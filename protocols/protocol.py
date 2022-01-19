@@ -10,7 +10,7 @@ from ctypes import (
     c_ubyte,
     sizeof
 )
-from socket import inet_pton, AF_INET
+from socket import inet_ntop, inet_pton, AF_INET
 
 
 class Protocol(BigEndianStructure):
@@ -26,19 +26,19 @@ class Protocol(BigEndianStructure):
         return create_string_buffer(sizeof(self))[:]
 
     @staticmethod
-    def addr_array_to_hdwr(address: str) -> str:
+    def addr_array_to_hdwr(addr_array: str) -> str:
         """
         Converts a c_ubyte array of 6 bytes to IEEE 802 MAC address.
         Ex: From b"\xceP\x9a\xcc\x8c\x9d" to "ce:50:9a:cc:8c:9d"
         """
-        return ":".join(format(octet, "02x") for octet in bytes(address))
+        return ":".join(format(octet, "02x") for octet in bytes(addr_array))
 
     @staticmethod
-    def hdwr_to_addr_array(mac_addr: str):
+    def hdwr_to_addr_array(hdwr_addr: str):
         """Converts an IEEE 802 MAC address to c_ubyte array of 6
         bytes."""
         mac_to_bytes = b"".join(bytes.fromhex(octet)
-                                for octet in re.split("[:-]", mac_addr))
+                                for octet in re.split("[:-]", hdwr_addr))
         return (c_ubyte * 6)(*mac_to_bytes)
 
     @staticmethod
@@ -47,6 +47,11 @@ class Protocol(BigEndianStructure):
         to a c_ubyte array of 4 bytes."""
         addr_to_bytes = inet_pton(AF_INET, proto_addr)
         return (c_ubyte * 4)(*addr_to_bytes)
+
+    @staticmethod
+    def array_to_proto_addr(addr_array: str) -> str:
+        """Converts a packed IPv4 address to string format."""
+        return inet_ntop(AF_INET, bytes(addr_array))
 
     @staticmethod
     def hex_format(value: int, str_length: int) -> str:
