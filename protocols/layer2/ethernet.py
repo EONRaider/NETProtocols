@@ -12,10 +12,14 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
     _fields_ = [
         ("_dst", c_ubyte * 6),  # Destination hardware address
         ("_src", c_ubyte * 6),  # Source hardware address
-        ("_eth", c_uint16)      # Ethertype
+        ("eth", c_uint16)       # Ethertype
     ]
-    header_len = 14
-    ethertypes = {0x0806: "ARP", 0x0800: "IPv4", 0x86dd: "IPv6"}
+    header_len = 14             # Length of the header in bytes
+    ethertypes = {
+        0x0806: "ARP",
+        0x0800: "IPv4",
+        0x86dd: "IPv6"
+    }
 
     def __init__(self, *, dst: str, src: str, eth: int):
         super().__init__()
@@ -28,7 +32,6 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
         header = cls.from_buffer_copy(packet)
         header.src = cls.addr_array_to_hdwr(header._src)
         header.dst = cls.addr_array_to_hdwr(header._dst)
-        header.eth = header._eth
         return header
 
     @property
