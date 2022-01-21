@@ -4,6 +4,7 @@
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import re
+import socket
 from ctypes import (
     BigEndianStructure,
     create_string_buffer,
@@ -42,16 +43,28 @@ class Protocol(BigEndianStructure):
         return (c_ubyte * 6)(*mac_to_bytes)
 
     @staticmethod
-    def proto_addr_to_array(proto_addr: str):
+    def proto_addr_to_array(proto_addr: str,
+                            addr_family: socket.AddressFamily = AF_INET):
         """Converts an IPv4 address string in dotted-decimal notation
-        to a c_ubyte array of 4 bytes."""
-        addr_to_bytes = inet_pton(AF_INET, proto_addr)
-        return (c_ubyte * 4)(*addr_to_bytes)
+        to a c_ubyte array of 4 bytes or an IPv6 address string to a
+        c_ubyte array of 16 bytes."""
+        try:
+            addr_to_bytes = inet_pton(addr_family, proto_addr)
+        except OSError:
+            raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
+                            "supported.")
+        return (c_ubyte * 4)(*addr_to_bytes) if addr_family == AF_INET else \
+            (c_ubyte * 16)(*addr_to_bytes)
 
     @staticmethod
-    def array_to_proto_addr(addr_array: str) -> str:
-        """Converts a packed IPv4 address to string format."""
-        return inet_ntop(AF_INET, bytes(addr_array))
+    def array_to_proto_addr(addr_array: str,
+                            addr_family: socket.AddressFamily = AF_INET) -> str:
+        """Converts a packed IPv4/IPv6 address to string format."""
+        try:
+            return inet_ntop(addr_family, bytes(addr_array))
+        except OSError:
+            raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
+                            "supported.")
 
     @staticmethod
     def hex_format(value: int, str_length: int) -> str:
