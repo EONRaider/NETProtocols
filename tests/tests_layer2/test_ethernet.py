@@ -8,31 +8,30 @@ import pytest
 from protocols.layer2.ethernet import Ethernet
 
 
-class MockEthFrame:
-    dst_mac = "11:22:33:aa:bb:cc"
-    src_mac = "ab:bc:cd:11:22:33"
-    ethertype = 0x86dd
+@pytest.fixture
+def mock_eth_header():
+    return Ethernet(
+        dst="11:22:33:aa:bb:cc",
+        src="ab:bc:cd:11:22:33",
+        eth=0x86dd
+    )
 
 
-@pytest.fixture()
+@pytest.fixture
 def raw_eth_header():
     return b"\xdc\xd9\xae\x71\xc2\xa3\x00\xc0\xca\xa8\x20\x21\x08\x00"
 
 
 class TestEthernet:
-    def test_build_ethernet_header(self):
+    def test_build_ethernet_header(self, mock_eth_header):
         """
         GIVEN a set of MAC addresses and Ethertype
         WHEN those values are valid and correctly formatted
         THEN an instance of Ethernet must be initialized without errors
         """
-        eth_header = Ethernet(dst=MockEthFrame.dst_mac,
-                              src=MockEthFrame.src_mac,
-                              eth=MockEthFrame.ethertype)
-
-        assert bytes(eth_header.dst) == b"\x11\x22\x33\xaa\xbb\xcc"
-        assert bytes(eth_header.src) == b"\xab\xbc\xcd\x11\x22\x33"
-        assert eth_header.eth == MockEthFrame.ethertype
+        assert bytes(mock_eth_header.dst) == b"\x11\x22\x33\xaa\xbb\xcc"
+        assert bytes(mock_eth_header.src) == b"\xab\xbc\xcd\x11\x22\x33"
+        assert mock_eth_header.eth == 0x86dd
 
     def test_decode_ethernet_header(self, raw_eth_header):
         """
