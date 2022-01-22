@@ -81,12 +81,3 @@ class Protocol(BigEndianStructure):
         except OSError:
             raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
                             "supported.")
-
-    @staticmethod
-    def hex_format(value: int, str_length: int) -> str:
-        """
-        Fill a hex value with zeroes to the left for compliance with
-        the presentation of codes used in Internet protocols.
-        Ex: From "0x800" to "0x0800"
-        """
-        return format(value, "#0{}x".format(str_length))
