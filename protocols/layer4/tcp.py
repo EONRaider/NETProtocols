@@ -76,14 +76,10 @@ class TCP(Protocol):                # IETF RFC 793
                       zip(self.flag_names, self.flag_bits) if flag_bit == "1")
         return " ".join(reversed(flags))
 
-    @classmethod
-    def decode(cls, packet: bytes):
-        header = cls.from_buffer_copy(packet)
-        return header
-
     @property
     def encapsulated_proto(self) -> str:
         """The string representation of the name of the encapsulated
-        protocol. Returns 'undefined' due to the fact that TCP is
-        agnostic about the protocols it carries at higher layers."""
+        protocol. Returns 'undefined' due to the fact that TCP is by
+        design agnostic about the protocols it carries at higher
+        layers."""
         return "Undefined"
