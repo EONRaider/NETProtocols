@@ -5,7 +5,6 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 import re
 import socket
-from abc import abstractmethod
 from ctypes import (
     BigEndianStructure,
     create_string_buffer,
@@ -29,11 +28,11 @@ class Protocol(BigEndianStructure):
         return create_string_buffer(sizeof(self))[:]
 
     @classmethod
-    @abstractmethod
     def decode(cls, packet: bytes):
         """Decode a raw network packet into a new instance of the
         protocol."""
-        pass
+        header = cls.from_buffer_copy(packet)
+        return header
 
     @property
     def encapsulated_proto(self) -> Union[None, str]:
