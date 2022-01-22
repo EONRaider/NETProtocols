@@ -45,6 +45,7 @@ class TestARP:
         assert bytes(mock_arp_header.spa) == b"\xc0\xa8\x01\x60"
         assert bytes(mock_arp_header.tha) == b"\xdc\xd9\xae\xaa\xbb\xcc"
         assert bytes(mock_arp_header.tpa) == b"\xc0\xa8\x01\xfe"
+        assert mock_arp_header.encapsulated_proto is None
 
     def test_decode_arp_header(self, raw_arp_header):
         """
@@ -64,3 +65,4 @@ class TestARP:
         assert arp_header.spa == "192.168.1.96"
         assert arp_header.tha == "dc:d9:ae:aa:bb:cc"
         assert arp_header.tpa == "192.168.1.254"
+        assert arp_header.encapsulated_proto is None
