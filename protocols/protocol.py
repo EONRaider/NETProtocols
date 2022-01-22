@@ -5,6 +5,7 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 import re
 import socket
+from abc import abstractmethod
 from ctypes import (
     BigEndianStructure,
     create_string_buffer,
@@ -12,6 +13,7 @@ from ctypes import (
     sizeof
 )
 from socket import inet_ntop, inet_pton, AF_INET
+from typing import Union
 
 
 class Protocol(BigEndianStructure):
@@ -26,17 +28,31 @@ class Protocol(BigEndianStructure):
     def __str__(self):
         return create_string_buffer(sizeof(self))[:]
 
+    @classmethod
+    @abstractmethod
+    def decode(cls, packet: bytes):
+        """Decode a raw network packet into a new instance of the
+        protocol."""
+        pass
+
+    @property
+    def encapsulated_proto(self) -> Union[None, str]:
+        """The string representation of the name of the encapsulated
+        protocol. Overwrite as required by the specific protocol being
+        implemented."""
+        return None
+
     @staticmethod
     def addr_array_to_hdwr(addr_array: str) -> str:
         """
-        Converts a c_ubyte array of 6 bytes to IEEE 802 MAC address.
+        Convert a c_ubyte array of 6 bytes to IEEE 802 MAC address.
         Ex: From b"\xceP\x9a\xcc\x8c\x9d" to "ce:50:9a:cc:8c:9d"
         """
         return ":".join(format(octet, "02x") for octet in bytes(addr_array))
 
     @staticmethod
     def hdwr_to_addr_array(hdwr_addr: str):
-        """Converts an IEEE 802 MAC address to c_ubyte array of 6
+        """Convert an IEEE 802 MAC address to c_ubyte array of 6
         bytes."""
         mac_to_bytes = b"".join(bytes.fromhex(octet)
                                 for octet in re.split("[:-]", hdwr_addr))
@@ -45,7 +61,7 @@ class Protocol(BigEndianStructure):
     @staticmethod
     def proto_addr_to_array(proto_addr: str,
                             addr_family: socket.AddressFamily = AF_INET):
-        """Converts an IPv4 address string in dotted-decimal notation
+        """Convert an IPv4 address string in dotted-decimal notation
         to a c_ubyte array of 4 bytes or an IPv6 address string to a
         c_ubyte array of 16 bytes."""
         try:
@@ -59,7 +75,7 @@ class Protocol(BigEndianStructure):
     @staticmethod
     def array_to_proto_addr(addr_array: str,
                             addr_family: socket.AddressFamily = AF_INET) -> str:
-        """Converts a packed IPv4/IPv6 address to string format."""
+        """Convert a packed IPv4/IPv6 address to string format."""
         try:
             return inet_ntop(addr_family, bytes(addr_array))
         except OSError:
@@ -69,7 +85,7 @@ class Protocol(BigEndianStructure):
     @staticmethod
     def hex_format(value: int, str_length: int) -> str:
         """
-        Fills a hex value with zeroes to the left for compliance with
+        Fill a hex value with zeroes to the left for compliance with
         the presentation of codes used in Internet protocols.
         Ex: From "0x800" to "0x0800"
         """
