@@ -55,7 +55,7 @@ class ICMPv4(Protocol):         # IETF RFC 792
         return header
 
     @property
-    def type_name(self):
+    def type_name(self) -> str:
         return self.icmpv4_types.get(
             self.type, "Unknown, Unassigned or Deprecated")
 
@@ -125,6 +125,6 @@ class ICMPv6(Protocol):           # IETF RFC 4443
         return header
 
     @property
-    def type_name(self):
+    def type_name(self) -> str:
         return self.icmpv6_types.get(
             self.type, "Unknown, Unassigned or Deprecated")
