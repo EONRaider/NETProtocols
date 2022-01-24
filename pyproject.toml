@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "protocols"
 version = "0.1.0"
-description = ""
+description = "Low-level implementations of common networking protocols"
 authors = ["EONRaider <livewire_voodoo@protonmail.com>"]
 
 [tool.poetry.dependencies]
