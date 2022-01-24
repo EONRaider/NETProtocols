@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
 
-from protocols.layer4.udp import UDP
+from netprotocols.layer4.udp import UDP
 
 
 @pytest.fixture

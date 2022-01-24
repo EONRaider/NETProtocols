@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
 
-from protocols.layer2.ethernet import Ethernet
+from netprotocols.layer2.ethernet import Ethernet
 
 
 @pytest.fixture
