@@ -14,8 +14,8 @@ class Packet:
     def __setattr__(self, protocol_name, protocol_class):
         valid_protocols = (cls.__name__ for cls in Protocol.__subclasses__())
         if protocol_name not in valid_protocols:
-            raise AttributeError("Cannot build packet. Invalid protocol: {}"
-                                 .format(protocol_name))
+            raise AttributeError(f"Cannot build packet. Invalid protocol: "
+                                 f"{protocol_name}")
         super().__setattr__(protocol_name.lower(), protocol_class)
 
     def __bytes__(self):
