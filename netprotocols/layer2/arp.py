@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = 'EONRaider @ keybase.io/eonraider'
 
 
 from ctypes import c_ubyte, c_uint8, c_uint16
 
-from protocols import Protocol
+from netprotocols import Protocol
 
 
 class ARP(Protocol):            # IETF RFC 826

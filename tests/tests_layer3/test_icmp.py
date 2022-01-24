@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
 
-from protocols.layer3.icmp import ICMPv4, ICMPv6
+from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 
 
 @pytest.fixture

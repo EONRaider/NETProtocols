@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-from protocols import Protocol
+from netprotocols import Protocol
 
 
 class Packet:

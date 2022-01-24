@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# https://github.com/EONRaider/Protocols
+# https://github.com/EONRaider/NETProtocols
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 from ctypes import c_uint16
 
-from protocols import Protocol
+from netprotocols import Protocol
 
 
 class UDP(Protocol):          # IETF RFC 768

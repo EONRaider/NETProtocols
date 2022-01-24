@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "protocols"
+name = "netprotocols"
 version = "0.1.0"
 description = "Low-level implementations of common networking protocols"
 authors = ["EONRaider <livewire_voodoo@protonmail.com>"]
