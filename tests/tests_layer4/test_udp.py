@@ -3,9 +3,9 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import pytest
+from netprotocols import UDP
 
-from netprotocols.layer4.udp import UDP
+import pytest
 
 
 @pytest.fixture

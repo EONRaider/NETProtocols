@@ -3,30 +3,15 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
+from netprotocols import ARP
+
 import pytest
 
-from netprotocols.layer2.arp import ARP
-
-
-@pytest.fixture
-def mock_arp_header():
-    return ARP(
-        htype=1,
-        ptype=0x0800,
-        hlen=6,
-        plen=4,
-        oper=2,
-        sha="00:c0:ca:11:22:33",
-        spa="192.168.1.96",
-        tha="dc:d9:ae:aa:bb:cc",
-        tpa="192.168.1.254"
-    )
-
-
-@pytest.fixture
-def raw_arp_header():
-    return b"\x00\x01\x08\x00\x06\x04\x00\x02\x00\xc0\xca\x11\x22\x33\xc0\xa8" \
-           b"\x01\x60\xdc\xd9\xae\xaa\xbb\xcc\xc0\xa8\x01\xfe"
+'''
+From WireShark sample captures at 
+https://wiki.wireshark.org/uploads/__moin_import__/attachments/SampleCaptures/
+arp-storm.pcap
+'''
 
 
 class TestARP:
@@ -41,10 +26,10 @@ class TestARP:
         assert mock_arp_header.hlen == 6
         assert mock_arp_header.plen == 4
         assert mock_arp_header.oper == 2
-        assert bytes(mock_arp_header.sha) == b"\x00\xc0\xca\x11\x22\x33"
-        assert bytes(mock_arp_header.spa) == b"\xc0\xa8\x01\x60"
-        assert bytes(mock_arp_header.tha) == b"\xdc\xd9\xae\xaa\xbb\xcc"
-        assert bytes(mock_arp_header.tpa) == b"\xc0\xa8\x01\xfe"
+        assert bytes(mock_arp_header.sha) == b"\x00\x07\x0d\xaf\xf4\x54"
+        assert bytes(mock_arp_header.spa) == b"\x18\xa6\xac\x01"
+        assert bytes(mock_arp_header.tha) == b"\x00\x00\x00\x00\x00\x00"
+        assert bytes(mock_arp_header.tpa) == b"\x18\xa6\xad\x9f"
         assert mock_arp_header.encapsulated_proto is None
 
     def test_decode_arp_header(self, raw_arp_header):
@@ -60,9 +45,9 @@ class TestARP:
         assert arp_header.ptype == 0x0800
         assert arp_header.hlen == 6
         assert arp_header.plen == 4
-        assert arp_header.oper == 2
-        assert arp_header.sha == "00:c0:ca:11:22:33"
-        assert arp_header.spa == "192.168.1.96"
-        assert arp_header.tha == "dc:d9:ae:aa:bb:cc"
-        assert arp_header.tpa == "192.168.1.254"
+        assert arp_header.oper == 1
+        assert arp_header.sha == "00:07:0d:af:f4:54"
+        assert arp_header.spa == "24.166.172.1"
+        assert arp_header.tha == "00:00:00:00:00:00"
+        assert arp_header.tpa == "24.166.173.159"
         assert arp_header.encapsulated_proto is None

@@ -3,9 +3,9 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import pytest
+from netprotocols import TCP
 
-from netprotocols.layer4.tcp import TCP
+import pytest
 
 
 @pytest.fixture

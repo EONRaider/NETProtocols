@@ -20,7 +20,3 @@ class Packet:
 
     def __bytes__(self):
         return b"".join(proto for proto in self.__dict__.values())
-
-    @property
-    def payload(self):
-        return self.__bytes__()
