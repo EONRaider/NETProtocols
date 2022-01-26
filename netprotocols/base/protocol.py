@@ -6,6 +6,7 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 import re
 import socket
 from ctypes import (
+    Array,
     BigEndianStructure,
     create_string_buffer,
     c_ubyte,
@@ -37,32 +38,47 @@ class Protocol(BigEndianStructure):
     @property
     def encapsulated_proto(self) -> Union[None, str]:
         """The string representation of the name of the encapsulated
-        protocol. Overwrite as required by the specific protocol being
+        protocol. Override as required by the specific protocol being
         implemented."""
         return None
 
     @staticmethod
-    def addr_array_to_hdwr(addr_array: str) -> str:
+    def hdwr_to_addr_array(hdwr_addr: str) -> Array:
         """
-        Convert a c_ubyte array of 6 bytes to IEEE 802 MAC address.
-        Ex: From b"\xceP\x9a\xcc\x8c\x9d" to "ce:50:9a:cc:8c:9d"
-        """
-        return ":".join(format(octet, "02x") for octet in bytes(addr_array))
+        Convert an IEEE 802 MAC address to c_ubyte array of 6
+        bytes.
 
-    @staticmethod
-    def hdwr_to_addr_array(hdwr_addr: str):
-        """Convert an IEEE 802 MAC address to c_ubyte array of 6
-        bytes."""
+        Ex: From "00:c0:ca:a8:19:74" to instance of Array with length
+        equal to 6 bytes.
+        """
         mac_to_bytes = b"".join(bytes.fromhex(octet)
                                 for octet in re.split("[:-]", hdwr_addr))
         return (c_ubyte * 6)(*mac_to_bytes)
 
     @staticmethod
+    def addr_array_to_hdwr(addr_array: Array) -> str:
+        """
+        Convert a c_ubyte array of 6 bytes to IEEE 802.3 MAC address.
+
+        Ex: From instance of Array with length equal to 6 to
+        "00:c0:ca:a8:19:74".
+        """
+        return ":".join(format(octet, "02x") for octet in bytes(addr_array))
+
+    @staticmethod
     def proto_addr_to_array(proto_addr: str,
                             addr_family: socket.AddressFamily = AF_INET):
-        """Convert an IPv4 address string in dotted-decimal notation
+        """
+        Convert an IPv4 address string in dotted-decimal notation
         to a c_ubyte array of 4 bytes or an IPv6 address string to a
-        c_ubyte array of 16 bytes."""
+        c_ubyte array of 16 bytes.
+
+        Ex1: From "185.159.104.91" to instance of Array with length
+        equal to 4
+
+        Ex2: From "fe80::200:86ff:fe05:80da" to instance of Array with
+        length equal to 16
+        """
         try:
             addr_to_bytes = inet_pton(addr_family, proto_addr)
         except OSError:
@@ -72,9 +88,18 @@ class Protocol(BigEndianStructure):
             (c_ubyte * 16)(*addr_to_bytes)
 
     @staticmethod
-    def array_to_proto_addr(addr_array: str,
+    def array_to_proto_addr(addr_array: Array,
                             addr_family: socket.AddressFamily = AF_INET) -> str:
-        """Convert a packed IPv4/IPv6 address to string format."""
+        """
+        Convert a packed IPv4/IPv6 address array to its RFC 791/2460
+        string representation.
+
+        Ex1: From instance of Array with length equal to 4 to
+        "185.159.104.91"
+
+        Ex2: From instance of Array with length equal to 16 to
+        "fe80::200:86ff:fe05:80da"
+        """
         try:
             return inet_ntop(addr_family, bytes(addr_array))
         except OSError:
