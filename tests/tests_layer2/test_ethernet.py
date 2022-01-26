@@ -3,23 +3,15 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
+from netprotocols import Ethernet
+
 import pytest
 
-from netprotocols.layer2.ethernet import Ethernet
-
-
-@pytest.fixture
-def mock_eth_header():
-    return Ethernet(
-        dst="11:22:33:aa:bb:cc",
-        src="ab:bc:cd:11:22:33",
-        eth=0x86dd
-    )
-
-
-@pytest.fixture
-def raw_eth_header():
-    return b"\xdc\xd9\xae\x71\xc2\xa3\x00\xc0\xca\xa8\x20\x21\x08\x00"
+'''
+From WireShark sample captures at 
+https://wiki.wireshark.org/uploads/__moin_import__/attachments/SampleCaptures/
+arp-storm.pcap
+'''
 
 
 class TestEthernet:
@@ -29,9 +21,9 @@ class TestEthernet:
         WHEN those values are valid and correctly formatted
         THEN an instance of Ethernet must be initialized without errors
         """
-        assert bytes(mock_eth_header.dst) == b"\x11\x22\x33\xaa\xbb\xcc"
-        assert bytes(mock_eth_header.src) == b"\xab\xbc\xcd\x11\x22\x33"
-        assert mock_eth_header.eth == 0x86dd
+        assert bytes(mock_eth_header.dst) == b"\xff\xff\xff\xff\xff\xff"
+        assert bytes(mock_eth_header.src) == b"\x00\x07\x0d\xaf\xf4\x54"
+        assert mock_eth_header.eth == 0x0806
 
     def test_decode_ethernet_header(self, raw_eth_header):
         """
@@ -42,7 +34,7 @@ class TestEthernet:
         """
         eth_header = Ethernet.decode(raw_eth_header)
 
-        assert eth_header.src == "00:c0:ca:a8:20:21"
-        assert eth_header.dst == "dc:d9:ae:71:c2:a3"
-        assert eth_header.eth == 0x0800
-        assert eth_header.encapsulated_proto == "IPv4"
+        assert eth_header.src == "00:07:0d:af:f4:54"
+        assert eth_header.dst == "ff:ff:ff:ff:ff:ff"
+        assert eth_header.eth == 0x0806
+        assert eth_header.encapsulated_proto == "ARP"
