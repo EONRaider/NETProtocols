@@ -3,9 +3,9 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import pytest
+from netprotocols import ICMPv4, ICMPv6
 
-from netprotocols.layer3.icmp import ICMPv4, ICMPv6
+import pytest
 
 
 @pytest.fixture
