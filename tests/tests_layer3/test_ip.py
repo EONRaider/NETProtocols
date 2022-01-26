@@ -3,9 +3,9 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import pytest
+from netprotocols import IPv4, IPv6
 
-from netprotocols.layer3.ip import IPv4, IPv6
+import pytest
 
 
 @pytest.fixture
@@ -39,12 +39,6 @@ def mock_ipv6_header():
         src="fe80::1",
         dst="ff02::1"
     )
-
-
-@pytest.fixture
-def raw_ipv4_header():
-    return b"\x45\x00\x00\x28\xec\x6c\x40\x00\x40\x06\x2b\x51\xc0\xa8\x01\x60" \
-           b"\xc0\xa8\x01\xfe"
 
 
 @pytest.fixture
