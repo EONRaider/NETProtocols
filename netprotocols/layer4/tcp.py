@@ -22,7 +22,7 @@ class TCP(Protocol):                # IETF RFC 793
         ("urg", c_uint16),          # Urgent pointer
     ]
     header_len = 32
-    flag_names = "NS", "CWR", "ECE", "URG", "ACK", "PSH", "RST", "SYN", "FIN"
+    flag_names = "FIN", "SYN", "RST", "PSH", "ACK", "URG", "ECE", "CWR", "NS"
 
     def __init__(self, *,
                  sport: int,
@@ -57,29 +57,18 @@ class TCP(Protocol):                # IETF RFC 793
         return format(self.flags, "#0{}x".format(5))
 
     @property
-    def flag_bits(self):
-        """
-        Gets a string representation of the binary value of the TCP
-        flags set on the segment.
-        Ex: '000011000' for 'PSH ACK' flags set.
-        """
-        return format(self.flags, "09b")
-
-    @property
     def flags_txt(self) -> str:
         """
-        Gets a string representation of the names of the TCP flags
-        set on the segment in space-separated format.
+        Gets a space-separated string representation of the names of
+        the TCP flags set on the segment.
         Ex: 'SYN ACK' or 'PSH ACK'
         """
-        flags = tuple(flag_name for flag_name, flag_bit in
-                      zip(self.flag_names, self.flag_bits) if flag_bit == "1")
-        return " ".join(reversed(flags))
+        '''Yield the least-significant bit of a 9-bit flag value at each 
+        iteration until there are no more bits left.'''
+        flag_bits = ((self.flags >> shift) & 1 for shift in range(9))
 
-    @property
-    def encapsulated_proto(self) -> str:
-        """The string representation of the name of the encapsulated
-        protocol. Returns 'undefined' due to the fact that TCP is by
-        design agnostic about the protocols it carries at higher
-        layers."""
-        return "Undefined"
+        '''Yield the string representation of a flag name if the 
+        corresponding bit is set.'''
+        flags = (flag_name for flag_name, flag_bit in
+                 zip(self.flag_names, flag_bits) if flag_bit == 1)
+        return " ".join(flags)
