@@ -27,11 +27,3 @@ class UDP(Protocol):          # IETF RFC 768
         self.dport = dport
         self.len = len
         self.chksum = chksum
-
-    @property
-    def encapsulated_proto(self) -> str:
-        """The string representation of the name of the encapsulated
-        protocol. Returns 'undefined' due to the fact that UDP is by
-        design agnostic about the protocols it carries at higher
-        layers."""
-        return "Undefined"

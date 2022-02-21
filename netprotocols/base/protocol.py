@@ -40,7 +40,7 @@ class Protocol(BigEndianStructure):
         """The string representation of the name of the encapsulated
         protocol. Override as required by the specific protocol being
         implemented."""
-        return None
+        return "undefined"
 
     @staticmethod
     def hdwr_to_addr_array(hdwr_addr: str) -> Array:
@@ -49,7 +49,7 @@ class Protocol(BigEndianStructure):
         bytes.
 
         Ex: From "00:c0:ca:a8:19:74" to instance of Array with length
-        equal to 6 bytes.
+        equal to 6.
         """
         mac_to_bytes = b"".join(bytes.fromhex(octet)
                                 for octet in re.split("[:-]", hdwr_addr))
@@ -74,10 +74,10 @@ class Protocol(BigEndianStructure):
         c_ubyte array of 16 bytes.
 
         Ex1: From "185.159.104.91" to instance of Array with length
-        equal to 4
+        equal to 4.
 
         Ex2: From "fe80::200:86ff:fe05:80da" to instance of Array with
-        length equal to 16
+        length equal to 16.
         """
         try:
             addr_to_bytes = inet_pton(addr_family, proto_addr)
