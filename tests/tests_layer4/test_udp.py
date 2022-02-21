@@ -34,7 +34,7 @@ class TestUDP:
         assert mock_udp_header.dport == 53
         assert mock_udp_header.len == 41
         assert mock_udp_header.chksum == 0x3649
-        assert mock_udp_header.encapsulated_proto == "Undefined"
+        assert mock_udp_header.encapsulated_proto == "undefined"
 
     def test_decode_udp_header(self, raw_udp_header):
         """
@@ -49,4 +49,4 @@ class TestUDP:
         assert udp_header.dport == 53
         assert udp_header.len == 41
         assert udp_header.chksum == 0x3649
-        assert udp_header.encapsulated_proto == "Undefined"
+        assert udp_header.encapsulated_proto == "undefined"

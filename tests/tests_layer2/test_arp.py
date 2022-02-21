@@ -30,7 +30,7 @@ class TestARP:
         assert bytes(mock_arp_header.spa) == b"\x18\xa6\xac\x01"
         assert bytes(mock_arp_header.tha) == b"\x00\x00\x00\x00\x00\x00"
         assert bytes(mock_arp_header.tpa) == b"\x18\xa6\xad\x9f"
-        assert mock_arp_header.encapsulated_proto is None
+        assert mock_arp_header.encapsulated_proto == "undefined"
 
     def test_decode_arp_header(self, raw_arp_header):
         """
@@ -50,4 +50,4 @@ class TestARP:
         assert arp_header.spa == "24.166.172.1"
         assert arp_header.tha == "00:00:00:00:00:00"
         assert arp_header.tpa == "24.166.173.159"
-        assert arp_header.encapsulated_proto is None
+        assert arp_header.encapsulated_proto == "undefined"
