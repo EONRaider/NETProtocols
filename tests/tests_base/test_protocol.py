@@ -52,7 +52,7 @@ class TestProtocol:
         ipv4_header = Protocol.decode(raw_ipv4_header)
 
         assert isinstance(ipv4_header, Protocol)
-        assert ipv4_header.encapsulated_proto is None
+        assert ipv4_header.encapsulated_proto == "undefined"
 
     def test_convert_hdwr_to_addr_array(self, mac_bytes, mac_string):
         """
