@@ -145,9 +145,9 @@ class IPv6(IP, Protocol):           # IETF RFC 2460 / 8200
         return self.protocol_numbers.get(self.next_header, None)
 
     @property
-    def tclass_str(self):
+    def tclass_hex_str(self):
         return self.int_to_hex_str(self.tclass)
 
     @property
-    def flabel_str(self):
+    def flabel_hex_str(self):
         return self.int_to_hex_str(self.flabel)
