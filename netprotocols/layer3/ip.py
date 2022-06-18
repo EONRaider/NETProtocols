@@ -36,6 +36,11 @@ class IPv4(IP, Protocol):          # IETF RFC 791
         ("_dst", c_ubyte * 4)      # Destination address
     ]
     header_len = 20                # Length of the header in bytes
+    flag_names = {
+        0: "Not set",
+        1: "More fragments (MF)",
+        2: "Don't fragment (DF)"
+    }
 
     def __init__(self, *,
                  version: int,
@@ -76,6 +81,15 @@ class IPv4(IP, Protocol):          # IETF RFC 791
     @property
     def encapsulated_proto(self) -> str:
         return self.protocol_numbers.get(self.proto, None)
+
+    @property
+    def flags_txt(self) -> str:
+        """
+        Gets a string representation of the name of the IP flag set on
+        the packet.
+        Ex: 'Not set', 'Don't fragment (DF)' or 'More fragments (MF)'
+        """
+        return self.flag_names.get(self.flags, "Error")
 
 
 class IPv6(IP, Protocol):           # IETF RFC 2460 / 8200
