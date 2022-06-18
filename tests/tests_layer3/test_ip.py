@@ -69,6 +69,7 @@ class TestIPv4:
         assert bytes(mock_ipv4_header.src) == b"\xc0\xa8\x01\x60"
         assert bytes(mock_ipv4_header.dst) == b"\xc0\xa8\x01\xfe"
         assert mock_ipv4_header.encapsulated_proto == "TCP"
+        assert mock_ipv4_header.flags_txt == "Don't fragment (DF)"
 
     def test_decode_ipv4_header(self, raw_ipv4_header):
         """
@@ -93,6 +94,7 @@ class TestIPv4:
         assert ipv4_header.src == "192.168.1.96"
         assert ipv4_header.dst == "192.168.1.254"
         assert ipv4_header.encapsulated_proto == "TCP"
+        assert ipv4_header.flags_txt == "Don't fragment (DF)"
 
 
 class TestIPv6:
