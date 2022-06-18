@@ -58,7 +58,7 @@ class TCP(Protocol):                # IETF RFC 793
         return self.int_to_hex_str(self.flags)
 
     @property
-    def flags_txt(self) -> str:
+    def flags_str(self) -> str:
         """
         Gets a space-separated string representation of the names of
         the TCP flags set on the segment.
