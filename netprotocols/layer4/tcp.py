@@ -58,6 +58,15 @@ class TCP(Protocol):                # IETF RFC 793
         return self.int_to_hex_str(self.flags)
 
     @property
+    def chksum_hex_str(self) -> str:
+        """
+        Gets a string representation of the hexadecimal value of the
+        TCP checksum value set on the header.
+        Ex: From 62030 to '0xf24e'
+        """
+        return self.int_to_hex_str(self.chksum)
+
+    @property
     def flags_str(self) -> str:
         """
         Gets a space-separated string representation of the names of
