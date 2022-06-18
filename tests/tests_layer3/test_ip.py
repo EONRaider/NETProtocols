@@ -66,6 +66,7 @@ class TestIPv4:
         assert mock_ipv4_header.ttl == 64
         assert mock_ipv4_header.proto == 0x06
         assert mock_ipv4_header.chksum == 0x2b51
+        assert mock_ipv4_header.chksum_txt == "0x2b51"
         assert bytes(mock_ipv4_header.src) == b"\xc0\xa8\x01\x60"
         assert bytes(mock_ipv4_header.dst) == b"\xc0\xa8\x01\xfe"
         assert mock_ipv4_header.encapsulated_proto == "TCP"
@@ -91,6 +92,7 @@ class TestIPv4:
         assert ipv4_header.ttl == 64
         assert ipv4_header.proto == 0x06
         assert ipv4_header.chksum == 0x2b51
+        assert ipv4_header.chksum_txt == "0x2b51"
         assert ipv4_header.src == "192.168.1.96"
         assert ipv4_header.dst == "192.168.1.254"
         assert ipv4_header.encapsulated_proto == "TCP"
