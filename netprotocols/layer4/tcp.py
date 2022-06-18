@@ -4,6 +4,7 @@
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 from ctypes import c_uint16, c_uint32
+from typing import Iterator
 
 from netprotocols import Protocol
 
@@ -65,10 +66,10 @@ class TCP(Protocol):                # IETF RFC 793
         """
         '''Yield the least-significant bit of a 9-bit flag value at each 
         iteration until there are no more bits left.'''
-        flag_bits = ((self.flags >> shift) & 1 for shift in range(9))
+        flag_bits: Iterator = ((self.flags >> shift) & 1 for shift in range(9))
 
         '''Yield the string representation of a flag name if the 
         corresponding bit is set.'''
-        flags = (flag_name for flag_name, flag_bit in
-                 zip(self.flag_names, flag_bits) if flag_bit == 1)
+        flags: Iterator = (flag_name for flag_name, flag_bit in
+                           zip(self.flag_names, flag_bits) if flag_bit == 1)
         return " ".join(flags)
