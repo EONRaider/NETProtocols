@@ -23,6 +23,7 @@ class TestARP:
         """
         assert mock_arp_header.htype == 1
         assert mock_arp_header.ptype == 0x0800
+        assert mock_arp_header.ptype_str == "IPv4"
         assert mock_arp_header.hlen == 6
         assert mock_arp_header.plen == 4
         assert mock_arp_header.oper == 2
@@ -43,6 +44,7 @@ class TestARP:
 
         assert arp_header.htype == 1
         assert arp_header.ptype == 0x0800
+        assert arp_header.ptype_str == "IPv4"
         assert arp_header.hlen == 6
         assert arp_header.plen == 4
         assert arp_header.oper == 1
