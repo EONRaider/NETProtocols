@@ -35,5 +35,5 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
         return header
 
     @property
-    def encapsulated_proto(self):
+    def encapsulated_proto(self) -> str:
         return self.ethertypes.get(self.eth, None)

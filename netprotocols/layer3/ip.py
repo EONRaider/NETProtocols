@@ -74,7 +74,7 @@ class IPv4(IP, Protocol):          # IETF RFC 791
         return header
 
     @property
-    def encapsulated_proto(self):
+    def encapsulated_proto(self) -> str:
         return self.protocol_numbers.get(self.proto, None)
 
 
@@ -118,5 +118,5 @@ class IPv6(IP, Protocol):           # IETF RFC 2460 / 8200
         return header
 
     @property
-    def encapsulated_proto(self):
+    def encapsulated_proto(self) -> str:
         return self.protocol_numbers.get(self.next_header, None)
