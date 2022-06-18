@@ -108,9 +108,9 @@ class TestIPv6:
         """
         assert mock_ipv6_header.version == 6
         assert mock_ipv6_header.tclass == 0
-        assert mock_ipv6_header.tclass_str == "0x000"
+        assert mock_ipv6_header.tclass_hex_str == "0x000"
         assert mock_ipv6_header.flabel == 0
-        assert mock_ipv6_header.flabel_str == "0x000"
+        assert mock_ipv6_header.flabel_hex_str == "0x000"
         assert mock_ipv6_header.payload_len == 120
         assert mock_ipv6_header.next_header == 0x06
         assert mock_ipv6_header.hop_limit == 255
@@ -133,9 +133,9 @@ class TestIPv6:
 
         assert ipv6_header.version == 6
         assert ipv6_header.tclass == 0
-        assert ipv6_header.tclass_str == "0x000"
+        assert ipv6_header.tclass_hex_str == "0x000"
         assert ipv6_header.flabel == 0
-        assert ipv6_header.flabel_str == "0x000"
+        assert ipv6_header.flabel_hex_str == "0x000"
         assert ipv6_header.payload_len == 120
         assert ipv6_header.next_header == 0x06
         assert ipv6_header.hop_limit == 255
