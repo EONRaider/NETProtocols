@@ -105,3 +105,12 @@ class Protocol(BigEndianStructure):
         except OSError:
             raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
                             "supported.")
+
+    @staticmethod
+    def int_to_hex_str(number: int) -> str:
+        """
+        Obtain the string representation of an integer as a hexadecimal
+        value.
+        Ex: From 62030 to '0xf24e'
+        """
+        return format(number, "#0{}x".format(5))
