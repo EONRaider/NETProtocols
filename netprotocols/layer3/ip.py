@@ -83,13 +83,13 @@ class IPv4(IP, Protocol):          # IETF RFC 791
         return self.protocol_numbers.get(self.proto, None)
 
     @property
-    def chksum_txt(self) -> str:
+    def chksum_hex_str(self) -> str:
         """
         Gets a string representation of the hexadecimal value of the
         IP checksum value set on the header.
         Ex: From 62030 to '0xf24e'
         """
-        return format(self.chksum, "#0{}x".format(5))
+        return self.int_to_hex_str(self.chksum)
     
     @property
     def flags_txt(self) -> str:
