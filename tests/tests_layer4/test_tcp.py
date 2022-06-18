@@ -47,8 +47,8 @@ class TestTCP:
         assert mock_tcp_header.window == 8540
         assert mock_tcp_header.chksum == 0x2008
         assert mock_tcp_header.urg == 0
-        assert mock_tcp_header.flags_hex == "0x018"
-        assert mock_tcp_header.flags_txt == "PSH ACK"
+        assert mock_tcp_header.flags_hex_str == "0x018"
+        assert mock_tcp_header.flags_str == "PSH ACK"
         assert mock_tcp_header.encapsulated_proto == "undefined"
 
     def test_decode_tcp_header(self, raw_tcp_header):
@@ -70,6 +70,6 @@ class TestTCP:
         assert tcp_header.window == 8540
         assert tcp_header.chksum == 0x2008
         assert tcp_header.urg == 0
-        assert tcp_header.flags_hex == "0x018"
-        assert tcp_header.flags_txt == "PSH ACK"
+        assert tcp_header.flags_hex_str == "0x018"
+        assert tcp_header.flags_str == "PSH ACK"
         assert tcp_header.encapsulated_proto == "undefined"
