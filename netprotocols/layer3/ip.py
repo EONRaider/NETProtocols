@@ -92,7 +92,7 @@ class IPv4(IP, Protocol):          # IETF RFC 791
         return self.int_to_hex_str(self.chksum)
     
     @property
-    def flags_txt(self) -> str:
+    def flags_str(self) -> str:
         """
         Gets a string representation of the name of the IP flag set on
         the packet.
