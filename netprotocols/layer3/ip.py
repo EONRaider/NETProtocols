@@ -143,3 +143,11 @@ class IPv6(IP, Protocol):           # IETF RFC 2460 / 8200
     @property
     def encapsulated_proto(self) -> str:
         return self.protocol_numbers.get(self.next_header, None)
+
+    @property
+    def tclass_str(self):
+        return self.int_to_hex_str(self.tclass)
+
+    @property
+    def flabel_str(self):
+        return self.int_to_hex_str(self.flabel)
