@@ -7,6 +7,7 @@ __author__ = 'EONRaider @ keybase.io/eonraider'
 from ctypes import c_ubyte, c_uint8, c_uint16
 
 from netprotocols import Protocol
+from netprotocols.layer2.ethernet import Ethernet
 
 
 class ARP(Protocol):            # IETF RFC 826
@@ -22,6 +23,10 @@ class ARP(Protocol):            # IETF RFC 826
         ("_tpa", c_ubyte * 4),  # Target protocol address
     ]
     header_len = 28             # Length of the header in bytes
+    operation_names = {
+        1: "request",
+        2: "reply"
+    }
 
     def __init__(self, *,
                  htype: int,
@@ -52,3 +57,30 @@ class ARP(Protocol):            # IETF RFC 826
         header.tha = cls.addr_array_to_hdwr(header._tha)
         header.tpa = cls.array_to_proto_addr(header._tpa)
         return header
+
+    @property
+    def ptype_hex_str(self) -> str:
+        """
+        Gets a string representation of the hexadecimal value of the
+        EtherType value set on the header.
+        Ex: From 2048 to 'IPv4'
+        """
+        return self.int_to_hex_str(self.ptype)
+
+    @property
+    def ptype_str(self):
+        """
+        Gets a string representation of the name of the EtherType set on
+        the packet.
+        Ex: 'IPv4'
+        """
+        return Ethernet.ethertypes.get(self.ptype, "unknown")
+
+    @property
+    def oper_str(self):
+        """
+        Gets a string representation of the name of the operation type
+        set on the packet.
+        Ex: 'request' or 'reply'
+        """
+        return self.operation_names.get(self.oper, "Error")
