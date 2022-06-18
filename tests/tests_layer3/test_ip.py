@@ -66,11 +66,11 @@ class TestIPv4:
         assert mock_ipv4_header.ttl == 64
         assert mock_ipv4_header.proto == 0x06
         assert mock_ipv4_header.chksum == 0x2b51
-        assert mock_ipv4_header.chksum_txt == "0x2b51"
+        assert mock_ipv4_header.chksum_hex_str == "0x2b51"
         assert bytes(mock_ipv4_header.src) == b"\xc0\xa8\x01\x60"
         assert bytes(mock_ipv4_header.dst) == b"\xc0\xa8\x01\xfe"
         assert mock_ipv4_header.encapsulated_proto == "TCP"
-        assert mock_ipv4_header.flags_txt == "Don't fragment (DF)"
+        assert mock_ipv4_header.flags_str == "Don't fragment (DF)"
 
     def test_decode_ipv4_header(self, raw_ipv4_header):
         """
@@ -92,11 +92,11 @@ class TestIPv4:
         assert ipv4_header.ttl == 64
         assert ipv4_header.proto == 0x06
         assert ipv4_header.chksum == 0x2b51
-        assert ipv4_header.chksum_txt == "0x2b51"
+        assert ipv4_header.chksum_hex_str == "0x2b51"
         assert ipv4_header.src == "192.168.1.96"
         assert ipv4_header.dst == "192.168.1.254"
         assert ipv4_header.encapsulated_proto == "TCP"
-        assert ipv4_header.flags_txt == "Don't fragment (DF)"
+        assert ipv4_header.flags_str == "Don't fragment (DF)"
 
 
 class TestIPv6:
@@ -108,7 +108,9 @@ class TestIPv6:
         """
         assert mock_ipv6_header.version == 6
         assert mock_ipv6_header.tclass == 0
+        assert mock_ipv6_header.tclass_str == "0x000"
         assert mock_ipv6_header.flabel == 0
+        assert mock_ipv6_header.flabel_str == "0x000"
         assert mock_ipv6_header.payload_len == 120
         assert mock_ipv6_header.next_header == 0x06
         assert mock_ipv6_header.hop_limit == 255
@@ -131,7 +133,9 @@ class TestIPv6:
 
         assert ipv6_header.version == 6
         assert ipv6_header.tclass == 0
+        assert ipv6_header.tclass_str == "0x000"
         assert ipv6_header.flabel == 0
+        assert ipv6_header.flabel_str == "0x000"
         assert ipv6_header.payload_len == 120
         assert ipv6_header.next_header == 0x06
         assert ipv6_header.hop_limit == 255
