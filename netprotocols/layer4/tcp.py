@@ -49,13 +49,13 @@ class TCP(Protocol):                # IETF RFC 793
         self.urg = urg
 
     @property
-    def flags_hex(self) -> str:
+    def flags_hex_str(self) -> str:
         """
         Gets a string representation of the hexadecimal value of the
         TCP flags set on the segment.
         Ex: '0x018' or '0x010'
         """
-        return format(self.flags, "#0{}x".format(5))
+        return self.int_to_hex_str(self.flags)
 
     @property
     def flags_txt(self) -> str:
