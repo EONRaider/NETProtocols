@@ -8,7 +8,25 @@ from ctypes import c_ubyte, c_uint8, c_uint16
 from netprotocols import Protocol
 
 
-class ICMPv4(Protocol):         # IETF RFC 792
+class ICMP(Protocol):
+    icmp_types = {}  # Implementation dependent on the protocol version
+
+    @property
+    def chksum_hex_str(self) -> str:
+        """
+        Gets a string representation of the hexadecimal value of the
+        ICMP checksum value set on the header.
+        Ex: From 62030 to '0xf24e'
+        """
+        return self.int_to_hex_str(self.chksum)
+
+    @property
+    def type_str(self) -> str:
+        return self.icmp_types.get(
+            self.type, "Unknown, Unassigned or Deprecated")
+
+
+class ICMPv4(ICMP):             # IETF RFC 792
     _fields_ = [
         ("type", c_uint8),      # Control message type
         ("code", c_uint8),      # Control message subtype
@@ -16,7 +34,7 @@ class ICMPv4(Protocol):         # IETF RFC 792
         ("_rest", c_ubyte * 4)  # Rest of header (contents vary)
     ]
     header_len = 8              # Length of the header in bytes
-    icmpv4_types = {
+    icmp_types = {
         0: "Echo reply",
         3: "Destination Unreachable",
         4: "Source Quench",
@@ -54,13 +72,8 @@ class ICMPv4(Protocol):         # IETF RFC 792
         header.rest = bytes(header._rest)
         return header
 
-    @property
-    def type_str(self) -> str:
-        return self.icmpv4_types.get(
-            self.type, "Unknown, Unassigned or Deprecated")
 
-
-class ICMPv6(Protocol):           # IETF RFC 4443
+class ICMPv6(ICMP):               # IETF RFC 4443
     _fields_ = [
         ("type", c_uint8),        # Control message type
         ("code", c_uint8),        # Control message subtype
@@ -68,7 +81,7 @@ class ICMPv6(Protocol):           # IETF RFC 4443
         ("_m_body", c_ubyte * 4)  # Message body
     ]
     header_len = 8                # Length of the header in bytes
-    icmpv6_types = {
+    icmp_types = {
         1: "Destination Unreachable",
         2: "Packet Too Big",
         3: "Time Exceeded",
@@ -123,8 +136,3 @@ class ICMPv6(Protocol):           # IETF RFC 4443
         header = cls.from_buffer_copy(packet)
         header.m_body = bytes(header._m_body)
         return header
-
-    @property
-    def type_str(self) -> str:
-        return self.icmpv6_types.get(
-            self.type, "Unknown, Unassigned or Deprecated")
