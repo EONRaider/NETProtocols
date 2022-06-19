@@ -11,11 +11,11 @@ from netprotocols import Protocol
 
 class IP:
     protocol_numbers = {  # As defined by RFC 790
-        0x01: "ICMP",
+        0x01: "ICMPv4",
         0x02: "IGMP",
         0x06: "TCP",
         0x11: "UDP",
-        0x3a: "IPv6-ICMP"
+        0x3a: "ICMPv6"
     }
 
 
