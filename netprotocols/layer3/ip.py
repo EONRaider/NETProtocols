@@ -9,7 +9,7 @@ from socket import AF_INET6
 from netprotocols import Protocol
 
 
-class IP:
+class IP(Protocol):
     protocol_numbers = {  # As defined by RFC 790
         0x01: "ICMPv4",
         0x02: "IGMP",
@@ -19,7 +19,7 @@ class IP:
     }
 
 
-class IPv4(IP, Protocol):          # IETF RFC 791
+class IPv4(IP):          # IETF RFC 791
     _fields_ = [
         ("version", c_uint8, 4),   # Protocol version
         ("ihl", c_uint8, 4),       # Internet header length
@@ -101,7 +101,7 @@ class IPv4(IP, Protocol):          # IETF RFC 791
         return self.flag_names.get(self.flags, "Error")
 
 
-class IPv6(IP, Protocol):           # IETF RFC 2460 / 8200
+class IPv6(IP):           # IETF RFC 2460 / 8200
     _fields_ = [
         ("version", c_uint32, 4),   # Protocol version
         ("tclass", c_uint32, 8),    # Traffic class
