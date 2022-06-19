@@ -53,7 +53,7 @@ class TestICMP:
         assert mock_icmpv4_header.chksum == 0x83f7
         assert bytes(mock_icmpv4_header.rest) == b"\x00\x01\x00\x01"
         assert mock_icmpv4_header.encapsulated_proto == "undefined"
-        assert mock_icmpv4_header.type_name == "Echo Request"
+        assert mock_icmpv4_header.type_str == "Echo Request"
 
     def test_decode_icmpv4_header(self, raw_icmpv4_header):
         """
@@ -69,7 +69,7 @@ class TestICMP:
         assert icmpv4_header.chksum == 0x83f7
         assert icmpv4_header.rest == b"\x00\x01\x00\x01"
         assert icmpv4_header.encapsulated_proto == "undefined"
-        assert icmpv4_header.type_name == "Echo Request"
+        assert icmpv4_header.type_str == "Echo Request"
 
     def test_build_icmpv6_header(self, mock_icmpv6_header):
         """
@@ -81,7 +81,7 @@ class TestICMP:
         assert mock_icmpv6_header.code == 0
         assert mock_icmpv6_header.chksum == 0x3f69
         assert bytes(mock_icmpv6_header.m_body) == b"\x76\x20\x01\x00"
-        assert mock_icmpv6_header.type_name == "Echo Request"
+        assert mock_icmpv6_header.type_str == "Echo Request"
 
     def test_decode_icmpv6_header(self, raw_icmpv6_header):
         """
@@ -96,4 +96,4 @@ class TestICMP:
         assert icmpv6_header.code == 0
         assert icmpv6_header.chksum == 0x3f69
         assert icmpv6_header.m_body == b"\x76\x20\x01\x00"
-        assert icmpv6_header.type_name == "Echo Request"
+        assert icmpv6_header.type_str == "Echo Request"
