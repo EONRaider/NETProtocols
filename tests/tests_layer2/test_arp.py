@@ -5,35 +5,12 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 from netprotocols import ARP
 
-import pytest
-
 
 '''
 From WireShark sample captures at 
 https://wiki.wireshark.org/uploads/__moin_import__/attachments/SampleCaptures/
 arp-storm.pcap
 '''
-
-
-@pytest.fixture
-def mock_arp_header():
-    return ARP(
-        htype=1,
-        ptype=0x0800,
-        hlen=6,
-        plen=4,
-        oper=2,
-        sha="00:07:0d:af:f4:54",
-        spa="24.166.172.1",
-        tha="00:00:00:00:00:00",
-        tpa="24.166.173.159"
-    )
-
-
-@pytest.fixture
-def raw_arp_header():
-    return b"\x00\x01\x08\x00\x06\x04\x00\x01\x00\x07\x0d\xaf\xf4\x54" \
-           b"\x18\xa6\xac\x01\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f"
 
 
 class TestARP:
@@ -49,11 +26,14 @@ class TestARP:
         assert mock_arp_header.hlen == 6
         assert mock_arp_header.plen == 4
         assert mock_arp_header.oper == 2
-        assert bytes(mock_arp_header.sha) == b"\x00\x07\x0d\xaf\xf4\x54"
-        assert bytes(mock_arp_header.spa) == b"\x18\xa6\xac\x01"
-        assert bytes(mock_arp_header.tha) == b"\x00\x00\x00\x00\x00\x00"
-        assert bytes(mock_arp_header.tpa) == b"\x18\xa6\xad\x9f"
+        assert mock_arp_header.sha == "00:07:0d:af:f4:54"
+        assert mock_arp_header.spa == "24.166.172.1"
+        assert mock_arp_header.tha == "00:00:00:00:00:00"
+        assert mock_arp_header.tpa == "24.166.173.159"
         assert mock_arp_header.encapsulated_proto == "undefined"
+        assert bytes(mock_arp_header) == \
+               b"\x00\x01\x08\x00\x06\x04\x00\x02\x00\x07\r\xaf\xf4T\x18\xa6" \
+               b"\xac\x01\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f"
 
     def test_decode_arp_header(self, raw_arp_header):
         """
@@ -75,3 +55,6 @@ class TestARP:
         assert arp_header.tha == "00:00:00:00:00:00"
         assert arp_header.tpa == "24.166.173.159"
         assert arp_header.encapsulated_proto == "undefined"
+        assert bytes(arp_header) == \
+               b"\x00\x01\x08\x00\x06\x04\x00\x01\x00\x07\r\xaf\xf4T\x18\xa6" \
+               b"\xac\x01\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f"

@@ -5,7 +5,6 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 from netprotocols import Ethernet
 
-import pytest
 
 '''
 From WireShark sample captures at 
@@ -21,9 +20,11 @@ class TestEthernet:
         WHEN those values are valid and correctly formatted
         THEN an instance of Ethernet must be initialized without errors
         """
-        assert bytes(mock_eth_header.dst) == b"\xff\xff\xff\xff\xff\xff"
-        assert bytes(mock_eth_header.src) == b"\x00\x07\x0d\xaf\xf4\x54"
+        assert mock_eth_header.src == "00:07:0d:af:f4:54"
+        assert mock_eth_header.dst == "ff:ff:ff:ff:ff:ff"
         assert mock_eth_header.eth == 0x0806
+        assert bytes(mock_eth_header) == b"\xff\xff\xff\xff\xff\xff\x00\x07\r" \
+                                         b"\xaf\xf4T\x08\x06"
 
     def test_decode_ethernet_header(self, raw_eth_header):
         """
@@ -37,4 +38,6 @@ class TestEthernet:
         assert eth_header.src == "00:07:0d:af:f4:54"
         assert eth_header.dst == "ff:ff:ff:ff:ff:ff"
         assert eth_header.eth == 0x0806
+        assert bytes(eth_header) == b"\xff\xff\xff\xff\xff\xff\x00\x07\r\xaf" \
+                                    b"\xf4T\x08\x06"
         assert eth_header.encapsulated_proto == "ARP"
