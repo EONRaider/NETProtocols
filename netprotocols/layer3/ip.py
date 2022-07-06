@@ -19,7 +19,7 @@ class IP(Protocol):
     }
 
 
-class IPv4(IP):          # IETF RFC 791
+class IPv4(IP):                    # IETF RFC 791
     _fields_ = [
         ("version", c_uint8, 4),   # Protocol version
         ("ihl", c_uint8, 4),       # Internet header length
@@ -101,7 +101,7 @@ class IPv4(IP):          # IETF RFC 791
         return self.flag_names.get(self.flags, "Error")
 
 
-class IPv6(IP):           # IETF RFC 2460 / 8200
+class IPv6(IP):                     # IETF RFC 2460 / 8200
     _fields_ = [
         ("version", c_uint32, 4),   # Protocol version
         ("tclass", c_uint32, 8),    # Traffic class
