@@ -23,5 +23,9 @@ class TestPacket:
 
         assert isinstance(packet.ethernet, Ethernet)
         assert isinstance(packet.arp, ARP)
-        assert len(bytes(packet)) == len(bytes(packet.ethernet)) + \
-               len(bytes(packet.arp))  # Total length == 42
+        assert len(bytes(packet)) == len(bytes(packet.ethernet) +
+                                         bytes(packet.arp))  # 42 bytes
+        assert packet.payload == \
+               b'\xff\xff\xff\xff\xff\xff\x00\x07\r\xaf\xf4T\x08\x06\x00\x01' \
+               b'\x08\x00\x06\x04\x00\x02\x00\x07\r\xaf\xf4T\x18\xa6\xac\x01' \
+               b'\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f'
