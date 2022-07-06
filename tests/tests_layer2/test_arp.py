@@ -7,11 +7,33 @@ from netprotocols import ARP
 
 import pytest
 
+
 '''
 From WireShark sample captures at 
 https://wiki.wireshark.org/uploads/__moin_import__/attachments/SampleCaptures/
 arp-storm.pcap
 '''
+
+
+@pytest.fixture
+def mock_arp_header():
+    return ARP(
+        htype=1,
+        ptype=0x0800,
+        hlen=6,
+        plen=4,
+        oper=2,
+        sha="00:07:0d:af:f4:54",
+        spa="24.166.172.1",
+        tha="00:00:00:00:00:00",
+        tpa="24.166.173.159"
+    )
+
+
+@pytest.fixture
+def raw_arp_header():
+    return b"\x00\x01\x08\x00\x06\x04\x00\x01\x00\x07\x0d\xaf\xf4\x54" \
+           b"\x18\xa6\xac\x01\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f"
 
 
 class TestARP:
