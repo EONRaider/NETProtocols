@@ -44,10 +44,14 @@ class ARP(Protocol):            # IETF RFC 826
         self.hlen = hlen
         self.plen = plen
         self.oper = oper
-        self.sha = self.hdwr_to_addr_array(sha)
-        self.spa = self.proto_addr_to_array(spa)
-        self.tha = self.hdwr_to_addr_array(tha)
-        self.tpa = self.proto_addr_to_array(tpa)
+        self.sha = sha
+        self.spa = spa
+        self.tha = tha
+        self.tpa = tpa
+        self._sha = self.hdwr_to_addr_array(self.sha)
+        self._spa = self.proto_addr_to_array(self.spa)
+        self._tha = self.hdwr_to_addr_array(self.tha)
+        self._tpa = self.proto_addr_to_array(self.tpa)
 
     @classmethod
     def decode(cls, packet: bytes):

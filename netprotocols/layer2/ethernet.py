@@ -23,8 +23,10 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
 
     def __init__(self, *, dst: str, src: str, eth: int):
         super().__init__()
-        self.dst = self.hdwr_to_addr_array(dst)
-        self.src = self.hdwr_to_addr_array(src)
+        self.dst = dst
+        self.src = src
+        self._dst = self.hdwr_to_addr_array(self.dst)
+        self._src = self.hdwr_to_addr_array(self.src)
         self.eth = eth
 
     @classmethod
