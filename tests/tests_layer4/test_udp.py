@@ -35,6 +35,8 @@ class TestUDP:
         assert mock_udp_header.len == 41
         assert mock_udp_header.chksum == 0x3649
         assert mock_udp_header.encapsulated_proto == "undefined"
+        assert repr(mock_udp_header) == \
+               "UDP(sport=2398, dport=53, len=41, chksum=13897)"
 
     def test_decode_udp_header(self, raw_udp_header):
         """
