@@ -29,6 +29,12 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
         self._src = self.hdwr_to_addr_array(self.src)
         self.eth = eth
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"dst={self.dst}, " \
+               f"src={self.src}, " \
+               f"eth={self.eth})"
+
     @classmethod
     def decode(cls, packet: bytes):
         header = cls.from_buffer_copy(packet)
