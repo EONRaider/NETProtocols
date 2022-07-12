@@ -138,6 +138,13 @@ class ICMPv6(ICMP):               # IETF RFC 4443
         self.chksum = chksum
         self.m_body = (c_ubyte * 4)(*m_body)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"type={self.type}, " \
+               f"code={self.code}, " \
+               f"chksum={self.chksum}, " \
+               f"m_body={bytes(self.m_body)})"
+
     @classmethod
     def decode(cls, packet: bytes):
         header = cls.from_buffer_copy(packet)
