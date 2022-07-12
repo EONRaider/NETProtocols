@@ -66,6 +66,13 @@ class ICMPv4(ICMP):             # IETF RFC 792
         self.chksum = chksum
         self.rest = (c_ubyte * 4)(*rest)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"type={self.type}, " \
+               f"code={self.code}, " \
+               f"chksum={self.chksum}, " \
+               f"rest={bytes(self.rest)})"
+
     @classmethod
     def decode(cls, packet: bytes):
         header = cls.from_buffer_copy(packet)
