@@ -54,6 +54,9 @@ class TestICMP:
         assert bytes(mock_icmpv4_header.rest) == b"\x00\x01\x00\x01"
         assert mock_icmpv4_header.encapsulated_proto == "undefined"
         assert mock_icmpv4_header.type_str == "Echo Request"
+        assert repr(mock_icmpv4_header) == \
+               "ICMPv4(type=8, code=0, chksum=33783, " \
+               "rest=b'\\x00\\x01\\x00\\x01')"
 
     def test_decode_icmpv4_header(self, raw_icmpv4_header):
         """
