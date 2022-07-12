@@ -25,6 +25,9 @@ class TestEthernet:
         assert mock_eth_header.eth == 0x0806
         assert bytes(mock_eth_header) == b"\xff\xff\xff\xff\xff\xff\x00\x07\r" \
                                          b"\xaf\xf4T\x08\x06"
+        assert repr(mock_eth_header) == \
+               'Ethernet(dst=ff:ff:ff:ff:ff:ff, src=00:07:0d:af:f4:54, ' \
+               'eth=2054)'
 
     def test_decode_ethernet_header(self, raw_eth_header):
         """
