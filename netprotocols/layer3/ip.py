@@ -71,6 +71,22 @@ class IPv4(IP):                    # IETF RFC 791
         self.src = self.proto_addr_to_array(src)
         self.dst = self.proto_addr_to_array(dst)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"version={self.version}, " \
+               f"ihl={self.ihl}, " \
+               f"dscp={self.dscp}, " \
+               f"ecp={self.ecp}, " \
+               f"len={self.len}, " \
+               f"id={self.id}, " \
+               f"flags={self.flags}, " \
+               f"offset={self.offset}, " \
+               f"ttl={self.ttl}, " \
+               f"proto={self.proto}, " \
+               f"chksum={self.chksum}, " \
+               f"src=\"{self.array_to_proto_addr(self.src)}\", " \
+               f"dst=\"{self.array_to_proto_addr(self.dst)}\")"
+
     @classmethod
     def decode(cls, packet: bytes):
         header = cls.from_buffer_copy(packet)
@@ -132,6 +148,17 @@ class IPv6(IP):                     # IETF RFC 2460 / 8200
         self.hop_limit = hop_limit
         self.src = self.proto_addr_to_array(src, addr_family=AF_INET6)
         self.dst = self.proto_addr_to_array(dst, addr_family=AF_INET6)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"version={self.version}, " \
+               f"tclass={self.tclass}, " \
+               f"flabel={self.flabel}, " \
+               f"payload_len={self.payload_len}, " \
+               f"next_header={self.next_header}, " \
+               f"hop_limit={self.hop_limit}, " \
+               f"src=\"{self.array_to_proto_addr(self.src, AF_INET6)}\", " \
+               f"dst=\"{self.array_to_proto_addr(self.dst, AF_INET6)}\")"
 
     @classmethod
     def decode(cls, packet: bytes):
