@@ -27,3 +27,10 @@ class UDP(Protocol):          # IETF RFC 768
         self.dport = dport
         self.len = len
         self.chksum = chksum
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"sport={self.sport}, " \
+               f"dport={self.dport}, " \
+               f"len={self.len}, " \
+               f"chksum={self.chksum})"
