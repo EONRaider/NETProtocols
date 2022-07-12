@@ -85,6 +85,9 @@ class TestICMP:
         assert mock_icmpv6_header.chksum == 0x3f69
         assert bytes(mock_icmpv6_header.m_body) == b"\x76\x20\x01\x00"
         assert mock_icmpv6_header.type_str == "Echo Request"
+        assert repr(mock_icmpv6_header) == \
+               "ICMPv6(type=128, code=0, chksum=16233, " \
+               "m_body=b'v \\x01\\x00')"
 
     def test_decode_icmpv6_header(self, raw_icmpv6_header):
         """
