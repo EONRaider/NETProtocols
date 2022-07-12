@@ -53,6 +53,17 @@ class ARP(Protocol):            # IETF RFC 826
         self._tha = self.hdwr_to_addr_array(self.tha)
         self._tpa = self.proto_addr_to_array(self.tpa)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"htype={self.htype}, " \
+               f"ptype={self.ptype}, " \
+               f"hlen={self.hlen}, " \
+               f"oper={self.oper}, " \
+               f"sha={self.sha}, " \
+               f"spa={self.spa}, " \
+               f"tha={self.tha}, " \
+               f"tpa={self.tpa})"
+
     @classmethod
     def decode(cls, packet: bytes):
         header = cls.from_buffer_copy(packet)
