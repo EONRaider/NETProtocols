@@ -48,6 +48,19 @@ class TCP(Protocol):                # IETF RFC 793
         self.chksum = chksum
         self.urg = urg
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}(" \
+               f"sport={self.sport}, " \
+               f"dport={self.dport}, " \
+               f"seq={self.seq}, " \
+               f"ack={self.ack}, " \
+               f"offset={self.offset}, " \
+               f"reserved={self.reserved}, " \
+               f"flags={self.flags}, " \
+               f"window={self.window}, " \
+               f"chksum={self.chksum}, " \
+               f"urg={self.urg})"
+
     @property
     def flags_hex_str(self) -> str:
         """
