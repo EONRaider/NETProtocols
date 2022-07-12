@@ -50,6 +50,10 @@ class TestTCP:
         assert mock_tcp_header.flags_hex_str == "0x018"
         assert mock_tcp_header.flags_str == "PSH ACK"
         assert mock_tcp_header.encapsulated_proto == "undefined"
+        assert repr(mock_tcp_header) == \
+               "TCP(sport=1022, dport=22, seq=209327191, ack=3598120581, " \
+               "offset=8, reserved=0, flags=24, window=8540, chksum=8200, " \
+               "urg=0)"
 
     def test_decode_tcp_header(self, raw_tcp_header):
         """
