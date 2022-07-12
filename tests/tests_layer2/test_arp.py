@@ -34,6 +34,10 @@ class TestARP:
         assert bytes(mock_arp_header) == \
                b"\x00\x01\x08\x00\x06\x04\x00\x02\x00\x07\r\xaf\xf4T\x18\xa6" \
                b"\xac\x01\x00\x00\x00\x00\x00\x00\x18\xa6\xad\x9f"
+        assert repr(mock_arp_header) == \
+               "ARP(htype=1, ptype=2048, hlen=6, oper=2, " \
+               "sha=00:07:0d:af:f4:54, spa=24.166.172.1, " \
+               "tha=00:00:00:00:00:00, tpa=24.166.173.159)"
 
     def test_decode_arp_header(self, raw_arp_header):
         """
