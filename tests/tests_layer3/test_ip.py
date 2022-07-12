@@ -71,6 +71,10 @@ class TestIPv4:
         assert bytes(mock_ipv4_header.dst) == b"\xc0\xa8\x01\xfe"
         assert mock_ipv4_header.encapsulated_proto == "TCP"
         assert mock_ipv4_header.flags_str == "Don't fragment (DF)"
+        assert repr(mock_ipv4_header) == \
+               "IPv4(version=4, ihl=5, dscp=0, ecp=0, len=40, id=60524, " \
+               "flags=2, offset=0, ttl=64, proto=6, chksum=11089, " \
+               "src=\"192.168.1.96\", dst=\"192.168.1.254\")"
 
     def test_decode_ipv4_header(self, raw_ipv4_header):
         """
@@ -121,6 +125,9 @@ class TestIPv6:
                                               b"\x00\x00\x00\x00\x00\x00\x00" \
                                               b"\x00\x01"
         assert mock_ipv6_header.encapsulated_proto == "TCP"
+        assert repr(mock_ipv6_header) == \
+               "IPv6(version=6, tclass=0, flabel=0, payload_len=120, " \
+               "next_header=6, hop_limit=255, src=\"fe80::1\", dst=\"ff02::1\")"
 
     def test_decode_ipv6_header(self, raw_ipv6_header):
         """
