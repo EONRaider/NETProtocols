@@ -21,6 +21,9 @@ class Packet:
     def __bytes__(self):
         return b"".join(proto for proto in self.__dict__.values())
 
+    def __repr__(self):
+        return ", ".join(repr(_repr) for proto, _repr in vars(self).items())
+
     @property
     def payload(self):
         return self.__bytes__()
