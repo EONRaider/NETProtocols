@@ -21,13 +21,16 @@ class TestPacket:
         """
         packet = Packet(mock_eth_header, mock_arp_header)
 
+        assert isinstance(packet.ethernet, Ethernet)
+        assert isinstance(packet.arp, ARP)
         assert repr(packet) == \
                "Ethernet(dst=ff:ff:ff:ff:ff:ff, src=00:07:0d:af:f4:54, " \
                "eth=2054), ARP(htype=1, ptype=2048, hlen=6, oper=2, " \
                "sha=00:07:0d:af:f4:54, spa=24.166.172.1, " \
                "tha=00:00:00:00:00:00, tpa=24.166.173.159)"
-        assert isinstance(packet.ethernet, Ethernet)
-        assert isinstance(packet.arp, ARP)
+        assert isinstance(packet.encapsulated_protos, tuple)
+        assert isinstance(packet.encapsulated_protos[0], Ethernet)
+        assert isinstance(packet.encapsulated_protos[1], ARP)
         assert len(bytes(packet)) == len(bytes(packet.ethernet) +
                                          bytes(packet.arp))  # 42 bytes
         assert packet.payload == \
