@@ -27,3 +27,7 @@ class Packet:
     @property
     def payload(self):
         return self.__bytes__()
+
+    @property
+    def encapsulated_protos(self) -> tuple:
+        return tuple(proto for name, proto in vars(self).items())
