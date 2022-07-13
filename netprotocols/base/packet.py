@@ -25,7 +25,7 @@ class Packet:
         return ", ".join(repr(_repr) for proto, _repr in vars(self).items())
 
     @property
-    def payload(self):
+    def payload(self) -> bytes:
         return self.__bytes__()
 
     @property
