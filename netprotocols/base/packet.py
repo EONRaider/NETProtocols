@@ -30,4 +30,4 @@ class Packet:
 
     @property
     def encapsulated_protos(self) -> tuple:
-        return tuple(proto for name, proto in vars(self).items())
+        return tuple(proto for proto in vars(self).values())
