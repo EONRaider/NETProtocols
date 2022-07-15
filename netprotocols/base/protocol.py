@@ -66,6 +66,17 @@ class Protocol(BigEndianStructure):
         return ":".join(format(octet, "02x") for octet in bytes(addr_array))
 
     @staticmethod
+    def byte_str_to_hdwr(addr: bytes) -> str:
+        """
+        Convert a byte string of 6 bytes to IEEE 802.3 MAC address.
+
+        Ex: From byte string with length equal to 6 to
+        "00:c0:ca:a8:19:74".
+        """
+        # noinspection PyTypeChecker
+        return Protocol.addr_array_to_hdwr(addr)
+
+    @staticmethod
     def proto_addr_to_array(proto_addr: str,
                             addr_family: socket.AddressFamily = AF_INET):
         """
