@@ -81,6 +81,17 @@ class TestProtocol:
 
         assert Protocol.addr_array_to_hdwr(addr_array) == mac_string
 
+    def test_convert_byte_str_to_hdwr(self, mac_bytes, mac_string):
+        """
+        GIVEN a byte-string
+        WHEN this byte-string corresponds to an IEEE 802 compliant MAC
+            address
+        THEN this byte-string must be correctly converted into its
+            string representation by the Protocol.byte_str_to_hdwr
+            static method
+        """
+        assert Protocol.byte_str_to_hdwr(mac_bytes) == mac_string
+
     def test_convert_ipv4_proto_addr_to_array(self,
                                               ipv4_addr_bytes,
                                               ipv4_addr_string):
