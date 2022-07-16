@@ -7,6 +7,8 @@ import string
 import re
 from random import choices
 
+from netprotocols.utils.exceptions import InvalidManufacturerCode
+
 
 def random_mac(manufacturer: str = "") -> str:
     """Return a string containing a randomly generated IEEE 802
@@ -16,9 +18,11 @@ def random_mac(manufacturer: str = "") -> str:
             bool(re.match(r"^([\dA-F]{2}:){2}([\dA-F]{2})$",
                           manufacturer,
                           flags=re.IGNORECASE)):
-        raise TypeError("A manufacturer code must be a string consisting of "
-                        "3 octets represented as hexadecimal characters "
-                        "separated by colons (i.e. \"AA:BB:CC\"")
+        raise InvalidManufacturerCode(
+            "A manufacturer code must be a string consisting of "
+            "3 octets represented as hexadecimal characters "
+            "separated by colons (i.e. \"AA:BB:CC\""
+        )
 
     device_only: bool = True if len(manufacturer) == 0 else False
     device_code: str = ":".join("".join(choices(string.hexdigits.upper(), k=2))
