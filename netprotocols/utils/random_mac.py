@@ -13,7 +13,9 @@ def random_mac(manufacturer: str = "") -> str:
     compliant MAC address that includes an optionally fixed manufacturer
     code."""
     if len(manufacturer) != 0 and not \
-            bool(re.match(r"^([\da-fA-F:]){8}$", manufacturer)):
+            bool(re.match(r"^([\dA-F]{2}:){2}([\dA-F]{2})$",
+                          manufacturer,
+                          flags=re.IGNORECASE)):
         raise TypeError("A manufacturer code must be a string consisting of "
                         "3 octets represented as hexadecimal characters "
                         "separated by colons (i.e. \"AA:BB:CC\"")
