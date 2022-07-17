@@ -10,7 +10,7 @@ import netprotocols.utils as utils
 from netprotocols.utils.exceptions import InvalidManufacturerCode
 
 
-class TestUtils:
+class TestRandomMac:
     def test_random_mac(self):
         """
         GIVEN a call to the utils.random_mac function
