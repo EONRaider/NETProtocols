@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "netprotocols"
-version = "0.5.3"
+version = "0.5.4"
 description = "Low-level implementations of common networking protocols"
 authors = ["EONRaider <livewire_voodoo@protonmail.com>"]
 
