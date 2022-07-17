@@ -13,8 +13,7 @@ class ICMP(Protocol):
 
     @property
     def chksum_hex_str(self) -> str:
-        """
-        Gets a string representation of the hexadecimal value of the
+        """Gets a string representation of the hexadecimal value of the
         ICMP checksum value set on the header.
         Ex: From 62030 to '0xf24e'
         """
@@ -23,17 +22,18 @@ class ICMP(Protocol):
     @property
     def type_str(self) -> str:
         return self.icmp_types.get(
-            self.type, "Unknown, Unassigned or Deprecated")
+            self.type, "Unknown, Unassigned or Deprecated"
+        )
 
 
-class ICMPv4(ICMP):             # IETF RFC 792
+class ICMPv4(ICMP):  # IETF RFC 792
     _fields_ = [
-        ("type", c_uint8),      # Control message type
-        ("code", c_uint8),      # Control message subtype
-        ("chksum", c_uint16),   # Header checksum
-        ("_rest", c_ubyte * 4)  # Rest of header (contents vary)
+        ("type", c_uint8),  # Control message type
+        ("code", c_uint8),  # Control message subtype
+        ("chksum", c_uint16),  # Header checksum
+        ("_rest", c_ubyte * 4),  # Rest of header (contents vary)
     ]
-    header_len = 8              # Length of the header in bytes
+    header_len = 8  # Length of the header in bytes
     icmp_types = {
         0: "Echo reply",
         3: "Destination Unreachable",
@@ -52,14 +52,10 @@ class ICMPv4(ICMP):             # IETF RFC 792
         18: "Address Mask Reply",
         30: "Traceroute",
         42: "Extended Echo Request",
-        43: "Extended Echo Reply"
+        43: "Extended Echo Reply",
     }
 
-    def __init__(self, *,
-                 type: int,
-                 code: int,
-                 chksum: int,
-                 rest: bytes):
+    def __init__(self, *, type: int, code: int, chksum: int, rest: bytes):
         super().__init__()
         self.type = type
         self.code = code
@@ -67,11 +63,13 @@ class ICMPv4(ICMP):             # IETF RFC 792
         self.rest = (c_ubyte * 4)(*rest)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(" \
-               f"type={self.type}, " \
-               f"code={self.code}, " \
-               f"chksum={self.chksum}, " \
-               f"rest={bytes(self.rest)})"
+        return (
+            f"{self.__class__.__name__}("
+            f"type={self.type}, "
+            f"code={self.code}, "
+            f"chksum={self.chksum}, "
+            f"rest={bytes(self.rest)})"
+        )
 
     @classmethod
     def decode(cls, packet: bytes):
@@ -80,14 +78,14 @@ class ICMPv4(ICMP):             # IETF RFC 792
         return header
 
 
-class ICMPv6(ICMP):               # IETF RFC 4443
+class ICMPv6(ICMP):  # IETF RFC 4443
     _fields_ = [
-        ("type", c_uint8),        # Control message type
-        ("code", c_uint8),        # Control message subtype
-        ("chksum", c_uint16),     # Header checksum
-        ("_m_body", c_ubyte * 4)  # Message body
+        ("type", c_uint8),  # Control message type
+        ("code", c_uint8),  # Control message subtype
+        ("chksum", c_uint16),  # Header checksum
+        ("_m_body", c_ubyte * 4),  # Message body
     ]
-    header_len = 8                # Length of the header in bytes
+    header_len = 8  # Length of the header in bytes
     icmp_types = {
         1: "Destination Unreachable",
         2: "Packet Too Big",
@@ -124,14 +122,10 @@ class ICMPv6(ICMP):               # IETF RFC 4443
         155: "RPL Control Message",
         200: "Private Experimentation",
         201: "Private Experimentation",
-        255: "Reserved for Expansion of ICMPv6 Informational Messages"
+        255: "Reserved for Expansion of ICMPv6 Informational Messages",
     }
 
-    def __init__(self, *,
-                 type: int,
-                 code: int,
-                 chksum: int,
-                 m_body: bytes):
+    def __init__(self, *, type: int, code: int, chksum: int, m_body: bytes):
         super().__init__()
         self.type = type
         self.code = code
@@ -139,11 +133,13 @@ class ICMPv6(ICMP):               # IETF RFC 4443
         self.m_body = (c_ubyte * 4)(*m_body)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(" \
-               f"type={self.type}, " \
-               f"code={self.code}, " \
-               f"chksum={self.chksum}, " \
-               f"m_body={bytes(self.m_body)})"
+        return (
+            f"{self.__class__.__name__}("
+            f"type={self.type}, "
+            f"code={self.code}, "
+            f"chksum={self.chksum}, "
+            f"m_body={bytes(self.m_body)})"
+        )
 
     @classmethod
     def decode(cls, packet: bytes):

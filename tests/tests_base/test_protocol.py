@@ -33,8 +33,9 @@ def ipv4_addr_string():
 
 @pytest.fixture
 def ipv6_addr_bytes():
-    return b"\xfe\x80\x00\x00\x00\x00\x00\x00" \
-           b"\x02\x00\x86\xff\xfe\x05\x80\xda"
+    return (
+        b"\xfe\x80\x00\x00\x00\x00\x00\x00" b"\x02\x00\x86\xff\xfe\x05\x80\xda"
+    )
 
 
 @pytest.fixture
@@ -92,9 +93,9 @@ class TestProtocol:
         """
         assert Protocol.byte_str_to_hdwr(mac_bytes) == mac_string
 
-    def test_convert_ipv4_proto_addr_to_array(self,
-                                              ipv4_addr_bytes,
-                                              ipv4_addr_string):
+    def test_convert_ipv4_proto_addr_to_array(
+        self, ipv4_addr_bytes, ipv4_addr_string
+    ):
         """
         GIVEN a string of characters
         WHEN this string corresponds to an RFC 791 compliant IPv4
@@ -108,9 +109,9 @@ class TestProtocol:
         assert bytes(addr_array) == ipv4_addr_bytes
         assert len(addr_array) == 4
 
-    def test_convert_array_to_ipv4_proto_addr(self,
-                                              ipv4_addr_bytes,
-                                              ipv4_addr_string):
+    def test_convert_array_to_ipv4_proto_addr(
+        self, ipv4_addr_bytes, ipv4_addr_string
+    ):
         """
         GIVEN a byte-string
         WHEN this byte-string corresponds to an RFC 791 compliant IPv4
@@ -123,9 +124,9 @@ class TestProtocol:
 
         assert Protocol.array_to_proto_addr(addr_array) == ipv4_addr_string
 
-    def test_convert_ipv6_proto_addr_to_array(self,
-                                              ipv6_addr_bytes,
-                                              ipv6_addr_string):
+    def test_convert_ipv6_proto_addr_to_array(
+        self, ipv6_addr_bytes, ipv6_addr_string
+    ):
         """
         GIVEN a string of characters
         WHEN this string corresponds to an RFC 2460 compliant IPv6
@@ -139,9 +140,9 @@ class TestProtocol:
         assert bytes(addr_array) == ipv6_addr_bytes
         assert len(addr_array) == 16
 
-    def test_convert_array_to_ipv6_proto_addr(self,
-                                              ipv6_addr_bytes,
-                                              ipv6_addr_string):
+    def test_convert_array_to_ipv6_proto_addr(
+        self, ipv6_addr_bytes, ipv6_addr_string
+    ):
         """
         GIVEN a byte-string
         WHEN this byte-string corresponds to an RFC 2460 compliant IPv6
@@ -152,5 +153,7 @@ class TestProtocol:
         """
         addr_array = (c_ubyte * 16)(*ipv6_addr_bytes)
 
-        assert Protocol.array_to_proto_addr(
-            addr_array, AF_INET6) == ipv6_addr_string
+        assert (
+            Protocol.array_to_proto_addr(addr_array, AF_INET6)
+            == ipv6_addr_string
+        )

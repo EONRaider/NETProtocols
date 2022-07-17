@@ -15,47 +15,50 @@ class IP(Protocol):
         0x02: "IGMP",
         0x06: "TCP",
         0x11: "UDP",
-        0x3a: "ICMPv6"
+        0x3A: "ICMPv6",
     }
 
 
-class IPv4(IP):                    # IETF RFC 791
+class IPv4(IP):  # IETF RFC 791
     _fields_ = [
-        ("version", c_uint8, 4),   # Protocol version
-        ("ihl", c_uint8, 4),       # Internet header length
-        ("dscp", c_uint8, 6),      # Differentiated services code point
-        ("ecp", c_uint8, 2),       # Explicit congestion notification
-        ("len", c_uint16),         # Total packet length
-        ("id", c_uint16),          # Identification
-        ("flags", c_uint16, 3),    # Fragmentation control flags
+        ("version", c_uint8, 4),  # Protocol version
+        ("ihl", c_uint8, 4),  # Internet header length
+        ("dscp", c_uint8, 6),  # Differentiated services code point
+        ("ecp", c_uint8, 2),  # Explicit congestion notification
+        ("len", c_uint16),  # Total packet length
+        ("id", c_uint16),  # Identification
+        ("flags", c_uint16, 3),  # Fragmentation control flags
         ("offset", c_uint16, 13),  # Fragment offset
-        ("ttl", c_uint8),          # Time to live
-        ("proto", c_uint8),        # Encapsulated protocol
-        ("chksum", c_uint16),      # Header checksum
-        ("_src", c_ubyte * 4),     # Source address
-        ("_dst", c_ubyte * 4)      # Destination address
+        ("ttl", c_uint8),  # Time to live
+        ("proto", c_uint8),  # Encapsulated protocol
+        ("chksum", c_uint16),  # Header checksum
+        ("_src", c_ubyte * 4),  # Source address
+        ("_dst", c_ubyte * 4),  # Destination address
     ]
-    header_len = 20                # Length of the header in bytes
+    header_len = 20  # Length of the header in bytes
     flag_names = {
         0: "Not set",
         1: "More fragments (MF)",
-        2: "Don't fragment (DF)"
+        2: "Don't fragment (DF)",
     }
 
-    def __init__(self, *,
-                 version: int,
-                 ihl: int,
-                 dscp: int,
-                 ecp: int,
-                 len: int,
-                 id: int,
-                 flags: int,
-                 offset: int,
-                 ttl: int,
-                 proto: int,
-                 chksum: int,
-                 src: str,
-                 dst: str):
+    def __init__(
+        self,
+        *,
+        version: int,
+        ihl: int,
+        dscp: int,
+        ecp: int,
+        len: int,
+        id: int,
+        flags: int,
+        offset: int,
+        ttl: int,
+        proto: int,
+        chksum: int,
+        src: str,
+        dst: str,
+    ):
         super().__init__()
         self.version = version
         self.ihl = ihl
@@ -72,20 +75,22 @@ class IPv4(IP):                    # IETF RFC 791
         self.dst = self.proto_addr_to_array(dst)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(" \
-               f"version={self.version}, " \
-               f"ihl={self.ihl}, " \
-               f"dscp={self.dscp}, " \
-               f"ecp={self.ecp}, " \
-               f"len={self.len}, " \
-               f"id={self.id}, " \
-               f"flags={self.flags}, " \
-               f"offset={self.offset}, " \
-               f"ttl={self.ttl}, " \
-               f"proto={self.proto}, " \
-               f"chksum={self.chksum}, " \
-               f"src=\"{self.array_to_proto_addr(self.src)}\", " \
-               f"dst=\"{self.array_to_proto_addr(self.dst)}\")"
+        return (
+            f"{self.__class__.__name__}("
+            f"version={self.version}, "
+            f"ihl={self.ihl}, "
+            f"dscp={self.dscp}, "
+            f"ecp={self.ecp}, "
+            f"len={self.len}, "
+            f"id={self.id}, "
+            f"flags={self.flags}, "
+            f"offset={self.offset}, "
+            f"ttl={self.ttl}, "
+            f"proto={self.proto}, "
+            f"chksum={self.chksum}, "
+            f'src="{self.array_to_proto_addr(self.src)}", '
+            f'dst="{self.array_to_proto_addr(self.dst)}")'
+        )
 
     @classmethod
     def decode(cls, packet: bytes):
@@ -100,45 +105,46 @@ class IPv4(IP):                    # IETF RFC 791
 
     @property
     def chksum_hex_str(self) -> str:
-        """
-        Gets a string representation of the hexadecimal value of the
+        """Gets a string representation of the hexadecimal value of the
         IP checksum value set on the header.
         Ex: From 62030 to '0xf24e'
         """
         return self.int_to_hex_str(self.chksum)
-    
+
     @property
     def flags_str(self) -> str:
-        """
-        Gets a string representation of the name of the IP flag set on
-        the packet.
+        """Gets a string representation of the name of the IP flag set
+        on the packet.
         Ex: 'Not set', 'Don't fragment (DF)' or 'More fragments (MF)'
         """
         return self.flag_names.get(self.flags, "Error")
 
 
-class IPv6(IP):                     # IETF RFC 2460 / 8200
+class IPv6(IP):  # IETF RFC 2460 / 8200
     _fields_ = [
-        ("version", c_uint32, 4),   # Protocol version
-        ("tclass", c_uint32, 8),    # Traffic class
-        ("flabel", c_uint32, 20),   # Flow label
+        ("version", c_uint32, 4),  # Protocol version
+        ("tclass", c_uint32, 8),  # Traffic class
+        ("flabel", c_uint32, 20),  # Flow label
         ("payload_len", c_uint16),  # Payload length
-        ("next_header", c_uint8),   # Type of next header
-        ("hop_limit", c_uint8),     # Hop limit (replaces IPv4 TTL)
-        ("_src", c_ubyte * 16),     # Source address
-        ("_dst", c_ubyte * 16)      # Destination address
+        ("next_header", c_uint8),  # Type of next header
+        ("hop_limit", c_uint8),  # Hop limit (replaces IPv4 TTL)
+        ("_src", c_ubyte * 16),  # Source address
+        ("_dst", c_ubyte * 16),  # Destination address
     ]
-    header_len = 40                 # Length of the header in bytes
+    header_len = 40  # Length of the header in bytes
 
-    def __init__(self, *,
-                 version: int,
-                 tclass: int,
-                 flabel: int,
-                 payload_len: int,
-                 next_header: int,
-                 hop_limit: int,
-                 src: str,
-                 dst: str):
+    def __init__(
+        self,
+        *,
+        version: int,
+        tclass: int,
+        flabel: int,
+        payload_len: int,
+        next_header: int,
+        hop_limit: int,
+        src: str,
+        dst: str,
+    ):
         super().__init__()
         self.version = version
         self.tclass = tclass
@@ -150,15 +156,17 @@ class IPv6(IP):                     # IETF RFC 2460 / 8200
         self.dst = self.proto_addr_to_array(dst, addr_family=AF_INET6)
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(" \
-               f"version={self.version}, " \
-               f"tclass={self.tclass}, " \
-               f"flabel={self.flabel}, " \
-               f"payload_len={self.payload_len}, " \
-               f"next_header={self.next_header}, " \
-               f"hop_limit={self.hop_limit}, " \
-               f"src=\"{self.array_to_proto_addr(self.src, AF_INET6)}\", " \
-               f"dst=\"{self.array_to_proto_addr(self.dst, AF_INET6)}\")"
+        return (
+            f"{self.__class__.__name__}("
+            f"version={self.version}, "
+            f"tclass={self.tclass}, "
+            f"flabel={self.flabel}, "
+            f"payload_len={self.payload_len}, "
+            f"next_header={self.next_header}, "
+            f"hop_limit={self.hop_limit}, "
+            f'src="{self.array_to_proto_addr(self.src, AF_INET6)}", '
+            f'dst="{self.array_to_proto_addr(self.dst, AF_INET6)}")'
+        )
 
     @classmethod
     def decode(cls, packet: bytes):

@@ -10,7 +10,7 @@ from ctypes import (
     BigEndianStructure,
     create_string_buffer,
     c_ubyte,
-    sizeof
+    sizeof,
 )
 from socket import inet_ntop, inet_pton, AF_INET
 from typing import Union
@@ -44,21 +44,20 @@ class Protocol(BigEndianStructure):
 
     @staticmethod
     def hdwr_to_addr_array(hdwr_addr: str) -> Array:
-        """
-        Convert an IEEE 802 MAC address to c_ubyte array of 6
+        """Convert an IEEE 802 MAC address to c_ubyte array of 6
         bytes.
 
         Ex: From "00:c0:ca:a8:19:74" to instance of Array with length
         equal to 6.
         """
-        mac_to_bytes = b"".join(bytes.fromhex(octet)
-                                for octet in re.split("[:-]", hdwr_addr))
+        mac_to_bytes = b"".join(
+            bytes.fromhex(octet) for octet in re.split("[:-]", hdwr_addr)
+        )
         return (c_ubyte * 6)(*mac_to_bytes)
 
     @staticmethod
     def addr_array_to_hdwr(addr_array: Array) -> str:
-        """
-        Convert a c_ubyte array of 6 bytes to IEEE 802.3 MAC address.
+        """Convert a c_ubyte array of 6 bytes to IEEE 802.3 MAC address.
 
         Ex: From instance of Array with length equal to 6 to
         "00:c0:ca:a8:19:74".
@@ -67,8 +66,7 @@ class Protocol(BigEndianStructure):
 
     @staticmethod
     def byte_str_to_hdwr(addr: bytes) -> str:
-        """
-        Convert a byte string of 6 bytes to IEEE 802.3 MAC address.
+        """Convert a byte string of 6 bytes to IEEE 802.3 MAC address.
 
         Ex: From byte string with length equal to 6 to
         "00:c0:ca:a8:19:74".
@@ -77,10 +75,10 @@ class Protocol(BigEndianStructure):
         return Protocol.addr_array_to_hdwr(addr)
 
     @staticmethod
-    def proto_addr_to_array(proto_addr: str,
-                            addr_family: socket.AddressFamily = AF_INET):
-        """
-        Convert an IPv4 address string in dotted-decimal notation
+    def proto_addr_to_array(
+        proto_addr: str, addr_family: socket.AddressFamily = AF_INET
+    ):
+        """Convert an IPv4 address string in dotted-decimal notation
         to a c_ubyte array of 4 bytes or an IPv6 address string to a
         c_ubyte array of 16 bytes.
 
@@ -93,16 +91,21 @@ class Protocol(BigEndianStructure):
         try:
             addr_to_bytes = inet_pton(addr_family, proto_addr)
         except OSError:
-            raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
-                            "supported.")
-        return (c_ubyte * 4)(*addr_to_bytes) if addr_family == AF_INET else \
-            (c_ubyte * 16)(*addr_to_bytes)
+            raise TypeError(
+                "Only addresses of family AF_INET and AF_INET6 are "
+                "supported."
+            )
+        return (
+            (c_ubyte * 4)(*addr_to_bytes)
+            if addr_family == AF_INET
+            else (c_ubyte * 16)(*addr_to_bytes)
+        )
 
     @staticmethod
-    def array_to_proto_addr(addr_array: Array,
-                            addr_family: socket.AddressFamily = AF_INET) -> str:
-        """
-        Convert a packed IPv4/IPv6 address array to its RFC 791/2460
+    def array_to_proto_addr(
+        addr_array: Array, addr_family: socket.AddressFamily = AF_INET
+    ) -> str:
+        """Convert a packed IPv4/IPv6 address array to its RFC 791/2460
         string representation.
 
         Ex1: From instance of Array with length equal to 4 to
@@ -114,13 +117,14 @@ class Protocol(BigEndianStructure):
         try:
             return inet_ntop(addr_family, bytes(addr_array))
         except OSError:
-            raise TypeError("Only addresses of family AF_INET and AF_INET6 are "
-                            "supported.")
+            raise TypeError(
+                "Only addresses of family AF_INET and AF_INET6 are "
+                "supported."
+            )
 
     @staticmethod
     def int_to_hex_str(number: int) -> str:
-        """
-        Obtain the string representation of an integer as a hexadecimal
+        """Obtain the string representation of an integer as a hexadecimal
         value.
         Ex: From 62030 to '0xf24e'
         """

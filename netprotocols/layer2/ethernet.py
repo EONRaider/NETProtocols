@@ -8,18 +8,14 @@ from ctypes import c_ubyte, c_uint16
 from netprotocols import Protocol
 
 
-class Ethernet(Protocol):       # IEEE 802.3 standard
+class Ethernet(Protocol):  # IEEE 802.3 standard
     _fields_ = [
         ("_dst", c_ubyte * 6),  # Destination hardware address
         ("_src", c_ubyte * 6),  # Source hardware address
-        ("eth", c_uint16)       # Ethertype
+        ("eth", c_uint16),  # Ethertype
     ]
-    header_len = 14             # Length of the header in bytes
-    ethertypes = {
-        0x0806: "ARP",
-        0x0800: "IPv4",
-        0x86dd: "IPv6"
-    }
+    header_len = 14  # Length of the header in bytes
+    ethertypes = {0x0806: "ARP", 0x0800: "IPv4", 0x86DD: "IPv6"}
 
     def __init__(self, *, dst: str, src: str, eth: int):
         super().__init__()
@@ -30,10 +26,12 @@ class Ethernet(Protocol):       # IEEE 802.3 standard
         self.eth = eth
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(" \
-               f"dst={self.dst}, " \
-               f"src={self.src}, " \
-               f"eth={self.eth})"
+        return (
+            f"{self.__class__.__name__}("
+            f"dst={self.dst}, "
+            f"src={self.src}, "
+            f"eth={self.eth})"
+        )
 
     @classmethod
     def decode(cls, packet: bytes):

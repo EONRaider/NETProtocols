@@ -10,12 +10,7 @@ import pytest
 
 @pytest.fixture
 def mock_udp_header():
-    return UDP(
-        sport=2398,
-        dport=53,
-        len=41,
-        chksum=0x3649
-    )
+    return UDP(sport=2398, dport=53, len=41, chksum=0x3649)
 
 
 @pytest.fixture
@@ -25,8 +20,7 @@ def raw_udp_header():
 
 class TestUDP:
     def test_build_udp_header(self, mock_udp_header):
-        """
-        GIVEN a set of attributes defining a UDP packet
+        """GIVEN a set of attributes defining a UDP packet
         WHEN those values are valid and correctly formatted
         THEN an instance of UDP must be initialized without errors
         """
@@ -35,12 +29,13 @@ class TestUDP:
         assert mock_udp_header.len == 41
         assert mock_udp_header.chksum == 0x3649
         assert mock_udp_header.encapsulated_proto == "undefined"
-        assert repr(mock_udp_header) == \
-               "UDP(sport=2398, dport=53, len=41, chksum=13897)"
+        assert (
+            repr(mock_udp_header)
+            == "UDP(sport=2398, dport=53, len=41, chksum=13897)"
+        )
 
     def test_decode_udp_header(self, raw_udp_header):
-        """
-        GIVEN a byte-string representation of a UDP packet header
+        """GIVEN a byte-string representation of a UDP packet header
         WHEN this header is successfully decoded
         THEN an instance of UDP must initialize each of its attributes
             in alignment with the byte fields

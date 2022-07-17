@@ -12,13 +12,13 @@ from netprotocols.utils.exceptions import InvalidManufacturerCode
 
 class TestRandomMac:
     def test_random_mac(self):
-        """
-        GIVEN a call to the utils.random_mac function
+        """GIVEN a call to the utils.random_mac function
         WHEN the arguments list is correctly passed
         THEN a random MAC address must be returned without exceptions
         """
-        valid_mac = re.compile(r"^([\dA-F]{2}:){5}([\dA-F]{2})$",
-                               flags=re.IGNORECASE)
+        valid_mac = re.compile(
+            r"^([\dA-F]{2}:){5}([\dA-F]{2})$", flags=re.IGNORECASE
+        )
 
         mac_addr = utils.random_mac()
         assert bool(re.match(valid_mac, mac_addr)) is True

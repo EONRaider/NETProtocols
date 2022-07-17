@@ -14,18 +14,21 @@ def random_mac(manufacturer: str = "") -> str:
     """Return a string containing a randomly generated IEEE 802
     compliant MAC address that includes an optionally fixed manufacturer
     code."""
-    if len(manufacturer) != 0 and not \
-            bool(re.match(r"^([\dA-F]{2}:){2}([\dA-F]{2})$",
-                          manufacturer,
-                          flags=re.IGNORECASE)):
+    if len(manufacturer) != 0 and not bool(
+        re.match(
+            r"^([\dA-F]{2}:){2}([\dA-F]{2})$", manufacturer, flags=re.IGNORECASE
+        )
+    ):
         raise InvalidManufacturerCode(
             "A manufacturer code must be a string consisting of "
             "3 octets represented as hexadecimal characters "
-            "separated by colons (i.e. \"AA:BB:CC\""
+            'separated by colons (i.e. "AA:BB:CC"'
         )
 
     device_only: bool = True if len(manufacturer) == 0 else False
-    device_code: str = ":".join("".join(choices(string.hexdigits.upper(), k=2))
-                                for _ in range(6 if device_only else 3))
+    device_code: str = ":".join(
+        "".join(choices(string.hexdigits.upper(), k=2))
+        for _ in range(6 if device_only else 3)
+    )
 
     return device_code if device_only else ":".join((manufacturer, device_code))
