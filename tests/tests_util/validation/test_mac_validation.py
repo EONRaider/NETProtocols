@@ -16,7 +16,7 @@ class MAC:
         self.mac = mac
 
 
-class TestValidation:
+class TestMACValidation:
     @pytest.mark.parametrize(
         "mac_addr",
         [
