@@ -30,8 +30,8 @@ class TestMACValidation:
     def test_descriptor_values(self, mac_addr):
         """GIVEN a set of strings
         WHEN those strings correspond to valid MAC addresses
-        THEN a class that uses the MACAddress descriptor must be
-            initialized without errors
+        THEN an instance of a class that uses the MACAddress descriptor
+            must be initialized without errors
         """
         mac_address1 = MAC(mac_addr)
         assert isinstance(mac_address1.mac, str)
