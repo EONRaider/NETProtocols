@@ -6,7 +6,7 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 import pytest
 
 from netprotocols.utils.exceptions import InvalidMACAddress
-from netprotocols.utils.validation import MACAddress, validate_mac_address
+from netprotocols.utils.validation.mac import MACAddress, validate_mac_address
 
 
 class MAC:
@@ -28,6 +28,11 @@ class TestValidation:
         ],
     )
     def test_descriptor_values(self, mac_addr):
+        """GIVEN a set of strings
+        WHEN those strings correspond to valid MAC addresses
+        THEN a class that uses the MACAddress descriptor must be
+            initialized without errors
+        """
         mac_address1 = MAC(mac_addr)
         assert isinstance(mac_address1.mac, str)
 
@@ -43,6 +48,11 @@ class TestValidation:
         ],
     )
     def test_descriptor_exceptions(self, mac_addr):
+        """GIVEN a set of strings
+        WHEN those strings correspond to invalid MAC addresses
+        THEN an InvalidMACAddress exception must be raised at each
+            instantiation
+        """
         with pytest.raises(InvalidMACAddress):
             MAC(mac_addr)
 
@@ -61,4 +71,10 @@ class TestValidation:
         ],
     )
     def test_validate_mac_address(self, mac_addr, is_valid):
+        """GIVEN a set of values of different types
+        WHEN those values are passed as parameters to the
+            validate_mac_address function
+        THEN the function must return the correct boolean object
+            corresponding to the validation of each value
+        """
         assert validate_mac_address(mac_addr) is is_valid
