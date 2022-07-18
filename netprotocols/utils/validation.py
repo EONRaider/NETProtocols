@@ -29,7 +29,7 @@ class MACAddress:
         except (TypeError, AttributeError):
             # Raised if 'value' is not of type str
             raise InvalidMACAddress(
-                "Unsupported format/type for MAC address value."
+                "Incorrect format/type for MAC address value."
             )
         self.value = mac_addr.group()
 
