@@ -44,7 +44,6 @@ def validate_mac_address(mac_address: str) -> bool:
     :returns: True if valid and False otherwise.
     """
     try:
-        return bool(re.match(mac_regex, mac_address))
-    except TypeError:
-        # Raised if 'mac_addr' is not of type str
+        return bool(MACAddress.validate(mac_address))
+    except InvalidMACAddress:
         return False
