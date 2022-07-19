@@ -4,16 +4,15 @@
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
+from dataclasses import dataclass
 
 from netprotocols.utils.exceptions import InvalidMACAddress
 from netprotocols.utils.validation.mac import MACAddress, validate_mac_address
 
 
+@dataclass
 class MAC:
-    mac = MACAddress()
-
-    def __init__(self, mac):
-        self.mac = mac
+    mac: str = MACAddress()
 
 
 class TestMACValidation:
