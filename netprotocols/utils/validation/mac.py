@@ -18,20 +18,24 @@ class MACAddress:
     validation of MAC addresses before assignment/manipulation."""
 
     def __get__(self, instance, owner=None) -> str:
-        return self.value
+        return self._value
 
     def __set__(self, instance, value: str) -> None:
+        self._value = self.validate(value)
+
+    @staticmethod
+    def validate(value: str) -> str:
         try:
-            if not (mac_addr := re.match(mac_regex, value)).group():
-                """Raised if 'value' is of type string but does not
-                represent a valid MAC address"""
-                raise TypeError
+            return re.match(mac_regex, value).group()
         except (TypeError, AttributeError):
-            # Raised if 'value' is not of type str
+            '''
+            TypeError: Raised if 'value' is not of type str.
+            AttributeError: Raised if 'value' is of type str but doesn't
+                represent a valid MAC address.
+            '''
             raise InvalidMACAddress(
-                "Incorrect format/type for MAC address value."
+                f"Invalid format or type for MAC address value: {value}"
             )
-        self.value = mac_addr.group()
 
 
 def validate_mac_address(mac_address: str) -> bool:
