@@ -3,14 +3,9 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import re
+import ipaddress
 
 from netprotocols.utils.exceptions import InvalidIPv4Address
-
-
-ipv4_regex = re.compile(
-    r"^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)(\.(?!$)|$)){4}$", flags=re.IGNORECASE
-)
 
 
 class IPv4Address:
@@ -18,20 +13,21 @@ class IPv4Address:
     validation of IPv4 addresses before assignment/manipulation."""
 
     def __get__(self, instance, owner=None) -> str:
-        return self.value
+        return self._value
 
     def __set__(self, instance, value: str) -> None:
+        self._value = self.validate(value)
+
+    @staticmethod
+    def validate(value: str) -> str:
         try:
-            if not (ipv4_addr := re.match(ipv4_regex, value)).group():
-                """Raised if 'value' is of type string but does not
-                represent a valid IPv4 address"""
-                raise TypeError
-        except (TypeError, AttributeError):
-            # Raised if 'value' is not of type str
+            if not issubclass(value.__class__, str):
+                raise ipaddress.AddressValueError
+            return str(ipaddress.IPv4Address(value))
+        except ipaddress.AddressValueError:
             raise InvalidIPv4Address(
-                "Incorrect format/type for IPv4 address value."
+                f"Invalid format or type for IPv4 address value: {value}"
             )
-        self.value = ipv4_addr.group()
 
 
 def validate_ipv4_address(ipv4_address: str) -> bool:
