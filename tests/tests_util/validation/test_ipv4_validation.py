@@ -4,6 +4,7 @@
 __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
+from dataclasses import dataclass
 
 from netprotocols.utils.exceptions import InvalidIPv4Address
 from netprotocols.utils.validation.ipv4 import (
@@ -12,11 +13,9 @@ from netprotocols.utils.validation.ipv4 import (
 )
 
 
+@dataclass
 class IPv4:
-    ipv4 = IPv4Address()
-
-    def __init__(self, ipv4):
-        self.ipv4 = ipv4
+    ipv4: str = IPv4Address()
 
 
 class TestIPv4Validation:
