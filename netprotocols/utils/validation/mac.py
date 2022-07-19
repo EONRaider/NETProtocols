@@ -22,11 +22,11 @@ class MACAddress(Validator):
         try:
             return re.match(mac_regex, value).group()
         except (TypeError, AttributeError):
-            '''
+            """
             TypeError: Raised if 'value' is not of type str.
             AttributeError: Raised if 'value' is of type str but doesn't
                 represent a valid MAC address.
-            '''
+            """
             raise InvalidMACAddress(
                 f"Invalid format or type for MAC address value: {value}"
             )
