@@ -12,7 +12,7 @@ mac_regex = re.compile(
     r"^(?P<manufacturer_id>([\dA-F]{2}[:-]){2}[\dA-F]{2})"
     r"[:-]"
     r"(?P<device_id>([\dA-F]{2}[:-]){2}[\dA-F]{2})$",
-    flags=re.IGNORECASE
+    flags=re.IGNORECASE,
 )
 
 

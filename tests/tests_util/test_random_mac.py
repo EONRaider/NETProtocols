@@ -34,8 +34,7 @@ class TestRandomMac:
         """
         result = re.match(mac_regex, random_mac(manufacturer)).group()
         assert (
-                re.match(mac_regex, result).group(
-                    "manufacturer_id") == manufacturer
+            re.match(mac_regex, result).group("manufacturer_id") == manufacturer
         )
 
     @pytest.mark.parametrize(
