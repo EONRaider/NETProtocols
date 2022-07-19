@@ -40,7 +40,16 @@ class TestRandomMac:
 
     @pytest.mark.parametrize(
         "manufacturer",
-        ["AA:BB", "AA:BB:TT", "AA:BB:TT:LL", "11:22:33:44:55:66", {}, "", 1, []]
+        [
+            "AA:BB",
+            "AA:BB:TT",
+            "AA:BB:TT:LL",
+            "11:22:33:44:55:66",
+            {},
+            "",
+            1,
+            [],
+        ],
     )
     def test_random_mac_invalid_manufacturer(self, manufacturer):
         """GIVEN a call to the random_mac function
