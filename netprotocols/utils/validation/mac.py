@@ -9,7 +9,10 @@ from netprotocols.utils.exceptions import InvalidMACAddress
 from netprotocols.utils.validation._base import Validator
 
 mac_regex = re.compile(
-    r"^([\dA-F]{2}[:-]){5}([\dA-F]{2})$", flags=re.IGNORECASE
+    r"^(?P<manufacturer_id>([\dA-F]{2}[:-]){2}[\dA-F]{2})"
+    r"[:-]"
+    r"(?P<device_id>([\dA-F]{2}[:-]){2}[\dA-F]{2})$",
+    flags=re.IGNORECASE
 )
 
 
