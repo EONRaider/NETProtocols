@@ -36,7 +36,6 @@ def validate_ipv4_address(ipv4_address: str) -> bool:
     :returns: True if valid and False otherwise.
     """
     try:
-        return bool(re.match(ipv4_regex, ipv4_address))
-    except TypeError:
-        # Raised if 'ipv4_address' is not of type str
+        return bool(IPv4Address.validate(ipv4_address))
+    except InvalidIPv4Address:
         return False
