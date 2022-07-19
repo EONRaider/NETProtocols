@@ -3,7 +3,7 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-from abc import ABC
+from abc import ABC, abstractmethod
 
 
 class Validator(ABC):
@@ -17,5 +17,6 @@ class Validator(ABC):
         self._value = self.validate(value)
 
     @staticmethod
+    @abstractmethod
     def validate(value: str) -> str:
         ...
