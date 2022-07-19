@@ -6,22 +6,16 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 import re
 
 from netprotocols.utils.exceptions import InvalidMACAddress
-
+from netprotocols.utils.validation._base import Validator
 
 mac_regex = re.compile(
     r"^([\dA-F]{2}[:-]){5}([\dA-F]{2})$", flags=re.IGNORECASE
 )
 
 
-class MACAddress:
+class MACAddress(Validator):
     """Descriptor for managed attributes in classes that require the
     validation of MAC addresses before assignment/manipulation."""
-
-    def __get__(self, instance, owner=None) -> str:
-        return self._value
-
-    def __set__(self, instance, value: str) -> None:
-        self._value = self.validate(value)
 
     @staticmethod
     def validate(value: str) -> str:
