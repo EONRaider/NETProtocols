@@ -8,14 +8,14 @@ from dataclasses import dataclass
 
 from netprotocols.utils.exceptions import InvalidIPv4Address
 from netprotocols.utils.validation.ipv4 import (
-    IPv4Address,
+    ValidIPv4Address,
     validate_ipv4_address,
 )
 
 
 @dataclass
 class IPv4:
-    ipv4: str = IPv4Address()
+    ipv4: str = ValidIPv4Address()
 
 
 class TestIPv4Validation:

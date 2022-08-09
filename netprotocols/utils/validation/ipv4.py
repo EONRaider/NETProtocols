@@ -9,7 +9,7 @@ from netprotocols.utils.exceptions import InvalidIPv4Address
 from netprotocols.utils.validation._base import Validator
 
 
-class IPv4Address(Validator):
+class ValidIPv4Address(Validator):
     """Descriptor for managed attributes in classes that require the
     validation of IPv4 addresses before assignment/manipulation."""
 
@@ -31,6 +31,6 @@ def validate_ipv4_address(ipv4_address: str) -> bool:
     :returns: True if valid and False otherwise.
     """
     try:
-        return bool(IPv4Address.validate(ipv4_address))
+        return bool(ValidIPv4Address.validate(ipv4_address))
     except InvalidIPv4Address:
         return False
