@@ -7,12 +7,12 @@ import pytest
 from dataclasses import dataclass
 
 from netprotocols.utils.exceptions import InvalidMACAddress
-from netprotocols.utils.validation.mac import MACAddress, validate_mac_address
+from netprotocols.utils.validation.mac import ValidMACAddress, validate_mac_address
 
 
 @dataclass
 class MAC:
-    mac: str = MACAddress()
+    mac: str = ValidMACAddress()
 
 
 class TestMACValidation:

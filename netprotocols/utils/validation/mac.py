@@ -16,7 +16,7 @@ mac_regex = re.compile(
 )
 
 
-class MACAddress(Validator):
+class ValidMACAddress(Validator):
     """Descriptor for managed attributes in classes that require the
     validation of MAC addresses before assignment/manipulation."""
 
@@ -41,6 +41,6 @@ def validate_mac_address(mac_address: str) -> bool:
     :returns: True if valid and False otherwise.
     """
     try:
-        return bool(MACAddress.validate(mac_address))
+        return bool(ValidMACAddress.validate(mac_address))
     except InvalidMACAddress:
         return False
