@@ -6,7 +6,7 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 import pytest
 from dataclasses import dataclass
 
-from netprotocols.utils.exceptions import InvalidMACAddress
+from netprotocols.utils.exceptions import InvalidMACAddressException
 from netprotocols.utils.validation.mac import ValidMACAddress, validate_mac_address
 
 
@@ -33,7 +33,9 @@ class TestMACValidation:
             must be initialized without errors
         """
         mac_address1 = MAC(mac_addr)
-        assert isinstance(mac_address1.mac, str)
+        assert isinstance(mac_address1.mac.addr, str)
+        assert mac_address1.mac.device in mac_addr
+        assert mac_address1.mac.oui in mac_addr
 
     @pytest.mark.parametrize(
         "mac_addr",
@@ -52,7 +54,7 @@ class TestMACValidation:
         THEN an InvalidMACAddress exception must be raised at each
             instantiation
         """
-        with pytest.raises(InvalidMACAddress):
+        with pytest.raises(InvalidMACAddressException):
             MAC(mac_addr)
 
     @pytest.mark.parametrize(
