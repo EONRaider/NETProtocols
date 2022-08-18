@@ -10,7 +10,7 @@ class Validator(ABC):
     """Base class for descriptors of managed attributes in classes that
     require the validation of fields before assignment/manipulation."""
 
-    def __get__(self, instance, owner=None) -> str:
+    def __get__(self, instance, owner=None):
         return self._value
 
     def __set__(self, instance, value: str) -> None:
@@ -18,5 +18,5 @@ class Validator(ABC):
 
     @staticmethod
     @abstractmethod
-    def validate(value: str) -> str:
+    def validate(value: str):
         ...
