@@ -5,7 +5,7 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 import re
 
-from netprotocols.utils.exceptions import InvalidMACAddress
+from netprotocols.utils.exceptions import InvalidMACAddressException
 from netprotocols.utils.validation._base import Validator
 
 mac_regex = re.compile(
@@ -30,8 +30,9 @@ class ValidMACAddress(Validator):
             AttributeError: Raised if 'value' is of type str but doesn't
                 represent a valid MAC address.
             """
-            raise InvalidMACAddress(
-                f"Invalid format or type for MAC address value: {value}"
+            raise InvalidMACAddressException(
+                f'InvalidMACAddressException: Invalid format or type for MAC '
+                f'address value "{value}"'
             )
 
 
@@ -42,5 +43,5 @@ def validate_mac_address(mac_address: str) -> bool:
     """
     try:
         return bool(ValidMACAddress.validate(mac_address))
-    except InvalidMACAddress:
+    except InvalidMACAddressException:
         return False
