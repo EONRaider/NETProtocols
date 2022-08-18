@@ -10,7 +10,7 @@ class InvalidManufacturerCode(Exception):
         self.code = code
 
 
-class InvalidMACAddress(Exception):
+class InvalidMACAddressException(Exception):
     def __init__(self, message, code: int = 1):
         super().__init__(message)
         self.code = code
