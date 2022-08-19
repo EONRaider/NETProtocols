@@ -3,9 +3,10 @@
 
 __author__ = "EONRaider @ keybase.io/eonraider"
 
-import ipaddress
+from ipaddress import AddressValueError, IPv4Address
+from typing import Union
 
-from netprotocols.utils.exceptions import InvalidIPv4Address
+from netprotocols.utils.exceptions import InvalidIPv4AddressException
 from netprotocols.utils.validation._base import Validator
 
 
@@ -14,15 +15,15 @@ class ValidIPv4Address(Validator):
     validation of IPv4 addresses before assignment/manipulation."""
 
     @staticmethod
-    def validate(value: str) -> str:
+    def validate(value: Union[str, IPv4Address]) -> str:
         try:
-            if not issubclass(value.__class__, str):
-                raise ipaddress.AddressValueError
-            return str(ipaddress.IPv4Address(value))
-        except ipaddress.AddressValueError:
-            raise InvalidIPv4Address(
+            if issubclass(value.__class__, IPv4Address):
+                return value
+            return str(IPv4Address(value))
+        except AddressValueError as e:
+            raise InvalidIPv4AddressException(
                 f"Invalid format or type for IPv4 address value: {value}"
-            )
+            ) from e
 
 
 def validate_ipv4_address(ipv4_address: str) -> bool:
