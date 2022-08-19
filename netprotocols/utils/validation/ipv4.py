@@ -26,12 +26,13 @@ class ValidIPv4Address(Validator):
             ) from e
 
 
-def validate_ipv4_address(ipv4_address: str) -> bool:
+def validate_ipv4_addr(ip: str) -> str:
     """Evaluate a string representing a valid IPv4 address.
 
-    :returns: True if valid and False otherwise.
+    :returns: The supplied string if it corresponds to a valid IPv4
+        address.
+
+    :raises InvalidIPv4AddressException: If the supplied string does not
+        correspond to a valid IPv4 address.
     """
-    try:
-        return bool(ValidIPv4Address.validate(ipv4_address))
-    except InvalidIPv4Address:
-        return False
+    return ValidIPv4Address.validate(ip)
