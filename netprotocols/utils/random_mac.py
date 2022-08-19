@@ -13,8 +13,8 @@ from netprotocols.utils.validation.mac import mac_regex
 
 def random_mac(manufacturer: str = None) -> str:
     """Return a string containing a randomly generated IEEE 802
-    compliant MAC address that includes an optionally fixed manufacturer
-    code."""
+    compliant MAC address that includes an optionally fixed OUI
+    (Organizationally Unique Identifier)."""
 
     try:
         if manufacturer is not None:
