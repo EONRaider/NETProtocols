@@ -36,12 +36,13 @@ class ValidMACAddress(Validator):
             ) from e
 
 
-def validate_mac_address(mac_address: str) -> bool:
+def validate_mac_addr(mac: str) -> str:
     """Evaluate a string representing an IEEE 802 compliant MAC address.
 
-    :returns: True if valid and False otherwise.
+    :returns: The supplied string if it corresponds to a valid MAC
+        address.
+
+    :raises InvalidMACAddressException: If the supplied string does not
+        correspond to a valid MAC address.
     """
-    try:
-        return bool(ValidMACAddress.validate(mac_address))
-    except InvalidMACAddressException:
-        return False
+    return ValidMACAddress.validate(mac)
