@@ -5,6 +5,8 @@ __author__ = "EONRaider @ keybase.io/eonraider"
 
 import pytest
 from dataclasses import dataclass
+from ipaddress import IPv4Address
+from typing import Union
 
 from netprotocols.utils.exceptions import InvalidIPv4AddressException
 from netprotocols.utils.validation.ipv4 import (
@@ -15,7 +17,7 @@ from netprotocols.utils.validation.ipv4 import (
 
 @dataclass
 class IPv4:
-    ipv4: str = ValidIPv4Address()
+    ipv4: Union[str, IPv4Address] = ValidIPv4Address()
 
 
 class TestIPv4Validation:
@@ -31,12 +33,21 @@ class TestIPv4Validation:
     )
     def test_descriptor_values(self, ipv4_addr):
         """GIVEN a value of type string
-        WHEN ths string corresponds to a valid IPv4 address
+        WHEN this string corresponds to a valid IPv4 address
         THEN an instance of a class that uses the ValidIPv4Address
             descriptor must be initialized without errors
         """
         ipv4_address = IPv4(ipv4_addr)
         assert isinstance(ipv4_address.ipv4, str)
+
+    def test_descriptor_ipv4_address_instance(self):
+        """GIVEN a value of type ipaddress.IPv4Address
+        WHEN ths string corresponds to a valid IPv4 address
+        THEN the type of the value returned from the descriptor must be
+            of type ipaddress.IPv4Address
+        """
+        ipv4_address = IPv4(IPv4Address("10.10.10.10"))
+        assert isinstance(ipv4_address.ipv4, IPv4Address)
 
     @pytest.mark.parametrize(
         "ipv4_addr",
@@ -72,7 +83,7 @@ class TestIPv4Validation:
     )
     def test_validate_ipv4_address_valid(self, ipv4_addr):
         """GIVEN a valid IPv4 address
-        WHEN ths value is passed as an argument to the
+        WHEN this value is passed as an argument to the
             validate_ipv4_address function
         THEN the function must return the string without exceptions
         """
@@ -92,7 +103,7 @@ class TestIPv4Validation:
     )
     def test_validate_ipv4_address_invalid(self, ipv4_addr):
         """GIVEN an invalid IPv4 address
-        WHEN ths value is passed as an argument to the
+        WHEN this value is passed as an argument to the
             validate_ipv4_address function
         THEN an exception must be raised
         """
