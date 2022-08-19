@@ -7,7 +7,7 @@ from netprotocols import Ethernet
 
 
 """
-From WireShark sample captures at 
+From WireShark sample captures at
 https://wiki.wireshark.org/uploads/__moin_import__/attachments/SampleCaptures/
 arp-storm.pcap
 """

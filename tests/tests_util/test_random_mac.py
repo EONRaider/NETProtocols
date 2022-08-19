@@ -33,9 +33,7 @@ class TestRandomMac:
             a random device ID must be returned without exceptions
         """
         result = re.match(mac_regex, random_mac(manufacturer)).group()
-        assert (
-            re.match(mac_regex, result).group("oui") == manufacturer
-        )
+        assert re.match(mac_regex, result).group("oui") == manufacturer
 
     @pytest.mark.parametrize(
         "manufacturer",

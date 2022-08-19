@@ -88,11 +88,11 @@ class TCP(Protocol):  # IETF RFC 793
         the TCP flags set on the segment.
         Ex: 'SYN ACK' or 'PSH ACK'
         """
-        """Yield the least-significant bit of a 9-bit flag value at each 
+        """Yield the least-significant bit of a 9-bit flag value at each
         iteration until there are no more bits left."""
         flag_bits: Iterator = ((self.flags >> shift) & 1 for shift in range(9))
 
-        """Yield the string representation of a flag name if the 
+        """Yield the string representation of a flag name if the
         corresponding bit is set."""
         flags: Iterator = (
             flag_name
