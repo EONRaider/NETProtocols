@@ -21,8 +21,10 @@ class TestEthernet:
         WHEN those values are valid and correctly formatted
         THEN an instance of Ethernet must be initialized without errors
         """
-        assert bytes(mock_eth_header.dst) == b"\xff\xff\xff\xff\xff\xff"
-        assert bytes(mock_eth_header.src) == b"\x00\x07\x0d\xaf\xf4\x54"
+        assert mock_eth_header.dst == "ff:ff:ff:ff:ff:ff"
+        assert mock_eth_header.src == "00:07:0d:af:f4:54"
+        assert bytes(mock_eth_header._dst) == b"\xff\xff\xff\xff\xff\xff"
+        assert bytes(mock_eth_header._src) == b"\x00\x07\x0d\xaf\xf4\x54"
         assert mock_eth_header.eth == 0x0806
 
     def test_decode_ethernet_header(self, raw_eth_header):
