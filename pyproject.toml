@@ -45,6 +45,7 @@ packages = ["src/netprotocols"]
 [tool.ruff]
 line-length = 80
 src = ["src", "tests"]
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = [
