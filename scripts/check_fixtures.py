@@ -134,10 +134,13 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
             ext_len = (upper[1] + 1) * 8
             next_header, upper = upper[0], upper[ext_len:]
         if next_header == 44 and len(upper) >= 8:
-            stats["ipv6-fragment"] += 1
             if struct.unpack_from("!H", upper, 2)[0] & 0xFFF8:
-                return failures
-            next_header, upper = upper[0], upper[8:]
+                stats["ipv6-fragment"] += 1
+                return failures  # non-first fragment: no upper header
+            stats["ipv6-first-fragment"] += 1
+            # The upper-layer checksum spans the reassembled datagram,
+            # not this fragment's slice: nothing verifiable here.
+            return failures
         upper_len = len(upper)
         if next_header == 58 and upper_len >= 4:
             stats["icmpv6"] += 1
