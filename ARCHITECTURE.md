@@ -174,10 +174,14 @@ Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
 
-One deliberate exception: **checksums are carried verbatim**. The
-library neither computes nor verifies them (yet — it's on the
-roadmap), which is exactly what you want when faithfully re-encoding
-captured traffic.
+One deliberate boundary: **decode and encode carry checksums
+verbatim** — exactly what you want when faithfully re-encoding
+captured traffic. Computing and verifying them is explicit, via
+`netprotocols.checksum`: `compute()`/`verify()` handle the IPv4 header
+checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
+pseudo-headers, and `Packet.with_checksums(payload)` fills a whole
+stack before sending. (The RFC 768 subtlety lives where it belongs:
+the `0x0000 → 0xFFFF` substitution applies to UDP alone.)
 
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.
@@ -189,13 +193,22 @@ src/netprotocols/
 ├── __init__.py     public API re-exports, __version__
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
-├── packet.py       Packet composition
+├── packet.py       Packet composition, with_checksums()
+├── checksum.py     RFC 1071: internet_checksum, compute, verify
 ├── layer2/         ethernet.py, arp.py
-├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6)
+├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
+│                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
+│                   Destination Options)
 ├── layer4/         tcp.py, udp.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
-                    (truncation, lying lengths, chain walks)
+                    (truncation, lying lengths, chain walks),
+                    test_corpus.py (invariants over the real-capture
+                    corpus in tests/fixtures/, 65 frames across 12
+                    scenarios — see its MANIFEST.md), test_checksum.py
+                    (corpus checksums recompute to wire values), and
+                    test_fuzz.py (hypothesis properties: decode never
+                    raises outside ProtocolError)
 ```
 
 Tooling: [uv](https://docs.astral.sh/uv/) manages the environment
@@ -221,8 +234,11 @@ the same:
 4. **Wire the chain.** The layer below decides when your class is
    next. For DNS that means UDP would implement `next_protocol()`
    consulting the ports. (For a new EtherType or IP protocol number,
-   add the value to `_enums.py` and one mapping entry in
-   `ethernet.py`/`ip.py`, using a deferred import.)
+   add the value to `_enums.py` — display name in lockstep, a test
+   enforces it — and one mapping entry in `ethernet.py`/`ip.py`, using
+   a deferred import. Numbers valid only inside an IPv6 chain follow
+   the extension headers' example: `_ip_protocol_class` hands them out
+   only when `ipv6=True`.)
 5. **Add display properties** for anything a human would want rendered
    (`flags_str`-style names, hex strings). Degrade gracefully on
    unknown values — return `"unknown (47)"`, never raise from a
