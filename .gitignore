@@ -146,4 +146,4 @@ amass.txt
 amass.log
 
 # Application-specific
-.logs/
+.logs/tests/fixtures/staging/

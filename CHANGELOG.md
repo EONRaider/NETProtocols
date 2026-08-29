@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-08-29
+
+### Fixed
+- `IPv4.next_protocol()` chained non-first fragments
+  (`fragment_offset > 0`) into garbage upper-layer decodes — a slice
+  from the middle of a fragmented payload has no header at its start.
+  Discovered by the new real-capture fixture corpus on live fragmented
+  traffic; the chain now ends at the IPv4 layer for those frames, as it
+  already did for unknown protocols.
+
+### Added (development)
+- A real-capture fixture corpus under `tests/fixtures/` (56 frames,
+  10 scenarios, every checksum internally verified — see its
+  MANIFEST.md) with corpus-wide invariant tests, plus the capture and
+  validation scripts under `scripts/`.
+
 ## [1.0.0] - 2026-08-21
 
 Complete rewrite. The public API is new; see the README and

@@ -172,6 +172,14 @@ class IPv4(Protocol):
         return self.ihl * 4
 
     def next_protocol(self) -> type[Protocol] | None:
+        """See :meth:`Protocol.next_protocol`.
+
+        A non-first fragment (``fragment_offset > 0``) carries a slice
+        from the middle of the original payload — no upper-layer header
+        exists at its start — so the chain ends here for those.
+        """
+        if self.fragment_offset > 0:
+            return None
         return _ip_protocol_class(self.protocol)
 
     @property
