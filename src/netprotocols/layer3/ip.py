@@ -23,20 +23,48 @@ from netprotocols.utils.ipv4 import validate_ipv4_addr
 __all__ = ["IPv4", "IPv6"]
 
 
-def _ip_protocol_class(number: int) -> type[Protocol] | None:
+#: Numbers that only make sense inside an IPv6 chain (RFC 8200 §4.1):
+#: extension headers follow the IPv6 fixed header or one another, never
+#: an IPv4 header.
+_IPV6_ONLY_NUMBERS = frozenset(
+    {
+        IPProtocol.HOPOPT,
+        IPProtocol.IPV6_ROUTE,
+        IPProtocol.IPV6_FRAG,
+        IPProtocol.IPV6_DSTOPTS,
+    }
+)
+
+
+def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
     """Map an IP protocol number to the class that decodes its payload.
 
     The number space is shared between IPv4 ``protocol`` and IPv6
     ``next_header`` (the values are disjoint), so both classes dispatch
-    through this single registry.
+    through this single registry — but the IPv6 extension headers are
+    handed out only when the caller is part of an IPv6 chain
+    (``ipv6=True``): a garbage IPv4 packet with ``protocol=0`` must not
+    decode a Hop-by-Hop layer.
     """
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
+    from netprotocols.layer3.ipv6_ext import (
+        IPv6DestinationOptions,
+        IPv6Fragment,
+        IPv6HopByHopOptions,
+        IPv6Routing,
+    )
     from netprotocols.layer4.tcp import TCP
     from netprotocols.layer4.udp import UDP
 
+    if not ipv6 and number in _IPV6_ONLY_NUMBERS:
+        return None
     mapping: dict[int, type[Protocol]] = {
+        IPProtocol.HOPOPT: IPv6HopByHopOptions,
         IPProtocol.ICMP: ICMPv4,
+        IPProtocol.IPV6_ROUTE: IPv6Routing,
+        IPProtocol.IPV6_FRAG: IPv6Fragment,
         IPProtocol.IPV6_ICMP: ICMPv6,
+        IPProtocol.IPV6_DSTOPTS: IPv6DestinationOptions,
         IPProtocol.TCP: TCP,
         IPProtocol.UDP: UDP,
     }
@@ -180,7 +208,7 @@ class IPv4(Protocol):
         """
         if self.fragment_offset > 0:
             return None
-        return _ip_protocol_class(self.protocol)
+        return _ip_protocol_class(self.protocol, ipv6=False)
 
     @property
     def protocol_name(self) -> str:
@@ -258,7 +286,7 @@ class IPv6(Protocol):
         )
 
     def next_protocol(self) -> type[Protocol] | None:
-        return _ip_protocol_class(self.next_header)
+        return _ip_protocol_class(self.next_header, ipv6=True)
 
     @property
     def next_header_name(self) -> str:
