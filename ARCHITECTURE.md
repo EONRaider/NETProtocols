@@ -115,7 +115,22 @@ flowchart LR
   I6 -->|58| IC6[ICMPv6]
   I6 -->|6| T
   I6 -->|17| U
+  I6 -->|0, 43, 44, 60| X[IPv6 extension headers]
+  X --> X
+  X -->|58| IC6
+  X -->|6| T
+  X -->|17| U
 ```
+
+IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
+Destination Options) chain like any other protocol — each names what
+follows via `next_header` — and may stack. Two guardrails: the
+registry hands them out only inside an IPv6 chain (a garbage IPv4
+packet with `protocol=0` cannot conjure a Hop-by-Hop layer), and a
+Fragment header chains onward only when `fragment_offset == 0` — a
+non-first fragment carries a slice from the middle of the original
+payload, so no upper-layer header exists at its start. The same
+offset rule applies to fragmented IPv4.
 
 The numbers on the arrows are the wire values — EtherTypes out of
 Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in

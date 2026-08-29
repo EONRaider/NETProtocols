@@ -42,7 +42,11 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
-| 3 | IPv6 | `IPv6` | RFC 8200, fixed header |
+| 3 | IPv6 | `IPv6` | RFC 8200 |
+| 3 | IPv6 Hop-by-Hop Options | `IPv6HopByHopOptions` | RFC 8200 §4.3 |
+| 3 | IPv6 Routing | `IPv6Routing` | RFC 8200 §4.4 |
+| 3 | IPv6 Fragment | `IPv6Fragment` | RFC 8200 §4.5, first-fragment chaining |
+| 3 | IPv6 Destination Options | `IPv6DestinationOptions` | RFC 8200 §4.6 |
 | 3 | ICMPv4 | `ICMPv4` | RFC 792, 8-byte header |
 | 3 | ICMPv6 | `ICMPv6` | RFC 4443, 8-byte header |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
@@ -125,9 +129,6 @@ network traffic monitor built on it.
 
 ## Roadmap
 
-- IPv6 extension headers (hop-by-hop, routing, fragment, destination
-  options) — today the decode chain ends at `IPv6` for traffic behind
-  them (e.g. MLD).
 - 802.1Q VLAN tags, DNS, DHCP, IGMP, GRE.
 - Checksum computation on encode and verification flags on decode.
 - Fuzzing of the decode path.

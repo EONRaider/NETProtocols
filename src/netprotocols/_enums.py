@@ -36,11 +36,15 @@ class IPProtocol(IntEnum):
     ``next_header``, so a single registry serves both.
     """
 
+    HOPOPT = 0x00
     ICMP = 0x01
     IGMP = 0x02
     TCP = 0x06
     UDP = 0x11
+    IPV6_ROUTE = 0x2B
+    IPV6_FRAG = 0x2C
     IPV6_ICMP = 0x3A
+    IPV6_DSTOPTS = 0x3C
 
     @property
     def display_name(self) -> str:
@@ -48,11 +52,15 @@ class IPProtocol(IntEnum):
 
 
 _IP_PROTOCOL_NAMES = {
+    IPProtocol.HOPOPT: "IPv6 Hop-by-Hop Options",
     IPProtocol.ICMP: "ICMP",
     IPProtocol.IGMP: "IGMP",
     IPProtocol.TCP: "TCP",
     IPProtocol.UDP: "UDP",
+    IPProtocol.IPV6_ROUTE: "IPv6 Routing",
+    IPProtocol.IPV6_FRAG: "IPv6 Fragment",
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
+    IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
 }
 
 

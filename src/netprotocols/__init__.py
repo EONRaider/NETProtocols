@@ -16,6 +16,12 @@ from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.ipv6_ext import (
+    IPv6DestinationOptions,
+    IPv6Fragment,
+    IPv6HopByHopOptions,
+    IPv6Routing,
+)
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.packet import Packet
@@ -45,6 +51,10 @@ __all__ = [
     "IPProtocol",
     "IPv4",
     "IPv6",
+    "IPv6DestinationOptions",
+    "IPv6Fragment",
+    "IPv6HopByHopOptions",
+    "IPv6Routing",
     "InvalidFieldError",
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
