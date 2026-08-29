@@ -29,6 +29,7 @@ Changelog = "https://github.com/EONRaider/NETProtocols/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.100",
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-cov>=6.0",
