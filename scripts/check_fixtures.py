@@ -74,8 +74,10 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
         ihl = (payload[0] & 0x0F) * 4
         header = payload[:ihl]
         stats["ipv4"] += 1
-        if internet_checksum(header[:10] + b"\x00\x00" + header[12:ihl]) != \
-                struct.unpack_from("!H", header, 10)[0]:
+        if (
+            internet_checksum(header[:10] + b"\x00\x00" + header[12:ihl])
+            != struct.unpack_from("!H", header, 10)[0]
+        ):
             failures.append("ipv4-header-checksum")
         src, dst = header[12:16], header[16:20]
         proto = header[9]
@@ -91,15 +93,18 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
         upper_len = len(upper)
         if proto == 1 and upper_len >= 8:
             stats["icmpv4"] += 1
-            if internet_checksum(upper[:2] + b"\x00\x00" + upper[4:]) != \
-                    struct.unpack_from("!H", upper, 2)[0]:
+            if (
+                internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
+                != struct.unpack_from("!H", upper, 2)[0]
+            ):
                 failures.append("icmpv4-checksum")
         elif proto == 6 and upper_len >= 20:
             stats["tcp"] += 1
             zeroed = upper[:16] + b"\x00\x00" + upper[18:]
-            if internet_checksum(
-                pseudo_v4(src, dst, 6, upper_len) + zeroed
-            ) != struct.unpack_from("!H", upper, 16)[0]:
+            if (
+                internet_checksum(pseudo_v4(src, dst, 6, upper_len) + zeroed)
+                != struct.unpack_from("!H", upper, 16)[0]
+            ):
                 failures.append("tcp-checksum")
         elif proto == 17 and upper_len >= 8:
             stats["udp"] += 1
@@ -108,9 +113,12 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
                 stats["udp-no-checksum"] += 1
             else:
                 zeroed = upper[:6] + b"\x00\x00" + upper[8:]
-                computed = internet_checksum(
-                    pseudo_v4(src, dst, 17, upper_len) + zeroed
-                ) or 0xFFFF
+                computed = (
+                    internet_checksum(
+                        pseudo_v4(src, dst, 17, upper_len) + zeroed
+                    )
+                    or 0xFFFF
+                )
                 if computed != wire:
                     failures.append("udp-checksum")
         return failures
@@ -134,23 +142,26 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
         if next_header == 58 and upper_len >= 4:
             stats["icmpv6"] += 1
             zeroed = upper[:2] + b"\x00\x00" + upper[4:]
-            if internet_checksum(
-                pseudo_v6(src, dst, 58, upper_len) + zeroed
-            ) != struct.unpack_from("!H", upper, 2)[0]:
+            if (
+                internet_checksum(pseudo_v6(src, dst, 58, upper_len) + zeroed)
+                != struct.unpack_from("!H", upper, 2)[0]
+            ):
                 failures.append("icmpv6-checksum")
         elif next_header == 6 and upper_len >= 20:
             stats["tcp6"] += 1
             zeroed = upper[:16] + b"\x00\x00" + upper[18:]
-            if internet_checksum(
-                pseudo_v6(src, dst, 6, upper_len) + zeroed
-            ) != struct.unpack_from("!H", upper, 16)[0]:
+            if (
+                internet_checksum(pseudo_v6(src, dst, 6, upper_len) + zeroed)
+                != struct.unpack_from("!H", upper, 16)[0]
+            ):
                 failures.append("tcp6-checksum")
         elif next_header == 17 and upper_len >= 8:
             stats["udp6"] += 1
             zeroed = upper[:6] + b"\x00\x00" + upper[8:]
-            computed = internet_checksum(
-                pseudo_v6(src, dst, 17, upper_len) + zeroed
-            ) or 0xFFFF
+            computed = (
+                internet_checksum(pseudo_v6(src, dst, 17, upper_len) + zeroed)
+                or 0xFFFF
+            )
             if computed != struct.unpack_from("!H", upper, 6)[0]:
                 failures.append("udp6-checksum")
         return failures
@@ -160,7 +171,9 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
 
 
 def main() -> int:
-    staging = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/staging")
+    staging = Path(
+        sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/staging"
+    )
     pcaps = sorted(staging.glob("*.pcap"))
     if not pcaps:
         print(f"No pcaps found in {staging}/")
@@ -185,19 +198,24 @@ def main() -> int:
         total_frames += frames
         corpus_stats.update(stats)
         verdict = "OK  " if not failures else "FAIL"
-        detail = ", ".join(f"{k}×{v}" for k, v in sorted(stats.items()))
+        detail = ", ".join(f"{k}x{v}" for k, v in sorted(stats.items()))
         print(f"[{verdict}] {pcap.name}: {frames} frames ({detail})")
         for failure, count in sorted(failures.items()):
-            print(f"       !! {failure} ×{count}")
+            print(f"       !! {failure} x{count}")
         if failures:
             bad_files += 1
 
     print(f"\nCorpus: {total_frames} frames across {len(pcaps)} files")
-    print("Coverage:", ", ".join(f"{k}={v}" for k, v in sorted(corpus_stats.items())))
+    print(
+        "Coverage:",
+        ", ".join(f"{k}={v}" for k, v in sorted(corpus_stats.items())),
+    )
     if bad_files:
-        print(f"\n{bad_files} file(s) FAILED checksum consistency — "
-              f"do not commit these; re-capture or investigate offload "
-              f"(ethtool -K <iface> tx off rx off).")
+        print(
+            f"\n{bad_files} file(s) FAILED checksum consistency — "
+            f"do not commit these; re-capture or investigate offload "
+            f"(ethtool -K <iface> tx off rx off)."
+        )
         return 1
     print("\nAll files internally consistent.")
     return 0
