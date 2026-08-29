@@ -125,18 +125,24 @@ byte layout maps onto a dataclass, the decode contract, the
 `next_protocol()` chain, and a cookbook for adding a new protocol.
 
 This library is the engine behind
-[Packet-Sniffer](https://github.com/EONRaider/Packet-Sniffer), a
-network traffic monitor built on it.
+[RootWire](https://github.com/EONRaider/RootWire), a network traffic
+monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
 - 802.1Q VLAN tags, DNS, DHCP, IGMP, GRE.
+- Optional richer address accessors (`ipaddress` / EUI objects
+  alongside the `str` fields).
+- TLV parsing inside IPv6 extension-header options.
 
 ## Contributing
 
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
-enforced by CI on Python 3.12–3.14. Start with
+enforced by CI on Python 3.12–3.14. The test suite is anchored by a
+65-frame corpus of real captured traffic
+([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
+property-based fuzzing of the decode path. Start with
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
