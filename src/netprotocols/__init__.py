@@ -12,6 +12,7 @@ from netprotocols._enums import (
     EtherType,
     IPProtocol,
 )
+from netprotocols.checksum import compute, internet_checksum, verify
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
@@ -64,7 +65,10 @@ __all__ = [
     "ProtocolError",
     "TruncatedHeaderError",
     "__version__",
+    "compute",
+    "internet_checksum",
     "random_mac",
     "validate_ipv4_addr",
     "validate_mac_addr",
+    "verify",
 ]
