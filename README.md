@@ -106,8 +106,9 @@ frame = Packet(
 raw = bytes(frame)  # ready for a raw socket
 ```
 
-Checksums are carried verbatim in both directions: the library neither
-computes nor verifies them (planned — see the roadmap).
+Checksums are computed and verified on request — never silently:
+`compute()`/`verify()` in `netprotocols.checksum`, and
+`Packet.with_checksums()` to fill a whole stack before sending.
 
 ## Display helpers
 
@@ -130,8 +131,6 @@ network traffic monitor built on it.
 ## Roadmap
 
 - 802.1Q VLAN tags, DNS, DHCP, IGMP, GRE.
-- Checksum computation on encode and verification flags on decode.
-- Fuzzing of the decode path.
 
 ## Contributing
 

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-08-29
+
+### Added
+- **IPv6 extension headers** (RFC 8200 §4.3-4.6): `IPv6HopByHopOptions`,
+  `IPv6Routing`, `IPv6Fragment`, `IPv6DestinationOptions`. The decode
+  chain now reaches ICMPv6/TCP/UDP behind them (MLD reports decode
+  fully). Extension headers dispatch only inside an IPv6 chain, and a
+  Fragment header chains onward only from the first fragment.
+- **Checksums** (`netprotocols.checksum`): `internet_checksum()`
+  (RFC 1071), `compute()`/`verify()` covering the IPv4 header checksum,
+  ICMPv4, and TCP/UDP/ICMPv6 with IPv4/IPv6 pseudo-headers, and
+  `Packet.with_checksums()` for filling a whole stack on encode. The
+  UDP-only zero substitution is confined to the UDP arm.
+- **Property-based fuzzing** of the decode path (hypothesis, dev-only):
+  decode() raises nothing outside `ProtocolError` for any input; the
+  chain walk never consumes past the frame; constrained round trips.
+- `IPProtocol` gains `HOPOPT`, `IPV6_ROUTE`, `IPV6_FRAG`,
+  `IPV6_DSTOPTS` with display names.
+
+### Development
+- The real-capture fixture corpus grew to 65 frames across 12
+  scenarios (MLD behind hop-by-hop, IPv6 fragment pairs); checksum
+  tests recompute every verifiable corpus frame to its captured wire
+  value.
+
 ## [1.0.1] - 2026-08-29
 
 ### Fixed
