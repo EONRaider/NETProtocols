@@ -217,6 +217,7 @@ src/netprotocols/
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify
 ├── layer2/         ethernet.py, arp.py
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
+│                   igmp.py,
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (well-known-port registry)

@@ -24,6 +24,7 @@ from netprotocols._base import (
 )
 from netprotocols._enums import IPProtocol
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
+from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
@@ -109,6 +110,10 @@ def compute(
         return internet_checksum(_zeroed(bytes(layer), 10))
     if isinstance(layer, ICMPv4):
         return internet_checksum(_zeroed(bytes(layer), 2) + payload)
+    if isinstance(layer, IGMP):
+        # Whole message, checksum field (bytes 2-3) zeroed, no
+        # pseudo-header; the body is already part of bytes(layer).
+        return internet_checksum(_zeroed(bytes(layer), 2))
     if isinstance(layer, ICMPv6):
         enclosing = _require_ip(layer, ip)
         segment = _zeroed(bytes(layer), 2) + payload

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **IGMP** (`netprotocols.IGMP`, RFC 1112/2236/3376) — IPv4 multicast
+  group management, dispatched from IPv4 protocol 2. The common
+  four-byte header (type, max-response code, checksum) is decoded; the
+  `group_address` accessor reads the group for the message types that
+  carry one, and `netprotocols.checksum` gains an IGMP arm. v3
+  group-record parsing is a roadmap follow-up.
 - **DNS** (`netprotocols.DNS`, RFC 1035) — the first application-layer
   protocol. The 12-byte header and flag bits are decoded; the four
   message sections are kept raw with on-demand, read-only accessors

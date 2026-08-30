@@ -49,6 +49,7 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 | 3 | IPv6 Destination Options | `IPv6DestinationOptions` | RFC 8200 §4.6 |
 | 3 | ICMPv4 | `ICMPv4` | RFC 792, 8-byte header |
 | 3 | ICMPv6 | `ICMPv6` | RFC 4443, 8-byte header |
+| 3 | IGMP | `IGMP` | RFC 1112/2236/3376, IPv4 multicast management |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 7 | DNS | `DNS` | RFC 1035, over UDP; header + on-demand name decompression |
@@ -131,8 +132,9 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-- More protocols: 802.1Q VLAN tags, DHCP, IGMP, GRE (DNS shipped in 1.2).
+- More protocols: 802.1Q VLAN tags, DHCP, GRE (DNS and IGMP shipped in 1.2).
 - Full DNS resource-record parsing (the header and question are decoded today; answer/authority/additional sections are kept raw).
+- IGMPv3 group-record parsing (the common header is decoded today; v3 report records are kept raw in the body).
 - Optional richer address accessors (`ipaddress` / EUI objects
   alongside the `str` fields).
 - TLV parsing inside IPv6 extension-header options.

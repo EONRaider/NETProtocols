@@ -20,6 +20,7 @@ from conftest import corpus_frames
 from netprotocols import (
     ARP,
     DNS,
+    IGMP,
     TCP,
     UDP,
     Ethernet,
@@ -53,6 +54,7 @@ ALL_PROTOCOLS = (
     IPv6DestinationOptions,
     ICMPv4,
     ICMPv6,
+    IGMP,
     TCP,
     UDP,
     DNS,
