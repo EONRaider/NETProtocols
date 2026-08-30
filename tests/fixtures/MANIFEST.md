@@ -7,7 +7,7 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram). Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 65 frames across 12
+frames routinely leave checksums to NIC offload. 69 frames across 13
 scenarios. Addresses are as-captured from the capture host's network.
 
 | File | Frames | Contents |
@@ -17,6 +17,7 @@ scenarios. Addresses are as-captured from the capture host's network.
 | `icmpv4_external.pcap` | 2 | Inbound echo replies from 1.1.1.1 |
 | `icmpv4_ttl_exceeded.pcap` | 3 | Time Exceeded (type 11) errors from intermediate hops |
 | `icmpv6_echo_lo.pcap` | 6 | Loopback ICMPv6 echo pairs (types 128/129) |
+| `igmp.pcap` | 4 | IGMPv3 Membership Reports (type 0x22) provoked by joining an IPv4 multicast group |
 | `ipv4_fragments.pcap` | 5 | Fragmented 2028-byte echo replies: first fragments (offset 0, MF) + non-first fragments |
 | `ipv6_fragments.pcap` | 5 | Fragmented 2048-byte ICMPv6 echo replies: first fragments (offset 0) + non-first fragments behind fragment headers (next_header 44) |
 | `ipv6_mld.pcap` | 4 | MLD reports behind hop-by-hop extension headers (next_header 0) — provoked by multicast group join/leave |
