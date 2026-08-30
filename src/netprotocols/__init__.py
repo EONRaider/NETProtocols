@@ -39,7 +39,7 @@ from netprotocols.utils.exceptions import (
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import random_mac, validate_mac_addr
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "ARP",
