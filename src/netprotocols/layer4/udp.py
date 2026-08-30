@@ -44,6 +44,15 @@ class UDP(Protocol):
             self.src_port, self.dst_port, self.length, self.checksum
         )
 
+    def next_protocol(self) -> type[Protocol] | None:
+        """The application protocol carried by this datagram, chosen by
+        well-known port (best-effort — see
+        :mod:`netprotocols.layer4._ports`); ``None`` when neither port
+        is recognized."""
+        from netprotocols.layer4._ports import udp_app_class
+
+        return udp_app_class(self.src_port, self.dst_port)
+
     @property
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``."""

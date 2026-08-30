@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **DNS** (`netprotocols.DNS`, RFC 1035) — the first application-layer
+  protocol. The 12-byte header and flag bits are decoded; the four
+  message sections are kept raw with on-demand, read-only accessors
+  (`question_name`, `question_type`, `question_class`) that decompress
+  names safely (bounded pointer-following; malformed or looping names
+  raise `InvalidFieldError`, never hang). Round-trip stays byte-exact.
+- **Port-based dispatch** on UDP: `UDP.next_protocol()` reaches an
+  application protocol by well-known port (`netprotocols.layer4._ports`,
+  `{53: DNS}` for now), checked destination-then-source. Documented as
+  best-effort — a mis-dispatch degrades to the malformed-frame path.
+
 ## [1.1.0] - 2026-08-29
 
 ### Added

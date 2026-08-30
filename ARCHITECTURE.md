@@ -158,6 +158,26 @@ the graph acyclic: shared registries live in the dependency-free
 `_enums.py`, and `next_protocol()` mappings import their target
 classes *inside the function body*, at call time.
 
+## Port-based dispatch is best-effort
+
+The EtherType and IP-protocol registries dispatch on a single
+authoritative field. Application protocols break that model: they are
+identified by *port*, which is a heuristic — any service may run on any
+port, and the discriminator is split across the source and destination
+ports. `UDP.next_protocol()` therefore consults a well-known-port
+registry (`netprotocols.layer4._ports`), checking the destination port
+first (a request targets the server's port) and then the source port
+(a response comes from it). `DNS` is the first such protocol; a DNS
+message on UDP port 53 now decodes as a fourth layer.
+
+Because the guess can be wrong, the application class validates
+strictly on decode: a non-DNS datagram that happens to use port 53
+raises a `ProtocolError`, which the ordinary decode-error path absorbs
+(the chain keeps the layers it did decode and records the failure). So
+a mis-dispatch degrades to a diagnosed frame, never to garbage. Only
+UDP is wired this way for now — DNS over TCP carries a 2-byte length
+prefix (RFC 1035 §4.2.2) that needs separate handling.
+
 ## The encode side, and the round-trip guarantee
 
 Every class also works in reverse. Constructors take the friendly
@@ -199,7 +219,8 @@ src/netprotocols/
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
-├── layer4/         tcp.py, udp.py
+├── layer4/         tcp.py, udp.py, _ports.py (well-known-port registry)
+├── layer7/         dns.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
@@ -230,7 +251,12 @@ the same:
    (raise `TruncatedHeaderError` when the buffer can't satisfy it) and
    materialize the variable part as `bytes`.
 3. **Implement `__bytes__()`.** Pack the same fields back; the
-   round-trip tests will hold you honest.
+   round-trip tests will hold you honest. When a payload is
+   self-referential — DNS names compress by pointing at earlier bytes,
+   so re-encoding a parsed record cannot reproduce the original — keep
+   that region as raw `bytes` and parse it through read-only accessors
+   that never re-encode. `bytes(decode(x)) == x` then holds by
+   construction (see `layer7/dns.py`).
 4. **Wire the chain.** The layer below decides when your class is
    next. For DNS that means UDP would implement `next_protocol()`
    consulting the ports. (For a new EtherType or IP protocol number,

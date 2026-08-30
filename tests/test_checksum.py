@@ -32,7 +32,7 @@ def transport_cases():
     excluded — those checksums span the reassembled datagram."""
     cases = []
     for name, index, frame in CORPUS:
-        layers, consumed = walk(frame)
+        layers, _ = walk(frame)
         if any(isinstance(layer, IPv6Fragment) for layer in layers):
             continue
         ip = next(
@@ -45,15 +45,27 @@ def transport_cases():
             ip.fragment_offset > 0 or ip.flags & 0b001
         ):
             continue  # any fragment: the checksum spans the reassembly
-        transport = layers[-1]
-        if not isinstance(transport, (TCP, UDP, ICMPv4, ICMPv6)):
+        # Find the transport by type and the offset just past its
+        # header: an application layer (e.g. DNS) may now sit below it,
+        # so the transport's payload ends before the chain does.
+        transport = None
+        after_transport = 0
+        offset = 0
+        for layer in layers:
+            offset += layer.header_len
+            if isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
+                transport = layer
+                after_transport = offset
+                break
+        if transport is None:
             continue
         # The wire payload ends at the IP datagram's declared length.
         if isinstance(ip, IPv4):
             end = 14 + ip.total_length
         else:
             end = 14 + ip.header_len + ip.payload_length
-        cases.append((f"{name}#{index}", transport, ip, frame[consumed:end]))
+        payload = frame[after_transport:end]
+        cases.append((f"{name}#{index}", transport, ip, payload))
     return cases
 
 
@@ -200,23 +212,15 @@ class TestPacketWithChecksums:
             (name, frame) for name, _, frame in CORPUS if name == "udp_dns.pcap"
         )
         _, frame = name_frame
-        layers, consumed = walk(frame)
-        ip = layers[1]
-        end = (
-            14 + ip.total_length
-            if isinstance(ip, IPv4)
-            else 14 + ip.header_len + ip.payload_length
-        )
-        payload = frame[consumed:end]
-        zeroed = Packet(
-            layers[0],
-            replace(layers[1], checksum=0)
-            if isinstance(layers[1], IPv4)
-            else layers[1],
-            replace(layers[2], checksum=0),
-        )
-        restored = zeroed.with_checksums(payload)
-        assert bytes(restored) + payload == frame[:end]
+        layers, _ = walk(frame)
+        eth, ip, udp = layers[0], layers[1], layers[2]
+        assert isinstance(ip, IPv4)
+        end = 14 + ip.total_length
+        # The DNS message is the UDP payload; the UDP checksum covers it.
+        udp_payload = frame[14 + ip.header_len + udp.header_len : end]
+        zeroed = Packet(eth, replace(ip, checksum=0), replace(udp, checksum=0))
+        restored = zeroed.with_checksums(udp_payload)
+        assert bytes(restored) + udp_payload == frame[:end]
 
     def test_arp_stack_passes_through_unchanged(self):
         eth = Ethernet(
