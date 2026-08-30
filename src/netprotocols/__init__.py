@@ -15,6 +15,7 @@ from netprotocols._enums import (
 from netprotocols.checksum import compute, internet_checksum, verify
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
+from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer3.ipv6_ext import (
@@ -43,6 +44,7 @@ __all__ = [
     "ARP",
     "TCP",
     "UDP",
+    "VLAN",
     "ARPHardwareType",
     "ARPOperation",
     "EtherType",

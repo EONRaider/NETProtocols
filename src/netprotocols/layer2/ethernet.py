@@ -10,7 +10,42 @@ from netprotocols._base import Protocol, bytes_to_mac, mac_to_bytes
 from netprotocols._enums import EtherType
 from netprotocols.utils.mac import validate_mac_addr
 
-__all__ = ["Ethernet"]
+__all__ = ["Ethernet", "_ethertype_class", "_ethertype_name"]
+
+#: EtherType values that mark a VLAN tag shim rather than a payload.
+_VLAN_TAG_ETHERTYPES = frozenset(
+    {EtherType.VLAN_TAG, EtherType.VLAN_TAG_QINQ, EtherType.VLAN_TAG_9100}
+)
+
+
+def _ethertype_class(ethertype: int) -> type[Protocol] | None:
+    """The class that decodes the payload of an Ethernet/VLAN header.
+
+    VLAN tag types dispatch to :class:`~netprotocols.VLAN`, whose own
+    ``next_protocol`` calls back here with the inner EtherType — so
+    stacked tags (QinQ) decode as one VLAN layer per tag.
+    """
+    from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.vlan import VLAN
+    from netprotocols.layer3.ip import IPv4, IPv6
+
+    if ethertype in _VLAN_TAG_ETHERTYPES:
+        return VLAN
+    mapping: dict[int, type[Protocol]] = {
+        EtherType.ARP: ARP,
+        EtherType.IPV4: IPv4,
+        EtherType.IPV6: IPv6,
+    }
+    return mapping.get(ethertype)
+
+
+def _ethertype_name(ethertype: int) -> str:
+    """Display name of an EtherType, e.g. ``"IPv4"``; falls back to the
+    hexadecimal value for types unknown to this library."""
+    try:
+        return EtherType(ethertype).display_name
+    except ValueError:
+        return f"{ethertype:#06x}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,21 +81,10 @@ class Ethernet(Protocol):
         )
 
     def next_protocol(self) -> type[Protocol] | None:
-        from netprotocols.layer2.arp import ARP
-        from netprotocols.layer3.ip import IPv4, IPv6
-
-        mapping: dict[int, type[Protocol]] = {
-            EtherType.ARP: ARP,
-            EtherType.IPV4: IPv4,
-            EtherType.IPV6: IPv6,
-        }
-        return mapping.get(self.ethertype)
+        return _ethertype_class(self.ethertype)
 
     @property
     def ethertype_name(self) -> str:
         """Display name of the EtherType, e.g. ``"IPv4"``; falls back to
         the hexadecimal value for types unknown to this library."""
-        try:
-            return EtherType(self.ethertype).display_name
-        except ValueError:
-            return f"{self.ethertype:#06x}"
+        return _ethertype_name(self.ethertype)
