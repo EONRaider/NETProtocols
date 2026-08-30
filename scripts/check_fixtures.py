@@ -98,6 +98,14 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
                 != struct.unpack_from("!H", upper, 2)[0]
             ):
                 failures.append("icmpv4-checksum")
+        elif proto == 2 and upper_len >= 8:
+            stats["igmp"] += 1
+            # IGMP: whole message, checksum at bytes 2-3, no pseudo-header.
+            if (
+                internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
+                != struct.unpack_from("!H", upper, 2)[0]
+            ):
+                failures.append("igmp-checksum")
         elif proto == 6 and upper_len >= 20:
             stats["tcp"] += 1
             zeroed = upper[:16] + b"\x00\x00" + upper[18:]
