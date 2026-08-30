@@ -20,5 +20,12 @@ class TestUDP:
         udp = UDP.decode(raw_udp_header + b"dns query payload")
         assert bytes(udp) == raw_udp_header
 
-    def test_chain_ends_here(self, raw_udp_header):
-        assert UDP.decode(raw_udp_header).next_protocol() is None
+    def test_well_known_port_chains_to_app_protocol(self, raw_udp_header):
+        # raw_udp_header is a DNS datagram (destination port 53).
+        from netprotocols import DNS
+
+        assert UDP.decode(raw_udp_header).next_protocol() is DNS
+
+    def test_ordinary_ports_end_the_chain(self):
+        udp = UDP(src_port=40000, dst_port=40001, length=8, checksum=0)
+        assert udp.next_protocol() is None

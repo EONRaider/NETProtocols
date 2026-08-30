@@ -19,11 +19,13 @@ from hypothesis import strategies as st
 from conftest import corpus_frames
 from netprotocols import (
     ARP,
+    DNS,
     TCP,
     UDP,
     Ethernet,
     ICMPv4,
     ICMPv6,
+    InvalidFieldError,
     IPv4,
     IPv6,
     IPv6DestinationOptions,
@@ -53,6 +55,7 @@ ALL_PROTOCOLS = (
     ICMPv6,
     TCP,
     UDP,
+    DNS,
 )
 
 CORPUS_FRAMES = [frame for _, _, frame in corpus_frames()]
@@ -180,3 +183,16 @@ class TestPacketProperties:
             layers, consumed = walk(data)
             if layers:
                 assert bytes(Packet(*layers)) == bytes(data[:consumed])
+
+
+class TestDNSNameAccessorSafety:
+    @given(data=fuzz_input)
+    def test_question_name_never_hangs_or_escapes(self, data: bytes) -> None:
+        """The name accessor parses untrusted, possibly compression-
+        looping bytes: it must return a str/None or raise
+        InvalidFieldError, never hang and never raise anything else."""
+        with contextlib.suppress(ProtocolError):
+            dns = DNS.decode(data)
+            with contextlib.suppress(InvalidFieldError):
+                name = dns.question_name
+                assert name is None or isinstance(name, str)
