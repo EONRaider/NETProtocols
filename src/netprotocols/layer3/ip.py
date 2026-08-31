@@ -46,6 +46,7 @@ def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
     (``ipv6=True``): a garbage IPv4 packet with ``protocol=0`` must not
     decode a Hop-by-Hop layer.
     """
+    from netprotocols.layer3.gre import GRE
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
     from netprotocols.layer3.igmp import IGMP
     from netprotocols.layer3.ipv6_ext import (
@@ -63,6 +64,7 @@ def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
         IPProtocol.HOPOPT: IPv6HopByHopOptions,
         IPProtocol.ICMP: ICMPv4,
         IPProtocol.IGMP: IGMP,
+        IPProtocol.GRE: GRE,
         IPProtocol.IPV6_ROUTE: IPv6Routing,
         IPProtocol.IPV6_FRAG: IPv6Fragment,
         IPProtocol.IPV6_ICMP: ICMPv6,

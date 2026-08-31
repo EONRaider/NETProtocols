@@ -100,5 +100,9 @@ class TestChainWalk:
         assert IPv6.decode(icmp_ipv6).next_protocol() is ICMPv6
 
     def test_unknown_ip_protocol_ends_chain(self, raw_ipv4_header):
-        gre = b"\x45" + raw_ipv4_header[1:9] + b"\x2f" + raw_ipv4_header[10:]
-        assert IPv4.decode(gre).next_protocol() is None
+        # Protocol 253 is reserved for experimentation (RFC 3692) and is
+        # not one this library decodes, so the chain ends at IPv4.
+        unknown = (
+            b"\x45" + raw_ipv4_header[1:9] + b"\xfd" + raw_ipv4_header[10:]
+        )
+        assert IPv4.decode(unknown).next_protocol() is None

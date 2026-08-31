@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   well-known port (67/68); terminal, with a byte-exact round-trip and
   the same bounded-parse contract as DNS (`InvalidFieldError` on a
   missing cookie or an option that overruns the buffer).
+- **GRE** (`netprotocols.GRE`, RFC 2784/2890) — Generic Routing
+  Encapsulation, dispatched from IPv4/IPv6 protocol 47. The four-byte
+  header (flags/version + protocol type) decodes with the optional
+  checksum, key, and sequence-number fields that the flag bits announce
+  kept raw and surfaced through accessors. The payload chains onward by
+  the `protocol_type` EtherType, so a GRE-tunnelled IPv4/IPv6 packet
+  keeps decoding; the round-trip stays byte-exact regardless of which
+  optional fields are present.
 
 ### Development
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q
