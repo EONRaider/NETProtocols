@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `8021q` driver) — genuine inner checksums, byte-identical to trunk
   output; see `tests/fixtures/MANIFEST.md` and
   `scripts/capture_fixtures_vlan.sh`.
+- Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
+  ladder, the decode contract, the add-a-protocol enforcement points,
+  and the fixture-capture workflow) and a pull-request template under
+  `.github/`.
 
 ## [1.2.0] - 2026-08-30
 
