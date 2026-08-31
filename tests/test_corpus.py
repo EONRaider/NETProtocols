@@ -15,6 +15,7 @@ from netprotocols import (
     ARP,
     TCP,
     UDP,
+    VLAN,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -82,7 +83,17 @@ class TestCorpusCoverage:
         seen = {
             type(layer) for _, _, frame in CORPUS for layer in walk(frame)[0]
         }
-        assert {Ethernet, ARP, IPv4, IPv6, ICMPv4, ICMPv6, TCP, UDP} <= seen
+        assert {
+            Ethernet,
+            VLAN,
+            ARP,
+            IPv4,
+            IPv6,
+            ICMPv4,
+            ICMPv6,
+            TCP,
+            UDP,
+        } <= seen
 
     def test_arp_covers_both_operations(self):
         opers = {
@@ -165,3 +176,34 @@ class TestRepresentativeFrames:
             udp = walk(frame)[0][2]
             assert isinstance(udp, UDP)
             assert udp.src_port == 53
+
+    def test_vlan_single_and_qinq_tags_chain_to_the_payload(self):
+        frames = read_pcap(FIXTURES / "vlan_icmp.pcap")
+        stacks = [walk(frame)[0] for frame in frames]
+
+        # A single 802.1Q tag: exactly one VLAN layer between Ethernet
+        # and the tagged payload (ARP or IPv4).
+        single = next(
+            s
+            for s in stacks
+            if [type(x) for x in s[:3]] == [Ethernet, VLAN, IPv4]
+        )
+        assert single[1].vid == 100
+        assert single[1].ethertype_name == "IPv4"
+        assert type(single[3]) is ICMPv4
+
+        # A QinQ frame carrying IPv4: one VLAN layer per tag, outer
+        # S-VID then inner C-VID, then the payload chains normally.
+        qinq = next(
+            s
+            for s in stacks
+            if [type(x) for x in s[:4]] == [Ethernet, VLAN, VLAN, IPv4]
+        )
+        assert (qinq[1].vid, qinq[2].vid) == (200, 30)
+        assert type(qinq[4]) is ICMPv4
+
+        # Both single-tag and QinQ frames are present, and ARP rides a
+        # tagged frame too (one VLAN layer per tag regardless of payload).
+        tag_counts = {sum(isinstance(x, VLAN) for x in s) for s in stacks}
+        assert {1, 2} <= tag_counts
+        assert any(any(isinstance(x, ARP) for x in s) for s in stacks)

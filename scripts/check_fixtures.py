@@ -66,6 +66,16 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
     ethertype = struct.unpack_from("!H", frame, 12)[0]
     payload = frame[14:]
 
+    # Peel 802.1Q/802.1ad VLAN tag shims (4 bytes each: TCI + inner
+    # EtherType); the innermost payload is then validated as usual.
+    while ethertype in (0x8100, 0x88A8, 0x9100):
+        if len(payload) < 4:
+            stats["vlan-truncated"] += 1
+            return failures
+        stats["vlan-tag"] += 1
+        ethertype = struct.unpack_from("!H", payload, 2)[0]
+        payload = payload[4:]
+
     if ethertype == 0x0806:
         stats["arp"] += 1
         return failures

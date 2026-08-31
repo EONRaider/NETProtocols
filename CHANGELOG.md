@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property-based fuzz suite and the `EtherType` display names are
   covered by the enum completeness test.
 
+### Development
+- The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q
+  single tag VID 100 + 802.1ad QinQ S-VID 200 / C-VID 30, over ARP and
+  ICMPv4), so the `VLAN` layer rides the corpus-wide invariants and the
+  transport-checksum recompute like every other protocol. The tags are
+  spliced over a real untagged capture (the CI/dev kernel lacks the
+  `8021q` driver) — genuine inner checksums, byte-identical to trunk
+  output; see `tests/fixtures/MANIFEST.md` and
+  `scripts/capture_fixtures_vlan.sh`.
+
 ## [1.2.0] - 2026-08-30
 
 ### Added

@@ -7,8 +7,11 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram). Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 69 frames across 13
+frames routinely leave checksums to NIC offload. 77 frames across 14
 scenarios. Addresses are as-captured from the capture host's network.
+
+One scenario (`vlan_icmp.pcap`) is a **tag-splice over a real capture**
+rather than a direct capture — see its row and the VLAN note below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -25,6 +28,7 @@ scenarios. Addresses are as-captured from the capture host's network.
 | `tcp_http.pcap` | 4 | Inbound HTTP-port segments over IPv6: ACK, PSH-ACK ×2, FIN-ACK — all carrying options |
 | `tcp_https.pcap` | 12 | Inbound HTTPS segments over IPv4 (7) and IPv6 (5): ACK/PSH-ACK with options |
 | `udp_dns.pcap` | 4 | DNS responses (src port 53) over IPv4 (1) and IPv6 (3), with payloads |
+| `vlan_icmp.pcap` | 8 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **tags spliced over a real untagged capture** (see VLAN note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -41,6 +45,17 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
 - Unknown-EtherType frames are exercised by deliberately synthetic
   fixtures in the unit tests (their point is being unknown), not by the
   corpus.
+- `vlan_icmp.pcap` was produced by `scripts/capture_fixtures_vlan.sh`.
+  A VLAN tag never reaches a host on an access port, and this repo's
+  CI/dev kernel ships without the `8021q` driver, so the script
+  captures a **real** untagged ARP + ICMPv4 exchange over a veth pair
+  and splices the tag shims in afterward. An 802.1Q tag copies no field
+  and is covered by no checksum, so the inner IPv4/ICMP checksums are
+  genuine kernel output and the frames are byte-identical to what a
+  trunk port would have captured for the same traffic — `check_fixtures`
+  verifies those inner checksums like any other frame. The script's
+  header documents the pure-capture recipe (`ip link add … type vlan`)
+  for regenerating this fixture directly on an `8021q` host.
 
 ## Provenance note
 

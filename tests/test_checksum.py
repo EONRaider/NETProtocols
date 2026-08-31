@@ -47,11 +47,16 @@ def transport_cases():
             continue  # any fragment: the checksum spans the reassembly
         # Find the transport by type and the offset just past its
         # header: an application layer (e.g. DNS) may now sit below it,
-        # so the transport's payload ends before the chain does.
+        # so the transport's payload ends before the chain does. Track
+        # the IP datagram's own start offset while walking, so a VLAN
+        # shim between Ethernet and IP shifts the datagram bounds too.
         transport = None
         after_transport = 0
+        ip_start = 0
         offset = 0
         for layer in layers:
+            if layer is ip:
+                ip_start = offset
             offset += layer.header_len
             if isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
                 transport = layer
@@ -61,9 +66,9 @@ def transport_cases():
             continue
         # The wire payload ends at the IP datagram's declared length.
         if isinstance(ip, IPv4):
-            end = 14 + ip.total_length
+            end = ip_start + ip.total_length
         else:
-            end = 14 + ip.header_len + ip.payload_length
+            end = ip_start + ip.header_len + ip.payload_length
         payload = frame[after_transport:end]
         cases.append((f"{name}#{index}", transport, ip, payload))
     return cases
