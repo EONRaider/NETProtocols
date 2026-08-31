@@ -49,6 +49,7 @@ class IPProtocol(IntEnum):
     UDP = 0x11
     IPV6_ROUTE = 0x2B
     IPV6_FRAG = 0x2C
+    GRE = 0x2F
     IPV6_ICMP = 0x3A
     IPV6_DSTOPTS = 0x3C
 
@@ -65,6 +66,7 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.UDP: "UDP",
     IPProtocol.IPV6_ROUTE: "IPv6 Routing",
     IPProtocol.IPV6_FRAG: "IPv6 Fragment",
+    IPProtocol.GRE: "GRE",
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
     IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
 }
