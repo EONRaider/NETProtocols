@@ -51,6 +51,26 @@ def build_v3_report(
     return struct.pack("!BBH", 0x22, 0, checksum) + body
 
 
+def build_v3_query(
+    *,
+    group: str = "0.0.0.0",
+    s: int = 0,
+    qrv: int = 2,
+    qqic: int = 125,
+    sources: list[str] | None = None,
+    max_resp_code: int = 100,
+) -> bytes:
+    """Assemble an IGMPv3 Membership Query (type 0x11, RFC 3376 §4.1)."""
+    sources = sources or []
+    body = ipv4_bytes(group)
+    body += bytes([((s & 1) << 3) | (qrv & 0x07), qqic])
+    body += struct.pack("!H", len(sources))
+    body += b"".join(ipv4_bytes(src) for src in sources)
+    header = struct.pack("!BBH", 0x11, max_resp_code, 0)
+    checksum = compute(IGMP.decode(header + body))
+    return struct.pack("!BBH", 0x11, max_resp_code, checksum) + body
+
+
 class TestIGMPFields:
     def test_v2_membership_report(self):
         raw = build_igmp(0x16, "239.255.42.99")
@@ -194,6 +214,71 @@ class TestIGMPv3GroupRecords:
         igmp = IGMP.decode(struct.pack("!BBH", 0x22, 0, 0) + body)
         with pytest.raises(InvalidFieldError):
             _ = igmp.group_records
+
+
+class TestIGMPv3Query:
+    def test_general_query_fields(self):
+        raw = build_v3_query(group="0.0.0.0", s=0, qrv=2, qqic=125)
+        igmp = IGMP.decode(raw)
+        assert igmp.type_name == "Membership Query"
+        assert igmp.group_address == "0.0.0.0"
+        assert igmp.s_flag == 0
+        assert igmp.qrv == 2
+        assert igmp.qqic == 125
+        assert igmp.num_query_sources == 0
+        assert igmp.query_source_addresses == ()
+        assert verify(igmp)
+
+    def test_group_and_source_specific_query(self):
+        raw = build_v3_query(
+            group="239.1.1.1",
+            s=1,
+            qrv=3,
+            qqic=10,
+            sources=["10.0.0.1", "10.0.0.2"],
+        )
+        igmp = IGMP.decode(raw)
+        assert igmp.group_address == "239.1.1.1"
+        assert igmp.s_flag == 1
+        assert igmp.qrv == 3
+        assert igmp.qqic == 10
+        assert igmp.num_query_sources == 2
+        assert igmp.query_source_addresses == ("10.0.0.1", "10.0.0.2")
+        assert verify(igmp)
+
+    def test_v2_query_has_no_v3_fields(self):
+        # An 8-byte v2 query: its body is only the 4-byte group address.
+        igmp = IGMP.decode(build_igmp(0x11, "224.0.0.1", max_resp_code=100))
+        assert igmp.group_address == "224.0.0.1"
+        assert igmp.s_flag is None
+        assert igmp.qrv is None
+        assert igmp.qqic is None
+        assert igmp.num_query_sources is None
+        assert igmp.query_source_addresses is None
+
+    def test_non_query_types_have_no_query_fields(self):
+        igmp = IGMP.decode(build_igmp(0x16, "239.1.2.3"))  # v2 report
+        assert igmp.s_flag is None
+        assert igmp.query_source_addresses is None
+
+    def test_round_trip_is_byte_exact(self):
+        raw = build_v3_query(
+            group="239.9.9.9", s=1, qrv=7, qqic=200, sources=["192.0.2.1"]
+        )
+        assert bytes(IGMP.decode(raw)) == raw
+
+    def test_truncated_source_list_raises(self):
+        raw = build_v3_query(sources=["10.0.0.1"])
+        with pytest.raises(InvalidFieldError):
+            _ = IGMP.decode(raw[:-2]).query_source_addresses
+
+    def test_lying_source_count_raises(self):
+        # Query claims 4 sources but carries none.
+        body = ipv4_bytes("0.0.0.0") + bytes([0x02, 100])
+        body += struct.pack("!H", 4)
+        igmp = IGMP.decode(struct.pack("!BBH", 0x11, 100, 0) + body)
+        with pytest.raises(InvalidFieldError):
+            _ = igmp.query_source_addresses
 
 
 class TestIGMPContract:

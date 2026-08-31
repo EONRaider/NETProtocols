@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never re-encodes, so the byte-exact round-trip is preserved, and a
   lying record/source count or a truncated record raises
   `InvalidFieldError` (bounded — never hangs or over-reads).
+- **IGMPv3 query fields** (RFC 3376 §4.1): a v3 Membership Query (type
+  `0x11`) now exposes its fields past the group address — the `s_flag`
+  (suppress router-side processing), `qrv`, `qqic`, and
+  `query_source_addresses` accessors parse the raw body on demand. A v2
+  (8-byte) query and non-query types return `None`, and a source count
+  that runs past the message raises `InvalidFieldError`.
 - **DHCP** (`netprotocols.DHCP`, RFC 2131/2132) — the fixed BOOTP header
   (op, xid, the client/your/server/gateway addresses, the 16-byte client
   hardware address, and the server-name / boot-file fields) decodes in
