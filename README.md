@@ -133,7 +133,7 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-- More protocols: 802.1Q VLAN tags, DHCP, GRE (DNS and IGMP shipped in 1.2).
+- More protocols: DHCP, GRE (802.1Q VLAN tags, DNS, and IGMP have shipped).
 - Full DNS resource-record parsing (the header and question are decoded today; answer/authority/additional sections are kept raw).
 - IGMPv3 group-record parsing (the common header is decoded today; v3 report records are kept raw in the body).
 - Optional richer address accessors (`ipaddress` / EUI objects
@@ -145,10 +145,12 @@ monitor built on it (formerly Packet-Sniffer).
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI on Python 3.12–3.14. The test suite is anchored by a
-65-frame corpus of real captured traffic
+77-frame corpus of real captured traffic
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
-property-based fuzzing of the decode path. Start with
-[ARCHITECTURE.md](ARCHITECTURE.md).
+property-based fuzzing of the decode path. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
+[ARCHITECTURE.md](ARCHITECTURE.md) for the design and the
+add-a-protocol cookbook.
 
 ## License
 
