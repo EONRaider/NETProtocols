@@ -1,6 +1,7 @@
 """DNS decoding, driven by the real corpus frames in udp_dns.pcap plus
 crafted cases for the decode contract and compression safety."""
 
+import socket
 import struct
 
 import pytest
@@ -9,6 +10,7 @@ from conftest import FIXTURES, read_pcap
 from netprotocols import (
     DNS,
     UDP,
+    DNSResourceRecord,
     Ethernet,
     InvalidFieldError,
     IPv4,
@@ -30,6 +32,47 @@ def build_query(qname_labels: list[str], qtype: int = 1) -> bytes:
         + qname
         + struct.pack("!HH", qtype, 1)
     )
+
+
+def encode_name(name: str) -> bytes:
+    if name in (".", ""):
+        return b"\x00"
+    return (
+        b"".join(bytes([len(part)]) + part.encode() for part in name.split("."))
+        + b"\x00"
+    )
+
+
+def rr(
+    name: str, rtype: int, rdata: bytes, *, rclass: int = 1, ttl: int = 300
+) -> bytes:
+    return (
+        encode_name(name)
+        + struct.pack("!HHIH", rtype, rclass, ttl, len(rdata))
+        + rdata
+    )
+
+
+def build_response(
+    question: str,
+    qtype: int = 1,
+    *,
+    answers: tuple[bytes, ...] = (),
+    authorities: tuple[bytes, ...] = (),
+    additionals: tuple[bytes, ...] = (),
+) -> bytes:
+    header = struct.pack(
+        "!HHHHHH",
+        0x1234,
+        0x8180,
+        1,
+        len(answers),
+        len(authorities),
+        len(additionals),
+    )
+    body = encode_name(question) + struct.pack("!HH", qtype, 1)
+    body += b"".join(answers) + b"".join(authorities) + b"".join(additionals)
+    return header + body
 
 
 class TestCorpusDNS:
@@ -66,6 +109,33 @@ class TestCorpusDNS:
         assert "example.com" in names
         assert "accounts.youtube.com" in names
 
+    def test_answers_parse_to_real_records(self):
+        records = [
+            record
+            for frame in CORPUS_DNS
+            for record in walk(frame)[0][-1].answers
+        ]
+        assert records
+        assert {"A", "AAAA", "CNAME"} <= {r.rtype_name for r in records}
+        # An A record's RDATA decodes to the dotted IPv4 in rdata_text.
+        a = next(r for r in records if r.rtype_name == "A")
+        assert a.rdata == socket.inet_aton(a.rdata_text)
+        # A CNAME's RDATA decompresses to a real target domain.
+        cname = next(r for r in records if r.rtype_name == "CNAME")
+        assert cname.rdata_text.endswith("google.com")
+
+    def test_authority_soa_and_additional_opt(self):
+        stacks = [walk(frame)[0][-1] for frame in CORPUS_DNS]
+        soas = [
+            r for d in stacks for r in d.authorities if r.rtype_name == "SOA"
+        ]
+        assert soas  # accounts.youtube.com authority is an SOA
+        assert soas[0].rdata_text.count(" ") == 6  # mname rname + 5 fields
+        opts = [
+            r for d in stacks for r in d.additionals if r.rtype_name == "OPT"
+        ]
+        assert opts  # every response carried an EDNS OPT pseudo-record
+
 
 class TestDNSFields:
     def test_flag_bits(self):
@@ -98,6 +168,166 @@ class TestDNSFields:
         dns = DNS.decode(raw)
         assert dns.header_len == len(raw)
         assert bytes(dns) == raw
+
+
+class TestDNSResourceRecords:
+    @staticmethod
+    def _ipv6(addr: str) -> bytes:
+        return socket.inet_pton(socket.AF_INET6, addr)
+
+    def test_a_record(self):
+        raw = build_response(
+            "host.example.com",
+            1,
+            answers=(rr("host.example.com", 1, socket.inet_aton("192.0.2.1")),),
+        )
+        (record,) = DNS.decode(raw).answers
+        assert isinstance(record, DNSResourceRecord)
+        assert record.name == "host.example.com"
+        assert record.rtype == 1
+        assert record.rtype_name == "A"
+        assert record.rclass == 1
+        assert record.ttl == 300
+        assert record.rdata_text == "192.0.2.1"
+
+    def test_aaaa_record(self):
+        raw = build_response(
+            "host.example.com",
+            28,
+            answers=(rr("host.example.com", 28, self._ipv6("2001:db8::1")),),
+        )
+        (record,) = DNS.decode(raw).answers
+        assert record.rtype_name == "AAAA"
+        assert record.rdata_text == "2001:db8::1"
+
+    def test_cname_target_name(self):
+        raw = build_response(
+            "alias.example.com",
+            5,
+            answers=(
+                rr("alias.example.com", 5, encode_name("target.example.com")),
+            ),
+        )
+        (record,) = DNS.decode(raw).answers
+        assert record.rtype_name == "CNAME"
+        assert record.rdata_text == "target.example.com"
+
+    def test_mx_record(self):
+        rdata = struct.pack("!H", 10) + encode_name("mail.example.com")
+        raw = build_response(
+            "example.com", 15, answers=(rr("example.com", 15, rdata),)
+        )
+        (record,) = DNS.decode(raw).answers
+        assert record.rtype_name == "MX"
+        assert record.rdata_text == "10 mail.example.com"
+
+    def test_txt_record(self):
+        rdata = bytes([5]) + b"hello" + bytes([6]) + b"world!"
+        raw = build_response(
+            "example.com", 16, answers=(rr("example.com", 16, rdata),)
+        )
+        (record,) = DNS.decode(raw).answers
+        assert record.rtype_name == "TXT"
+        assert record.rdata_text == "helloworld!"
+
+    def test_soa_record(self):
+        rdata = (
+            encode_name("ns.example.com")
+            + encode_name("admin.example.com")
+            + struct.pack("!IIIII", 1, 2, 3, 4, 5)
+        )
+        raw = build_response(
+            "example.com", 6, authorities=(rr("example.com", 6, rdata),)
+        )
+        (record,) = DNS.decode(raw).authorities
+        assert record.rtype_name == "SOA"
+        assert record.rdata_text == "ns.example.com admin.example.com 1 2 3 4 5"
+
+    def test_unknown_type_keeps_hex_rdata(self):
+        raw = build_response(
+            "example.com",
+            1,
+            answers=(rr("example.com", 99, b"\xde\xad\xbe\xef"),),
+        )
+        (record,) = DNS.decode(raw).answers
+        assert record.rtype_name == "99"
+        assert record.rdata == b"\xde\xad\xbe\xef"
+        assert record.rdata_text == "deadbeef"
+
+    def test_sections_split_by_count(self):
+        raw = build_response(
+            "example.com",
+            1,
+            answers=(rr("example.com", 1, socket.inet_aton("192.0.2.1")),),
+            authorities=(rr("example.com", 2, encode_name("ns.example.com")),),
+            additionals=(
+                rr("ns.example.com", 1, socket.inet_aton("192.0.2.53")),
+            ),
+        )
+        dns = DNS.decode(raw)
+        assert [r.rtype_name for r in dns.answers] == ["A"]
+        assert [r.rtype_name for r in dns.authorities] == ["NS"]
+        assert [r.rtype_name for r in dns.additionals] == ["A"]
+
+    def test_no_records_is_empty(self):
+        dns = DNS.decode(build_query(["example", "com"]))
+        assert dns.answers == ()
+        assert dns.authorities == ()
+        assert dns.additionals == ()
+
+    def test_round_trip_preserved(self):
+        raw = build_response(
+            "example.com",
+            1,
+            answers=(rr("example.com", 1, socket.inet_aton("192.0.2.1")),),
+        )
+        assert bytes(DNS.decode(raw)) == raw
+
+    def test_rdata_running_past_message_raises(self):
+        raw = build_response(
+            "example.com",
+            1,
+            answers=(rr("example.com", 1, socket.inet_aton("192.0.2.1")),),
+        )
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw[:-2]).answers  # RDATA now overruns the buffer
+
+    def test_lying_answer_count_raises(self):
+        header = struct.pack("!HHHHHH", 1, 0x8180, 1, 2, 0, 0)  # ancount=2
+        body = encode_name("example.com") + struct.pack("!HH", 1, 1)
+        body += rr("example.com", 1, socket.inet_aton("192.0.2.1"))  # only 1
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(header + body).answers
+
+    def test_record_header_truncated_raises(self):
+        # An answer name present, but no room for the 10 fixed bytes.
+        header = struct.pack("!HHHHHH", 1, 0x8180, 1, 1, 0, 0)
+        body = encode_name("example.com") + struct.pack("!HH", 1, 1)
+        body += encode_name("x")  # a name, then the message ends
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(header + body).answers
+
+    def test_question_section_truncated_raises(self):
+        # qdcount=1 but the question has no room for QTYPE/QCLASS.
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 1, 0, 0) + encode_name("a")
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).answers
+
+    def test_txt_character_string_overrun_raises(self):
+        rdata = bytes([10]) + b"abc"  # declares 10 bytes, only 3 follow
+        raw = build_response(
+            "example.com", 16, answers=(rr("example.com", 16, rdata),)
+        )
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).answers
+
+    def test_soa_truncated_raises(self):
+        rdata = encode_name("ns") + encode_name("r") + b"\x00\x00"
+        raw = build_response(
+            "example.com", 6, authorities=(rr("example.com", 6, rdata),)
+        )
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).authorities
 
 
 class TestDNSContract:
@@ -137,6 +367,29 @@ class TestDNSContract:
         bad = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x09abc"
         with pytest.raises(InvalidFieldError):
             _ = DNS.decode(bad).question_type
+
+    def test_lone_pointer_byte_raises_reading_past_name(self):
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0"
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_type  # via _read_name
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_name  # via _labels
+
+    def test_reserved_length_bits_raise_reading_past_name(self):
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x40\x00"
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_type  # via _read_name
+
+    def test_label_overruns_message_in_labels(self):
+        # Declares a 9-byte label but only three bytes follow.
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x09abc"
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_name  # via _labels
+
+    def test_question_without_qtype_qclass_raises(self):
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + encode_name("a")
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_type
 
 
 class TestDNSDispatch:
