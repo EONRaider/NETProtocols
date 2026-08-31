@@ -5,12 +5,16 @@ import struct
 
 import pytest
 
+from conftest import FIXTURES, read_pcap
 from netprotocols import (
     DHCP,
     UDP,
+    Ethernet,
     InvalidFieldError,
+    IPv4,
     TruncatedHeaderError,
 )
+from test_corpus import walk
 
 MAGIC = b"\x63\x82\x53\x63"
 
@@ -193,6 +197,36 @@ class TestDHCPContract:
 
     def test_dhcp_ends_the_chain(self):
         assert DHCP.decode(build_dhcp()).next_protocol() is None
+
+
+class TestCorpusDHCP:
+    def test_dora_exchange_decodes(self):
+        frames = read_pcap(FIXTURES / "dhcp.pcap")
+        assert frames
+        for frame in frames:
+            layers = walk(frame)[0]
+            assert [type(layer) for layer in layers] == [
+                Ethernet,
+                IPv4,
+                UDP,
+                DHCP,
+            ]
+        # The four DORA message types are present (option 53):
+        # DISCOVER 1, OFFER 2, REQUEST 3, ACK 5.
+        types = {walk(frame)[0][-1].message_type for frame in frames}
+        assert {1, 2, 3, 5} <= types
+
+    def test_offer_assigns_an_address(self):
+        offer = next(
+            dhcp
+            for dhcp in (
+                walk(f)[0][-1] for f in read_pcap(FIXTURES / "dhcp.pcap")
+            )
+            if dhcp.message_type == 2
+        )
+        assert offer.op_name == "BOOTREPLY"
+        assert offer.yiaddr != "0.0.0.0"
+        assert offer.client_mac is not None
 
 
 class TestDHCPDispatch:

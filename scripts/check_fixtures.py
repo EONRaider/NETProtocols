@@ -57,24 +57,15 @@ def pseudo_v6(src: bytes, dst: bytes, proto: int, length: int) -> bytes:
     return src + dst + struct.pack("!IBBBB", length, 0, 0, 0, proto)
 
 
-def check_frame(frame: bytes, stats: Counter) -> list[str]:
-    """Validate one Ethernet frame; returns a list of failure strings."""
+def _check_l3(
+    ethertype: int, payload: bytes, stats: Counter, depth: int = 0
+) -> list[str]:
+    """Validate the checksums reachable from an L3 payload named by
+    ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
+    is itself an EtherType. Returns a list of failure strings."""
     failures: list[str] = []
-    if len(frame) < 14:
-        stats["runt"] += 1
-        return failures
-    ethertype = struct.unpack_from("!H", frame, 12)[0]
-    payload = frame[14:]
-
-    # Peel 802.1Q/802.1ad VLAN tag shims (4 bytes each: TCI + inner
-    # EtherType); the innermost payload is then validated as usual.
-    while ethertype in (0x8100, 0x88A8, 0x9100):
-        if len(payload) < 4:
-            stats["vlan-truncated"] += 1
-            return failures
-        stats["vlan-tag"] += 1
-        ethertype = struct.unpack_from("!H", payload, 2)[0]
-        payload = payload[4:]
+    if depth > 8:
+        return failures  # bound pathological tunnel nesting
 
     if ethertype == 0x0806:
         stats["arp"] += 1
@@ -139,6 +130,21 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
                 )
                 if computed != wire:
                     failures.append("udp-checksum")
+        elif proto == 47 and upper_len >= 4:
+            # GRE: a 4-byte header (flags word + inner EtherType) plus the
+            # optional checksum/key/sequence words the flag bits announce
+            # (RFC 2890), then the tunnelled packet — validated in turn.
+            stats["gre"] += 1
+            gre_flags = struct.unpack_from("!H", upper, 0)[0]
+            inner_ethertype = struct.unpack_from("!H", upper, 2)[0]
+            optional = (
+                (4 if gre_flags & 0x8000 else 0)
+                + (4 if gre_flags & 0x2000 else 0)
+                + (4 if gre_flags & 0x1000 else 0)
+            )
+            failures += _check_l3(
+                inner_ethertype, upper[4 + optional :], stats, depth + 1
+            )
         return failures
 
     if ethertype == 0x86DD and len(payload) >= 40:
@@ -189,6 +195,27 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
 
     stats[f"other-0x{ethertype:04x}"] += 1
     return failures
+
+
+def check_frame(frame: bytes, stats: Counter) -> list[str]:
+    """Validate one Ethernet frame; returns a list of failure strings."""
+    if len(frame) < 14:
+        stats["runt"] += 1
+        return []
+    ethertype = struct.unpack_from("!H", frame, 12)[0]
+    payload = frame[14:]
+
+    # Peel 802.1Q/802.1ad VLAN tag shims (4 bytes each: TCI + inner
+    # EtherType); the innermost payload is then validated as usual.
+    while ethertype in (0x8100, 0x88A8, 0x9100):
+        if len(payload) < 4:
+            stats["vlan-truncated"] += 1
+            return []
+        stats["vlan-tag"] += 1
+        ethertype = struct.unpack_from("!H", payload, 2)[0]
+        payload = payload[4:]
+
+    return _check_l3(ethertype, payload, stats)
 
 
 def main() -> int:

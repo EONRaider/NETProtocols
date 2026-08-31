@@ -7,12 +7,13 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram). Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 81 frames across 14
+frames routinely leave checksums to NIC offload. 93 frames across 16
 scenarios. Addresses are as-captured from the capture host's network.
 
-One scenario (`vlan_icmp.pcap`) is captured separately by
-`scripts/capture_fixtures_vlan.sh` over real kernel vlan devices — see
-its row and the VLAN note below.
+Three scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`) are captured
+separately by their own `scripts/capture_fixtures_*.sh` over
+purpose-built topologies — real kernel vlan devices, a DHCP
+server/client, and a GRE tunnel — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -30,6 +31,8 @@ its row and the VLAN note below.
 | `tcp_https.pcap` | 12 | Inbound HTTPS segments over IPv4 (7) and IPv6 (5): ACK/PSH-ACK with options |
 | `udp_dns.pcap` | 4 | DNS responses (src port 53) over IPv4 (1) and IPv6 (3), with payloads |
 | `vlan_icmp.pcap` | 12 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **direct capture** of real kernel-tagged traffic (see VLAN note) |
+| `dhcp.pcap` | 4 | DHCP DORA exchange (DISCOVER / OFFER / REQUEST / ACK) over IPv4/UDP — **direct capture** via dnsmasq + dhclient over a veth pair (see DHCP note) |
+| `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -58,6 +61,18 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   like any other frame. On a kernel without the `8021q` driver the
   script falls back to splicing tag shims over a real untagged capture,
   which is byte-identical; the committed fixture is a direct capture.
+- `dhcp.pcap` was produced by `scripts/capture_fixtures_dhcp.sh`: a real
+  DHCP DORA exchange between `dnsmasq` (DHCP only) and `dhclient` over a
+  veth pair, captured on the server side. The four messages decode
+  `Ethernet→IPv4→UDP→DHCP`; `check_fixtures` verifies the UDP checksum,
+  which covers the DHCP payload. Offload is disabled first so the
+  server's checksums are computed rather than left to "offload".
+- `gre.pcap` was produced by `scripts/capture_fixtures_gre.sh`: ICMPv4
+  echo across a kernel GRE tunnel built over a veth pair, captured on
+  the underlay so each frame is `Ethernet→IPv4 (proto 47)→GRE→IPv4→
+  ICMPv4`. Half the frames ride a plain tunnel (GRE flags all clear) and
+  half a keyed tunnel (the RFC 2890 key field). `check_fixtures` peels
+  the GRE header and verifies the inner IPv4/ICMP checksums.
 
 ## Provenance note
 
