@@ -132,6 +132,16 @@ class TCP(Protocol):
     def header_len(self) -> int:
         return self.data_offset * 4
 
+    def next_protocol(self) -> type[Protocol] | None:
+        """The application protocol carried by this segment, chosen by
+        well-known port (best-effort — see
+        :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
+        recognized. DNS over TCP is length-prefixed, so it chains through
+        a :class:`~netprotocols.DNSOverTCP` shim."""
+        from netprotocols.layer4._ports import tcp_app_class
+
+        return tcp_app_class(self.src_port, self.dst_port)
+
     @property
     def flags_str(self) -> str:
         """Space-separated names of the flags set on the segment, e.g.

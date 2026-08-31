@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and MX/TXT/SOA; hexadecimal otherwise). Parsing reads the raw sections
   and never re-encodes, so the byte-exact round-trip holds; a record or
   compressed name that runs past the message raises `InvalidFieldError`.
+- **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
+  now dispatches application protocols by well-known port
+  (`layer4._ports.tcp_app_class`). DNS over TCP is length-prefixed, so
+  port 53 chains through a 2-byte `DNSOverTCP` length shim — a layer
+  between `TCP` and the `DNS` message, like a VLAN tag between Ethernet
+  and its payload — and the walk reaches the DNS message (records and
+  all) at its true offset. Non-DNS ports still end the chain at TCP.
 
 ### Development
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q

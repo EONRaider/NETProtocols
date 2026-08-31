@@ -20,7 +20,7 @@ from typing import ClassVar, Self
 from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["DNS", "DNSResourceRecord"]
+__all__ = ["DNS", "DNSOverTCP", "DNSResourceRecord"]
 
 #: A compressed name must not follow more than this many pointers; the
 #: bound makes a maliciously looping name terminate instead of hanging.
@@ -401,3 +401,36 @@ class DNS(Protocol):
     def additionals(self) -> tuple[DNSResourceRecord, ...]:
         """The additional-section resource records, parsed on demand."""
         return self._resource_records()[2]
+
+
+@dataclass(frozen=True, slots=True)
+class DNSOverTCP(Protocol):
+    """The two-octet length prefix that frames a DNS message over TCP
+    (RFC 1035 §4.2.2).
+
+    Over TCP a DNS message is preceded by its length as a 16-bit field.
+    This models that prefix as a 2-byte shim between :class:`~netprotocols.TCP`
+    and the :class:`DNS` message — like a VLAN tag between Ethernet and
+    its payload — so the chain walk decodes ``[..., TCP, DNSOverTCP,
+    DNS]`` and the DNS message parses at its true offset. It is reached
+    only from :meth:`~netprotocols.TCP.next_protocol` on a DNS port.
+
+    :param message_length: Length in bytes of the DNS message that
+        follows this prefix.
+    """
+
+    message_length: int
+
+    _struct: ClassVar[Struct] = Struct("!H")
+
+    @classmethod
+    def decode(cls, data: bytes | memoryview) -> Self:
+        (message_length,) = cls._unpack_fixed(data)
+        return cls(message_length=message_length)
+
+    def __bytes__(self) -> bytes:
+        return self._struct.pack(self.message_length)
+
+    def next_protocol(self) -> type[Protocol] | None:
+        """The DNS message this length prefix frames."""
+        return DNS

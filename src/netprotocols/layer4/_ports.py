@@ -10,16 +10,17 @@ request targets the server's well-known port) and then the source port
 validate strictly on decode so that a wrong guess degrades to the
 library's ordinary malformed-frame path rather than yielding garbage.
 
-Only UDP is wired this round. TCP application protocols (DNS over TCP
-carries a 2-byte length prefix, RFC 1035 §4.2.2) need their own
-handling and are left for later.
+DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so the
+TCP dispatch names a small length-prefix shim (``DNSOverTCP``) rather
+than ``DNS`` directly; the shim consumes the prefix and then chains to
+the DNS message, keeping the chain walk uniform.
 """
 
 from __future__ import annotations
 
 from netprotocols._base import Protocol
 
-__all__ = ["udp_app_class"]
+__all__ = ["tcp_app_class", "udp_app_class"]
 
 
 def udp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
@@ -32,4 +33,19 @@ def udp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
     from netprotocols.layer7.dns import DNS
 
     registry: dict[int, type[Protocol]] = {53: DNS, 67: DHCP, 68: DHCP}
+    return registry.get(dst_port) or registry.get(src_port)
+
+
+def tcp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
+    """The class that decodes a TCP payload, chosen by well-known port.
+
+    DNS over TCP is length-prefixed (RFC 1035 §4.2.2), so port 53 names
+    :class:`~netprotocols.DNSOverTCP` — a 2-byte length shim that then
+    chains to the DNS message. Returns ``None`` when neither port names a
+    known application protocol (the common case, where the chain ends at
+    TCP).
+    """
+    from netprotocols.layer7.dns import DNSOverTCP
+
+    registry: dict[int, type[Protocol]] = {53: DNSOverTCP}
     return registry.get(dst_port) or registry.get(src_port)

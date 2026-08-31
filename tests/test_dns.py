@@ -9,7 +9,9 @@ import pytest
 from conftest import FIXTURES, read_pcap
 from netprotocols import (
     DNS,
+    TCP,
     UDP,
+    DNSOverTCP,
     DNSResourceRecord,
     Ethernet,
     InvalidFieldError,
@@ -73,6 +75,22 @@ def build_response(
     body = encode_name(question) + struct.pack("!HH", qtype, 1)
     body += b"".join(answers) + b"".join(authorities) + b"".join(additionals)
     return header + body
+
+
+def tcp_segment(*, src_port: int, dst_port: int, payload: bytes) -> bytes:
+    tcp = TCP(
+        src_port=src_port,
+        dst_port=dst_port,
+        seq=1,
+        ack=1,
+        data_offset=5,
+        reserved=0,
+        flags=0x018,  # PSH + ACK
+        window=0,
+        checksum=0,
+        urgent_pointer=0,
+    )
+    return bytes(tcp) + payload
 
 
 class TestCorpusDNS:
@@ -419,3 +437,53 @@ class TestDNSDispatch:
 
     def test_dns_ends_the_chain(self):
         assert DNS.decode(build_query(["x"])).next_protocol() is None
+
+
+class TestDNSOverTCP:
+    def test_shim_decodes_length_and_chains(self):
+        shim = DNSOverTCP.decode(struct.pack("!H", 56) + b"x" * 56)
+        assert shim.message_length == 56
+        assert shim.header_len == 2
+        assert shim.next_protocol() is DNS
+        assert bytes(shim) == struct.pack("!H", 56)
+
+    def test_truncated_prefix_raises(self):
+        with pytest.raises(TruncatedHeaderError):
+            DNSOverTCP.decode(b"\x00")
+
+    def test_tcp_port_53_dispatches_to_shim(self):
+        to_server = TCP.decode(
+            tcp_segment(src_port=40000, dst_port=53, payload=b"")
+        )
+        assert to_server.next_protocol() is DNSOverTCP
+        from_server = TCP.decode(
+            tcp_segment(src_port=53, dst_port=40000, payload=b"")
+        )
+        assert from_server.next_protocol() is DNSOverTCP
+
+    def test_non_dns_tcp_port_ends_chain(self):
+        https = TCP.decode(tcp_segment(src_port=443, dst_port=443, payload=b""))
+        assert https.next_protocol() is None
+
+    def test_full_tcp_dns_walk_with_records(self):
+        message = build_response(
+            "example.com",
+            1,
+            answers=(rr("example.com", 1, socket.inet_aton("93.184.216.34")),),
+        )
+        payload = struct.pack("!H", len(message)) + message
+        frame = tcp_segment(src_port=40000, dst_port=53, payload=payload)
+        layers = []
+        cursor, protocol = 0, TCP
+        while protocol is not None:
+            header = protocol.decode(frame[cursor:])
+            layers.append(header)
+            cursor += header.header_len
+            protocol = header.next_protocol()
+        assert [type(layer) for layer in layers] == [TCP, DNSOverTCP, DNS]
+        assert layers[1].message_length == len(message)
+        dns = layers[2]
+        assert dns.question_name == "example.com"
+        (a,) = dns.answers
+        assert (a.rtype_name, a.rdata_text) == ("A", "93.184.216.34")
+        assert b"".join(bytes(layer) for layer in layers) == frame

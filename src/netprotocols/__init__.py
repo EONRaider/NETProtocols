@@ -29,7 +29,7 @@ from netprotocols.layer3.ipv6_ext import (
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP
-from netprotocols.layer7.dns import DNS, DNSResourceRecord
+from netprotocols.layer7.dns import DNS, DNSOverTCP, DNSResourceRecord
 from netprotocols.packet import Packet
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -55,6 +55,7 @@ __all__ = [
     "VLAN",
     "ARPHardwareType",
     "ARPOperation",
+    "DNSOverTCP",
     "DNSResourceRecord",
     "EtherType",
     "Ethernet",
