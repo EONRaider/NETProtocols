@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never re-encodes, so the byte-exact round-trip is preserved, and a
   lying record/source count or a truncated record raises
   `InvalidFieldError` (bounded — never hangs or over-reads).
+- **DHCP** (`netprotocols.DHCP`, RFC 2131/2132) — the fixed BOOTP header
+  (op, xid, the client/your/server/gateway addresses, the 16-byte client
+  hardware address, and the server-name / boot-file fields) decodes in
+  full; the magic cookie and TLV options are kept raw and parsed on
+  demand. `option_map` walks the options (concatenating a value split
+  across appearances, RFC 3396) and `message_type` / `message_type_name`
+  read the DHCP message type (option 53). Dispatched from UDP by
+  well-known port (67/68); terminal, with a byte-exact round-trip and
+  the same bounded-parse contract as DNS (`InvalidFieldError` on a
+  missing cookie or an option that overruns the buffer).
 
 ### Development
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q

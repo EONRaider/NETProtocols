@@ -27,6 +27,7 @@ from netprotocols.layer3.ipv6_ext import (
 )
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
+from netprotocols.layer7.dhcp import DHCP
 from netprotocols.layer7.dns import DNS
 from netprotocols.packet import Packet
 from netprotocols.utils.exceptions import (
@@ -44,6 +45,7 @@ __version__ = "1.2.0"
 
 __all__ = [
     "ARP",
+    "DHCP",
     "DNS",
     "IGMP",
     "TCP",

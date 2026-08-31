@@ -28,7 +28,8 @@ def udp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
     Returns ``None`` when neither port names a known application
     protocol — the common case, where the chain ends at UDP.
     """
+    from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS
 
-    registry: dict[int, type[Protocol]] = {53: DNS}
+    registry: dict[int, type[Protocol]] = {53: DNS, 67: DHCP, 68: DHCP}
     return registry.get(dst_port) or registry.get(src_port)
