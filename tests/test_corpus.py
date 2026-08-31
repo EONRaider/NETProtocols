@@ -112,6 +112,27 @@ class TestCorpusCoverage:
             if isinstance(layer, TCP)
         )
 
+    def test_tcp_options_parse_across_the_corpus(self):
+        """Every options-bearing captured segment parses; the corpus
+        rides established connections, so the options are the classic
+        NOP, NOP, Timestamps layout (no SYN was captured — see the
+        MANIFEST — so MSS and friends are exercised by crafted tests)."""
+        options = [
+            option
+            for _, _, frame in CORPUS
+            for layer in walk(frame)[0]
+            if isinstance(layer, TCP)
+            for option in layer.parsed_options
+        ]
+        kinds = {option.kind for option in options}
+        assert kinds == {1, 8}  # No-Operation + Timestamps
+        for option in options:
+            if option.kind == 8:
+                assert option.kind_name == "Timestamps"
+                tsval_tsecr = option.value
+                assert isinstance(tsval_tsecr, tuple)
+                assert len(tsval_tsecr) == 2
+
 
 class TestFragmentHandling:
     """Regression: real fragmented traffic exposed that IPv4 chained
