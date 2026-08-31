@@ -5,13 +5,17 @@ import struct
 
 import pytest
 
+from conftest import FIXTURES, read_pcap
 from netprotocols import (
     GRE,
+    Ethernet,
+    ICMPv4,
     IPProtocol,
     IPv4,
     IPv6,
     TruncatedHeaderError,
 )
+from test_corpus import walk
 
 
 def build_gre(
@@ -175,6 +179,35 @@ class TestGREChain:
             protocol = header.next_protocol()
         assert [type(layer) for layer in layers] == [IPv4, GRE, IPv4]
         assert layers[2].src == "192.168.0.1"
+
+
+class TestCorpusGRE:
+    def test_captured_frames_are_ip_in_gre(self):
+        frames = read_pcap(FIXTURES / "gre.pcap")
+        assert frames
+        for frame in frames:
+            layers = walk(frame)[0]
+            assert [type(layer) for layer in layers[:5]] == [
+                Ethernet,
+                IPv4,
+                GRE,
+                IPv4,
+                ICMPv4,
+            ]
+            # The GRE payload names IPv4, and the tunnel's inner packet
+            # is a different network than the underlay it rides.
+            gre = layers[2]
+            assert isinstance(gre, GRE)
+            assert gre.protocol_name == "IPv4"
+            assert layers[1].src.startswith("10.9.4.")  # underlay
+            assert layers[3].src.startswith("10.9.5.")  # overlay
+
+    def test_corpus_has_plain_and_keyed_tunnels(self):
+        keys = {
+            walk(frame)[0][2].key for frame in read_pcap(FIXTURES / "gre.pcap")
+        }
+        assert None in keys  # plain tunnel: no key
+        assert any(key is not None for key in keys)  # keyed tunnel
 
 
 class TestGREContract:

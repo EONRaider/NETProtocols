@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offload disabled so the tags stay in-band in the saved bytes and the
   inner checksums are genuine kernel output; see
   `tests/fixtures/MANIFEST.md` and `scripts/capture_fixtures_vlan.sh`.
+- The corpus gained real-capture `dhcp.pcap` (a DHCP DORA exchange from
+  `dnsmasq` + `dhclient`) and `gre.pcap` (IPv4-in-GRE ICMPv4 echo over a
+  plain and a keyed kernel tunnel), so the `DHCP` and `GRE` layers ride
+  the corpus-wide invariants on genuine bytes.
+  `scripts/capture_fixtures_dhcp.sh` and `scripts/capture_fixtures_gre.sh`
+  produce them, and `scripts/check_fixtures.py` now peels a GRE header to
+  verify the tunnelled inner IPv4/ICMP checksums.
 - Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and
