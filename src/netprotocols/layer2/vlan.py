@@ -7,6 +7,13 @@ chain: a QinQ (0x88A8) or legacy double-tagged (0x9100) frame carries
 an inner tag whose EtherType is again a tag type, so
 ``next_protocol`` dispatches recursively and the chain walker sees one
 ``VLAN`` layer per tag.
+
+Following the house pattern (``IPv6`` stores ``version`` /
+``traffic_class`` / ``flow_label``, not the raw first word), the TCI
+bitfields are materialized as dataclass fields — ``pcp``, ``dei``,
+``vid`` — so serialization surfaces the semantic parts instead of an
+opaque integer. The packed 16-bit view remains available as the
+``tci`` property.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["VLAN"]
 
@@ -24,43 +32,54 @@ __all__ = ["VLAN"]
 class VLAN(Protocol):
     """One 802.1Q / 802.1ad VLAN tag.
 
-    :param tci: Tag Control Information — PCP (3 bits), DEI (1 bit)
-        and VID (12 bits) — carried as the raw 16-bit field.
+    :param pcp: Priority code point (802.1p), ``0``-``7``.
+    :param dei: Drop eligible indicator, ``0`` or ``1``.
+    :param vid: VLAN identifier, ``0``-``4095`` (``0`` = priority tag,
+        ``0xFFF`` = wildcard).
     :param ethertype: EtherType of the payload that follows this tag.
     """
 
-    tci: int
+    pcp: int
+    dei: int
+    vid: int
     ethertype: int
 
     _struct: ClassVar[Struct] = Struct("!HH")
 
+    def __post_init__(self) -> None:
+        if not 0 <= self.pcp <= 7:
+            raise InvalidFieldError(
+                f"VLAN PCP must be within 0-7, got {self.pcp}"
+            )
+        if self.dei not in (0, 1):
+            raise InvalidFieldError(f"VLAN DEI must be 0 or 1, got {self.dei}")
+        if not 0 <= self.vid <= 0xFFF:
+            raise InvalidFieldError(
+                f"VLAN VID must be within 0-4095, got {self.vid}"
+            )
+
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
         tci, ethertype = cls._unpack_fixed(data)
-        return cls(tci=tci, ethertype=ethertype)
+        return cls(
+            pcp=tci >> 13,
+            dei=(tci >> 12) & 1,
+            vid=tci & 0xFFF,
+            ethertype=ethertype,
+        )
 
     def __bytes__(self) -> bytes:
         return self._struct.pack(self.tci, self.ethertype)
+
+    @property
+    def tci(self) -> int:
+        """The raw Tag Control Information word (PCP | DEI | VID)."""
+        return (self.pcp << 13) | (self.dei << 12) | self.vid
 
     def next_protocol(self) -> type[Protocol] | None:
         from netprotocols.layer2.ethernet import _ethertype_class
 
         return _ethertype_class(self.ethertype)
-
-    @property
-    def pcp(self) -> int:
-        """Priority code point (802.1p), 0-7."""
-        return self.tci >> 13
-
-    @property
-    def dei(self) -> int:
-        """Drop eligible indicator, 0-1."""
-        return (self.tci >> 12) & 1
-
-    @property
-    def vid(self) -> int:
-        """VLAN identifier, 0-4094 (0 = priority tag, 0xFFF = wildcard)."""
-        return self.tci & 0xFFF
 
     @property
     def ethertype_name(self) -> str:

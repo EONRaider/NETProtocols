@@ -40,6 +40,7 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 | Layer | Protocol | Class | Notes |
 |---|---|---|---|
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
+| 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |

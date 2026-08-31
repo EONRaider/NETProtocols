@@ -8,6 +8,7 @@ import pytest
 from netprotocols import (
     VLAN,
     Ethernet,
+    InvalidFieldError,
     IPv4,
     Protocol,
     TruncatedHeaderError,
@@ -36,11 +37,15 @@ class TestVLANFields:
         assert tag.header_len == 4
 
     def test_roundtrip(self) -> None:
-        tag = VLAN(tci=0x0123, ethertype=0x86DD)
+        tag = VLAN(pcp=0, dei=0, vid=0x123, ethertype=0x86DD)
         assert VLAN.decode(bytes(tag)) == tag
 
     def test_unknown_ethertype_name_falls_back(self) -> None:
-        assert VLAN(tci=0, ethertype=0xCAFE).ethertype_name == "0xcafe"
+        tag = VLAN(pcp=0, dei=0, vid=0, ethertype=0xCAFE)
+        assert tag.ethertype_name == "0xcafe"
+
+    def test_tci_packs_the_bitfields(self) -> None:
+        assert VLAN(pcp=7, dei=1, vid=42, ethertype=0).tci == 0xE02A + 0x1000
 
 
 class TestVLANChain:
@@ -84,5 +89,19 @@ class TestVLANContract:
             VLAN.decode(b"\x00\x00\x00")
 
     def test_unknown_inner_ethertype_ends_chain(self) -> None:
-        tag = VLAN(tci=0, ethertype=0xCAFE)
+        tag = VLAN(pcp=0, dei=0, vid=0, ethertype=0xCAFE)
         assert tag.next_protocol() is None
+
+
+class TestVLANValidation:
+    def test_out_of_range_pcp_rejected(self) -> None:
+        with pytest.raises(InvalidFieldError):
+            VLAN(pcp=8, dei=0, vid=0, ethertype=0)
+
+    def test_out_of_range_dei_rejected(self) -> None:
+        with pytest.raises(InvalidFieldError):
+            VLAN(pcp=0, dei=2, vid=0, ethertype=0)
+
+    def test_out_of_range_vid_rejected(self) -> None:
+        with pytest.raises(InvalidFieldError):
+            VLAN(pcp=0, dei=0, vid=0x1000, ethertype=0)

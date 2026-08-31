@@ -5,6 +5,7 @@ import pytest
 from conftest import FIXTURES, read_pcap
 from netprotocols import (
     Ethernet,
+    EtherType,
     ICMPv6,
     InvalidFieldError,
     IPProtocol,
@@ -170,6 +171,10 @@ class TestRegistryGating:
 class TestEnumCompleteness:
     def test_every_ip_protocol_member_has_a_display_name(self):
         for member in IPProtocol:
+            assert member.display_name
+
+    def test_every_ethertype_member_has_a_display_name(self):
+        for member in EtherType:
             assert member.display_name
 
     def test_extension_header_display_names(self):

@@ -10,7 +10,7 @@ from netprotocols._base import Protocol, bytes_to_mac, mac_to_bytes
 from netprotocols._enums import EtherType
 from netprotocols.utils.mac import validate_mac_addr
 
-__all__ = ["Ethernet", "_ethertype_class", "_ethertype_name"]
+__all__ = ["Ethernet"]
 
 #: EtherType values that mark a VLAN tag shim rather than a payload.
 _VLAN_TAG_ETHERTYPES = frozenset(
