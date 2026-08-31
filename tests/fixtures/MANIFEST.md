@@ -7,11 +7,12 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram). Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 77 frames across 14
+frames routinely leave checksums to NIC offload. 81 frames across 14
 scenarios. Addresses are as-captured from the capture host's network.
 
-One scenario (`vlan_icmp.pcap`) is a **tag-splice over a real capture**
-rather than a direct capture — see its row and the VLAN note below.
+One scenario (`vlan_icmp.pcap`) is captured separately by
+`scripts/capture_fixtures_vlan.sh` over real kernel vlan devices — see
+its row and the VLAN note below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -28,7 +29,7 @@ rather than a direct capture — see its row and the VLAN note below.
 | `tcp_http.pcap` | 4 | Inbound HTTP-port segments over IPv6: ACK, PSH-ACK ×2, FIN-ACK — all carrying options |
 | `tcp_https.pcap` | 12 | Inbound HTTPS segments over IPv4 (7) and IPv6 (5): ACK/PSH-ACK with options |
 | `udp_dns.pcap` | 4 | DNS responses (src port 53) over IPv4 (1) and IPv6 (3), with payloads |
-| `vlan_icmp.pcap` | 8 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **tags spliced over a real untagged capture** (see VLAN note) |
+| `vlan_icmp.pcap` | 12 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **direct capture** of real kernel-tagged traffic (see VLAN note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -46,16 +47,17 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   fixtures in the unit tests (their point is being unknown), not by the
   corpus.
 - `vlan_icmp.pcap` was produced by `scripts/capture_fixtures_vlan.sh`.
-  A VLAN tag never reaches a host on an access port, and this repo's
-  CI/dev kernel ships without the `8021q` driver, so the script
-  captures a **real** untagged ARP + ICMPv4 exchange over a veth pair
-  and splices the tag shims in afterward. An 802.1Q tag copies no field
-  and is covered by no checksum, so the inner IPv4/ICMP checksums are
-  genuine kernel output and the frames are byte-identical to what a
-  trunk port would have captured for the same traffic — `check_fixtures`
-  verifies those inner checksums like any other frame. The script's
-  header documents the pure-capture recipe (`ip link add … type vlan`)
-  for regenerating this fixture directly on an `8021q` host.
+  A VLAN tag never reaches a host on an access port, so the script
+  builds real 802.1Q / 802.1ad vlan devices over a veth pair, lets the
+  kernel `8021q` driver tag the frames, and captures on the parent
+  device with tcpdump. veth's VLAN and checksum offload is turned off
+  (`ethtool -K`) first, so the tags land **in-band** in the saved bytes
+  (EtherType `0x8100` / `0x88a8` at offset 12, not stripped into
+  ancillary data) and the inner IPv4/ICMP checksums are computed to
+  their real values — `check_fixtures` verifies those inner checksums
+  like any other frame. On a kernel without the `8021q` driver the
+  script falls back to splicing tag shims over a real untagged capture,
+  which is byte-identical; the committed fixture is a direct capture.
 
 ## Provenance note
 

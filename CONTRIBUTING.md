@@ -111,13 +111,16 @@ Fixtures are captured and validated with the scripts under
   python3 scripts/check_fixtures.py tests/fixtures/staging
   ```
 
-Prefer a real capture. When a protocol can't be captured directly in a
-normal environment — for example VLAN tags, which a switch strips on an
-access port and which the CI kernel can't originate without the `8021q`
-driver — a fixture may be derived from a real capture as long as the
-derivation is byte-faithful to the wire and the provenance is recorded
-in the MANIFEST. `scripts/capture_fixtures_vlan.sh` is the worked
-example (it splices tags over a real untagged capture).
+Prefer a real capture, and build the conditions for one where a
+protocol won't appear in a normal environment. VLAN tags, for instance,
+are stripped by a switch on an access port, so
+`scripts/capture_fixtures_vlan.sh` stands up real 802.1Q / 802.1ad vlan
+devices over a veth pair and captures the kernel-tagged frames on the
+parent device. Only where even that isn't possible — a kernel without
+the `8021q` driver — may a fixture be derived from a real capture, and
+only if the derivation is byte-faithful to the wire and the provenance
+is recorded in the MANIFEST; that script's synthesis fallback (splicing
+tag shims over a real untagged capture) is the worked example.
 
 ## Changelog
 

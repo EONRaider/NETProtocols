@@ -21,11 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q
   single tag VID 100 + 802.1ad QinQ S-VID 200 / C-VID 30, over ARP and
   ICMPv4), so the `VLAN` layer rides the corpus-wide invariants and the
-  transport-checksum recompute like every other protocol. The tags are
-  spliced over a real untagged capture (the CI/dev kernel lacks the
-  `8021q` driver) — genuine inner checksums, byte-identical to trunk
-  output; see `tests/fixtures/MANIFEST.md` and
-  `scripts/capture_fixtures_vlan.sh`.
+  transport-checksum recompute like every other protocol. It is a
+  direct tcpdump capture of real kernel-tagged frames — built over
+  802.1Q / 802.1ad vlan devices on a veth pair with VLAN and checksum
+  offload disabled so the tags stay in-band in the saved bytes and the
+  inner checksums are genuine kernel output; see
+  `tests/fixtures/MANIFEST.md` and `scripts/capture_fixtures_vlan.sh`.
 - Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and

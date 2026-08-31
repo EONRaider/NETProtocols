@@ -13,24 +13,34 @@
 #   (A) Pure capture, on a kernel with the 8021q driver
 #       (CONFIG_VLAN_8021Q=y). Build real vlan devices over a veth and
 #       let the kernel tag/untag; tcpdump on the parent device sees the
-#       tags. The exact recipe (run each side, then ping across):
+#       tags in-band. A single 802.1Q device carries VID 100; a QinQ
+#       stack carries an 802.1ad S-TAG (VID 200) around an 802.1Q C-TAG
+#       (VID 30):
 #
 #         ip link add link veth0 name veth0.100 type vlan id 100
 #         ip link add link veth0 name veth0.200 type vlan proto 802.1ad id 200
 #         ip link add link veth0.200 name veth0.200.30 type vlan id 30
 #
-#   (B) Synthesis from a real capture, for kernels without 8021q
-#       (this repo's CI/dev VM among them). Capture a real untagged
-#       ICMP exchange over a veth pair — genuine kernel Ethernet / ARP
-#       / IPv4 / ICMP with real checksums — then splice a tag shim in
-#       after the MAC addresses. The result is byte-for-byte what path
-#       (A) would have captured for the same traffic.
+#       veth advertises hardware VLAN tx offload, which would move the
+#       tag into skb metadata (and out of the saved bytes); veth also
+#       leaves local checksums to "offload" (never actually computed on
+#       a purely local link). So path (A) turns both off with
+#       `ethtool -K` before capturing — that forces the tag inline and
+#       the inner IPv4/ICMP checksums to their real values, which is
+#       what check_fixtures.py verifies.
 #
-# This script runs (A) when the 8021q driver is present and falls back
-# to (B) otherwise, printing which path produced the fixture. Either
-# way it validates with check_fixtures.py before you fold the pcap into
-# the corpus. The committed tests/fixtures/vlan_icmp.pcap was produced
-# by path (B); the MANIFEST records that.
+#   (B) Synthesis from a real capture, for kernels without 8021q.
+#       Capture a real untagged ICMP exchange over a veth pair — genuine
+#       kernel Ethernet / ARP / IPv4 / ICMP with real checksums — then
+#       splice a tag shim in after the MAC addresses. The result is
+#       byte-for-byte what path (A) would have captured for the same
+#       traffic.
+#
+# This script runs (A) when the 8021q driver and ethtool are both
+# present and falls back to (B) otherwise, printing which path produced
+# the fixture. Either way it validates with check_fixtures.py before you
+# fold the pcap into the corpus. The committed tests/fixtures/vlan_icmp.pcap
+# was produced by path (A); the MANIFEST records that.
 
 set -euo pipefail
 
@@ -45,53 +55,104 @@ done
 OUT="tests/fixtures/staging"
 mkdir -p "$OUT"
 NS="npvlan"
-cleanup() { ip netns del "$NS" 2>/dev/null || true; ip link del npveth0 2>/dev/null || true; }
+A="npveth0"          # parent, stays in the root netns
+B="npveth1"          # parent, moved into $NS
+cleanup() { ip netns del "$NS" 2>/dev/null || true; ip link del "$A" 2>/dev/null || true; }
 trap cleanup EXIT
 cleanup
 
-no6() { sysctl -qw "net/ipv6/conf/$1/disable_ipv6=1" 2>/dev/null || true; }
+# Kill IPv6 autoconf (link-local DAD, MLD reports, router solicitations)
+# in a netns so a capture there holds only the traffic we provoke.
+# default.* must be set before the devices are created and brought up.
+no6() {  # $1 = "" (root netns) or "ip netns exec $NS"
+    $1 sysctl -qw net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
+    $1 sysctl -qw net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+}
 
-echo "[*] veth pair + netns (10.9.0.1 <-> 10.9.0.2)"
+echo "[*] veth pair + netns"
+no6 ""
 ip netns add "$NS"
-ip link add npveth0 type veth peer name npveth1
-ip link set npveth1 netns "$NS"
-no6 npveth0
-ip addr add 10.9.0.1/24 dev npveth0
-ip link set npveth0 up
-ip netns exec "$NS" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
+no6 "ip netns exec $NS"
+ip link add "$A" type veth peer name "$B"
+ip link set "$B" netns "$NS"
 ip -n "$NS" link set lo up
-ip -n "$NS" link set npveth1 up
-ip -n "$NS" addr add 10.9.0.2/24 dev npveth1
-ip neigh flush dev npveth0 2>/dev/null || true
 
-# Path (A): real vlan devices, if the kernel has the driver.
-have_8021q=0
-if ip link add link npveth0 name npveth0.probe type vlan id 4094 2>/dev/null; then
-    have_8021q=1
-    ip link del npveth0.probe 2>/dev/null || true
+# Path (A) needs the 8021q driver *and* ethtool (to turn off veth's
+# VLAN/checksum offload). Probe the driver by creating a throwaway vlan
+# device on the parent.
+have_A=0
+if command -v ethtool >/dev/null \
+   && ip link add link "$A" name "$A.probe" type vlan id 4094 2>/dev/null; then
+    have_A=1
+    ip link del "$A.probe" 2>/dev/null || true
 fi
 
 echo "[>] vlan_icmp (ARP + ICMPv4 echo across a single tag and a QinQ stack)"
-if [[ $have_8021q -eq 1 ]]; then
+if [[ $have_A -eq 1 ]]; then
     echo "    path (A): kernel 8021q driver present — capturing real tagged frames"
-    # (Left as the documented recipe above; this VM has no 8021q, so the
-    #  tested path is (B). A maintainer on an 8021q host can flesh this
-    #  branch out from the three ip-link commands in the header comment.)
-    echo "    note: run the recipe in this script's header on an 8021q host" >&2
-    echo "          for a pure capture; falling through to synthesis here." >&2
-fi
 
-echo "    path (B): synthesizing tags over a real untagged capture"
-tcpdump -i npveth0 -w "$OUT/vlan_untagged.pcap" --immediate-mode -U -q \
-    ip or arp >/dev/null 2>&1 &
-pid=$!
-sleep 1
-ping -c 3 -i 0.3 10.9.0.2 >/dev/null
-sleep 1
-kill -INT "$pid" 2>/dev/null || true
-wait "$pid" 2>/dev/null || true
+    # Real vlan devices on both ends: single 802.1Q (VID 100) and a QinQ
+    # stack (802.1ad S-TAG VID 200 over 802.1Q C-TAG VID 30).
+    ip link add link "$A"     name "$A.100"    type vlan id 100
+    ip link add link "$A"     name "$A.200"    type vlan proto 802.1ad id 200
+    ip link add link "$A.200" name "$A.200.30" type vlan id 30
+    ip -n "$NS" link add link "$B"     name "$B.100"    type vlan id 100
+    ip -n "$NS" link add link "$B"     name "$B.200"    type vlan proto 802.1ad id 200
+    ip -n "$NS" link add link "$B.200" name "$B.200.30" type vlan id 30
 
-python3 - "$OUT/vlan_untagged.pcap" "$OUT/vlan_icmp.pcap" <<'PY'
+    # Turn off VLAN and checksum offload so the tag lands inline and the
+    # inner IPv4/ICMP checksums are computed (not left to "offload").
+    for d in "$A" "$A.100" "$A.200" "$A.200.30"; do
+        ethtool -K "$d" tx off rx off tso off gso off gro off \
+            txvlan off rxvlan off >/dev/null 2>&1 || true
+    done
+    for d in "$B" "$B.100" "$B.200" "$B.200.30"; do
+        ip netns exec "$NS" ethtool -K "$d" tx off rx off tso off gso off \
+            gro off txvlan off rxvlan off >/dev/null 2>&1 || true
+    done
+
+    # Addresses on the tagged devices: one subnet per flow.
+    ip      addr add 10.9.1.1/24 dev "$A.100"        # single-tag flow
+    ip -n "$NS" addr add 10.9.1.2/24 dev "$B.100"
+    ip      addr add 10.9.2.1/24 dev "$A.200.30"     # QinQ flow
+    ip -n "$NS" addr add 10.9.2.2/24 dev "$B.200.30"
+    for d in "$A" "$A.100" "$A.200" "$A.200.30"; do ip link set "$d" up; done
+    for d in "$B" "$B.100" "$B.200" "$B.200.30"; do ip -n "$NS" link set "$d" up; done
+
+    # Fresh ARP (a tagged who-has/is-at pair) in front of each flow.
+    ip neigh flush dev "$A.100" 2>/dev/null || true
+    ip neigh flush dev "$A.200.30" 2>/dev/null || true
+
+    # Capture on the PARENT: it carries both flows with tags in-band.
+    tcpdump -i "$A" -w "$OUT/vlan_icmp.pcap" --immediate-mode -U -q \
+        >/dev/null 2>&1 &
+    pid=$!
+    sleep 1
+    ping -c 2 -i 0.3 -I 10.9.1.1 10.9.1.2 >/dev/null || true   # single 802.1Q
+    ping -c 2 -i 0.3 -I 10.9.2.1 10.9.2.2 >/dev/null || true   # QinQ
+    sleep 1
+    kill -INT "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+else
+    echo "    path (B): 8021q driver (or ethtool) unavailable — synthesizing"
+    echo "              tags over a real untagged capture"
+
+    ip addr add 10.9.0.1/24 dev "$A"
+    ip link set "$A" up
+    ip -n "$NS" addr add 10.9.0.2/24 dev "$B"
+    ip -n "$NS" link set "$B" up
+    ip neigh flush dev "$A" 2>/dev/null || true
+
+    tcpdump -i "$A" -w "$OUT/vlan_untagged.pcap" --immediate-mode -U -q \
+        ip or arp >/dev/null 2>&1 &
+    pid=$!
+    sleep 1
+    ping -c 3 -i 0.3 10.9.0.2 >/dev/null
+    sleep 1
+    kill -INT "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    python3 - "$OUT/vlan_untagged.pcap" "$OUT/vlan_icmp.pcap" <<'PY'
 """Splice VLAN tags into real captured frames (stdlib only).
 
 Single 802.1Q (VID 100) on even frames; 802.1ad S-TAG (VID 200) around
@@ -137,7 +198,8 @@ write_pcap(sys.argv[2], out)
 print(f"    synthesized {len(out)} tagged frames -> {sys.argv[2]}")
 PY
 
-rm -f "$OUT/vlan_untagged.pcap"
+    rm -f "$OUT/vlan_untagged.pcap"
+fi
 
 echo
 echo "[*] Validating..."
