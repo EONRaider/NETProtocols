@@ -1,0 +1,10 @@
+# Freeform issues stay enabled (the roadmap and design discussions don't
+# fit a form); the templates just make the common cases structured.
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/EONRaider/NETProtocols/blob/master/CONTRIBUTING.md
+    about: Dev setup, the QA ladder, and how to add a protocol.
+  - name: Protocol roadmap
+    url: https://github.com/EONRaider/NETProtocols/issues/22
+    about: Planned protocols and their ordering — check before requesting one.

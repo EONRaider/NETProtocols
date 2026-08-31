@@ -1,0 +1,60 @@
+name: Bug report
+description: A protocol decodes, encodes, or chains incorrectly, or raises the wrong error.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. netprotocols decodes real traffic, so the most
+        useful reports come with the actual bytes that trigger the problem.
+        Please search [existing issues](https://github.com/EONRaider/NETProtocols/issues)
+        first.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        netprotocols version
+        (`python -c "import netprotocols; print(netprotocols.__version__)"`)
+        and your Python version.
+      placeholder: "netprotocols 1.2.0, Python 3.12.3"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you decode or build, and what went wrong?
+      placeholder: "IPv4.decode(...) returned X, but the header on the wire says Y."
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >-
+        A minimal snippet. Include the raw bytes as a hex string so it runs
+        standalone — that is by far the fastest path to a fix. Rendered as
+        Python; no backticks needed.
+      render: python
+      placeholder: |
+        from netprotocols import Ethernet
+
+        frame = bytes.fromhex("ffffffffffff0007...")
+        print(Ethernet.decode(frame))
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I included the raw bytes (or a pcap) needed to reproduce this.
+        - label: I searched existing issues for a duplicate.
