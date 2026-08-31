@@ -8,7 +8,9 @@ max-response code, checksum) are modelled as fields; the remainder is
 kept as raw ``body``. The ``group_address`` accessor reads bytes 4-7 as
 an IPv4 address for the message types that carry one there; for the v3
 report (type ``0x22``) the ``group_records`` accessor parses the record
-array. Both read the raw body on demand and never re-encode, so
+array; and for a v3 query (type ``0x11``) the ``s_flag`` / ``qrv`` /
+``qqic`` / ``query_source_addresses`` accessors parse the query's extra
+fields. All read the raw body on demand and never re-encode, so
 ``bytes(IGMP.decode(x)) == x`` holds by construction.
 """
 
@@ -29,6 +31,13 @@ _GROUP_ADDRESS_TYPES = frozenset({0x11, 0x12, 0x16, 0x17})
 
 #: The IGMPv3 Membership Report message type (RFC 3376 §4.2).
 _V3_REPORT_TYPE = 0x22
+
+#: The Membership Query message type. A v3 query (RFC 3376 §4.1) extends
+#: the group address with S/QRV (1 byte), QQIC (1 byte), and a source
+#: count (2 bytes) before the sources — so its body is at least 8 bytes,
+#: where a v2 query (RFC 2236) carries only the 4-byte group address.
+_QUERY_TYPE = 0x11
+_V3_QUERY_MIN_BODY = 8
 
 #: IGMPv3 group-record types (RFC 3376 §4.2.12).
 _RECORD_TYPE_NAMES: dict[int, str] = {
@@ -193,6 +202,66 @@ class IGMP(Protocol):
                 )
             )
         return tuple(records)
+
+    @property
+    def _is_v3_query(self) -> bool:
+        """Whether this is an IGMPv3 Membership Query — a query whose body
+        is long enough to carry the v3 fields past the group address."""
+        return self.type == _QUERY_TYPE and len(self.body) >= _V3_QUERY_MIN_BODY
+
+    @property
+    def s_flag(self) -> int | None:
+        """Suppress Router-Side Processing (S) flag of a v3 Membership
+        Query (RFC 3376 §4.1.5); ``None`` for other messages and for a
+        v2 query, which carries no such field."""
+        if not self._is_v3_query:
+            return None
+        return (self.body[4] >> 3) & 1
+
+    @property
+    def qrv(self) -> int | None:
+        """Querier's Robustness Variable (QRV) of a v3 query (RFC 3376
+        §4.1.6); ``None`` otherwise."""
+        if not self._is_v3_query:
+            return None
+        return self.body[4] & 0x07
+
+    @property
+    def qqic(self) -> int | None:
+        """Querier's Query Interval Code (QQIC) of a v3 query (RFC 3376
+        §4.1.7); ``None`` otherwise."""
+        if not self._is_v3_query:
+            return None
+        return self.body[5]
+
+    @property
+    def num_query_sources(self) -> int | None:
+        """Number of source addresses in a v3 query (RFC 3376 §4.1.8),
+        or ``None`` for other messages and a v2 query."""
+        if not self._is_v3_query:
+            return None
+        return int.from_bytes(self.body[6:8], "big")
+
+    @property
+    def query_source_addresses(self) -> tuple[str, ...] | None:
+        """The source addresses of a v3 Membership Query (RFC 3376
+        §4.1.10), parsed on demand; ``None`` for other messages and a v2
+        query (empty for a General or Group-Specific query).
+
+        :raises InvalidFieldError: if the source count runs past the
+            message (bounded — never hangs or over-reads).
+        """
+        count = self.num_query_sources
+        if count is None:
+            return None
+        sources: list[str] = []
+        cursor = 8
+        for _ in range(count):
+            if cursor + 4 > len(self.body):
+                raise InvalidFieldError("IGMPv3 query source list truncated")
+            sources.append(bytes_to_ipv4(self.body[cursor : cursor + 4]))
+            cursor += 4
+        return tuple(sources)
 
     @property
     def checksum_hex_str(self) -> str:
