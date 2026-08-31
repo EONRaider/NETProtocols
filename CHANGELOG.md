@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `protocol_type` EtherType, so a GRE-tunnelled IPv4/IPv6 packet
   keeps decoding; the round-trip stays byte-exact regardless of which
   optional fields are present.
+- **DNS resource records** (`DNSResourceRecord`, RFC 1035 §4.1.3): the
+  answer, authority, and additional sections parse on demand —
+  `DNS.answers` / `DNS.authorities` / `DNS.additionals` yield records
+  (name, type + `rtype_name`, class, TTL, raw `rdata`, and a decoded
+  `rdata_text`: IPv4/IPv6 for A/AAAA, the target name for CNAME/NS/PTR,
+  and MX/TXT/SOA; hexadecimal otherwise). Parsing reads the raw sections
+  and never re-encodes, so the byte-exact round-trip holds; a record or
+  compressed name that runs past the message raises `InvalidFieldError`.
 
 ### Development
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q
