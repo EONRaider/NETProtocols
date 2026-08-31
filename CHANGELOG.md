@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **IEEE 802.1Q VLAN tags** (`VLAN`, 802.1Q-2018 §9.6 / 802.1ad QinQ):
+  single and stacked (QinQ `0x88A8`, legacy double-tagged `0x9100`)
+  tags decode as one layer per tag; the Tag Control Information word is
+  split into `pcp`/`dei`/`vid` dataclass fields validated in
+  `__post_init__` (`InvalidFieldError`), with the packed 16-bit view
+  kept as the `tci` property; `VLAN` is registered in the
+  property-based fuzz suite and the `EtherType` display names are
+  covered by the enum completeness test.
+
 ## [1.2.0] - 2026-08-30
 
 ### Added

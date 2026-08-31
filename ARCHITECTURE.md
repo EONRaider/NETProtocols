@@ -109,6 +109,11 @@ flowchart LR
   E[Ethernet] -->|0x0806| A[ARP]
   E -->|0x0800| I4[IPv4]
   E -->|0x86DD| I6[IPv6]
+  E -->|0x8100, 0x88A8, 0x9100| V[VLAN tag]
+  V -->|0x8100, 0x88A8, 0x9100| V
+  V -->|0x0806| A
+  V -->|0x0800| I4
+  V -->|0x86DD| I6
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
@@ -131,6 +136,16 @@ Fragment header chains onward only when `fragment_offset == 0` — a
 non-first fragment carries a slice from the middle of the original
 payload, so no upper-layer header exists at its start. The same
 offset rule applies to fragmented IPv4.
+
+VLAN tags chain the same way: a tag's `next_protocol` dispatches the
+inner EtherType through the same registry Ethernet uses, so a QinQ
+(`0x88A8`) or legacy double-tagged (`0x9100`) frame decodes as one
+`VLAN` layer per tag and the innermost payload (IPv4/IPv6/ARP) chains
+normally. The Tag Control Information word is split into its semantic
+bitfields — `pcp`, `dei`, `vid` — as dataclass fields validated in
+`__post_init__`, with the packed 16-bit view kept as the `tci`
+property (the same pattern `IPv6` uses for `version` /
+`traffic_class` / `flow_label`).
 
 The numbers on the arrows are the wire values — EtherTypes out of
 Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in

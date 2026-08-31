@@ -23,6 +23,7 @@ from netprotocols import (
     IGMP,
     TCP,
     UDP,
+    VLAN,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -45,6 +46,7 @@ settings.load_profile("netprotocols")
 
 ALL_PROTOCOLS = (
     Ethernet,
+    VLAN,
     ARP,
     IPv4,
     IPv6,

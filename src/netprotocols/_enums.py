@@ -15,6 +15,9 @@ class EtherType(IntEnum):
 
     IPV4 = 0x0800
     ARP = 0x0806
+    VLAN_TAG = 0x8100
+    VLAN_TAG_QINQ = 0x88A8
+    VLAN_TAG_9100 = 0x9100
     IPV6 = 0x86DD
 
     @property
@@ -25,6 +28,9 @@ class EtherType(IntEnum):
 _ETHERTYPE_NAMES = {
     EtherType.IPV4: "IPv4",
     EtherType.ARP: "ARP",
+    EtherType.VLAN_TAG: "802.1Q VLAN tag",
+    EtherType.VLAN_TAG_QINQ: "802.1ad S-TAG (QinQ)",
+    EtherType.VLAN_TAG_9100: "VLAN double tag (legacy)",
     EtherType.IPV6: "IPv6",
 }
 
