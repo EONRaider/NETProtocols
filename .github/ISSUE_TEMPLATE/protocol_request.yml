@@ -1,0 +1,66 @@
+name: Protocol request
+description: Request support for a protocol netprotocols does not decode yet.
+labels: ["enhancement", "roadmap"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The roadmap ([#22](https://github.com/EONRaider/NETProtocols/issues/22))
+        tracks planned protocols and their ordering — check it and existing
+        issues first. Adding a protocol follows the cookbook in
+        [ARCHITECTURE.md](https://github.com/EONRaider/NETProtocols/blob/master/ARCHITECTURE.md);
+        contributions are welcome.
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol
+      placeholder: "e.g. DHCP, GRE, 802.1X"
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Specification
+      description: The RFC or standard number(s) that define the header.
+      placeholder: "RFC 2131"
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      description: Roughly where it sits in the stack.
+      options:
+        - Link (2)
+        - Network (3)
+        - Transport (4)
+        - Application (7)
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: dispatch
+    attributes:
+      label: How it is reached
+      description: >-
+        What carries it — which lower layer, and which dispatch value
+        (EtherType, IP protocol number, or port)?
+      placeholder: "Behind UDP on ports 67/68."
+    validations:
+      required: false
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample traffic
+      description: >-
+        A pcap or a hex dump of a real frame makes this far easier to
+        implement and test — the fixture corpus is captured from real traffic.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked the roadmap (#22) and existing issues.
+        - label: I can provide a real capture (pcap or hex) of this protocol.

@@ -28,8 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/capture_fixtures_vlan.sh`.
 - Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
   ladder, the decode contract, the add-a-protocol enforcement points,
-  and the fixture-capture workflow) and a pull-request template under
-  `.github/`.
+  and the fixture-capture workflow), a pull-request template, and
+  bug-report / protocol-request issue templates under `.github/`.
 
 ## [1.2.0] - 2026-08-30
 
