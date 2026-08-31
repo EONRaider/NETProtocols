@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept as the `tci` property; `VLAN` is registered in the
   property-based fuzz suite and the `EtherType` display names are
   covered by the enum completeness test.
+- **IGMPv3 group records** (`IGMPv3GroupRecord`, RFC 3376 §4.2): a v3
+  Membership Report (type `0x22`) now parses its group-record array on
+  demand. `IGMP.group_records` yields one `IGMPv3GroupRecord` per record
+  (record type + display name, multicast group, source-address list,
+  raw auxiliary data) and `IGMP.num_group_records` reads the count;
+  other message types return `None`. Parsing reads the raw body and
+  never re-encodes, so the byte-exact round-trip is preserved, and a
+  lying record/source count or a truncated record raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
 
 ### Development
 - The real-capture fixture corpus gained `vlan_icmp.pcap` (802.1Q
