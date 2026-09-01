@@ -241,7 +241,7 @@ src/netprotocols/
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
                     test_corpus.py (invariants over the real-capture
-                    corpus in tests/fixtures/, 65 frames across 12
+                    corpus in tests/fixtures/, 93 frames across 16
                     scenarios — see its MANIFEST.md), test_checksum.py
                     (corpus checksums recompute to wire values), and
                     test_fuzz.py (hypothesis properties: decode never

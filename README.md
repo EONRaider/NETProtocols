@@ -50,10 +50,12 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 | 3 | IPv6 Destination Options | `IPv6DestinationOptions` | RFC 8200 §4.6 |
 | 3 | ICMPv4 | `ICMPv4` | RFC 792, 8-byte header |
 | 3 | ICMPv6 | `ICMPv6` | RFC 4443, 8-byte header |
-| 3 | IGMP | `IGMP` | RFC 1112/2236/3376, IPv4 multicast management |
+| 3 | IGMP | `IGMP` | RFC 1112/2236/3376, IPv4 multicast management; IGMPv3 report group records + query fields |
+| 3 | GRE | `GRE` | RFC 2784/2890, IP protocol 47; payload chains onward by EtherType |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
-| 7 | DNS | `DNS` | RFC 1035, over UDP; header + on-demand name decompression |
+| 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
+| 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 
 ## Decoding a captured frame
 
@@ -133,19 +135,33 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-- More protocols: DHCP, GRE (802.1Q VLAN tags, DNS, and IGMP have shipped).
-- Full DNS resource-record parsing (the header and question are decoded today; answer/authority/additional sections are kept raw).
-- IGMPv3 group-record parsing (the common header is decoded today; v3 report records are kept raw in the body).
-- Optional richer address accessors (`ipaddress` / EUI objects
-  alongside the `str` fields).
-- TLV parsing inside IPv6 extension-header options.
+The next wave is decoder depth on already-supported layers, tracked by
+[#67](https://github.com/EONRaider/NETProtocols/issues/67):
+
+- TCP option parsing — MSS, window scale, SACK, timestamps
+  ([#59](https://github.com/EONRaider/NETProtocols/issues/59)).
+- ICMP message bodies — echo identifier/sequence, the embedded original
+  packet in error messages
+  ([#60](https://github.com/EONRaider/NETProtocols/issues/60)).
+- IPv6 Neighbor Discovery (NDP) messages and options
+  ([#61](https://github.com/EONRaider/NETProtocols/issues/61)).
+- TLV parsing inside IPv6 extension-header options
+  ([#62](https://github.com/EONRaider/NETProtocols/issues/62)).
+- A GRE arm for `netprotocols.checksum`
+  ([#63](https://github.com/EONRaider/NETProtocols/issues/63)).
+- A real-capture DNS-over-TCP corpus fixture
+  ([#64](https://github.com/EONRaider/NETProtocols/issues/64)).
+- Richer address accessors (`ipaddress` objects alongside the `str`
+  fields) ([#65](https://github.com/EONRaider/NETProtocols/issues/65)).
+- IPv4 option parsing — Router Alert, Record Route, Timestamp
+  ([#66](https://github.com/EONRaider/NETProtocols/issues/66)).
 
 ## Contributing
 
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI on Python 3.12–3.14. The test suite is anchored by a
-77-frame corpus of real captured traffic
+93-frame corpus of real captured traffic across 16 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
