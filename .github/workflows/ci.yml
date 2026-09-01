@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Callable so the release workflow can run this exact ladder against a
+  # tagged commit before publishing (see release.yml). Keeping one
+  # definition means the release gate cannot drift from the PR gate.
+  workflow_call:
 
 jobs:
   lint:
