@@ -1,4 +1,12 @@
-"""IPv4 (RFC 791) and IPv6 (RFC 8200) headers."""
+"""IPv4 (RFC 791) and IPv6 (RFC 8200) headers.
+
+The IPv4 options are kept as raw ``bytes`` (IHL aware), so
+``bytes(IPv4.decode(x)) == x`` holds by construction; the
+``parsed_options`` accessor walks the option TLV list on demand and
+never re-encodes, mirroring TCP's. The common kinds — Record Route,
+Timestamp, Router Alert (RFC 791 §3.1, RFC 2113) — are named, and
+unknown kinds keep their raw data.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +28,7 @@ from netprotocols.utils.exceptions import (
 )
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 
-__all__ = ["IPv4", "IPv6"]
+__all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 
 #: Numbers that only make sense inside an IPv6 chain (RFC 8200 §4.1):
@@ -82,6 +90,45 @@ def _ip_protocol_name(number: int) -> str:
         return f"unknown ({number})"
 
 
+#: Single-byte IPv4 option kinds that carry no length or value
+#: (RFC 791 §3.1): End of Option List terminates the parse,
+#: No-Operation pads.
+_OPT_EOL = 0
+_OPT_NOP = 1
+
+#: IPv4 option kinds this library names (RFC 791 §3.1; RFC 2113 for
+#: Router Alert); unknown kinds fall back to their numeric value.
+_OPTION_KIND_NAMES: dict[int, str] = {
+    _OPT_EOL: "End of Option List",
+    _OPT_NOP: "No-Operation",
+    7: "Record Route",
+    68: "Timestamp",
+    148: "Router Alert",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IPv4Option:
+    """One IPv4 option (RFC 791 §3.1).
+
+    :param kind: Option kind — ``0`` End of Option List, ``1``
+        No-Operation, ``7`` Record Route, ``68`` Timestamp, ``148``
+        Router Alert (see :attr:`kind_name`).
+    :param data: The option's value bytes after the two kind/length
+        bytes, kept raw; empty for the single-byte kinds (EOL, NOP).
+    """
+
+    kind: int
+    data: bytes = b""
+
+    @property
+    def kind_name(self) -> str:
+        """Display name of the option kind, e.g. ``"Router Alert"``;
+        falls back to ``"unknown (n)"`` for kinds this library does not
+        name."""
+        return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
+
+
 @dataclass(frozen=True, slots=True)
 class IPv4(Protocol):
     """An IPv4 header.
@@ -104,7 +151,8 @@ class IPv4(Protocol):
     :param src: Source address in dotted-decimal notation.
     :param dst: Destination address in dotted-decimal notation.
     :param options: Raw options bytes; length must be a multiple of 4
-        consistent with ``ihl``.
+        consistent with ``ihl``. Parsed on demand via
+        :attr:`parsed_options`.
     """
 
     version: int
@@ -229,6 +277,48 @@ class IPv4(Protocol):
     def checksum_hex_str(self) -> str:
         """The header checksum as a hexadecimal string, e.g. ``"0xf24e"``."""
         return f"{self.checksum:#06x}"
+
+    # -- options TLV list (parsed on demand, never re-encoded) --
+
+    @property
+    def parsed_options(self) -> tuple[IPv4Option, ...]:
+        """The options as a tuple of :class:`IPv4Option`, in wire order,
+        parsed on demand (RFC 791 §3.1). The single-byte kinds (EOL,
+        NOP) carry no data; an End of Option List option ends the parse,
+        so whatever follows it is padding and is not returned. Empty for
+        a header without options.
+
+        :raises InvalidFieldError: if an option's declared length is
+            below the 2-byte minimum or runs past the options bytes
+            (bounded — never hangs or over-reads).
+        """
+        raw = self.options
+        parsed: list[IPv4Option] = []
+        cursor = 0
+        while cursor < len(raw):
+            kind = raw[cursor]
+            if kind in (_OPT_EOL, _OPT_NOP):
+                parsed.append(IPv4Option(kind=kind))
+                if kind == _OPT_EOL:
+                    break
+                cursor += 1
+                continue
+            if cursor + 1 >= len(raw):
+                raise InvalidFieldError("IPv4 option missing its length byte")
+            length = raw[cursor + 1]
+            if length < 2:
+                raise InvalidFieldError(
+                    f"IPv4 option length must be at least 2, got {length}"
+                )
+            if cursor + length > len(raw):
+                raise InvalidFieldError(
+                    "IPv4 option value runs past the options bytes"
+                )
+            parsed.append(
+                IPv4Option(kind=kind, data=raw[cursor + 2 : cursor + length])
+            )
+            cursor += length
+        return tuple(parsed)
 
 
 @dataclass(frozen=True, slots=True)
