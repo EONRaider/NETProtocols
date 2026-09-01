@@ -85,3 +85,31 @@ class TestCorpusFiguresInDocs:
             f"ARCHITECTURE.md's layout map does not mention {module}, "
             f"which ships in src/netprotocols/"
         )
+
+
+class TestReadmeRoadmap:
+    """The README's Roadmap section listed eight items tracked by #67 —
+    all of which had shipped in 1.3.0, with #67 itself closed. Presenting
+    finished work as planned is the front page's version of the drift
+    ARCHITECTURE.md had, and the cause was the same: a copied list."""
+
+    def test_does_not_point_at_the_superseded_roadmap(self) -> None:
+        assert "issues/67" not in README.read_text(), (
+            "README links to #67, the closed roadmap superseded by #107"
+        )
+
+    def test_points_at_the_current_roadmap(self) -> None:
+        assert "issues/107" in README.read_text(), (
+            "README's Roadmap section should point at the tracker (#107) "
+            "rather than restating planned work"
+        )
+
+    def test_does_not_relist_shipped_work_as_planned(self) -> None:
+        """The 1.3.0 items must not reappear as upcoming."""
+        text = README.read_text()
+        roadmap = text[text.index("## Roadmap") : text.index("## Contributing")]
+        for shipped in ("issues/59", "issues/60", "issues/61", "issues/66"):
+            assert shipped not in roadmap, (
+                f"README's Roadmap section links {shipped}, work that "
+                f"shipped in 1.3.0"
+            )
