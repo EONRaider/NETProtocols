@@ -26,7 +26,7 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6HopByHopOptions,
     IPv6Routing,
 )
-from netprotocols.layer4.tcp import TCP
+from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP
 from netprotocols.layer7.dns import DNS, DNSOverTCP, DNSResourceRecord
@@ -77,6 +77,7 @@ __all__ = [
     "Packet",
     "Protocol",
     "ProtocolError",
+    "TCPOption",
     "TruncatedHeaderError",
     "__version__",
     "compute",
