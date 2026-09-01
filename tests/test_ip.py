@@ -1,3 +1,5 @@
+from ipaddress import IPv4Address, IPv6Address, ip_network
+
 import pytest
 
 from netprotocols import TCP, InvalidFieldError, IPv4, IPv6
@@ -32,6 +34,31 @@ class TestIPv4:
 
     def test_next_protocol(self, raw_ipv4_header):
         assert IPv4.decode(raw_ipv4_header).next_protocol() is TCP
+
+    def test_unknown_protocol_name_degrades(self, raw_ipv4_header):
+        unknown = (
+            b"\x45" + raw_ipv4_header[1:9] + b"\xfd" + raw_ipv4_header[10:]
+        )
+        assert IPv4.decode(unknown).protocol_name == "unknown (253)"
+
+    def test_ihl_out_of_range_rejected(self, raw_ipv4_header):
+        from dataclasses import replace
+
+        with pytest.raises(InvalidFieldError):
+            replace(IPv4.decode(raw_ipv4_header), ihl=4)
+
+    def test_address_objects(self, raw_ipv4_header):
+        """The `_address` accessors return stdlib ipaddress objects for
+        comparison and subnet math; the str fields stay canonical and
+        the round-trip is untouched."""
+        ip = IPv4.decode(raw_ipv4_header)
+        assert ip.src_address == IPv4Address("192.168.1.96")
+        assert ip.dst_address == IPv4Address("192.168.1.254")
+        assert str(ip.src_address) == ip.src
+        assert ip.src_address.is_private
+        assert ip.src_address in ip_network("192.168.1.0/24")
+        assert int(ip.dst_address) - int(ip.src_address) == 158
+        assert bytes(ip) == raw_ipv4_header
 
     def test_decode_with_options(self, raw_ipv4_header):
         """An IHL of 6 makes the 4 bytes after the fixed header part of
@@ -82,6 +109,15 @@ class TestIPv6:
         ip = IPv6.decode(raw_ipv6_header)
         assert bytes(ip) == raw_ipv6_header
         assert IPv6.decode(bytes(ip)) == ip
+
+    def test_address_objects(self, raw_ipv6_header):
+        ip = IPv6.decode(raw_ipv6_header)
+        assert ip.src_address == IPv6Address("fe80::1")
+        assert ip.dst_address == IPv6Address("ff02::1")
+        assert str(ip.dst_address) == ip.dst
+        assert ip.src_address.is_link_local
+        assert ip.dst_address.is_multicast
+        assert bytes(ip) == raw_ipv6_header
 
     def test_next_protocol(self, raw_ipv6_header):
         assert IPv6.decode(raw_ipv6_header).next_protocol() is TCP

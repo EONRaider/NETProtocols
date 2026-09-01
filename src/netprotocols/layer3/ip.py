@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import IPv4Address, IPv6Address
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -230,6 +231,20 @@ class IPv4(Protocol):
         """The header checksum as a hexadecimal string, e.g. ``"0xf24e"``."""
         return f"{self.checksum:#06x}"
 
+    @property
+    def src_address(self) -> IPv4Address:
+        """The source address as a stdlib
+        :class:`~ipaddress.IPv4Address`, for comparison, subnet
+        membership, and arithmetic; :attr:`src` stays the canonical
+        string form."""
+        return IPv4Address(self.src)
+
+    @property
+    def dst_address(self) -> IPv4Address:
+        """The destination address as a stdlib
+        :class:`~ipaddress.IPv4Address` (see :attr:`src_address`)."""
+        return IPv4Address(self.dst)
+
 
 @dataclass(frozen=True, slots=True)
 class IPv6(Protocol):
@@ -306,3 +321,17 @@ class IPv6(Protocol):
     def flow_label_hex_str(self) -> str:
         """The flow label as a hexadecimal string, e.g. ``"0x9f8c3"``."""
         return f"{self.flow_label:#07x}"
+
+    @property
+    def src_address(self) -> IPv6Address:
+        """The source address as a stdlib
+        :class:`~ipaddress.IPv6Address`, for comparison, subnet
+        membership, and arithmetic; :attr:`src` stays the canonical
+        string form."""
+        return IPv6Address(self.src)
+
+    @property
+    def dst_address(self) -> IPv6Address:
+        """The destination address as a stdlib
+        :class:`~ipaddress.IPv6Address` (see :attr:`src_address`)."""
+        return IPv6Address(self.dst)
