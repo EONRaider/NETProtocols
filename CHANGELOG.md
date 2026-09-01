@@ -82,6 +82,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/capture_fixtures_dhcp.sh` and `scripts/capture_fixtures_gre.sh`
   produce them, and `scripts/check_fixtures.py` now peels a GRE header to
   verify the tunnelled inner IPv4/ICMP checksums.
+- The corpus gained real-capture `dns_tcp.pcap` (an A and a TXT query +
+  response from `dig +tcp` against `dnsmasq` over a veth pair, offload
+  disabled), so the TCP application dispatch and the `DNSOverTCP`
+  length shim (#57) ride the corpus-wide invariants and the
+  TCP-checksum recompute on genuine bytes — every frame decodes
+  `Ethernet→IPv4→TCP→DNSOverTCP→DNS` with the length prefix agreeing
+  with the message it frames and a resolvable answer.
+  `scripts/capture_fixtures_dns_tcp.sh` produces it; the corpus is now
+  97 frames across 17 scenarios.
 - Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and
