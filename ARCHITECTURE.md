@@ -230,19 +230,19 @@ src/netprotocols/
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
 ├── packet.py       Packet composition, with_checksums()
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify
-├── layer2/         ethernet.py, arp.py
+├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
-│                   igmp.py,
+│                   igmp.py, gre.py,
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (well-known-port registry)
-├── layer7/         dns.py
+├── layer7/         dns.py, dhcp.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
                     test_corpus.py (invariants over the real-capture
-                    corpus in tests/fixtures/, 93 frames across 16
-                    scenarios — see its MANIFEST.md), test_checksum.py
+                    corpus in tests/fixtures/ — see its MANIFEST.md for
+                    the frame and scenario counts), test_checksum.py
                     (corpus checksums recompute to wire values), and
                     test_fuzz.py (hypothesis properties: decode never
                     raises outside ProtocolError)

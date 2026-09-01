@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate are one definition and cannot drift apart.
 
 ### Fixed
+- **ARCHITECTURE.md no longer misstates the corpus or the source
+  layout.** It described "93 frames across 16 scenarios" long after the
+  corpus reached 97 across 17, and its layout map omitted `vlan.py`,
+  `gre.py` and `dhcp.py`. The counts now live in
+  `tests/fixtures/MANIFEST.md` and the README alone — ARCHITECTURE.md
+  points at the MANIFEST rather than keeping a third copy, which is
+  what drifted.
 - **Layer sub-packages now export everything their layer defines.**
   `from netprotocols.layer7 import DHCP` failed while
   `from netprotocols import DHCP` worked, because each layer's own
@@ -30,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DNSResourceRecord`. Purely additive — no name changed meaning.
 
 ### Development
+- `tests/test_docs.py` holds documented facts against the fixtures:
+  the MANIFEST's and README's frame/scenario counts must match the real
+  corpus, ARCHITECTURE.md must not reintroduce a third copy of them,
+  and the layout map must mention every shipped module.
 - `tests/test_exports.py` keeps the layer and top-level export sets in
   agreement, deriving the expectation from each object's `__module__`
   rather than a hand-written list, so a protocol added to the top level
