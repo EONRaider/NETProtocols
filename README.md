@@ -135,26 +135,24 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-The next wave is decoder depth on already-supported layers, tracked by
-[#67](https://github.com/EONRaider/NETProtocols/issues/67):
+Planned work lives in the issue tracker rather than being restated
+here, so this section cannot drift out of date the way a copied list
+does. The current plan is
+[#107](https://github.com/EONRaider/NETProtocols/issues/107) — five
+tiers, each mapped to a release:
 
-- TCP option parsing — MSS, window scale, SACK, timestamps
-  ([#59](https://github.com/EONRaider/NETProtocols/issues/59)).
-- ICMP message bodies — echo identifier/sequence, the embedded original
-  packet in error messages
-  ([#60](https://github.com/EONRaider/NETProtocols/issues/60)).
-- IPv6 Neighbor Discovery (NDP) messages and options
-  ([#61](https://github.com/EONRaider/NETProtocols/issues/61)).
-- TLV parsing inside IPv6 extension-header options
-  ([#62](https://github.com/EONRaider/NETProtocols/issues/62)).
-- A GRE arm for `netprotocols.checksum`
-  ([#63](https://github.com/EONRaider/NETProtocols/issues/63)).
-- A real-capture DNS-over-TCP corpus fixture
-  ([#64](https://github.com/EONRaider/NETProtocols/issues/64)).
-- Richer address accessors (`ipaddress` objects alongside the `str`
-  fields) ([#65](https://github.com/EONRaider/NETProtocols/issues/65)).
-- IPv4 option parsing — Router Alert, Record Route, Timestamp
-  ([#66](https://github.com/EONRaider/NETProtocols/issues/66)).
+| Version | Theme |
+|---|---|
+| [1.3.1](https://github.com/EONRaider/NETProtocols/issues/102) | Hygiene |
+| [1.4.0](https://github.com/EONRaider/NETProtocols/issues/103) | Decode performance |
+| [2.0.0](https://github.com/EONRaider/NETProtocols/issues/104) | A public protocol registry, a shipped chain walker, flow keys |
+| [2.1.0](https://github.com/EONRaider/NETProtocols/issues/105) | Typed accessors and pattern-matching ergonomics |
+| [2.2.0](https://github.com/EONRaider/NETProtocols/issues/106) | Universal round-trip properties, nightly fuzzing, a pcap reader |
+
+The previous wave — TCP and IPv4 option parsing, ICMP message bodies,
+NDP, IPv6 extension-header TLV options, the GRE checksum arm, a
+DNS-over-TCP corpus fixture and `ipaddress` accessors — shipped in
+1.3.0; see [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 

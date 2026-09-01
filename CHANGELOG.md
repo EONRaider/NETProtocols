@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate are one definition and cannot drift apart.
 
 ### Fixed
+- **The README no longer advertises shipped work as upcoming.** Its
+  Roadmap section listed the eight decoder-depth items tracked by #67 —
+  all of which shipped in 1.3.0, with #67 itself closed — so the front
+  page presented finished work as planned and pointed readers at a
+  closed issue. It now links the current roadmap (#107) and its five
+  release-mapped epics instead of restating individual items, which is
+  what went stale.
 - **ARCHITECTURE.md no longer misstates the corpus or the source
   layout.** It described "93 frames across 16 scenarios" long after the
   corpus reached 97 across 17, and its layout map omitted `vlan.py`,
@@ -40,7 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_docs.py` holds documented facts against the fixtures:
   the MANIFEST's and README's frame/scenario counts must match the real
   corpus, ARCHITECTURE.md must not reintroduce a third copy of them,
-  and the layout map must mention every shipped module.
+  and the layout map must mention every shipped module. It also
+  guards the README's Roadmap section against pointing back at the
+  superseded #67 or re-listing work that has already shipped.
 - `tests/test_exports.py` keeps the layer and top-level export sets in
   agreement, deriving the expectation from each object's `__module__`
   rather than a hand-written list, so a protocol added to the top level
