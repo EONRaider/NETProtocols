@@ -98,6 +98,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and
   bug-report / protocol-request issue templates under `.github/`.
+- README refresh: the Protocol coverage table gains the shipped `DHCP`
+  and `GRE` rows, the `DNS` row notes resource-record parsing and the
+  DNS-over-TCP length shim, and the `IGMP` row notes the IGMPv3 report
+  and query parsing. The Roadmap section now lists only the remaining
+  items, linking the open decoder-depth issues (#59-#66, tracked by
+  #67), and the stale corpus figure is corrected to 93 frames across 16
+  scenarios here and in `ARCHITECTURE.md`.
 
 ## [1.2.0] - 2026-08-30
 
