@@ -47,28 +47,82 @@ against dpkt's 123,719 (a 1.6× gap) where the corpus shows 2.9×,
 because the uncached DNS accessors of #85 never get exercised. **Quote
 the corpus figure.**
 
+### Re-measured after Tier 1 (2026-09-01, #86)
+
+Tier 1 (#82, #83, #84, #85) has merged, so every figure above that
+compares decode throughput is stale. Re-measured with the harness this
+tier delivered:
+
+```
+uv run --group bench python scripts/benchmark.py --compare
+```
+
+- CPython 3.12.3, x86-64 Linux, 97 corpus frames, 30 repetitions,
+  **best of 9** — not the mean of 300 used above. The minimum is the
+  more stable statistic (a timed run is only ever interrupted, never
+  helped), but it reads a few per cent faster than a mean, so the two
+  methods are not directly comparable.
+- Run-to-run variance of the normalized figure ≈ ±2%.
+
+| | frames/sec | vs. netprotocols |
+|---|---|---|
+| **netprotocols (post-Tier-1)** | **121,945** | — |
+| dpkt 1.9.8 | 105,292 | 0.86× |
+| scapy 2.7.0 | 19,657 | 0.16× |
+
+Two things must travel with those numbers:
+
+1. **The libraries are not asked for identical work.** On the
+   DNS-over-TCP frames dpkt stops at TCP and leaves the payload as raw
+   bytes; netprotocols continues into `DNSOverTCP` and `DNS`. Where the
+   depths differ, we are doing more, not less — but the comparison is
+   not like-for-like and should never be quoted as if it were. The
+   harness prints this caveat under every comparison run.
+2. **Normalization cancels machine speed, not the interpreter.** The
+   same code and machine normalize to 6.8 on CPython 3.12 and 7.6 on
+   3.13. A baseline belongs to the Python that recorded it.
+
+Note also that the v1.3.0 figure of 36,500 f/s above predates #83, which
+alone accounts for most of the gap to the ~58,000 f/s the same corpus
+walk showed once that had merged.
+
 ---
 
 ## 1. Performance
 
 ### 1.1 "2.1× faster than scapy at decoding"
-**Status: VERIFIED**
+**Status: VERIFIED — and now understated**
 
-36,500 frames/sec against scapy 2.7.0's 17,100 on the corpus walk.
+Was 36,500 frames/sec against scapy 2.7.0's 17,100. Re-measured after
+Tier 1: **121,945 against 19,657, a 6.2× gap** (see the re-measurement
+above for the method and its caveats).
 
-Reproduce: the benchmark harness from #86, once it lands. Until then,
-the scratch method described in the baseline above.
+Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
+
+The wording is a positioning decision, not a measurement one: 6.2× is
+what the corpus shows on one machine, and whoever writes the README
+should pick the number they are willing to defend on someone else's.
 
 ### 1.2 "Within 15% of dpkt on decode"
-**Status: GATED ON #82, #83, #84** — false today
+**Status: gate satisfied — measured, and the claim is now too modest**
 
-Today: 36,500 f/s against dpkt's 104,000 — we are **2.9× slower**.
-With the three Tier 1 fixes applied to a scratch copy: **89,200 f/s**,
-or 86% of dpkt, while passing all 698 tests unmodified.
+#82, #83, #84 (and #85) have merged and #86 has re-measured on the real
+tree, which is exactly what this claim was waiting for. Measured:
+**121,945 f/s against dpkt 1.9.8's 105,292 — 1.16× dpkt**, where
+v1.3.0 was 2.9× slower. The prediction in #103 was 86% of dpkt; the
+extra came from #85, which the scratch prototype did not include, and
+from best-of rather than mean.
 
-Do not publish any decode-throughput comparison against dpkt until
-those three issues have merged and #86 has re-measured on the real
-tree.
+Before this is published as "faster than dpkt", two caveats from the
+re-measurement section apply and are not optional: the two libraries do
+not parse to the same depth (we go deeper on the DNS frames), and this
+is one machine. A cautious public form — "matches dpkt on the corpus
+walk while decoding further into the stack" — is defensible on the
+evidence; "1.16× faster than dpkt" is defensible only with the machine
+and the depth caveat attached.
+
+Recommend re-running the harness on a second machine before this
+reaches the README. Front-page wording is the maintainer's call.
 
 ### 1.3 "5.3× faster than dpkt at encoding"
 **Status: VERIFIED** — and never yet claimed
