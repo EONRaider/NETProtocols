@@ -19,7 +19,7 @@ from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
 from netprotocols.layer3.igmp import IGMP, IGMPv3GroupRecord
-from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.ip import IPv4, IPv4Option, IPv6
 from netprotocols.layer3.ipv6_ext import (
     IPv6DestinationOptions,
     IPv6Fragment,
@@ -65,6 +65,7 @@ __all__ = [
     "IGMPv3GroupRecord",
     "IPProtocol",
     "IPv4",
+    "IPv4Option",
     "IPv6",
     "IPv6DestinationOptions",
     "IPv6Fragment",

@@ -67,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Purely additive: the `str` fields stay the round-tripping
   representation. MAC addresses stay `str` — the stdlib has no EUI
   type.
+- **IPv4 options** (`IPv4Option`, RFC 791 §3.1): the options TLV list
+  now parses on demand, mirroring the TCP-option work —
+  `IPv4.parsed_options` yields one `IPv4Option` per option in wire
+  order (kind + `kind_name`, raw `data`). The common kinds are named:
+  End of Option List and No-Operation (single-byte; EOL ends the parse,
+  so padding after it is not returned), Record Route (7), Timestamp
+  (68), and Router Alert (148, RFC 2113); unknown kinds keep their raw
+  `data` with a numeric fallback name. Parsing reads the raw `options`
+  bytes and never re-encodes, so the byte-exact round-trip is
+  preserved; an option length below the 2-byte minimum or one that runs
+  past the options raises `InvalidFieldError` (bounded — never hangs or
+  over-reads).
 - **DNS resource records** (`DNSResourceRecord`, RFC 1035 §4.1.3): the
   answer, authority, and additional sections parse on demand —
   `DNS.answers` / `DNS.authorities` / `DNS.additionals` yield records
