@@ -17,6 +17,24 @@ and must:
 
 ``memoryview`` input is accepted and used as a decode-time transient
 only; no view is ever stored on an instance.
+
+Decode-path construction
+------------------------
+Constructing a header from field values validates them: an address that
+is not a valid MAC or IPv4 string raises, and that strictness is part
+of the public contract. It is pure overhead on the decode path, though,
+because ``decode()`` *generates* those strings itself, from raw bytes,
+via ``bytes_to_mac()`` / ``bytes_to_ipv4()`` — a regex can only confirm
+what the conversion already guarantees.
+
+The three headers that carry addresses (``Ethernet``, ``ARP``,
+``IPv4``) therefore build their decoded instance directly, with
+``object.__new__`` plus ``object.__setattr__`` per field, skipping
+``__init__`` and ``__post_init__``. This is an internal shortcut on a
+path whose inputs are known-good, not a relaxation of the contract:
+every public constructor still validates, and any ``__post_init__``
+check bypassed this way is one ``decode()`` has already established
+itself (documented at each site).
 """
 
 from __future__ import annotations

@@ -9,6 +9,8 @@ from netprotocols import (
     UDP,
     Ethernet,
     ICMPv4,
+    InvalidIPv4AddressError,
+    InvalidMACAddressError,
     IPv4,
     IPv6,
     ProtocolError,
@@ -106,3 +108,115 @@ class TestChainWalk:
             b"\x45" + raw_ipv4_header[1:9] + b"\xfd" + raw_ipv4_header[10:]
         )
         assert IPv4.decode(unknown).next_protocol() is None
+
+
+class TestDecodePathValidation:
+    """The decoder does not re-validate strings it generated itself,
+    but every public constructor still does (#84)."""
+
+    def spy_on(self, module, name):
+        """Replace a compiled regex with a spy that fails if used."""
+        from unittest import mock
+
+        spy = mock.Mock()
+        spy.match.side_effect = AssertionError(
+            f"{name} matched on the decode path"
+        )
+        return mock.patch.object(module, name, spy)
+
+    def test_ethernet_decode_runs_no_mac_regex(self, raw_eth_header):
+        from netprotocols.utils import mac
+
+        with self.spy_on(mac, "mac_regex"):
+            eth = Ethernet.decode(raw_eth_header)
+        assert eth.dst == "ff:ff:ff:ff:ff:ff"
+        assert bytes(eth) == raw_eth_header
+
+    def test_arp_decode_runs_no_regex(self, raw_arp_header):
+        from netprotocols.utils import ipv4, mac
+
+        with self.spy_on(mac, "mac_regex"), self.spy_on(ipv4, "ipv4_regex"):
+            arp = ARP.decode(raw_arp_header)
+        assert arp.sha == "00:07:0d:af:f4:54"
+        assert arp.tpa == "24.166.173.159"
+        assert bytes(arp) == raw_arp_header
+
+    def test_ipv4_decode_runs_no_ipv4_regex(self, raw_ipv4_header):
+        from netprotocols.utils import ipv4
+
+        with self.spy_on(ipv4, "ipv4_regex"):
+            ip = IPv4.decode(raw_ipv4_header)
+        assert ip.src == "192.168.1.96"
+        assert bytes(ip) == raw_ipv4_header
+
+    def test_construction_still_validates(self):
+        """The strictness the decode path skips is intact for callers."""
+        with pytest.raises(InvalidMACAddressError):
+            Ethernet(dst="nonsense", src="00:07:0d:af:f4:54", ethertype=0x0800)
+        with pytest.raises(InvalidMACAddressError):
+            ARP(
+                htype=1,
+                ptype=0x0800,
+                hlen=6,
+                plen=4,
+                oper=1,
+                sha="not-a-mac",
+                spa="192.0.2.1",
+                tha="00:00:00:00:00:00",
+                tpa="192.0.2.2",
+            )
+        with pytest.raises(InvalidIPv4AddressError):
+            IPv4(
+                version=4,
+                ihl=5,
+                dscp=0,
+                ecn=0,
+                total_length=20,
+                identification=1,
+                flags=2,
+                fragment_offset=0,
+                ttl=64,
+                protocol=6,
+                checksum=0,
+                src="999.1.1.1",
+                dst="192.0.2.2",
+            )
+
+    def test_decoded_instances_equal_constructed_ones(
+        self, raw_eth_header, raw_arp_header, raw_ipv4_header
+    ):
+        """Equality compares every field, so a field the bypass forgot
+        to set would raise AttributeError here rather than lurk."""
+        eth = Ethernet.decode(raw_eth_header)
+        assert eth == Ethernet(
+            dst="ff:ff:ff:ff:ff:ff", src="00:07:0d:af:f4:54", ethertype=0x0806
+        )
+        arp = ARP.decode(raw_arp_header)
+        assert arp == ARP(
+            htype=1,
+            ptype=0x0800,
+            hlen=6,
+            plen=4,
+            oper=1,
+            sha="00:07:0d:af:f4:54",
+            spa="24.166.172.1",
+            tha="00:00:00:00:00:00",
+            tpa="24.166.173.159",
+        )
+        ip = IPv4.decode(raw_ipv4_header)
+        assert ip == IPv4(
+            version=4,
+            ihl=5,
+            dscp=0,
+            ecn=0,
+            total_length=40,
+            identification=0xEC6C,
+            flags=2,
+            fragment_offset=0,
+            ttl=64,
+            protocol=6,
+            checksum=0x2B51,
+            src="192.168.1.96",
+            dst="192.168.1.254",
+        )
+        assert hash(eth) and hash(arp) and hash(ip)

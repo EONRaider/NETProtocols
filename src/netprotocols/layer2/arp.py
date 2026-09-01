@@ -61,17 +61,22 @@ class ARP(Protocol):
         htype, ptype, hlen, plen, oper, sha, spa, tha, tpa = cls._unpack_fixed(
             data
         )
-        return cls(
-            htype=htype,
-            ptype=ptype,
-            hlen=hlen,
-            plen=plen,
-            oper=oper,
-            sha=bytes_to_mac(sha),
-            spa=bytes_to_ipv4(spa),
-            tha=bytes_to_mac(tha),
-            tpa=bytes_to_ipv4(tpa),
-        )
+        # The addresses below are generated here, from raw bytes, by
+        # bytes_to_mac()/bytes_to_ipv4() — they cannot fail the
+        # validators the constructor runs, so this builds the instance
+        # directly instead (see "Decode-path construction" in _base.py).
+        header = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(header, "htype", htype)
+        set_field(header, "ptype", ptype)
+        set_field(header, "hlen", hlen)
+        set_field(header, "plen", plen)
+        set_field(header, "oper", oper)
+        set_field(header, "sha", bytes_to_mac(sha))
+        set_field(header, "spa", bytes_to_ipv4(spa))
+        set_field(header, "tha", bytes_to_mac(tha))
+        set_field(header, "tpa", bytes_to_ipv4(tpa))
+        return header
 
     def __bytes__(self) -> bytes:
         return self._struct.pack(

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The decoder no longer re-validates the addresses it just
+  generated.** Every header's `__post_init__` ran the address
+  validators, including for instances built by `decode()` — so a MAC
+  mechanically rendered from six bytes by `bytes_to_mac()` was
+  immediately matched against `mac_regex` to confirm what the
+  conversion had already guaranteed. `Ethernet`, `ARP` and `IPv4` now
+  build their decoded instance directly (`object.__new__` plus
+  `object.__setattr__` per field), skipping `__init__` and
+  `__post_init__` on that path only. Measured here: `Ethernet.decode`
+  2330 → 830 ns (2.8x), `IPv4.decode` 4936 → 2596 ns (1.9x), a corpus
+  walk 76,500 → 113,200 frames/sec (1.48x). **Strictness on
+  construction is unchanged** — every public constructor still
+  validates and still raises, which is now asserted alongside a test
+  that the decode path runs no regex at all. The `__post_init__` checks
+  bypassed this way are ones `decode()` establishes itself (documented
+  at each site and in `_base.py`). No API change.
 - **Protocol dispatch is a table lookup, not a table construction.**
   `_ethertype_class()` and `_ip_protocol_class()` re-ran their deferred
   imports and rebuilt a `dict` literal on *every* call — once per layer

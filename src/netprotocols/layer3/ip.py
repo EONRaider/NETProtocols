@@ -239,22 +239,28 @@ class IPv4(Protocol):
                 f"IPv4 header declares {ihl * 4} bytes, buffer holds "
                 f"{len(data)}"
             )
-        return cls(
-            version=ver_ihl >> 4,
-            ihl=ihl,
-            dscp=dscp_ecn >> 2,
-            ecn=dscp_ecn & 0b11,
-            total_length=total_length,
-            identification=identification,
-            flags=flags_frag >> 13,
-            fragment_offset=flags_frag & 0x1FFF,
-            ttl=ttl,
-            protocol=protocol,
-            checksum=checksum,
-            src=bytes_to_ipv4(src),
-            dst=bytes_to_ipv4(dst),
-            options=bytes(data[cls._struct.size : ihl * 4]),
-        )
+        # As in Ethernet/ARP, the addresses are generated here and
+        # cannot fail validation. The constructor's other checks are
+        # already established above: the IHL is 4 bits (so <= 15), it
+        # was rejected below 5, and the options are sliced to exactly
+        # ihl * 4 bytes after the buffer was confirmed to hold them.
+        header = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(header, "version", ver_ihl >> 4)
+        set_field(header, "ihl", ihl)
+        set_field(header, "dscp", dscp_ecn >> 2)
+        set_field(header, "ecn", dscp_ecn & 0b11)
+        set_field(header, "total_length", total_length)
+        set_field(header, "identification", identification)
+        set_field(header, "flags", flags_frag >> 13)
+        set_field(header, "fragment_offset", flags_frag & 0x1FFF)
+        set_field(header, "ttl", ttl)
+        set_field(header, "protocol", protocol)
+        set_field(header, "checksum", checksum)
+        set_field(header, "src", bytes_to_ipv4(src))
+        set_field(header, "dst", bytes_to_ipv4(dst))
+        set_field(header, "options", bytes(data[cls._struct.size : ihl * 4]))
+        return header
 
     def __bytes__(self) -> bytes:
         return (
