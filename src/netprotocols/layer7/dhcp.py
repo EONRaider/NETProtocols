@@ -16,6 +16,7 @@ it is terminal — it never encapsulates another protocol.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -189,6 +190,32 @@ class DHCP(Protocol):
     def boot_file(self) -> str:
         """The optional boot-file name (``file``), NUL-trimmed."""
         return self.file.split(b"\x00", 1)[0].decode("ascii", "replace")
+
+    @property
+    def ciaddr_address(self) -> IPv4Address:
+        """The client address as a stdlib
+        :class:`~ipaddress.IPv4Address`, for comparison, subnet
+        membership, and arithmetic; :attr:`ciaddr` stays the canonical
+        string form (likewise the three accessors below)."""
+        return IPv4Address(self.ciaddr)
+
+    @property
+    def yiaddr_address(self) -> IPv4Address:
+        """The "your" (assigned) address as a stdlib
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        return IPv4Address(self.yiaddr)
+
+    @property
+    def siaddr_address(self) -> IPv4Address:
+        """The next-server address as a stdlib
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        return IPv4Address(self.siaddr)
+
+    @property
+    def giaddr_address(self) -> IPv4Address:
+        """The relay-agent address as a stdlib
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        return IPv4Address(self.giaddr)
 
     @property
     def has_magic_cookie(self) -> bool:

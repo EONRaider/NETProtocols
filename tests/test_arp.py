@@ -1,3 +1,5 @@
+from ipaddress import IPv4Address, ip_network
+
 import pytest
 
 from netprotocols import ARP, InvalidIPv4AddressError
@@ -39,6 +41,20 @@ class TestARP:
         arp = ARP.decode(raw_arp_header)
         assert bytes(arp) == raw_arp_header
         assert ARP.decode(bytes(arp)) == arp
+
+    def test_address_objects(self, raw_arp_header):
+        arp = ARP.decode(raw_arp_header)
+        assert arp.spa_address == IPv4Address("24.166.172.1")
+        assert arp.tpa_address == IPv4Address("24.166.173.159")
+        assert str(arp.spa_address) == arp.spa
+        assert arp.tpa_address in ip_network("24.166.0.0/16")
+
+    def test_unknown_display_values_degrade(self, arp_reply):
+        from dataclasses import replace
+
+        odd = replace(arp_reply, oper=9, ptype=0x1234)
+        assert odd.oper_name == "unknown (9)"
+        assert odd.ptype_name == "0x1234"
 
     def test_build(self, arp_reply):
         assert arp_reply.oper_name == "reply"

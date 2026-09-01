@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import IPv4Address
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -105,3 +106,17 @@ class ARP(Protocol):
     def ptype_hex_str(self) -> str:
         """The protocol type as a hexadecimal string, e.g. ``"0x0800"``."""
         return f"{self.ptype:#06x}"
+
+    @property
+    def spa_address(self) -> IPv4Address:
+        """The sender protocol address as a stdlib
+        :class:`~ipaddress.IPv4Address`, for comparison, subnet
+        membership, and arithmetic; :attr:`spa` stays the canonical
+        string form."""
+        return IPv4Address(self.spa)
+
+    @property
+    def tpa_address(self) -> IPv4Address:
+        """The target protocol address as a stdlib
+        :class:`~ipaddress.IPv4Address` (see :attr:`spa_address`)."""
+        return IPv4Address(self.tpa)

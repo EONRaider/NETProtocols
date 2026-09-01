@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   otherwise; `verify` of a header whose Checksum-Present bit is clear
   returns `True` — a frame cannot fail a checksum it does not carry —
   mirroring the UDP-over-IPv4 zero rule.
+- **Richer address accessors** (README roadmap): read-only `_address`
+  properties return stdlib `ipaddress` objects alongside the canonical
+  `str` fields, for comparison, subnet membership, and arithmetic —
+  `IPv4.src_address`/`dst_address` and `ARP.spa_address`/`tpa_address`
+  as `ipaddress.IPv4Address`, `IPv6.src_address`/`dst_address` as
+  `ipaddress.IPv6Address`, and the four `DHCP` address fields as
+  `ciaddr_address`/`yiaddr_address`/`siaddr_address`/`giaddr_address`.
+  Purely additive: the `str` fields stay the round-tripping
+  representation. MAC addresses stay `str` — the stdlib has no EUI
+  type.
 - **DNS resource records** (`DNSResourceRecord`, RFC 1035 §4.1.3): the
   answer, authority, and additional sections parse on demand —
   `DNS.answers` / `DNS.authorities` / `DNS.additionals` yield records
