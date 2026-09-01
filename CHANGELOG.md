@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `protocol_type` EtherType, so a GRE-tunnelled IPv4/IPv6 packet
   keeps decoding; the round-trip stays byte-exact regardless of which
   optional fields are present.
+- **GRE checksum arm** (`netprotocols.checksum`, RFC 2784 §2.5):
+  `compute`/`verify` now cover GRE — the internet checksum over the GRE
+  header plus its payload with the checksum field zeroed and no
+  pseudo-header. `compute(gre, payload=...)` requires the
+  Checksum-Present bit (and its field) and raises `InvalidFieldError`
+  otherwise; `verify` of a header whose Checksum-Present bit is clear
+  returns `True` — a frame cannot fail a checksum it does not carry —
+  mirroring the UDP-over-IPv4 zero rule.
 - **DNS resource records** (`DNSResourceRecord`, RFC 1035 §4.1.3): the
   answer, authority, and additional sections parse on demand —
   `DNS.answers` / `DNS.authorities` / `DNS.additionals` yield records
