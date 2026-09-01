@@ -47,7 +47,11 @@ def mac_to_bytes(mac: str) -> bytes:
 
 def bytes_to_mac(data: bytes) -> str:
     """Render 6 raw bytes as a colon-separated lowercase MAC address."""
-    return ":".join(format(octet, "02x") for octet in data)
+    # bytes.hex(sep) does this in one C call; the generator-plus-format
+    # equivalent it replaces ran seven generator steps and six format()
+    # calls per address, twice per Ethernet frame. memoryview.hex takes
+    # a separator too, so this still accepts a decode-time view.
+    return data.hex(":")
 
 
 def ipv4_to_bytes(addr: str) -> bytes:
