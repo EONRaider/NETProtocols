@@ -487,3 +487,61 @@ class TestDNSOverTCP:
         (a,) = dns.answers
         assert (a.rtype_name, a.rdata_text) == ("A", "93.184.216.34")
         assert b"".join(bytes(layer) for layer in layers) == frame
+
+
+class TestSectionParsingIsShared:
+    """#85: the three section accessors share one parse, and nothing
+    round-trips through `bytes(self)` to get at the message."""
+
+    def response_with_all_three_sections(self) -> bytes:
+        header = struct.pack("!HHHHHH", 0x1234, 0x8180, 1, 1, 1, 1)
+        question = build_query(["example", "test"])[12:]
+        # One A record per section, each naming the question by pointer.
+        record = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 300, 4)
+        return header + question + (record + b"\x0a\x00\x00\x01") * 3
+
+    def test_reading_all_three_sections_parses_once(self):
+        from netprotocols.layer7 import dns as dns_module
+
+        dns_module._parse_records.cache_clear()
+        message = DNS.decode(self.response_with_all_three_sections())
+        assert len(message.answers) == 1
+        assert len(message.authorities) == 1
+        assert len(message.additionals) == 1
+        info = dns_module._parse_records.cache_info()
+        assert (info.misses, info.hits) == (1, 2)
+
+    def test_accessors_agree_with_a_single_parse(self):
+        from netprotocols.layer7 import dns as dns_module
+
+        raw = self.response_with_all_three_sections()
+        message = DNS.decode(raw)
+        answers, authorities, additionals = (
+            dns_module._parse_records.__wrapped__(
+                message.sections,
+                message.qdcount,
+                message.ancount,
+                message.nscount,
+                message.arcount,
+            )
+        )
+        assert message.answers == answers
+        assert message.authorities == authorities
+        assert message.additionals == additionals
+        assert bytes(message) == raw  # round-trip untouched
+
+    def test_cached_records_are_shared_not_copied(self):
+        """Equal messages share one parse; the records are frozen, so
+        sharing them between callers cannot leak mutation."""
+        raw = self.response_with_all_three_sections()
+        first, second = DNS.decode(raw), DNS.decode(raw)
+        assert first.answers is second.answers
+        with pytest.raises(AttributeError):
+            first.answers[0].name = "mutated"  # type: ignore[misc]
+
+    def test_pointer_into_the_header_is_rejected(self):
+        """Offsets are section-relative now; a pointer below the header
+        length cannot address anything real."""
+        raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0\x02"
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(raw).question_name

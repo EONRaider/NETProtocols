@@ -14,6 +14,7 @@ re-encode.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -25,6 +26,20 @@ __all__ = ["DNS", "DNSOverTCP", "DNSResourceRecord"]
 #: A compressed name must not follow more than this many pointers; the
 #: bound makes a maliciously looping name terminate instead of hanging.
 _MAX_NAME_POINTERS = 128
+
+#: Length of the fixed header. The parser works from the ``sections``
+#: bytes that follow it, so every internal offset below is relative to
+#: the start of ``sections``; only a compression pointer, which counts
+#: from the start of the *message*, needs translating (by subtracting
+#: this) — a pointer into the header lands below zero and is rejected.
+_HEADER_LEN = 12
+
+#: How many parsed messages the record cache keeps. The cache is keyed
+#: by the raw section bytes and the counts, so it is shared by equal
+#: messages and bounded: reading all three sections of one message
+#: parses it once instead of three times, without storing anything on
+#: the (frozen) instance.
+_RECORD_CACHE_SIZE = 128
 
 #: DNS resource-record types this library names (RFC 1035 §3.2.2 and
 #: later assignments); unknown types keep their numeric value.
@@ -74,6 +89,180 @@ class DNSResourceRecord:
         """Display name of the record type, e.g. ``"AAAA"``; falls back
         to the numeric type for records unknown to this library."""
         return _RR_TYPE_NAMES.get(self.rtype, str(self.rtype))
+
+
+def _read_name(sections: bytes, at: int) -> int:
+    """The offset just past the name's in-line bytes at ``at``.
+
+    A compression pointer ends the in-line name (this does not follow
+    it — :func:`_labels` does), so the result advances the cursor to the
+    field after the name.
+
+    :raises InvalidFieldError: on a malformed name.
+    """
+    cursor = at
+    while True:
+        if not 0 <= cursor < len(sections):
+            raise InvalidFieldError("DNS name runs past the message")
+        length = sections[cursor]
+        if length == 0:
+            return cursor + 1
+        if length & 0xC0 == 0xC0:  # a pointer ends the in-line name
+            if cursor + 1 >= len(sections):
+                raise InvalidFieldError("truncated DNS compression pointer")
+            return cursor + 2
+        if length & 0xC0:
+            raise InvalidFieldError("reserved DNS label length bits set")
+        cursor += 1 + length
+
+
+def _labels(sections: bytes, at: int) -> str:
+    """Decode the dotted name beginning at ``at``.
+
+    :raises InvalidFieldError: on a label that overruns the message, a
+        reserved length prefix, a pointer into the header, or looping
+        compression pointers (bounded — never hangs).
+    """
+    labels: list[str] = []
+    pointers = 0
+    cursor = at
+    while True:
+        if not 0 <= cursor < len(sections):
+            raise InvalidFieldError("DNS name runs past the message")
+        length = sections[cursor]
+        if length == 0:
+            break
+        if length & 0xC0 == 0xC0:  # compression pointer
+            pointers += 1
+            if pointers > _MAX_NAME_POINTERS:
+                raise InvalidFieldError("DNS name compression loops")
+            if cursor + 1 >= len(sections):
+                raise InvalidFieldError("truncated DNS compression pointer")
+            target = ((length & 0x3F) << 8) | sections[cursor + 1]
+            cursor = target - _HEADER_LEN  # pointers count from the message
+            continue
+        if length & 0xC0:
+            raise InvalidFieldError("reserved DNS label length bits set")
+        if cursor + 1 + length > len(sections):
+            raise InvalidFieldError("DNS label runs past the message")
+        labels.append(
+            sections[cursor + 1 : cursor + 1 + length].decode(
+                "ascii", "replace"
+            )
+        )
+        cursor += 1 + length
+    return ".".join(labels) if labels else "."
+
+
+def _decode_txt(rdata: bytes) -> str:
+    """Concatenate the character-strings of a TXT record (§3.3.14)."""
+    parts: list[str] = []
+    cursor = 0
+    while cursor < len(rdata):
+        length = rdata[cursor]
+        cursor += 1
+        if cursor + length > len(rdata):
+            raise InvalidFieldError("DNS TXT character-string overruns")
+        parts.append(rdata[cursor : cursor + length].decode("ascii", "replace"))
+        cursor += length
+    return "".join(parts)
+
+
+def _decode_rdata(sections: bytes, rtype: int, at: int, rdlength: int) -> str:
+    """A human-readable rendering of the RDATA at ``at``; names follow
+    compression against the whole message."""
+    rdata = sections[at : at + rdlength]
+    if rtype == 1 and rdlength == 4:  # A
+        return bytes_to_ipv4(rdata)
+    if rtype == 28 and rdlength == 16:  # AAAA
+        return bytes_to_ipv6(rdata)
+    if rtype in (2, 5, 12):  # NS, CNAME, PTR — a single name
+        return _labels(sections, at)
+    if rtype == 15 and rdlength >= 2:  # MX — preference + exchange
+        preference = int.from_bytes(rdata[:2], "big")
+        return f"{preference} {_labels(sections, at + 2)}"
+    if rtype == 16:  # TXT
+        return _decode_txt(rdata)
+    if rtype == 6:  # SOA — mname, rname, then five 32-bit fields
+        mname = _labels(sections, at)
+        rname_at = _read_name(sections, at)
+        rname = _labels(sections, rname_at)
+        fixed = _read_name(sections, rname_at)
+        if fixed + 20 > len(sections):
+            raise InvalidFieldError("DNS SOA record truncated")
+        serial, refresh, retry, expire, minimum = (
+            int.from_bytes(sections[fixed + i : fixed + i + 4], "big")
+            for i in range(0, 20, 4)
+        )
+        return f"{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"
+    return rdata.hex()
+
+
+def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
+    """Parse the resource record at ``at``; return it and the offset of
+    the next record."""
+    name = _labels(sections, at)
+    cursor = _read_name(sections, at)
+    if cursor + 10 > len(sections):
+        raise InvalidFieldError("DNS resource record truncated")
+    rtype = int.from_bytes(sections[cursor : cursor + 2], "big")
+    rclass = int.from_bytes(sections[cursor + 2 : cursor + 4], "big")
+    ttl = int.from_bytes(sections[cursor + 4 : cursor + 8], "big")
+    rdlength = int.from_bytes(sections[cursor + 8 : cursor + 10], "big")
+    cursor += 10
+    if cursor + rdlength > len(sections):
+        raise InvalidFieldError("DNS RDATA runs past the message")
+    record = DNSResourceRecord(
+        name=name,
+        rtype=rtype,
+        rclass=rclass,
+        ttl=ttl,
+        rdata=sections[cursor : cursor + rdlength],
+        rdata_text=_decode_rdata(sections, rtype, cursor, rdlength),
+    )
+    return record, cursor + rdlength
+
+
+def _first_record(sections: bytes, qdcount: int) -> int:
+    """Offset of the first resource record: past the questions.
+
+    :raises InvalidFieldError: if the question section is truncated.
+    """
+    cursor = 0
+    for _ in range(qdcount):
+        cursor = _read_name(sections, cursor)
+        cursor += 4  # QTYPE + QCLASS
+        if cursor > len(sections):
+            raise InvalidFieldError("DNS question section truncated")
+    return cursor
+
+
+@lru_cache(maxsize=_RECORD_CACHE_SIZE)
+def _parse_records(
+    sections: bytes, qdcount: int, ancount: int, nscount: int, arcount: int
+) -> tuple[
+    tuple[DNSResourceRecord, ...],
+    tuple[DNSResourceRecord, ...],
+    tuple[DNSResourceRecord, ...],
+]:
+    """Parse the answer, authority and additional sections in one pass.
+
+    Cached on the (immutable) section bytes and counts, so reading all
+    three accessors of a message parses it once. Records are frozen
+    dataclasses, so sharing them between callers is safe.
+
+    :raises InvalidFieldError: if a record, its RDATA, or a name runs
+        past the message (bounded — never hangs or over-reads).
+    """
+    cursor = _first_record(sections, qdcount)
+    parsed: list[tuple[DNSResourceRecord, ...]] = []
+    for count in (ancount, nscount, arcount):
+        records: list[DNSResourceRecord] = []
+        for _ in range(count):
+            record, cursor = _parse_rr(sections, cursor)
+            records.append(record)
+        parsed.append(tuple(records))
+    return parsed[0], parsed[1], parsed[2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,67 +368,6 @@ class DNS(Protocol):
 
     # -- first question (parsed on demand, never re-encoded) --
 
-    def _read_name(self, offset: int) -> int:
-        """The offset just past the name's in-line bytes at ``offset``. A
-        compression pointer ends the in-line name (this does not follow
-        it — :meth:`_labels` does), so the result advances the cursor to
-        the field after the name.
-
-        :raises InvalidFieldError: on a malformed name.
-        """
-        message = bytes(self)
-        cursor = offset
-        while True:
-            if cursor >= len(message):
-                raise InvalidFieldError("DNS name runs past the message")
-            length = message[cursor]
-            if length == 0:
-                return cursor + 1
-            if length & 0xC0 == 0xC0:  # a pointer ends the in-line name
-                if cursor + 1 >= len(message):
-                    raise InvalidFieldError("truncated DNS compression pointer")
-                return cursor + 2
-            if length & 0xC0:
-                raise InvalidFieldError("reserved DNS label length bits set")
-            cursor += 1 + length
-
-    def _labels(self, offset: int) -> str:
-        """Decode the dotted name beginning at ``offset``.
-
-        :raises InvalidFieldError: on a label that overruns the message,
-            a reserved length prefix, or looping compression pointers
-            (bounded — never hangs).
-        """
-        message = bytes(self)
-        labels: list[str] = []
-        pointers = 0
-        cursor = offset
-        while True:
-            if cursor >= len(message):
-                raise InvalidFieldError("DNS name runs past the message")
-            length = message[cursor]
-            if length == 0:
-                break
-            if length & 0xC0 == 0xC0:  # compression pointer
-                pointers += 1
-                if pointers > _MAX_NAME_POINTERS:
-                    raise InvalidFieldError("DNS name compression loops")
-                if cursor + 1 >= len(message):
-                    raise InvalidFieldError("truncated DNS compression pointer")
-                cursor = ((length & 0x3F) << 8) | message[cursor + 1]
-                continue
-            if length & 0xC0:
-                raise InvalidFieldError("reserved DNS label length bits set")
-            if cursor + 1 + length > len(message):
-                raise InvalidFieldError("DNS label runs past the message")
-            labels.append(
-                message[cursor + 1 : cursor + 1 + length].decode(
-                    "ascii", "replace"
-                )
-            )
-            cursor += 1 + length
-        return ".".join(labels) if labels else "."
-
     @property
     def question_name(self) -> str | None:
         """The QNAME of the first question, decompressed, or ``None``
@@ -250,17 +378,16 @@ class DNS(Protocol):
         """
         if self.qdcount == 0:
             return None
-        return self._labels(self._struct.size)
+        return _labels(self.sections, 0)
 
     def _question_fixed(self) -> tuple[int, int] | None:
         if self.qdcount == 0:
             return None
-        end = self._read_name(self._struct.size)
-        message = bytes(self)
-        if end + 4 > len(message):
+        end = _read_name(self.sections, 0)
+        if end + 4 > len(self.sections):
             raise InvalidFieldError("DNS question truncated")
-        qtype = int.from_bytes(message[end : end + 2], "big")
-        qclass = int.from_bytes(message[end + 2 : end + 4], "big")
+        qtype = int.from_bytes(self.sections[end : end + 2], "big")
+        qclass = int.from_bytes(self.sections[end + 2 : end + 4], "big")
         return qtype, qclass
 
     @property
@@ -279,92 +406,6 @@ class DNS(Protocol):
 
     # -- resource records (parsed on demand, never re-encoded) --
 
-    def _sections_start(self) -> int:
-        """Offset of the first resource record: past the questions.
-
-        :raises InvalidFieldError: if the question section is truncated.
-        """
-        message = bytes(self)
-        cursor = self._struct.size
-        for _ in range(self.qdcount):
-            cursor = self._read_name(cursor)
-            cursor += 4  # QTYPE + QCLASS
-            if cursor > len(message):
-                raise InvalidFieldError("DNS question section truncated")
-        return cursor
-
-    def _decode_txt(self, rdata: bytes) -> str:
-        """Concatenate the character-strings of a TXT record (§3.3.14)."""
-        parts: list[str] = []
-        cursor = 0
-        while cursor < len(rdata):
-            length = rdata[cursor]
-            cursor += 1
-            if cursor + length > len(rdata):
-                raise InvalidFieldError("DNS TXT character-string overruns")
-            parts.append(
-                rdata[cursor : cursor + length].decode("ascii", "replace")
-            )
-            cursor += length
-        return "".join(parts)
-
-    def _decode_rdata(self, rtype: int, offset: int, rdlength: int) -> str:
-        """A human-readable rendering of the RDATA at ``offset``; names
-        follow compression against the whole message."""
-        message = bytes(self)
-        rdata = message[offset : offset + rdlength]
-        if rtype == 1 and rdlength == 4:  # A
-            return bytes_to_ipv4(rdata)
-        if rtype == 28 and rdlength == 16:  # AAAA
-            return bytes_to_ipv6(rdata)
-        if rtype in (2, 5, 12):  # NS, CNAME, PTR — a single name
-            return self._labels(offset)
-        if rtype == 15 and rdlength >= 2:  # MX — preference + exchange
-            preference = int.from_bytes(rdata[:2], "big")
-            return f"{preference} {self._labels(offset + 2)}"
-        if rtype == 16:  # TXT
-            return self._decode_txt(rdata)
-        if rtype == 6:  # SOA — mname, rname, then five 32-bit fields
-            mname = self._labels(offset)
-            rname_at = self._read_name(offset)
-            rname = self._labels(rname_at)
-            fixed = self._read_name(rname_at)
-            if fixed + 20 > len(message):
-                raise InvalidFieldError("DNS SOA record truncated")
-            serial, refresh, retry, expire, minimum = (
-                int.from_bytes(message[fixed + i : fixed + i + 4], "big")
-                for i in range(0, 20, 4)
-            )
-            return (
-                f"{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"
-            )
-        return rdata.hex()
-
-    def _parse_rr(self, cursor: int) -> tuple[DNSResourceRecord, int]:
-        """Parse the resource record at ``cursor``; return it and the
-        offset of the next record."""
-        message = bytes(self)
-        name = self._labels(cursor)
-        cursor = self._read_name(cursor)
-        if cursor + 10 > len(message):
-            raise InvalidFieldError("DNS resource record truncated")
-        rtype = int.from_bytes(message[cursor : cursor + 2], "big")
-        rclass = int.from_bytes(message[cursor + 2 : cursor + 4], "big")
-        ttl = int.from_bytes(message[cursor + 4 : cursor + 8], "big")
-        rdlength = int.from_bytes(message[cursor + 8 : cursor + 10], "big")
-        cursor += 10
-        if cursor + rdlength > len(message):
-            raise InvalidFieldError("DNS RDATA runs past the message")
-        record = DNSResourceRecord(
-            name=name,
-            rtype=rtype,
-            rclass=rclass,
-            ttl=ttl,
-            rdata=message[cursor : cursor + rdlength],
-            rdata_text=self._decode_rdata(rtype, cursor, rdlength),
-        )
-        return record, cursor + rdlength
-
     def _resource_records(
         self,
     ) -> tuple[
@@ -372,20 +413,15 @@ class DNS(Protocol):
         tuple[DNSResourceRecord, ...],
         tuple[DNSResourceRecord, ...],
     ]:
-        """Parse the answer, authority, and additional sections.
-
-        :raises InvalidFieldError: if a record, its RDATA, or a name runs
-            past the message (bounded — never hangs or over-reads).
-        """
-        cursor = self._sections_start()
-        sections: list[tuple[DNSResourceRecord, ...]] = []
-        for count in (self.ancount, self.nscount, self.arcount):
-            records: list[DNSResourceRecord] = []
-            for _ in range(count):
-                record, cursor = self._parse_rr(cursor)
-                records.append(record)
-            sections.append(tuple(records))
-        return sections[0], sections[1], sections[2]
+        """The three record sections, parsed once (see
+        :func:`_parse_records`) and shared by the accessors below."""
+        return _parse_records(
+            self.sections,
+            self.qdcount,
+            self.ancount,
+            self.nscount,
+            self.arcount,
+        )
 
     @property
     def answers(self) -> tuple[DNSResourceRecord, ...]:
