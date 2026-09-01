@@ -45,16 +45,19 @@ _IPV6_ONLY_NUMBERS = frozenset(
 )
 
 
-def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
-    """Map an IP protocol number to the class that decodes its payload.
+#: Payload dispatch tables, populated on first use. The imports they
+#: need must stay deferred to keep the layer modules acyclic (see
+#: ARCHITECTURE.md), so the tables are built once on the first call
+#: rather than at import time — every later call is a dict lookup.
+#:
+#: The IPv4 table simply omits the IPv6-only numbers, so the chain
+#: gating is baked into the table instead of being re-tested per call.
+_IPV6_PROTOCOL_CLASSES: dict[int, type[Protocol]] = {}
+_IPV4_PROTOCOL_CLASSES: dict[int, type[Protocol]] = {}
 
-    The number space is shared between IPv4 ``protocol`` and IPv6
-    ``next_header`` (the values are disjoint), so both classes dispatch
-    through this single registry — but the IPv6 extension headers are
-    handed out only when the caller is part of an IPv6 chain
-    (``ipv6=True``): a garbage IPv4 packet with ``protocol=0`` must not
-    decode a Hop-by-Hop layer.
-    """
+
+def _build_ip_protocol_classes() -> None:
+    """Populate the dispatch tables (called once, on first use)."""
     from netprotocols.layer3.gre import GRE
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
     from netprotocols.layer3.igmp import IGMP
@@ -67,21 +70,43 @@ def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
     from netprotocols.layer4.tcp import TCP
     from netprotocols.layer4.udp import UDP
 
-    if not ipv6 and number in _IPV6_ONLY_NUMBERS:
-        return None
-    mapping: dict[int, type[Protocol]] = {
-        IPProtocol.HOPOPT: IPv6HopByHopOptions,
-        IPProtocol.ICMP: ICMPv4,
-        IPProtocol.IGMP: IGMP,
-        IPProtocol.GRE: GRE,
-        IPProtocol.IPV6_ROUTE: IPv6Routing,
-        IPProtocol.IPV6_FRAG: IPv6Fragment,
-        IPProtocol.IPV6_ICMP: ICMPv6,
-        IPProtocol.IPV6_DSTOPTS: IPv6DestinationOptions,
-        IPProtocol.TCP: TCP,
-        IPProtocol.UDP: UDP,
-    }
-    return mapping.get(number)
+    _IPV6_PROTOCOL_CLASSES.update(
+        {
+            IPProtocol.HOPOPT: IPv6HopByHopOptions,
+            IPProtocol.ICMP: ICMPv4,
+            IPProtocol.IGMP: IGMP,
+            IPProtocol.GRE: GRE,
+            IPProtocol.IPV6_ROUTE: IPv6Routing,
+            IPProtocol.IPV6_FRAG: IPv6Fragment,
+            IPProtocol.IPV6_ICMP: ICMPv6,
+            IPProtocol.IPV6_DSTOPTS: IPv6DestinationOptions,
+            IPProtocol.TCP: TCP,
+            IPProtocol.UDP: UDP,
+        }
+    )
+    _IPV4_PROTOCOL_CLASSES.update(
+        {
+            number: protocol
+            for number, protocol in _IPV6_PROTOCOL_CLASSES.items()
+            if number not in _IPV6_ONLY_NUMBERS
+        }
+    )
+
+
+def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
+    """Map an IP protocol number to the class that decodes its payload.
+
+    The number space is shared between IPv4 ``protocol`` and IPv6
+    ``next_header`` (the values are disjoint), so both classes dispatch
+    through this single registry — but the IPv6 extension headers are
+    handed out only when the caller is part of an IPv6 chain
+    (``ipv6=True``): a garbage IPv4 packet with ``protocol=0`` must not
+    decode a Hop-by-Hop layer.
+    """
+    if not _IPV6_PROTOCOL_CLASSES:
+        _build_ip_protocol_classes()
+    table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES
+    return table.get(number)
 
 
 def _ip_protocol_name(number: int) -> str:

@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Protocol dispatch is a table lookup, not a table construction.**
+  `_ethertype_class()` and `_ip_protocol_class()` re-ran their deferred
+  imports and rebuilt a `dict` literal on *every* call — once per layer
+  per frame, the hottest path in the library. Both now populate a
+  module-level table on first use (the imports stay deferred, so the
+  layer modules remain acyclic) and reduce the call to a lookup.
+  Measured here: `_ip_protocol_class` 1439 → 104 ns (13.9x),
+  `_ethertype_class` 712 → 86 ns (8.3x), and a corpus walk 58,300 →
+  76,500 frames/sec (1.31x). The IPv6-only gating is unchanged: the
+  IPv4 table simply omits those numbers, so an IPv4 packet with
+  `protocol=0` still cannot decode a Hop-by-Hop layer, now asserted at
+  the table level as well as through the public API. No API change.
 - `bytes_to_mac` renders addresses with `bytes.hex(":")` instead of a
   generator over `format()`. The old form ran seven generator steps and
   six `format()` calls per address, twice per Ethernet frame, and showed

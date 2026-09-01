@@ -249,6 +249,23 @@ class TestRegistryGating:
             frame = raw_ipv6_header[:6] + bytes([number]) + raw_ipv6_header[7:]
             assert IPv6.decode(frame).next_protocol() is cls
 
+    def test_dispatch_tables_differ_only_by_the_ipv6_only_numbers(self):
+        """The gating is baked into the tables: the IPv4 table is the
+        IPv6 one minus the extension-header numbers, and nothing else."""
+        from netprotocols.layer3.ip import (
+            _IPV4_PROTOCOL_CLASSES,
+            _IPV6_ONLY_NUMBERS,
+            _IPV6_PROTOCOL_CLASSES,
+            _ip_protocol_class,
+        )
+
+        _ip_protocol_class(6, ipv6=False)  # force the lazy build
+        assert _IPV6_PROTOCOL_CLASSES
+        missing = set(_IPV6_PROTOCOL_CLASSES) - set(_IPV4_PROTOCOL_CLASSES)
+        assert missing == set(_IPV6_ONLY_NUMBERS)
+        for number, protocol in _IPV4_PROTOCOL_CLASSES.items():
+            assert _IPV6_PROTOCOL_CLASSES[number] is protocol
+
     def test_extension_headers_chain_among_themselves(self):
         dst_opts = IPv6HopByHopOptions(
             next_header=60, hdr_ext_len=0, options=b"\x01\x04\x00\x00\x00\x00"
