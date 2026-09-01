@@ -19,7 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   publish job gated behind it, so the release gate and the pull-request
   gate are one definition and cannot drift apart.
 
+### Fixed
+- **Layer sub-packages now export everything their layer defines.**
+  `from netprotocols.layer7 import DHCP` failed while
+  `from netprotocols import DHCP` worked, because each layer's own
+  `__init__` carried a subset of what the top-level package re-exports.
+  `layer3` was missing `GRE`, `IPv4Option`, `IPv6Option`, `NDPOption`
+  and `IGMPv3GroupRecord`; `layer4` was missing `TCPOption`; `layer7`
+  exported only `DNS`, omitting `DHCP`, `DNSOverTCP` and
+  `DNSResourceRecord`. Purely additive — no name changed meaning.
+
 ### Development
+- `tests/test_exports.py` keeps the layer and top-level export sets in
+  agreement, deriving the expectation from each object's `__module__`
+  rather than a hand-written list, so a protocol added to the top level
+  but forgotten in its layer fails the suite.
 - Coverage is now enforced, not merely reported: `fail_under = 98` in
   `[tool.coverage.report]`. The suite covers 99% of 1441 statements —
   the only misses are `Packet.__repr__` and its `__eq__`
