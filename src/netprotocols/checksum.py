@@ -102,7 +102,10 @@ def compute(
         ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
         built from ``ip``.
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
-    :param payload: The bytes following ``layer`` on the wire.
+    :param payload: The bytes following ``layer`` on the wire. A decoded
+        ``ICMPv4``/``ICMPv6``/``IGMP`` message already carries its whole
+        body in ``bytes(layer)``, so pass a ``payload`` only for bytes
+        the layer object does not itself hold.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """

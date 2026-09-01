@@ -69,6 +69,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte-exact round-trip is preserved, and an option length below the
   TLV minimum or one that runs past the options raises
   `InvalidFieldError` (bounded — never hangs or over-reads).
+- **ICMP message bodies** (RFC 792 / RFC 4443): `ICMPv4`/`ICMPv6` gain a
+  raw `body` field — the message data after the 8-byte header — so a
+  decoded message is self-contained (like `IGMP`/`DNS`), `header_len`
+  consumes the whole IP payload, and the layer stays terminal with a
+  byte-exact round-trip. Echo requests/replies (v4 types 8/0, v6
+  128/129) expose `identifier` / `sequence_number` split from `rest`,
+  and the error messages (v4 Destination Unreachable / Redirect / Time
+  Exceeded / Parameter Problem; v6 types 1-4) expose `embedded_packet` —
+  the invoking datagram, decodable as `IPv4`/`IPv6`. The accessors read
+  on demand and degrade to `None` for other message types or an empty
+  body, never raising. A decoded message now carries its body in
+  `bytes(layer)`, so `checksum.compute`/`verify` need no separate
+  `payload` for it (passing one for a header-only object still works).
 - **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
   now dispatches application protocols by well-known port
   (`layer4._ports.tcp_app_class`). DNS over TCP is length-prefixed, so
