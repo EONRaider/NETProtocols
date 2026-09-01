@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate are one definition and cannot drift apart.
 
 ### Development
+- Coverage is now enforced, not merely reported: `fail_under = 98` in
+  `[tool.coverage.report]`. The suite covers 99% of 1441 statements —
+  the only misses are `Packet.__repr__` and its `__eq__`
+  `NotImplemented` branch — so the gate is set below the current figure
+  to leave room for a legitimately unreachable branch, and well above
+  the level at which the bar would stop meaning anything.
 - `tests/test_workflows.py` asserts the release gate stays wired:
   that `ci.yml` remains callable, that some release job invokes it,
   that `publish` depends on that job, and that every local `uses: ./…`
