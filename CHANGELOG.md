@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and MX/TXT/SOA; hexadecimal otherwise). Parsing reads the raw sections
   and never re-encodes, so the byte-exact round-trip holds; a record or
   compressed name that runs past the message raises `InvalidFieldError`.
+- **TCP options** (`TCPOption`, RFC 9293 §3.1): the options TLV list
+  now parses on demand — `TCP.parsed_options` yields one `TCPOption`
+  per option in wire order (kind + `kind_name`, raw `data`, and a
+  decoded `value` where this library understands the kind: the segment
+  size for MSS, the shift count for Window Scale, a `(tsval, tsecr)`
+  pair for Timestamps, and `(left_edge, right_edge)` pairs for SACK;
+  RFC 7323/2018). EOL and NOP are single-byte (EOL ends the parse);
+  unknown kinds keep their raw `data` with `value` degrading to `None`.
+  Parsing reads the raw `options` bytes and never re-encodes, so the
+  byte-exact round-trip is preserved, and an option length below the
+  TLV minimum or one that runs past the options raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
 - **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
   now dispatches application protocols by well-known port
   (`layer4._ports.tcp_app_class`). DNS over TCP is length-prefixed, so
