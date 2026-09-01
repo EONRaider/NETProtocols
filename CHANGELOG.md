@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate are one definition and cannot drift apart.
 
 ### Fixed
+- **A mistagged release can no longer publish the wrong version.**
+  `release.yml` built from `pyproject.toml` and never consulted the tag,
+  so pushing `v1.4.0` while the project still read `1.3.0` would either
+  fail at upload against an existing version or, if that version was
+  never released, silently publish the wrong one. The QA ladder cannot
+  catch this — every check passes, because the code is fine and only the
+  tag is wrong. The release now reads the version back out of the built
+  artifact and refuses to publish unless it matches the tag.
 - **The README no longer advertises shipped work as upcoming.** Its
   Roadmap section listed the eight decoder-depth items tracked by #67 —
   all of which shipped in 1.3.0, with #67 itself closed — so the front
@@ -44,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DNSResourceRecord`. Purely additive — no name changed meaning.
 
 ### Development
+- `tests/test_version.py` holds `netprotocols.__version__` against the
+  version in `pyproject.toml`. The two were kept in step by hand and
+  nothing checked them, so a bump that missed one would ship a package
+  whose metadata and `__version__` disagree.
 - `tests/test_docs.py` holds documented facts against the fixtures:
   the MANIFEST's and README's frame/scenario counts must match the real
   corpus, ARCHITECTURE.md must not reintroduce a third copy of them,
