@@ -7,13 +7,14 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram). Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 93 frames across 16
+frames routinely leave checksums to NIC offload. 97 frames across 17
 scenarios. Addresses are as-captured from the capture host's network.
 
-Three scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`) are captured
-separately by their own `scripts/capture_fixtures_*.sh` over
-purpose-built topologies — real kernel vlan devices, a DHCP
-server/client, and a GRE tunnel — see their rows and the notes below.
+Four scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`dns_tcp.pcap`) are captured separately by their own
+`scripts/capture_fixtures_*.sh` over purpose-built topologies — real
+kernel vlan devices, a DHCP server/client, a GRE tunnel, and a DNS
+server queried over TCP — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -33,6 +34,7 @@ server/client, and a GRE tunnel — see their rows and the notes below.
 | `vlan_icmp.pcap` | 12 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **direct capture** of real kernel-tagged traffic (see VLAN note) |
 | `dhcp.pcap` | 4 | DHCP DORA exchange (DISCOVER / OFFER / REQUEST / ACK) over IPv4/UDP — **direct capture** via dnsmasq + dhclient over a veth pair (see DHCP note) |
 | `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
+| `dns_tcp.pcap` | 4 | DNS over TCP (RFC 1035 §4.2.2): A and TXT queries + responses from `dig +tcp` against `dnsmasq` — `Ethernet→IPv4→TCP→DNSOverTCP→DNS`; **direct capture** (see DNS-over-TCP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -73,6 +75,17 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   ICMPv4`. Half the frames ride a plain tunnel (GRE flags all clear) and
   half a keyed tunnel (the RFC 2890 key field). `check_fixtures` peels
   the GRE header and verifies the inner IPv4/ICMP checksums.
+- `dns_tcp.pcap` was produced by `scripts/capture_fixtures_dns_tcp.sh`:
+  a real DNS exchange over TCP — `dig +tcp` querying an A and a TXT
+  record against `dnsmasq` answering from its own records — over a veth
+  pair, captured on the server side with offload disabled so the TCP
+  checksums are computed for real (`check_fixtures` verifies them; the
+  TCP checksum covers the length-prefixed DNS message). Only the
+  data-bearing segments are kept: each committed frame decodes
+  `Ethernet→IPv4→TCP→DNSOverTCP→DNS` cleanly, whereas the connection's
+  bare handshake/teardown segments carry no DNS message — walking one
+  sends an empty payload into the length shim, the documented
+  malformed-frame path of port-based dispatch.
 
 ## Provenance note
 

@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `protocol_type` EtherType, so a GRE-tunnelled IPv4/IPv6 packet
   keeps decoding; the round-trip stays byte-exact regardless of which
   optional fields are present.
+- **GRE checksum arm** (`netprotocols.checksum`, RFC 2784 §2.5):
+  `compute`/`verify` now cover GRE — the internet checksum over the GRE
+  header plus its payload with the checksum field zeroed and no
+  pseudo-header. `compute(gre, payload=...)` requires the
+  Checksum-Present bit (and its field) and raises `InvalidFieldError`
+  otherwise; `verify` of a header whose Checksum-Present bit is clear
+  returns `True` — a frame cannot fail a checksum it does not carry —
+  mirroring the UDP-over-IPv4 zero rule.
 - **Richer address accessors** (README roadmap): read-only `_address`
   properties return stdlib `ipaddress` objects alongside the canonical
   `str` fields, for comparison, subnet membership, and arithmetic —
@@ -67,6 +75,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and MX/TXT/SOA; hexadecimal otherwise). Parsing reads the raw sections
   and never re-encodes, so the byte-exact round-trip holds; a record or
   compressed name that runs past the message raises `InvalidFieldError`.
+- **TCP options** (`TCPOption`, RFC 9293 §3.1): the options TLV list
+  now parses on demand — `TCP.parsed_options` yields one `TCPOption`
+  per option in wire order (kind + `kind_name`, raw `data`, and a
+  decoded `value` where this library understands the kind: the segment
+  size for MSS, the shift count for Window Scale, a `(tsval, tsecr)`
+  pair for Timestamps, and `(left_edge, right_edge)` pairs for SACK;
+  RFC 7323/2018). EOL and NOP are single-byte (EOL ends the parse);
+  unknown kinds keep their raw `data` with `value` degrading to `None`.
+  Parsing reads the raw `options` bytes and never re-encodes, so the
+  byte-exact round-trip is preserved, and an option length below the
+  TLV minimum or one that runs past the options raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
+- **ICMP message bodies** (RFC 792 / RFC 4443): `ICMPv4`/`ICMPv6` gain a
+  raw `body` field — the message data after the 8-byte header — so a
+  decoded message is self-contained (like `IGMP`/`DNS`), `header_len`
+  consumes the whole IP payload, and the layer stays terminal with a
+  byte-exact round-trip. Echo requests/replies (v4 types 8/0, v6
+  128/129) expose `identifier` / `sequence_number` split from `rest`,
+  and the error messages (v4 Destination Unreachable / Redirect / Time
+  Exceeded / Parameter Problem; v6 types 1-4) expose `embedded_packet` —
+  the invoking datagram, decodable as `IPv4`/`IPv6`. The accessors read
+  on demand and degrade to `None` for other message types or an empty
+  body, never raising. A decoded message now carries its body in
+  `bytes(layer)`, so `checksum.compute`/`verify` need no separate
+  `payload` for it (passing one for a header-only object still works).
+- **IPv6 Neighbor Discovery** (`NDPOption`, RFC 4861): `ICMPv6` now
+  parses NDP messages on demand — `ndp_target_address` reads the
+  16-byte target of a Neighbor Solicitation/Advertisement (135/136),
+  and `ndp_options` walks the option TLVs of Router
+  Solicitation/Advertisement, Neighbor Solicitation/Advertisement, and
+  Redirect at each message's own options offset. Each `NDPOption`
+  carries its `type` + `type_name` and raw `data`; a Source/Target
+  Link-Layer Address option (1/2) reads back as a MAC string via
+  `link_layer_address`, and Prefix Information (3) / MTU (5) stay raw.
+  Non-NDP message types return `None`. Option lengths count in 8-octet
+  units: a zero length (which must not loop), a length past the
+  message, or a body shorter than the message's fixed fields raises
+- **IPv6 extension-header options** (`IPv6Option`, RFC 8200 §4.2): the
+  Hop-by-Hop and Destination Options headers now parse their option
+  TLVs on demand — `parsed_options` yields one `IPv6Option` per option
+  in wire order, padding included (Pad1 is a lone type byte; everything
+  else is type/length/data). Each option carries its `type` +
+  `type_name` (Pad1, PadN, Router Alert per RFC 2711, Jumbo Payload per
+  RFC 2675; unknown types keep their numeric value) and raw `data`, and
+  exposes the action-on-unrecognized bits (the two high bits of the
+  type) as `unrecognized_action`. Parsing reads the raw `options` bytes
+  and never re-encodes, so the byte-exact round-trip is preserved; a
+  missing length byte or option data that runs past the header raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
 - **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
   now dispatches application protocols by well-known port
   (`layer4._ports.tcp_app_class`). DNS over TCP is length-prefixed, so
@@ -92,10 +149,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/capture_fixtures_dhcp.sh` and `scripts/capture_fixtures_gre.sh`
   produce them, and `scripts/check_fixtures.py` now peels a GRE header to
   verify the tunnelled inner IPv4/ICMP checksums.
+- The corpus gained real-capture `dns_tcp.pcap` (an A and a TXT query +
+  response from `dig +tcp` against `dnsmasq` over a veth pair, offload
+  disabled), so the TCP application dispatch and the `DNSOverTCP`
+  length shim (#57) ride the corpus-wide invariants and the
+  TCP-checksum recompute on genuine bytes — every frame decodes
+  `Ethernet→IPv4→TCP→DNSOverTCP→DNS` with the length prefix agreeing
+  with the message it frames and a resolvable answer.
+  `scripts/capture_fixtures_dns_tcp.sh` produces it; the corpus is now
+  97 frames across 17 scenarios.
 - Contributor documentation: a `CONTRIBUTING.md` (dev setup, the QA
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and
   bug-report / protocol-request issue templates under `.github/`.
+- README refresh: the Protocol coverage table gains the shipped `DHCP`
+  and `GRE` rows, the `DNS` row notes resource-record parsing and the
+  DNS-over-TCP length shim, and the `IGMP` row notes the IGMPv3 report
+  and query parsing. The Roadmap section now lists only the remaining
+  items, linking the open decoder-depth issues (#59-#66, tracked by
+  #67), and the stale corpus figure is corrected to 93 frames across 16
+  scenarios here and in `ARCHITECTURE.md`.
 
 ## [1.2.0] - 2026-08-30
 

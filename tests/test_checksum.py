@@ -7,6 +7,7 @@ import pytest
 from conftest import corpus_frames
 from netprotocols import (
     ARP,
+    GRE,
     TCP,
     UDP,
     Ethernet,
@@ -115,6 +116,79 @@ class TestCorpusChecksums:
             payload[:-1] + bytes([payload[-1] ^ 0xFF]) if payload else b"\x01"
         )
         assert not verify(transport, ip=ip, payload=corrupted)
+
+
+class TestGREChecksum:
+    """The GRE arm (RFC 2784 §2.5): internet checksum over the GRE
+    header plus its payload, checksum field zeroed, no pseudo-header."""
+
+    def make_gre(self, *, keyed: bool = False) -> tuple[GRE, bytes]:
+        """A checksummed (optionally RFC 2890 keyed) GRE header and the
+        tunnelled payload, the checksum filled to its correct value."""
+        payload = bytes(range(64))  # stands in for the inner packet
+        flags = 0x8000 | (0x2000 if keyed else 0)
+        fields = b"\x00" * 4 + (b"\xca\xfe\xba\xbe" if keyed else b"")
+        blank = GRE(flags=flags, protocol_type=0x0800, fields=fields)
+        checksum = compute(blank, payload=payload)
+        filled = GRE(
+            flags=flags,
+            protocol_type=0x0800,
+            fields=checksum.to_bytes(2, "big") + fields[2:],
+        )
+        return filled, payload
+
+    def test_checksummed_gre_round_trips_through_verify(self):
+        gre, payload = self.make_gre()
+        assert gre.checksum is not None
+        assert compute(gre, payload=payload) == gre.checksum
+        assert verify(gre, payload=payload)
+
+    def test_keyed_and_checksummed_gre_verifies(self):
+        gre, payload = self.make_gre(keyed=True)
+        assert gre.key == 0xCAFEBABE
+        assert verify(gre, payload=payload)
+
+    def test_corrupted_payload_is_detected(self):
+        gre, payload = self.make_gre()
+        corrupted = payload[:-1] + bytes([payload[-1] ^ 0xFF])
+        assert not verify(gre, payload=corrupted)
+
+    def test_computing_without_the_checksum_bit_is_rejected(self):
+        plain = GRE(flags=0, protocol_type=0x0800)
+        with pytest.raises(InvalidFieldError):
+            compute(plain, payload=b"x")
+
+    def test_checksum_bit_without_its_field_is_rejected(self):
+        broken = GRE(flags=0x8000, protocol_type=0x0800)  # no fields
+        with pytest.raises(InvalidFieldError):
+            compute(broken)
+
+    def test_absent_checksum_verifies_vacuously(self):
+        """A header that carries no checksum cannot fail verification —
+        the GRE analogue of the UDP-over-IPv4 zero rule."""
+        assert verify(GRE(flags=0, protocol_type=0x0800), payload=b"any")
+        keyed = GRE(flags=0x2000, protocol_type=0x0800, fields=b"\x00" * 4)
+        assert verify(keyed)
+
+    def test_corpus_gre_frames_verify(self):
+        """Every corpus GRE frame — plain and keyed tunnels, none with
+        the checksum bit set — passes verify with its true payload."""
+        seen = 0
+        for name, _, frame in CORPUS:
+            if name != "gre.pcap":
+                continue
+            layers, _ = walk(frame)
+            offset = 0
+            gre = None
+            for layer in layers:
+                if isinstance(layer, GRE):
+                    gre = layer
+                    break
+                offset += layer.header_len
+            assert gre is not None
+            assert verify(gre, payload=frame[offset + gre.header_len :])
+            seen += 1
+        assert seen == 8
 
 
 class TestChecksumRules:

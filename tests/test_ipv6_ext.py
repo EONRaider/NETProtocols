@@ -14,6 +14,7 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6Fragment,
     IPv6HopByHopOptions,
+    IPv6Option,
     IPv6Routing,
     TruncatedHeaderError,
 )
@@ -53,6 +54,18 @@ class TestMLDBehindHopByHop:
         # MLDv2 Listener Report (143) and/or v1 report/done (131/132).
         assert types <= {130, 131, 132, 143}
         assert types
+
+    def test_router_alert_option_parses(self):
+        """The captured hop-by-hop options are a Router Alert (value 0:
+        an MLD message is present) padded out with a PadN."""
+        for frame in self.frames():
+            hbh = walk(frame)[0][2]
+            assert isinstance(hbh, IPv6HopByHopOptions)
+            alert = hbh.parsed_options[0]
+            assert alert.type == 5
+            assert alert.type_name == "Router Alert"
+            assert alert.data == b"\x00\x00"
+            assert alert.unrecognized_action == 0
 
 
 class TestFragmentHeader:
@@ -101,6 +114,9 @@ class TestDecodeContract:
         assert routing.routing_type == 3
         assert routing.segments_left == 1
         assert bytes(routing) == raw
+        assert routing.header_len == 8
+        assert routing.next_protocol() is ICMPv6
+        assert routing.next_header_name == "IPv6-ICMP"
 
     def test_fragment_round_trip_preserves_reserved_bits(self):
         raw = b"\x3a\xa5\x01\x5b\xde\xad\xbe\xef"
@@ -110,6 +126,7 @@ class TestDecodeContract:
         assert fragment.res == 0b01
         assert fragment.m_flag == 1
         assert bytes(fragment) == raw
+        assert fragment.next_header_name == "IPv6-ICMP"
 
     def test_trailing_bytes_tolerated(self):
         header = IPv6HopByHopOptions.decode(self.RAW_HBH + b"payload")
@@ -137,6 +154,77 @@ class TestDecodeContract:
                 segments_left=0,
                 data=b"\x00" * 12,
             )
+
+
+class TestOptionTLVs:
+    """Option TLV parsing on the two options headers (RFC 8200 §4.2)."""
+
+    def make_hbh(self, options: bytes) -> IPv6HopByHopOptions:
+        """A hop-by-hop header carrying ``options`` (whole 8-octet
+        units, the 2 fixed bytes included)."""
+        return IPv6HopByHopOptions(
+            next_header=58,
+            hdr_ext_len=(len(options) - 6) // 8,
+            options=options,
+        )
+
+    def test_router_alert_and_padn(self):
+        hbh = self.make_hbh(b"\x05\x02\x00\x00\x01\x00")
+        alert, padn = hbh.parsed_options
+        assert alert.type == 5
+        assert alert.type_name == "Router Alert"
+        assert alert.data == b"\x00\x00"
+        assert padn.type == 1
+        assert padn.type_name == "PadN"
+        assert padn.data == b""
+
+    def test_pad1_is_a_lone_byte(self):
+        hbh = self.make_hbh(b"\x00" * 6)
+        options = hbh.parsed_options
+        assert [option.type_name for option in options] == ["Pad1"] * 6
+        assert all(option.data == b"" for option in options)
+
+    def test_jumbo_payload(self):
+        hbh = self.make_hbh(b"\xc2\x04\x00\x10\x00\x00")
+        (jumbo,) = hbh.parsed_options
+        assert jumbo.type == 194
+        assert jumbo.type_name == "Jumbo Payload"
+        assert jumbo.data == b"\x00\x10\x00\x00"
+        assert jumbo.unrecognized_action == 3
+
+    def test_destination_options_share_the_parser(self):
+        dst = IPv6DestinationOptions(
+            next_header=58, hdr_ext_len=0, options=b"\x05\x02\x00\x00\x01\x00"
+        )
+        assert [option.type for option in dst.parsed_options] == [5, 1]
+
+    def test_unknown_type_keeps_raw_data_and_action_bits(self):
+        hbh = self.make_hbh(b"\x8a\x02\xca\xfe\x01\x00")
+        unknown = hbh.parsed_options[0]
+        assert unknown.type == 138
+        assert unknown.type_name == "unknown (138)"
+        assert unknown.data == b"\xca\xfe"
+        assert unknown.unrecognized_action == 2
+
+    def test_action_bits_on_a_direct_construction(self):
+        assert IPv6Option(type=0x40).unrecognized_action == 1
+        assert IPv6Option(type=0x05).unrecognized_action == 0
+
+    def test_missing_length_byte_raises(self):
+        hbh = self.make_hbh(b"\x00\x00\x00\x00\x00\x05")
+        with pytest.raises(InvalidFieldError):
+            _ = hbh.parsed_options
+
+    def test_length_past_the_header_raises(self):
+        hbh = self.make_hbh(b"\x05\x08\x00\x00\x00\x00")
+        with pytest.raises(InvalidFieldError):
+            _ = hbh.parsed_options
+
+    def test_round_trip_unchanged_by_parsing(self):
+        raw = b"\x3a\x00\x05\x02\x00\x00\x01\x00"
+        hbh = IPv6HopByHopOptions.decode(raw)
+        _ = hbh.parsed_options
+        assert bytes(hbh) == raw
 
 
 class TestRegistryGating:
