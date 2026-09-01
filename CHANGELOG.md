@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `bytes_to_mac` renders addresses with `bytes.hex(":")` instead of a
+  generator over `format()`. The old form ran seven generator steps and
+  six `format()` calls per address, twice per Ethernet frame, and showed
+  up in a corpus profile as 88,200 generator calls. Measured 16–29×
+  faster on the call depending on run. Output is byte-for-byte
+  identical, and `memoryview.hex` takes a separator too, so a
+  decode-time view still works. No API change.
+
 ### Fixed
 - **The release workflow can no longer publish untested code.** Pushing
   a `v*` tag ran `uv build` and `uv publish` with no dependency on the
