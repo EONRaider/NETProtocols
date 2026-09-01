@@ -189,6 +189,21 @@ class TestPacketProperties:
                 assert bytes(Packet(*layers)) == bytes(data[:consumed])
 
 
+class TestIPv6OptionAccessorSafety:
+    @given(data=fuzz_input)
+    def test_parsed_options_never_hang_or_escape(self, data: bytes) -> None:
+        """The ext-header options accessor parses untrusted TLV bytes:
+        it must return a tuple or raise InvalidFieldError, never hang
+        and never raise anything else — and the per-option display
+        helpers must never raise at all."""
+        with contextlib.suppress(ProtocolError):
+            header = IPv6HopByHopOptions.decode(data)
+            with contextlib.suppress(InvalidFieldError):
+                for option in header.parsed_options:
+                    assert option.type_name
+                    _ = option.unrecognized_action
+
+
 class TestDNSNameAccessorSafety:
     @given(data=fuzz_input)
     def test_question_name_never_hangs_or_escapes(self, data: bytes) -> None:
