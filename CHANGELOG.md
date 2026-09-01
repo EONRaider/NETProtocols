@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Development
+- `docs/CLAIMS.md` records the positioning claims produced by the
+  post-1.3.0 competitive analysis, each with its evidence, a
+  reproduction path and a publication status — `VERIFIED`,
+  `GATED ON #nn`, or `NEEDS RE-MEASUREMENT`. Several of the strongest
+  claims are not true yet (decode throughput against dpkt is gated on
+  the Tier 1 performance work; the browser claim is untested until a
+  Pyodide CI job exists), so the register also lists what must not be
+  said and why. Feeds the README as each roadmap tier lands; see #101
+  and the roadmap in #107.
+
 ## [1.3.0] - 2026-09-01
 
 ### Added
