@@ -161,7 +161,7 @@ The next wave is decoder depth on already-supported layers, tracked by
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI on Python 3.12–3.14. The test suite is anchored by a
-93-frame corpus of real captured traffic across 16 scenarios
+97-frame corpus of real captured traffic across 17 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
