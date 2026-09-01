@@ -24,6 +24,7 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6DestinationOptions,
     IPv6Fragment,
     IPv6HopByHopOptions,
+    IPv6Option,
     IPv6Routing,
 )
 from netprotocols.layer4.tcp import TCP, TCPOption
@@ -68,6 +69,7 @@ __all__ = [
     "IPv6DestinationOptions",
     "IPv6Fragment",
     "IPv6HopByHopOptions",
+    "IPv6Option",
     "IPv6Routing",
     "InvalidFieldError",
     "InvalidIPv4AddressError",

@@ -94,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Non-NDP message types return `None`. Option lengths count in 8-octet
   units: a zero length (which must not loop), a length past the
   message, or a body shorter than the message's fixed fields raises
+- **IPv6 extension-header options** (`IPv6Option`, RFC 8200 §4.2): the
+  Hop-by-Hop and Destination Options headers now parse their option
+  TLVs on demand — `parsed_options` yields one `IPv6Option` per option
+  in wire order, padding included (Pad1 is a lone type byte; everything
+  else is type/length/data). Each option carries its `type` +
+  `type_name` (Pad1, PadN, Router Alert per RFC 2711, Jumbo Payload per
+  RFC 2675; unknown types keep their numeric value) and raw `data`, and
+  exposes the action-on-unrecognized bits (the two high bits of the
+  type) as `unrecognized_action`. Parsing reads the raw `options` bytes
+  and never re-encodes, so the byte-exact round-trip is preserved; a
+  missing length byte or option data that runs past the header raises
   `InvalidFieldError` (bounded — never hangs or over-reads).
 - **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
   now dispatches application protocols by well-known port
