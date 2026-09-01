@@ -23,6 +23,7 @@ from netprotocols._base import (
     ipv6_to_bytes,
 )
 from netprotocols._enums import IPProtocol
+from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
@@ -99,6 +100,8 @@ def compute(
     :param layer: The header to checksum. ``IPv4`` covers its own
         header only (options included; ``ip``/``payload`` ignored);
         ``ICMPv4`` covers header plus ``payload`` (no pseudo-header);
+        ``GRE`` covers header plus ``payload`` with no pseudo-header
+        (RFC 2784 §2.5) and requires the Checksum-Present bit;
         ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
         built from ``ip``.
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
@@ -117,6 +120,16 @@ def compute(
         # Whole message, checksum field (bytes 2-3) zeroed, no
         # pseudo-header; the body is already part of bytes(layer).
         return internet_checksum(_zeroed(bytes(layer), 2))
+    if isinstance(layer, GRE):
+        # GRE header plus payload, checksum field (bytes 4-5) zeroed,
+        # no pseudo-header (RFC 2784 §2.5). Only meaningful when the
+        # Checksum-Present bit announces the field.
+        if layer.checksum is None:
+            raise InvalidFieldError(
+                "Computing a GRE checksum requires the Checksum-Present "
+                "bit and its field (RFC 2784 §2.5)"
+            )
+        return internet_checksum(_zeroed(bytes(layer), 4) + payload)
     if isinstance(layer, ICMPv6):
         enclosing = _require_ip(layer, ip)
         segment = _zeroed(bytes(layer), 2) + payload
@@ -154,13 +167,17 @@ def verify(
 
     A UDP-over-IPv4 checksum of ``0`` means "no checksum in use" and
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
-    invalid).
+    invalid). A GRE header whose Checksum-Present bit is clear carries
+    no checksum at all (RFC 2784 §2.5) and likewise verifies as True —
+    a frame cannot fail a checksum it does not have.
     """
     if (
         isinstance(layer, UDP)
         and layer.checksum == 0
         and not isinstance(ip, IPv6)
     ):
+        return True
+    if isinstance(layer, GRE) and not layer.checksum_present:
         return True
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire
