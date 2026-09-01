@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **DNS section parsing happens once, and no longer re-serializes the
+  message to read it.** Six helpers called `bytes(self)` — a full
+  re-serialization of the whole message — so a single `.answers` access
+  rebuilt the message 14 times; and `answers`, `authorities` and
+  `additionals` each re-parsed *all three* sections, so reading all
+  three parsed the message three times. The parsers are now module-level
+  functions working directly from the `sections` bytes the instance
+  already holds, in section-relative offsets (a compression pointer,
+  which counts from the start of the message, is translated once), and
+  the three accessors share a single parse cached on those immutable
+  bytes. Measured here on a corpus response: `.answers` 16.84 → 0.20 us,
+  all three sections 52.08 → 0.54 us, and one uncached parse 17.03 →
+  12.17 us from dropping the re-serializations alone. Nothing is stored
+  on the frozen instance — the cache is a bounded module-level memo
+  keyed by value, so equal messages share a parse and records (frozen
+  dataclasses) are shared rather than copied. The byte-exact round-trip
+  is unchanged. A compression pointer that addresses the fixed header
+  now raises `InvalidFieldError` instead of decoding header bytes as
+  labels. No API change.
 - **The decoder no longer re-validates the addresses it just
   generated.** Every header's `__post_init__` ran the address
   validators, including for instances built by `decode()` — so a MAC
