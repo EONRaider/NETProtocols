@@ -185,14 +185,27 @@ class TestRepresentativeFrames:
 
     def test_ndp_neighbor_discovery(self):
         frames = read_pcap(FIXTURES / "ipv6_ndp_mld.pcap")
-        types = {
-            layer.type
+        ndp = [
+            layer
             for frame in frames
             for layer in walk(frame)[0]
-            if isinstance(layer, ICMPv6)
-        }
+            if isinstance(layer, ICMPv6) and layer.type in (135, 136)
+        ]
+        types = {icmp.type for icmp in ndp}
         assert 135 in types  # Neighbor Solicitation
         assert 136 in types  # Neighbor Advertisement
+        # Every NS/NA exposes its target address, and the captured
+        # source/target link-layer-address options read back as MACs.
+        lla_types = set()
+        for icmp in ndp:
+            assert icmp.ndp_target_address is not None
+            for option in icmp.ndp_options or ():
+                if option.type in (1, 2):
+                    lla_types.add(option.type)
+                    mac = option.link_layer_address
+                    assert mac is not None
+                    assert len(mac.split(":")) == 6
+        assert {1, 2} <= lla_types
 
     def test_dns_responses_over_both_ip_versions(self):
         frames = read_pcap(FIXTURES / "udp_dns.pcap")

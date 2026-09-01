@@ -8,10 +8,13 @@ plus the message data that follows, kept raw as ``body`` (like
 self-contained. The layer stays terminal; the accessors read ``rest``
 and ``body`` on demand and never re-encode, so ``bytes(X.decode(x)) ==
 x`` holds by construction: an echo's ``identifier`` /
-``sequence_number`` split from ``rest``, and an error message's
+``sequence_number`` split from ``rest``, an error message's
 ``embedded_packet`` exposes the invoking datagram it carries in
 ``body``, decodable as :class:`~netprotocols.IPv4` /
-:class:`~netprotocols.IPv6`.
+:class:`~netprotocols.IPv6`, and an ICMPv6 Neighbor Discovery
+message's ``ndp_target_address`` / ``ndp_options`` parse the RFC 4861
+target and option TLVs (a source/target link-layer address reads back
+as a MAC string).
 """
 
 from __future__ import annotations
@@ -20,10 +23,56 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol
+from netprotocols._base import Protocol, bytes_to_ipv6, bytes_to_mac
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["ICMPv4", "ICMPv6"]
+__all__ = ["ICMPv4", "ICMPv6", "NDPOption"]
+
+#: Neighbor Discovery option types this library names (RFC 4861 §4.6);
+#: unknown types fall back to their numeric value.
+_NDP_OPTION_TYPE_NAMES: dict[int, str] = {
+    1: "Source Link-Layer Address",
+    2: "Target Link-Layer Address",
+    3: "Prefix Information",
+    4: "Redirected Header",
+    5: "MTU",
+}
+
+#: Option types that carry a link-layer address (RFC 4861 §4.6.1).
+_NDP_LLA_TYPES = frozenset({1, 2})
+
+
+@dataclass(frozen=True, slots=True)
+class NDPOption:
+    """One Neighbor Discovery option TLV (RFC 4861 §4.6).
+
+    :param type: Option type — ``1`` Source Link-Layer Address, ``2``
+        Target Link-Layer Address, ``3`` Prefix Information, ``4``
+        Redirected Header, ``5`` MTU (see :attr:`type_name`).
+    :param data: The option's payload after the two type/length bytes,
+        kept raw (the wire length counts in 8-octet units, so this is
+        ``length * 8 - 2`` bytes).
+    """
+
+    type: int
+    data: bytes = b""
+
+    @property
+    def type_name(self) -> str:
+        """Display name of the option type, e.g. ``"Source Link-Layer
+        Address"``; falls back to ``"unknown (n)"`` for types this
+        library does not name."""
+        return _NDP_OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
+
+    @property
+    def link_layer_address(self) -> str | None:
+        """The MAC of a Source/Target Link-Layer Address option (types
+        1/2) over Ethernet, e.g. ``"84:01:12:be:7e:d9"``; ``None`` for
+        other option types and for a payload that is not the 6-byte
+        Ethernet form (degrades, never raises)."""
+        if self.type in _NDP_LLA_TYPES and len(self.data) == 6:
+            return bytes_to_mac(self.data)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,3 +260,69 @@ class ICMPv6(_ICMP):
         201: "Private Experimentation",
         255: "Reserved for Expansion of ICMPv6 Informational Messages",
     }
+
+    #: Neighbor Discovery message types (RFC 4861 §4.1-4.5) mapped to
+    #: the offset into ``body`` where the option list starts — past the
+    #: fixed fields each message puts there: none for a Router
+    #: Solicitation, the reachable-time/retrans timers for a Router
+    #: Advertisement, the target address for a Neighbor
+    #: Solicitation/Advertisement, target + destination for a Redirect.
+    _NDP_OPTIONS_OFFSET: ClassVar[dict[int, int]] = {
+        133: 0,
+        134: 8,
+        135: 16,
+        136: 16,
+        137: 32,
+    }
+
+    # -- Neighbor Discovery (read on demand, never re-encoded) --
+
+    @property
+    def ndp_target_address(self) -> str | None:
+        """The target address of a Neighbor Solicitation/Advertisement
+        (types 135/136) — the 16 bytes after the reserved word, e.g.
+        ``"fe80::f6d7:8b9a:993e:5efa"``; ``None`` for other message
+        types and for a body too short to hold it (degrades, never
+        raises)."""
+        if self.type not in (135, 136) or len(self.body) < 16:
+            return None
+        return bytes_to_ipv6(self.body[:16])
+
+    @property
+    def ndp_options(self) -> tuple[NDPOption, ...] | None:
+        """The option TLVs of a Neighbor Discovery message (Router
+        Solicitation/Advertisement, Neighbor Solicitation/Advertisement,
+        Redirect), parsed on demand — one :class:`NDPOption` per option,
+        in wire order; ``None`` for non-NDP message types and empty for
+        an NDP message carrying no options.
+
+        :raises InvalidFieldError: if the body ends before the message's
+            fixed fields, an option's length is zero (lengths count in
+            8-octet units and zero must not loop), or an option runs
+            past the message (bounded — never hangs or over-reads).
+        """
+        offset = self._NDP_OPTIONS_OFFSET.get(self.type)
+        if offset is None:
+            return None
+        body = self.body
+        if len(body) < offset:
+            raise InvalidFieldError(
+                f"{self.type_name} body ends before its fixed fields"
+            )
+        options: list[NDPOption] = []
+        cursor = offset
+        while cursor < len(body):
+            if cursor + 2 > len(body):
+                raise InvalidFieldError("NDP option missing its length byte")
+            length = body[cursor + 1] * 8
+            if length == 0:
+                raise InvalidFieldError("NDP option length must not be zero")
+            if cursor + length > len(body):
+                raise InvalidFieldError("NDP option runs past the message")
+            options.append(
+                NDPOption(
+                    type=body[cursor], data=body[cursor + 2 : cursor + length]
+                )
+            )
+            cursor += length
+        return tuple(options)

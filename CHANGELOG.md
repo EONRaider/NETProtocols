@@ -70,6 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body, never raising. A decoded message now carries its body in
   `bytes(layer)`, so `checksum.compute`/`verify` need no separate
   `payload` for it (passing one for a header-only object still works).
+- **IPv6 Neighbor Discovery** (`NDPOption`, RFC 4861): `ICMPv6` now
+  parses NDP messages on demand — `ndp_target_address` reads the
+  16-byte target of a Neighbor Solicitation/Advertisement (135/136),
+  and `ndp_options` walks the option TLVs of Router
+  Solicitation/Advertisement, Neighbor Solicitation/Advertisement, and
+  Redirect at each message's own options offset. Each `NDPOption`
+  carries its `type` + `type_name` and raw `data`; a Source/Target
+  Link-Layer Address option (1/2) reads back as a MAC string via
+  `link_layer_address`, and Prefix Information (3) / MTU (5) stay raw.
+  Non-NDP message types return `None`. Option lengths count in 8-octet
+  units: a zero length (which must not loop), a length past the
+  message, or a body shorter than the message's fixed fields raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
 - **DNS over TCP** (`DNSOverTCP`, RFC 1035 §4.2.2): `TCP.next_protocol()`
   now dispatches application protocols by well-known port
   (`layer4._ports.tcp_app_class`). DNS over TCP is length-prefixed, so
