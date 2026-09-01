@@ -28,6 +28,10 @@ Repository = "https://github.com/EONRaider/NETProtocols"
 Changelog = "https://github.com/EONRaider/NETProtocols/blob/master/CHANGELOG.md"
 
 [dependency-groups]
+bench = [
+    "dpkt>=1.9.8",
+    "scapy>=2.6",
+]
 dev = [
     "hypothesis>=6.100",
     "mypy>=1.14",

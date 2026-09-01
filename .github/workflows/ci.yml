@@ -49,3 +49,29 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import netprotocols; print(netprotocols.__version__)"
+
+  # Advisory, deliberately: throughput on a shared runner is noisy, and
+  # a threshold picked without runner data would start failing pull
+  # requests that changed nothing. The job measures, compares against
+  # the committed baseline and reports; `continue-on-error` keeps it
+  # from blocking until a maintainer sets a real threshold (#103).
+  #
+  # Pinned to the baseline's interpreter on purpose: normalization
+  # cancels how fast the machine is, not which CPython it runs (see the
+  # module docstring in scripts/benchmark.py).
+  benchmark:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Corpus decode throughput (advisory)
+        run: |
+          {
+            echo '```'
+            uv run --frozen --group bench python scripts/benchmark.py \
+              --check --compare
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
