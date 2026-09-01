@@ -17,16 +17,17 @@ from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.gre import GRE
-from netprotocols.layer3.icmp import ICMPv4, ICMPv6
+from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
 from netprotocols.layer3.igmp import IGMP, IGMPv3GroupRecord
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer3.ipv6_ext import (
     IPv6DestinationOptions,
     IPv6Fragment,
     IPv6HopByHopOptions,
+    IPv6Option,
     IPv6Routing,
 )
-from netprotocols.layer4.tcp import TCP
+from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP
 from netprotocols.layer7.dns import DNS, DNSOverTCP, DNSResourceRecord
@@ -68,14 +69,17 @@ __all__ = [
     "IPv6DestinationOptions",
     "IPv6Fragment",
     "IPv6HopByHopOptions",
+    "IPv6Option",
     "IPv6Routing",
     "InvalidFieldError",
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "NDPOption",
     "Packet",
     "Protocol",
     "ProtocolError",
+    "TCPOption",
     "TruncatedHeaderError",
     "__version__",
     "compute",
