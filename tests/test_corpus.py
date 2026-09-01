@@ -13,9 +13,11 @@ import pytest
 from conftest import FIXTURES, corpus_frames, read_pcap
 from netprotocols import (
     ARP,
+    DNS,
     TCP,
     UDP,
     VLAN,
+    DNSOverTCP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -93,6 +95,8 @@ class TestCorpusCoverage:
             ICMPv6,
             TCP,
             UDP,
+            DNSOverTCP,
+            DNS,
         } <= seen
 
     def test_arp_covers_both_operations(self):
@@ -111,6 +115,27 @@ class TestCorpusCoverage:
             for layer in walk(frame)[0]
             if isinstance(layer, TCP)
         )
+
+    def test_tcp_options_parse_across_the_corpus(self):
+        """Every options-bearing captured segment parses; the corpus
+        rides established connections, so the options are the classic
+        NOP, NOP, Timestamps layout (no SYN was captured — see the
+        MANIFEST — so MSS and friends are exercised by crafted tests)."""
+        options = [
+            option
+            for _, _, frame in CORPUS
+            for layer in walk(frame)[0]
+            if isinstance(layer, TCP)
+            for option in layer.parsed_options
+        ]
+        kinds = {option.kind for option in options}
+        assert kinds == {1, 8}  # No-Operation + Timestamps
+        for option in options:
+            if option.kind == 8:
+                assert option.kind_name == "Timestamps"
+                tsval_tsecr = option.value
+                assert isinstance(tsval_tsecr, tuple)
+                assert len(tsval_tsecr) == 2
 
 
 class TestFragmentHandling:
@@ -150,22 +175,62 @@ class TestRepresentativeFrames:
         assert isinstance(icmp, ICMPv4)
         assert icmp.type == 11
         assert icmp.type_name == "Time Exceeded"
+        # The error embeds the invoking packet: its bytes must decode as
+        # the original IPv4 header, addressed like the outer datagram in
+        # reverse (the expiring probe travelled the other way).
+        outer = layers[1]
+        assert isinstance(outer, IPv4)
+        assert icmp.embedded_packet is not None
+        embedded = IPv4.decode(icmp.embedded_packet)
+        assert embedded.dst == outer.dst or embedded.src == outer.dst
 
     def test_loopback_echo_pair(self):
         frames = read_pcap(FIXTURES / "icmpv4_echo_lo.pcap")
-        types = [walk(frame)[0][2].type for frame in frames]  # type: ignore[attr-defined]
+        echoes = [walk(frame)[0][2] for frame in frames]
+        types = [icmp.type for icmp in echoes]  # type: ignore[attr-defined]
         assert 8 in types and 0 in types
+        # Every echo exposes its identifier/sequence, and each reply
+        # mirrors a request's pair.
+        pairs = {
+            (icmp.identifier, icmp.sequence_number)  # type: ignore[attr-defined]
+            for icmp in echoes
+        }
+        assert None not in {pair[0] for pair in pairs}
+        requests = {
+            (icmp.identifier, icmp.sequence_number)  # type: ignore[attr-defined]
+            for icmp in echoes
+            if icmp.type == 8  # type: ignore[attr-defined]
+        }
+        replies = {
+            (icmp.identifier, icmp.sequence_number)  # type: ignore[attr-defined]
+            for icmp in echoes
+            if icmp.type == 0  # type: ignore[attr-defined]
+        }
+        assert requests == replies
 
     def test_ndp_neighbor_discovery(self):
         frames = read_pcap(FIXTURES / "ipv6_ndp_mld.pcap")
-        types = {
-            layer.type
+        ndp = [
+            layer
             for frame in frames
             for layer in walk(frame)[0]
-            if isinstance(layer, ICMPv6)
-        }
+            if isinstance(layer, ICMPv6) and layer.type in (135, 136)
+        ]
+        types = {icmp.type for icmp in ndp}
         assert 135 in types  # Neighbor Solicitation
         assert 136 in types  # Neighbor Advertisement
+        # Every NS/NA exposes its target address, and the captured
+        # source/target link-layer-address options read back as MACs.
+        lla_types = set()
+        for icmp in ndp:
+            assert icmp.ndp_target_address is not None
+            for option in icmp.ndp_options or ():
+                if option.type in (1, 2):
+                    lla_types.add(option.type)
+                    mac = option.link_layer_address
+                    assert mac is not None
+                    assert len(mac.split(":")) == 6
+        assert {1, 2} <= lla_types
 
     def test_dns_responses_over_both_ip_versions(self):
         frames = read_pcap(FIXTURES / "udp_dns.pcap")
@@ -176,6 +241,43 @@ class TestRepresentativeFrames:
             udp = walk(frame)[0][2]
             assert isinstance(udp, UDP)
             assert udp.src_port == 53
+
+    def test_dns_over_tcp_full_chain(self):
+        """Every dns_tcp frame walks the TCP application dispatch on
+        genuine bytes: the 2-byte length shim frames a DNS message whose
+        length agrees, and the captured answers resolve."""
+        frames = read_pcap(FIXTURES / "dns_tcp.pcap")
+        stacks = [walk(frame)[0] for frame in frames]
+        for stack in stacks:
+            assert [type(layer) for layer in stack] == [
+                Ethernet,
+                IPv4,
+                TCP,
+                DNSOverTCP,
+                DNS,
+            ]
+            shim, dns = stack[3], stack[4]
+            assert isinstance(shim, DNSOverTCP)
+            assert isinstance(dns, DNS)
+            assert shim.message_length == dns.header_len
+            assert dns.question_name == "netprotocols.test"
+        responses = [
+            stack[4]
+            for stack in stacks
+            if isinstance(stack[4], DNS) and stack[4].qr == 1
+        ]
+        assert len(responses) == 2  # one A, one TXT
+        a_response = next(r for r in responses if r.question_type == 1)
+        assert any(
+            record.rtype_name == "A" and record.rdata_text == "10.9.7.42"
+            for record in a_response.answers
+        )
+        txt_response = next(r for r in responses if r.question_type == 16)
+        assert any(
+            record.rtype_name == "TXT"
+            and record.rdata_text == "NETProtocols DNS-over-TCP fixture"
+            for record in txt_response.answers
+        )
 
     def test_vlan_single_and_qinq_tags_chain_to_the_payload(self):
         frames = read_pcap(FIXTURES / "vlan_icmp.pcap")

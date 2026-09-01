@@ -10,8 +10,10 @@ header (see ``_ip_protocol_class``).
 The TLV-shaped headers (Hop-by-Hop Options, Routing, Destination
 Options) declare their own length in ``hdr_ext_len``, counted in
 8-octet units *excluding* the first 8; the Fragment header is a fixed
-8 bytes. Option/data contents are kept as raw ``bytes`` — TLV parsing
-inside options is deliberately out of scope for now.
+8 bytes. Option/data contents are kept as raw ``bytes``; on the two
+options headers the ``parsed_options`` accessor walks the option TLVs
+(RFC 8200 §4.2) on demand and never re-encodes, so the byte-exact
+round-trip holds by construction.
 """
 
 from __future__ import annotations
@@ -30,8 +32,56 @@ __all__ = [
     "IPv6DestinationOptions",
     "IPv6Fragment",
     "IPv6HopByHopOptions",
+    "IPv6Option",
     "IPv6Routing",
 ]
+
+#: The one option type that is a lone byte with no length or data
+#: (RFC 8200 §4.2): Pad1, one byte of padding.
+_OPT_PAD1 = 0
+
+#: Option types this library names (RFC 8200 §4.2; RFC 2711 for Router
+#: Alert; RFC 2675 for Jumbo Payload); unknown types fall back to their
+#: numeric value.
+_OPTION_TYPE_NAMES: dict[int, str] = {
+    _OPT_PAD1: "Pad1",
+    1: "PadN",
+    5: "Router Alert",
+    194: "Jumbo Payload",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IPv6Option:
+    """One option TLV from a Hop-by-Hop / Destination Options extension
+    header (RFC 8200 §4.2).
+
+    :param type: Option type — ``0`` Pad1, ``1`` PadN, ``5`` Router
+        Alert, ``194`` Jumbo Payload (see :attr:`type_name`). The two
+        high bits encode the action on an unrecognized option
+        (:attr:`unrecognized_action`).
+    :param data: The option data after the two type/length bytes, kept
+        raw; always empty for Pad1, which is a lone type byte.
+    """
+
+    type: int
+    data: bytes = b""
+
+    @property
+    def type_name(self) -> str:
+        """Display name of the option type, e.g. ``"Router Alert"``;
+        falls back to ``"unknown (n)"`` for types this library does not
+        name."""
+        return _OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
+
+    @property
+    def unrecognized_action(self) -> int:
+        """What a node must do with an option it does not recognize —
+        the two high bits of the type (RFC 8200 §4.2): ``0`` skip it,
+        ``1`` discard the packet, ``2`` discard and send an ICMP
+        Parameter Problem, ``3`` discard and send the Parameter Problem
+        only to a non-multicast destination."""
+        return self.type >> 6
 
 
 def _next_in_ipv6_chain(number: int) -> type[Protocol] | None:
@@ -103,6 +153,45 @@ class _IPv6OptionsHeader(Protocol):
     def next_header_name(self) -> str:
         """Display name of what follows, e.g. ``"IPv6-ICMP"``."""
         return _next_header_name(self.next_header)
+
+    @property
+    def parsed_options(self) -> tuple[IPv6Option, ...]:
+        """The option TLVs as a tuple of :class:`IPv6Option`, in wire
+        order, parsed on demand (RFC 8200 §4.2) — padding included:
+        Pad1 is a lone type byte, every other option is
+        type/length/data.
+
+        :raises InvalidFieldError: if an option's length byte is
+            missing or its data runs past the header (bounded — never
+            hangs or over-reads).
+        """
+        raw = self.options
+        parsed: list[IPv6Option] = []
+        cursor = 0
+        while cursor < len(raw):
+            option_type = raw[cursor]
+            if option_type == _OPT_PAD1:
+                parsed.append(IPv6Option(type=option_type))
+                cursor += 1
+                continue
+            if cursor + 1 >= len(raw):
+                raise InvalidFieldError(
+                    f"{self.__class__.__name__} option missing its length byte"
+                )
+            length = raw[cursor + 1]
+            if cursor + 2 + length > len(raw):
+                raise InvalidFieldError(
+                    f"{self.__class__.__name__} option data runs past the "
+                    f"header"
+                )
+            parsed.append(
+                IPv6Option(
+                    type=option_type,
+                    data=raw[cursor + 2 : cursor + 2 + length],
+                )
+            )
+            cursor += 2 + length
+        return tuple(parsed)
 
 
 @dataclass(frozen=True, slots=True)

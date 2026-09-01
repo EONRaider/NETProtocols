@@ -120,8 +120,8 @@ class GRE(Protocol):
     @property
     def checksum(self) -> int | None:
         """The header checksum, carried verbatim, or ``None`` when the
-        checksum-present bit is clear (this library neither computes nor
-        verifies it)."""
+        checksum-present bit is clear (compute/verify via
+        :mod:`netprotocols.checksum`)."""
         if not self.checksum_present or len(self.fields) < 2:
             return None
         return int.from_bytes(self.fields[:2], "big")

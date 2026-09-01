@@ -2,6 +2,7 @@
 option parsing, and UDP port dispatch."""
 
 import struct
+from ipaddress import IPv4Address, ip_network
 
 import pytest
 
@@ -88,6 +89,22 @@ class TestDHCPFields:
     def test_unknown_op_degrades(self):
         dhcp = DHCP.decode(build_dhcp(op=7))
         assert dhcp.op_name == "unknown (0x07)"
+
+    def test_address_objects(self):
+        dhcp = DHCP.decode(
+            build_dhcp(
+                ciaddr="0.0.0.0",
+                yiaddr="192.168.50.10",
+                siaddr="192.168.50.1",
+                giaddr="10.0.0.1",
+            )
+        )
+        assert dhcp.ciaddr_address == IPv4Address("0.0.0.0")
+        assert dhcp.yiaddr_address == IPv4Address("192.168.50.10")
+        assert dhcp.siaddr_address == IPv4Address("192.168.50.1")
+        assert dhcp.giaddr_address == IPv4Address("10.0.0.1")
+        assert str(dhcp.yiaddr_address) == dhcp.yiaddr
+        assert dhcp.yiaddr_address in ip_network("192.168.50.0/24")
 
     def test_client_mac_none_for_non_ethernet(self):
         raw = bytearray(build_dhcp())
