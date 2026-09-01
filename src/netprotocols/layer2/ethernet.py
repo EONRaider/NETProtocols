@@ -18,6 +18,32 @@ _VLAN_TAG_ETHERTYPES = frozenset(
 )
 
 
+#: Payload dispatch table, populated on first use. The imports it needs
+#: must stay deferred to keep the layer modules acyclic (see
+#: ARCHITECTURE.md), so the table is built once on the first call rather
+#: than at import time — every later call is a plain dict lookup.
+_ETHERTYPE_CLASSES: dict[int, type[Protocol]] = {}
+
+
+def _build_ethertype_classes() -> None:
+    """Populate :data:`_ETHERTYPE_CLASSES` (called once, on first use)."""
+    from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.vlan import VLAN
+    from netprotocols.layer3.ip import IPv4, IPv6
+
+    _ETHERTYPE_CLASSES.update(
+        {
+            EtherType.ARP: ARP,
+            EtherType.IPV4: IPv4,
+            EtherType.IPV6: IPv6,
+            # A tag type dispatches to VLAN, whose own next_protocol
+            # calls back here with the inner EtherType — so stacked tags
+            # (QinQ) decode as one VLAN layer per tag.
+            **dict.fromkeys(_VLAN_TAG_ETHERTYPES, VLAN),
+        }
+    )
+
+
 def _ethertype_class(ethertype: int) -> type[Protocol] | None:
     """The class that decodes the payload of an Ethernet/VLAN header.
 
@@ -25,18 +51,9 @@ def _ethertype_class(ethertype: int) -> type[Protocol] | None:
     ``next_protocol`` calls back here with the inner EtherType — so
     stacked tags (QinQ) decode as one VLAN layer per tag.
     """
-    from netprotocols.layer2.arp import ARP
-    from netprotocols.layer2.vlan import VLAN
-    from netprotocols.layer3.ip import IPv4, IPv6
-
-    if ethertype in _VLAN_TAG_ETHERTYPES:
-        return VLAN
-    mapping: dict[int, type[Protocol]] = {
-        EtherType.ARP: ARP,
-        EtherType.IPV4: IPv4,
-        EtherType.IPV6: IPv6,
-    }
-    return mapping.get(ethertype)
+    if not _ETHERTYPE_CLASSES:
+        _build_ethertype_classes()
+    return _ETHERTYPE_CLASSES.get(ethertype)
 
 
 def _ethertype_name(ethertype: int) -> str:
