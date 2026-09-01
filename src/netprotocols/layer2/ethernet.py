@@ -88,9 +88,16 @@ class Ethernet(Protocol):
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
         dst, src, ethertype = cls._unpack_fixed(data)
-        return cls(
-            dst=bytes_to_mac(dst), src=bytes_to_mac(src), ethertype=ethertype
-        )
+        # The addresses below are generated here, from raw bytes, by
+        # bytes_to_mac()/bytes_to_ipv4() — they cannot fail the
+        # validators the constructor runs, so this builds the instance
+        # directly instead (see "Decode-path construction" in _base.py).
+        header = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(header, "dst", bytes_to_mac(dst))
+        set_field(header, "src", bytes_to_mac(src))
+        set_field(header, "ethertype", ethertype)
+        return header
 
     def __bytes__(self) -> bytes:
         return self._struct.pack(
