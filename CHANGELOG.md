@@ -57,6 +57,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and MX/TXT/SOA; hexadecimal otherwise). Parsing reads the raw sections
   and never re-encodes, so the byte-exact round-trip holds; a record or
   compressed name that runs past the message raises `InvalidFieldError`.
+- **TCP options** (`TCPOption`, RFC 9293 §3.1): the options TLV list
+  now parses on demand — `TCP.parsed_options` yields one `TCPOption`
+  per option in wire order (kind + `kind_name`, raw `data`, and a
+  decoded `value` where this library understands the kind: the segment
+  size for MSS, the shift count for Window Scale, a `(tsval, tsecr)`
+  pair for Timestamps, and `(left_edge, right_edge)` pairs for SACK;
+  RFC 7323/2018). EOL and NOP are single-byte (EOL ends the parse);
+  unknown kinds keep their raw `data` with `value` degrading to `None`.
+  Parsing reads the raw `options` bytes and never re-encodes, so the
+  byte-exact round-trip is preserved, and an option length below the
+  TLV minimum or one that runs past the options raises
+  `InvalidFieldError` (bounded — never hangs or over-reads).
 - **ICMP message bodies** (RFC 792 / RFC 4443): `ICMPv4`/`ICMPv6` gain a
   raw `body` field — the message data after the 8-byte header — so a
   decoded message is self-contained (like `IGMP`/`DNS`), `header_len`
@@ -99,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ladder, the decode contract, the add-a-protocol enforcement points,
   and the fixture-capture workflow), a pull-request template, and
   bug-report / protocol-request issue templates under `.github/`.
+- README refresh: the Protocol coverage table gains the shipped `DHCP`
+  and `GRE` rows, the `DNS` row notes resource-record parsing and the
+  DNS-over-TCP length shim, and the `IGMP` row notes the IGMPv3 report
+  and query parsing. The Roadmap section now lists only the remaining
+  items, linking the open decoder-depth issues (#59-#66, tracked by
+  #67), and the stale corpus figure is corrected to 93 frames across 16
+  scenarios here and in `ARCHITECTURE.md`.
 
 ## [1.2.0] - 2026-08-30
 

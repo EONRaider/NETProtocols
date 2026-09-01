@@ -200,3 +200,18 @@ class TestDNSNameAccessorSafety:
             with contextlib.suppress(InvalidFieldError):
                 name = dns.question_name
                 assert name is None or isinstance(name, str)
+
+
+class TestTCPOptionAccessorSafety:
+    @given(data=fuzz_input)
+    def test_parsed_options_never_hang_or_escape(self, data: bytes) -> None:
+        """The options accessor parses untrusted TLV bytes: it must
+        return a tuple or raise InvalidFieldError, never hang and never
+        raise anything else — and the per-option display helpers and
+        decoded values must never raise at all."""
+        with contextlib.suppress(ProtocolError):
+            tcp = TCP.decode(data)
+            with contextlib.suppress(InvalidFieldError):
+                for option in tcp.parsed_options:
+                    assert option.kind_name
+                    _ = option.value
