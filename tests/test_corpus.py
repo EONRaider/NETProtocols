@@ -13,9 +13,11 @@ import pytest
 from conftest import FIXTURES, corpus_frames, read_pcap
 from netprotocols import (
     ARP,
+    DNS,
     TCP,
     UDP,
     VLAN,
+    DNSOverTCP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -93,6 +95,8 @@ class TestCorpusCoverage:
             ICMPv6,
             TCP,
             UDP,
+            DNSOverTCP,
+            DNS,
         } <= seen
 
     def test_arp_covers_both_operations(self):
@@ -237,6 +241,43 @@ class TestRepresentativeFrames:
             udp = walk(frame)[0][2]
             assert isinstance(udp, UDP)
             assert udp.src_port == 53
+
+    def test_dns_over_tcp_full_chain(self):
+        """Every dns_tcp frame walks the TCP application dispatch on
+        genuine bytes: the 2-byte length shim frames a DNS message whose
+        length agrees, and the captured answers resolve."""
+        frames = read_pcap(FIXTURES / "dns_tcp.pcap")
+        stacks = [walk(frame)[0] for frame in frames]
+        for stack in stacks:
+            assert [type(layer) for layer in stack] == [
+                Ethernet,
+                IPv4,
+                TCP,
+                DNSOverTCP,
+                DNS,
+            ]
+            shim, dns = stack[3], stack[4]
+            assert isinstance(shim, DNSOverTCP)
+            assert isinstance(dns, DNS)
+            assert shim.message_length == dns.header_len
+            assert dns.question_name == "netprotocols.test"
+        responses = [
+            stack[4]
+            for stack in stacks
+            if isinstance(stack[4], DNS) and stack[4].qr == 1
+        ]
+        assert len(responses) == 2  # one A, one TXT
+        a_response = next(r for r in responses if r.question_type == 1)
+        assert any(
+            record.rtype_name == "A" and record.rdata_text == "10.9.7.42"
+            for record in a_response.answers
+        )
+        txt_response = next(r for r in responses if r.question_type == 16)
+        assert any(
+            record.rtype_name == "TXT"
+            and record.rdata_text == "NETProtocols DNS-over-TCP fixture"
+            for record in txt_response.answers
+        )
 
     def test_vlan_single_and_qinq_tags_chain_to_the_payload(self):
         frames = read_pcap(FIXTURES / "vlan_icmp.pcap")
