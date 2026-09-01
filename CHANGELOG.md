@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The release workflow can no longer publish untested code.** Pushing
+  a `v*` tag ran `uv build` and `uv publish` with no dependency on the
+  lint, typecheck or test jobs — and because the CI workflow triggers
+  only on pushes and pull requests targeting `master`, a tag push ran
+  **no checks at all**. A tag against broken code published to PyPI
+  unchallenged, and a published version can only be yanked, never
+  replaced. `ci.yml` is now also a reusable workflow (`workflow_call`),
+  and `release.yml` invokes it against the tagged commit with the
+  publish job gated behind it, so the release gate and the pull-request
+  gate are one definition and cannot drift apart.
+
 ### Development
+- `tests/test_workflows.py` asserts the release gate stays wired:
+  that `ci.yml` remains callable, that some release job invokes it,
+  that `publish` depends on that job, and that every local `uses: ./…`
+  reference resolves to a workflow declaring `workflow_call`. The
+  wiring is otherwise easy to remove silently — releases keep working
+  while the gate quietly stops existing — and it cannot be verified by
+  running it, since publishing is irreversible.
 - `docs/CLAIMS.md` records the positioning claims produced by the
   post-1.3.0 competitive analysis, each with its evidence, a
   reproduction path and a publication status — `VERIFIED`,

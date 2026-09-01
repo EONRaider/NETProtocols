@@ -4,8 +4,21 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
+  # Run the full QA ladder against the tagged commit before anything is
+  # uploaded. This is not redundant with the CI workflow's own triggers:
+  # those fire on pushes and pull requests targeting master, and a tag
+  # push matches neither, so without this job a release ran no checks at
+  # all. A tag can also point at a commit that never landed on master.
+  # A published version can only be yanked, never replaced.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: ci
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
