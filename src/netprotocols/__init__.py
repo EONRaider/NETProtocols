@@ -5,6 +5,7 @@ build those objects from field values and serialize them back to their
 exact on-wire form.
 """
 
+from netprotocols import _defaults
 from netprotocols._base import Protocol
 from netprotocols._enums import (
     ARPHardwareType,
@@ -32,6 +33,14 @@ from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP
 from netprotocols.layer7.dns import DNS, DNSOverTCP, DNSResourceRecord
 from netprotocols.packet import Packet
+from netprotocols.registry import (
+    DEFAULT,
+    Registry,
+    RegistryConflictError,
+    UnknownTableError,
+    register,
+    register_all,
+)
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     InvalidIPv4AddressError,
@@ -43,10 +52,16 @@ from netprotocols.utils.exceptions import (
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import random_mac, validate_mac_addr
 
+# Populate the default dispatch registry now that every protocol class
+# above has been imported. This must stay after those imports: the
+# registrations name the classes. See netprotocols/_defaults.py.
+_defaults.install(DEFAULT)
+
 __version__ = "1.3.0"
 
 __all__ = [
     "ARP",
+    "DEFAULT",
     "DHCP",
     "DNS",
     "GRE",
@@ -80,12 +95,17 @@ __all__ = [
     "Packet",
     "Protocol",
     "ProtocolError",
+    "Registry",
+    "RegistryConflictError",
     "TCPOption",
     "TruncatedHeaderError",
+    "UnknownTableError",
     "__version__",
     "compute",
     "internet_checksum",
     "random_mac",
+    "register",
+    "register_all",
     "validate_ipv4_addr",
     "validate_mac_addr",
     "verify",

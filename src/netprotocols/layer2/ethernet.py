@@ -8,40 +8,16 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_mac, mac_to_bytes
 from netprotocols._enums import EtherType
+from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE
 from netprotocols.utils.mac import validate_mac_addr
 
 __all__ = ["Ethernet"]
 
-#: EtherType values that mark a VLAN tag shim rather than a payload.
-_VLAN_TAG_ETHERTYPES = frozenset(
-    {EtherType.VLAN_TAG, EtherType.VLAN_TAG_QINQ, EtherType.VLAN_TAG_9100}
-)
-
-
-#: Payload dispatch table, populated on first use. The imports it needs
-#: must stay deferred to keep the layer modules acyclic (see
-#: ARCHITECTURE.md), so the table is built once on the first call rather
-#: than at import time — every later call is a plain dict lookup.
-_ETHERTYPE_CLASSES: dict[int, type[Protocol]] = {}
-
-
-def _build_ethertype_classes() -> None:
-    """Populate :data:`_ETHERTYPE_CLASSES` (called once, on first use)."""
-    from netprotocols.layer2.arp import ARP
-    from netprotocols.layer2.vlan import VLAN
-    from netprotocols.layer3.ip import IPv4, IPv6
-
-    _ETHERTYPE_CLASSES.update(
-        {
-            EtherType.ARP: ARP,
-            EtherType.IPV4: IPv4,
-            EtherType.IPV6: IPv6,
-            # A tag type dispatches to VLAN, whose own next_protocol
-            # calls back here with the inner EtherType — so stacked tags
-            # (QinQ) decode as one VLAN layer per tag.
-            **dict.fromkeys(_VLAN_TAG_ETHERTYPES, VLAN),
-        }
-    )
+#: The flat ``ethertype`` dispatch table of the default registry, bound
+#: once at import. Registering a decoder mutates this dict in place
+#: rather than replacing it, so the reference stays live and a lookup
+#: stays a bare ``dict.get`` — see :mod:`netprotocols.registry`.
+_ETHERTYPE_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_ETHERTYPE)
 
 
 def _ethertype_class(ethertype: int) -> type[Protocol] | None:
@@ -51,8 +27,6 @@ def _ethertype_class(ethertype: int) -> type[Protocol] | None:
     ``next_protocol`` calls back here with the inner EtherType — so
     stacked tags (QinQ) decode as one VLAN layer per tag.
     """
-    if not _ETHERTYPE_CLASSES:
-        _build_ethertype_classes()
     return _ETHERTYPE_CLASSES.get(ethertype)
 
 

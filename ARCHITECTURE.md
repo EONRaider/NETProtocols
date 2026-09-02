@@ -165,33 +165,85 @@ while protocol is not None:
     protocol = header.next_protocol()
 ```
 
-**Why the deferred imports?** `Ethernet.next_protocol()` must name
-`ARP`, `IPv4`, and `IPv6` — but `arp.py` also imports from the
-Ethernet side of the world (EtherType names). Importing layer modules
-from each other at module level would create cycles, so two rules keep
-the graph acyclic: shared registries live in the dependency-free
-`_enums.py`, and `next_protocol()` mappings import their target
-classes *inside the function body*, at call time.
+**Where do those arrows live?** Not in the protocol classes. Every
+one of them is a row in a dispatch table owned by
+[`registry.py`](src/netprotocols/registry.py), and `next_protocol()`
+is a single `dict.get` against one of five tables named after the wire
+field they dispatch on:
+
+| Table | Dispatches on | Read by |
+|---|---|---|
+| `ethertype` | Ethernet II EtherType | `Ethernet`, `VLAN`, `GRE` |
+| `ip.proto` | IPv4 `protocol` | `IPv4` |
+| `ip.proto.v6` | IPv6 `next_header` | `IPv6`, extension headers |
+| `udp.port` | UDP well-known port | `UDP` |
+| `tcp.port` | TCP well-known port | `TCP` |
+
+`ip.proto.v6` **inherits** `ip.proto`: the two share a number space
+but not a table, because the four extension headers must be reachable
+only inside an IPv6 chain. Registering in `ip.proto` reaches both;
+registering in `ip.proto.v6` reaches the v6 chain alone. Inheritance
+is resolved when you register, not when you look up, so the gating
+costs nothing on the hot path — an IPv4 packet with `protocol=0`
+cannot conjure a Hop-by-Hop layer because the table it reads has no
+entry for `0`.
+
+**Extending the walk without forking.** The tables are public. A
+protocol this library does not implement — MPLS, VXLAN, a proprietary
+telemetry header — is one registration away from participating in
+frame walks like any built-in:
+
+```python
+from netprotocols import Protocol
+from netprotocols.registry import register
+
+@register("ethertype", 0x8847)
+class MPLS(Protocol):
+    ...
+```
+
+Registrations land in the process-wide `DEFAULT` registry. When they
+must not — you are embedding this library, or isolating a test — build
+your own with `Registry.from_defaults()` and hand it to the caller
+that walks frames. Registering over an existing entry raises
+`RegistryConflictError` unless you pass `override=True`, so two
+packages claiming the same port cannot silently resolve by import
+order; re-registering the *same* class to the same key is a no-op,
+because a decorator re-runs whenever its module does.
+
+**Why is the built-in map in its own module?** `Ethernet` must name
+`ARP`, `IPv4`, and `IPv6` — but `arp.py` imports from the Ethernet
+side of the world (EtherType names). Importing layer modules from each
+other at module level would create cycles, so the built-in
+registrations live together in
+[`_defaults.py`](src/netprotocols/_defaults.py), whose imports sit
+inside `install()` and run once from `__init__.py` after every
+protocol class exists. Shared enums stay in the dependency-free
+`_enums.py`. The layer modules bind their table at import and never
+import each other's classes at all.
 
 ## Port-based dispatch is best-effort
 
-The EtherType and IP-protocol registries dispatch on a single
-authoritative field. Application protocols break that model: they are
-identified by *port*, which is a heuristic — any service may run on any
-port, and the discriminator is split across the source and destination
-ports. `UDP.next_protocol()` therefore consults a well-known-port
-registry (`netprotocols.layer4._ports`), checking the destination port
-first (a request targets the server's port) and then the source port
-(a response comes from it). `DNS` is the first such protocol; a DNS
-message on UDP port 53 now decodes as a fourth layer.
+The `ethertype` and `ip.proto` tables dispatch on a single
+authoritative field: it exists to say what follows. The two port
+tables break that model, and differ in kind rather than just in name.
+A port is a *guess* — any service may run on any port, and the
+discriminator is split across the source and destination ports.
+Dispatch therefore checks the destination port first (a request
+targets the server's well-known port) and then the source port (a
+response comes from it). DNS on UDP 53 and DHCP on 67/68 decode as a
+fourth layer; on TCP, port 53 names `DNSOverTCP`, a shim that consumes
+the 2-byte length prefix (RFC 1035 §4.2.2) and chains onward, so the
+walk stays uniform.
 
 Because the guess can be wrong, the application class validates
 strictly on decode: a non-DNS datagram that happens to use port 53
 raises a `ProtocolError`, which the ordinary decode-error path absorbs
 (the chain keeps the layers it did decode and records the failure). So
-a mis-dispatch degrades to a diagnosed frame, never to garbage. Only
-UDP is wired this way for now — DNS over TCP carries a 2-byte length
-prefix (RFC 1035 §4.2.2) that needs separate handling.
+a mis-dispatch degrades to a diagnosed frame, never to garbage. This
+is why the port tables can be opened to third parties as safely as the
+authoritative ones: a wrong registration costs a diagnosed frame, not
+a wrong answer.
 
 ## The encode side, and the round-trip guarantee
 
@@ -225,9 +277,11 @@ headers and `bytes(packet)` joins them, ready for a raw socket.
 
 ```
 src/netprotocols/
-├── __init__.py     public API re-exports, __version__
+├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
+├── registry.py     public dispatch tables: register(), Registry
+├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums()
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
@@ -235,7 +289,7 @@ src/netprotocols/
 │                   igmp.py, gre.py,
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
-├── layer4/         tcp.py, udp.py, _ports.py (well-known-port registry)
+├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
 ├── layer7/         dns.py, dhcp.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
@@ -273,14 +327,15 @@ the same:
    that region as raw `bytes` and parse it through read-only accessors
    that never re-encode. `bytes(decode(x)) == x` then holds by
    construction (see `layer7/dns.py`).
-4. **Wire the chain.** The layer below decides when your class is
-   next. For DNS that means UDP would implement `next_protocol()`
-   consulting the ports. (For a new EtherType or IP protocol number,
-   add the value to `_enums.py` — display name in lockstep, a test
-   enforces it — and one mapping entry in `ethernet.py`/`ip.py`, using
-   a deferred import. Numbers valid only inside an IPv6 chain follow
-   the extension headers' example: `_ip_protocol_class` hands them out
-   only when `ipv6=True`.)
+4. **Wire the chain.** Register the class against the value that
+   names it, in the table that carries that value — `register("udp.port",
+   53, DNS)`. Nothing in the layer below changes. If you are adding a
+   protocol *to this library* rather than to your own program, add the
+   wire value to `_enums.py` too (display name in lockstep — a test
+   enforces it) and put the registration in `_defaults.py` alongside
+   the rest. Numbers valid only inside an IPv6 chain go in
+   `ip.proto.v6` rather than `ip.proto`, which is the whole of the
+   gating.
 5. **Add display properties** for anything a human would want rendered
    (`flags_str`-style names, hex strings). Degrade gracefully on
    unknown values — return `"unknown (47)"`, never raise from a
@@ -289,6 +344,10 @@ the same:
    a fixture, and cover: a decode with asserted fields, both round
    trips, truncated input, and (if variable-length) an options case
    and a lying-length case. Export the class from `__init__.py`.
+
+Steps 1–3, 5 and 6 are the same whether the protocol ships here or in
+your own package; only step 4 differs, and only in *where* the
+registration lives.
 
 If you follow the six steps, your protocol automatically composes with
 `Packet`, participates in frame walks, and inherits the library's

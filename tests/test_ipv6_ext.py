@@ -250,21 +250,44 @@ class TestRegistryGating:
             assert IPv6.decode(frame).next_protocol() is cls
 
     def test_dispatch_tables_differ_only_by_the_ipv6_only_numbers(self):
-        """The gating is baked into the tables: the IPv4 table is the
-        IPv6 one minus the extension-header numbers, and nothing else."""
-        from netprotocols.layer3.ip import (
-            _IPV4_PROTOCOL_CLASSES,
-            _IPV6_ONLY_NUMBERS,
-            _IPV6_PROTOCOL_CLASSES,
-            _ip_protocol_class,
+        """The gating is baked into the tables: the v6 table is the
+        base one plus the extension-header numbers, and nothing else.
+
+        Stated over the *built-in* registrations on a clean registry —
+        once third parties can register into ``ip.proto.v6`` directly
+        (#87) the live tables may legitimately differ by more, so the
+        invariant that matters is the one this library ships.
+        """
+        from netprotocols._defaults import IPV6_ONLY_NUMBERS, install
+        from netprotocols.registry import (
+            TABLE_IP_PROTO,
+            TABLE_IP_PROTO_V6,
+            Registry,
         )
 
-        _ip_protocol_class(6, ipv6=False)  # force the lazy build
-        assert _IPV6_PROTOCOL_CLASSES
-        missing = set(_IPV6_PROTOCOL_CLASSES) - set(_IPV4_PROTOCOL_CLASSES)
-        assert missing == set(_IPV6_ONLY_NUMBERS)
-        for number, protocol in _IPV4_PROTOCOL_CLASSES.items():
-            assert _IPV6_PROTOCOL_CLASSES[number] is protocol
+        registry = Registry()
+        install(registry)
+        base = registry.table(TABLE_IP_PROTO)
+        v6 = registry.table(TABLE_IP_PROTO_V6)
+
+        assert base
+        assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
+        for number, protocol in base.items():
+            assert v6[number] is protocol
+
+    def test_the_live_tables_still_gate_the_extension_headers(self):
+        """The invariant above holds on the process-wide registry too,
+        which is the one ``next_protocol()`` actually reads."""
+        from netprotocols._defaults import IPV6_ONLY_NUMBERS
+        from netprotocols.layer3.ip import (
+            _IPV4_PROTOCOL_CLASSES,
+            _IPV6_PROTOCOL_CLASSES,
+        )
+
+        assert _IPV4_PROTOCOL_CLASSES
+        for number in IPV6_ONLY_NUMBERS:
+            assert number not in _IPV4_PROTOCOL_CLASSES
+            assert number in _IPV6_PROTOCOL_CLASSES
 
     def test_extension_headers_chain_among_themselves(self):
         dst_opts = IPv6HopByHopOptions(

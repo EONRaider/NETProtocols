@@ -22,6 +22,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
 from netprotocols.utils.exceptions import TruncatedHeaderError
 
 __all__ = ["GRE"]
@@ -85,8 +86,6 @@ class GRE(Protocol):
         """The class that decodes the encapsulated payload, chosen by
         ``protocol_type`` (an EtherType); ``None`` when it is not one
         this library decodes."""
-        from netprotocols.layer2.ethernet import _ethertype_class
-
         return _ethertype_class(self.protocol_type)
 
     @property
@@ -113,8 +112,6 @@ class GRE(Protocol):
     def protocol_name(self) -> str:
         """Display name of ``protocol_type``, e.g. ``"IPv4"``; falls back
         to the hexadecimal value for EtherTypes unknown to this library."""
-        from netprotocols.layer2.ethernet import _ethertype_name
-
         return _ethertype_name(self.protocol_type)
 
     @property
