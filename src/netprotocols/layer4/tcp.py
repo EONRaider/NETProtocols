@@ -17,6 +17,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
 from netprotocols.layer4._ports import tcp_app_class
+from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -221,13 +222,15 @@ class TCP(Protocol):
     def header_len(self) -> int:
         return self.data_offset * 4
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """The application protocol carried by this segment, chosen by
         well-known port (best-effort — see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
         recognized. DNS over TCP is length-prefixed, so it chains through
         a :class:`~netprotocols.DNSOverTCP` shim."""
-        return tcp_app_class(self.src_port, self.dst_port)
+        return tcp_app_class(self.src_port, self.dst_port, registry)
 
     @property
     def flags_str(self) -> str:

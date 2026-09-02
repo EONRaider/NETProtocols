@@ -24,6 +24,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
 from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
+from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["VLAN"]
@@ -77,8 +78,10 @@ class VLAN(Protocol):
         """The raw Tag Control Information word (PCP | DEI | VID)."""
         return (self.pcp << 13) | (self.dei << 12) | self.vid
 
-    def next_protocol(self) -> type[Protocol] | None:
-        return _ethertype_class(self.ethertype)
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        return _ethertype_class(self.ethertype, registry)
 
     @property
     def ethertype_name(self) -> str:

@@ -8,7 +8,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_mac, mac_to_bytes
 from netprotocols._enums import EtherType
-from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE
+from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE, Registry
 from netprotocols.utils.mac import validate_mac_addr
 
 __all__ = ["Ethernet"]
@@ -20,14 +20,21 @@ __all__ = ["Ethernet"]
 _ETHERTYPE_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_ETHERTYPE)
 
 
-def _ethertype_class(ethertype: int) -> type[Protocol] | None:
+def _ethertype_class(
+    ethertype: int, registry: Registry | None = None
+) -> type[Protocol] | None:
     """The class that decodes the payload of an Ethernet/VLAN header.
 
     VLAN tag types dispatch to :class:`~netprotocols.VLAN`, whose own
     ``next_protocol`` calls back here with the inner EtherType — so
     stacked tags (QinQ) decode as one VLAN layer per tag.
+
+    ``registry`` overrides the process-wide tables; omitting it keeps
+    the lookup a single ``dict.get`` on the hot path.
     """
-    return _ETHERTYPE_CLASSES.get(ethertype)
+    if registry is None:
+        return _ETHERTYPE_CLASSES.get(ethertype)
+    return registry.get(TABLE_ETHERTYPE, ethertype)
 
 
 def _ethertype_name(ethertype: int) -> str:
@@ -78,8 +85,10 @@ class Ethernet(Protocol):
             mac_to_bytes(self.dst), mac_to_bytes(self.src), self.ethertype
         )
 
-    def next_protocol(self) -> type[Protocol] | None:
-        return _ethertype_class(self.ethertype)
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        return _ethertype_class(self.ethertype, registry)
 
     @property
     def ethertype_name(self) -> str:

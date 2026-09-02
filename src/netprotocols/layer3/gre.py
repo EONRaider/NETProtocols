@@ -23,6 +23,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
 from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
+from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import TruncatedHeaderError
 
 __all__ = ["GRE"]
@@ -82,11 +83,13 @@ class GRE(Protocol):
     def header_len(self) -> int:
         return self._struct.size + len(self.fields)
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """The class that decodes the encapsulated payload, chosen by
         ``protocol_type`` (an EtherType); ``None`` when it is not one
         this library decodes."""
-        return _ethertype_class(self.protocol_type)
+        return _ethertype_class(self.protocol_type, registry)
 
     @property
     def checksum_present(self) -> int:

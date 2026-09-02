@@ -6,7 +6,10 @@ from dataclasses import replace
 from typing import Self
 
 from netprotocols._base import Protocol
-from netprotocols.utils.exceptions import InvalidFieldError
+from netprotocols.utils.exceptions import (
+    InvalidFieldError,
+    ProtocolError,
+)
 
 __all__ = ["Packet"]
 
@@ -18,26 +21,40 @@ class Packet:
     >>> bytes(packet)  # ready to be sent through a raw socket
     """
 
-    __slots__ = ("layers",)
+    __slots__ = ("layers", "stopped_by")
 
-    def __init__(self, *layers: Protocol) -> None:
+    def __init__(
+        self, *layers: Protocol, stopped_by: ProtocolError | None = None
+    ) -> None:
         for layer in layers:
             if not isinstance(layer, Protocol):
                 raise InvalidFieldError(
                     f"Cannot build packet: {layer!r} is not a Protocol"
                 )
         self.layers: tuple[Protocol, ...] = layers
+        #: Why the chain walk stopped early, or ``None`` when it ran to
+        #: a clean end. Only :func:`~netprotocols.decode_frame` in lax
+        #: mode ever sets this; a packet you built yourself has nothing
+        #: to report.
+        self.stopped_by: ProtocolError | None = stopped_by
 
     def __bytes__(self) -> bytes:
         return b"".join(bytes(layer) for layer in self.layers)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}{self.layers!r}"
+        name = self.__class__.__name__
+        if self.stopped_by is None:
+            return f"{name}{self.layers!r}"
+        return f"{name}{self.layers!r} stopped_by={self.stopped_by!r}"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Packet):
             return NotImplemented
-        return self.layers == other.layers
+        return (
+            self.layers == other.layers
+            and type(self.stopped_by) is type(other.stopped_by)
+            and str(self.stopped_by) == str(other.stopped_by)
+        )
 
     def __getitem__(self, index: int) -> Protocol:
         return self.layers[index]
@@ -49,6 +66,16 @@ class Packet:
     def payload(self) -> bytes:
         """The serialized form of all layers, outermost first."""
         return bytes(self)
+
+    @property
+    def consumed(self) -> int:
+        """Total bytes these headers occupy on the wire.
+
+        After :func:`~netprotocols.decode_frame`, this is the offset at
+        which the walk stopped — so ``frame[packet.consumed:]`` is
+        whatever the chain did not decode.
+        """
+        return sum(layer.header_len for layer in self.layers)
 
     def with_checksums(self, payload: bytes = b"") -> Self:
         """A copy of this packet with every checksum field computed.
@@ -85,4 +112,4 @@ class Packet:
                 layer = replace(layer, checksum=compute(layer))
             rebuilt.append(layer)
             trailing = bytes(layer) + trailing
-        return type(self)(*reversed(rebuilt))
+        return type(self)(*reversed(rebuilt), stopped_by=self.stopped_by)

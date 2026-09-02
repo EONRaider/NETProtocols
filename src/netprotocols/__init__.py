@@ -46,11 +46,13 @@ from netprotocols.utils.exceptions import (
     InvalidIPv4AddressError,
     InvalidMACAddressError,
     InvalidManufacturerCodeError,
+    MaxDepthExceededError,
     ProtocolError,
     TruncatedHeaderError,
 )
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import random_mac, validate_mac_addr
+from netprotocols.walk import MAX_DEPTH, decode_frame
 
 # Populate the default dispatch registry now that every protocol class
 # above has been imported. This must stay after those imports: the
@@ -66,6 +68,7 @@ __all__ = [
     "DNS",
     "GRE",
     "IGMP",
+    "MAX_DEPTH",
     "TCP",
     "UDP",
     "VLAN",
@@ -91,6 +94,7 @@ __all__ = [
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "MaxDepthExceededError",
     "NDPOption",
     "Packet",
     "Protocol",
@@ -102,6 +106,7 @@ __all__ = [
     "UnknownTableError",
     "__version__",
     "compute",
+    "decode_frame",
     "internet_checksum",
     "random_mac",
     "register",

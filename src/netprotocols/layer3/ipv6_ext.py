@@ -24,6 +24,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
 from netprotocols.layer3.ip import _ip_protocol_class, _ip_protocol_name
+from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -85,8 +86,10 @@ class IPv6Option:
         return self.type >> 6
 
 
-def _next_in_ipv6_chain(number: int) -> type[Protocol] | None:
-    return _ip_protocol_class(number, ipv6=True)
+def _next_in_ipv6_chain(
+    number: int, registry: Registry | None = None
+) -> type[Protocol] | None:
+    return _ip_protocol_class(number, ipv6=True, registry=registry)
 
 
 def _next_header_name(number: int) -> str:
@@ -143,8 +146,10 @@ class _IPv6OptionsHeader(Protocol):
     def header_len(self) -> int:
         return (self.hdr_ext_len + 1) * 8
 
-    def next_protocol(self) -> type[Protocol] | None:
-        return _next_in_ipv6_chain(self.next_header)
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        return _next_in_ipv6_chain(self.next_header, registry)
 
     @property
     def next_header_name(self) -> str:
@@ -270,8 +275,10 @@ class IPv6Routing(Protocol):
     def header_len(self) -> int:
         return (self.hdr_ext_len + 1) * 8
 
-    def next_protocol(self) -> type[Protocol] | None:
-        return _next_in_ipv6_chain(self.next_header)
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        return _next_in_ipv6_chain(self.next_header, registry)
 
     @property
     def next_header_name(self) -> str:
@@ -323,7 +330,9 @@ class IPv6Fragment(Protocol):
             self.identification,
         )
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """See :meth:`Protocol.next_protocol`.
 
         Only the first fragment (``fragment_offset == 0``) starts with
@@ -331,7 +340,7 @@ class IPv6Fragment(Protocol):
         """
         if self.fragment_offset > 0:
             return None
-        return _next_in_ipv6_chain(self.next_header)
+        return _next_in_ipv6_chain(self.next_header, registry)
 
     @property
     def next_header_name(self) -> str:

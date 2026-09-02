@@ -25,22 +25,22 @@ from netprotocols import (
     IPv6,
     Protocol,
     ProtocolError,
+    decode_frame,
 )
 
 CORPUS = corpus_frames()
 
 
 def walk(frame: bytes) -> tuple[list[Protocol], int]:
-    """The documented chain walk; returns (layers, bytes consumed)."""
-    layers: list[Protocol] = []
-    cursor = 0
-    protocol: type[Protocol] | None = Ethernet
-    while protocol is not None:
-        header = protocol.decode(frame[cursor:])
-        layers.append(header)
-        cursor += header.header_len
-        protocol = header.next_protocol()
-    return layers, cursor
+    """The shipped chain walk; returns (layers, bytes consumed).
+
+    A thin adapter over :func:`~netprotocols.decode_frame` so the
+    assertions below keep their shape. The suite no longer carries its
+    own copy of the loop (#88) — if the walker regresses, these tests
+    are what notices.
+    """
+    packet = decode_frame(frame)
+    return list(packet.layers), packet.consumed
 
 
 def corpus_ids() -> list[str]:
