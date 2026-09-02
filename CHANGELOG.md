@@ -108,6 +108,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DNSResourceRecord`. Purely additive — no name changed meaning.
 
 ### Development
+- **Comparative claims are under embargo until the roadmap closes.**
+  `docs/CLAIMS.md` gains a standing rule and a per-claim
+  `COMPARATIVE — HELD` marker: nothing mentioning scapy, dpkt or any
+  other library reaches the README, release notes or package metadata
+  until #107 is finished. The measurements keep being recorded — the
+  register exists to hold evidence, not to publish it — and ship once,
+  together, rather than in pieces that each need defending. The
+  rationale is in the numbers: claim 1.2 went from "2.9x slower than
+  dpkt" to "1.16x faster" inside a single tier.
+- Three differentiators found during Tier 1 are now tracked as claims
+  rather than living in pull-request descriptions: decode depth (1.6 —
+  the corpus walk reaches a deeper layer than dpkt on 27 of 97 frames,
+  reproducible with `scripts/benchmark.py --depth`, which this change
+  adds), the CI throughput gate (1.7), and strict construction on a
+  decode path that pays nothing for it (5.4). The stale "we are ~86% of
+  dpkt" line in "Claims we must not make" is corrected, and a rule
+  added that a superiority claim must name its axis — scapy crafts,
+  sends and covers thousands of protocols, so the codec axes are where
+  the evidence is.
 - **A reproducible decode benchmark, and a CI job that fails on a
   regression.** `scripts/benchmark.py` walks the 97-frame corpus and
   reports frames/sec; `--compare` times `dpkt` and `scapy` on the same
