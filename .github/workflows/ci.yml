@@ -50,28 +50,42 @@ jobs:
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import netprotocols; print(netprotocols.__version__)"
 
-  # Advisory, deliberately: throughput on a shared runner is noisy, and
-  # a threshold picked without runner data would start failing pull
-  # requests that changed nothing. The job measures, compares against
-  # the committed baseline and reports; `continue-on-error` keeps it
-  # from blocking until a maintainer sets a real threshold (#103).
+  # Blocking, at 15% below the committed baseline. The threshold has
+  # runner data behind it: this job's first run measured 3.7% away from
+  # a baseline recorded on entirely different hardware, and run-to-run
+  # spread on one machine is ~2%. 15% is therefore roughly four times
+  # the noise it has to tolerate, which leaves real regressions (Tier 1
+  # moved this number by 30-90% a step) nowhere to hide.
+  #
+  # A failure re-measures once before failing, because a shared runner
+  # can lose a slice of CPU to a neighbour: a genuine regression fails
+  # both attempts, a noisy one usually does not.
   #
   # Pinned to the baseline's interpreter on purpose: normalization
   # cancels how fast the machine is, not which CPython it runs (see the
-  # module docstring in scripts/benchmark.py).
+  # module docstring in scripts/benchmark.py). If a change is a
+  # deliberate trade, re-record with --update-baseline and say why.
   benchmark:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
-      - name: Corpus decode throughput (advisory)
+      - name: Corpus decode throughput
+        shell: bash
         run: |
+          # Keep the benchmark's own exit status: piping the whole thing
+          # into tee would report tee's, and wrapping it in a { } group
+          # would report the trailing echo's -- either way the gate
+          # would pass while the check failed.
+          status=0
+          uv run --frozen --group bench python scripts/benchmark.py \
+            --check --threshold 15 --compare >benchmark.out 2>&1 || status=$?
           {
             echo '```'
-            uv run --frozen --group bench python scripts/benchmark.py \
-              --check --compare
+            cat benchmark.out
             echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          } >>"$GITHUB_STEP_SUMMARY"
+          cat benchmark.out
+          exit "$status"

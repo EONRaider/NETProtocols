@@ -309,7 +309,9 @@ def main() -> int:
         "--check", action="store_true", help="fail on a regression"
     )
     parser.add_argument("--update-baseline", action="store_true")
-    parser.add_argument("--threshold", type=float, default=25.0)
+    # CI passes this explicitly so the gate's number is visible in
+    # ci.yml; the default matches it so a local run gates the same.
+    parser.add_argument("--threshold", type=float, default=15.0)
     parser.add_argument("--json", type=Path, help="write the results here")
     args = parser.parse_args()
 
@@ -358,7 +360,17 @@ def main() -> int:
         BASELINE.write_text(json.dumps(result, indent=2) + "\n")
         print(f"\nBaseline written to {BASELINE.relative_to(REPOSITORY)}")
     if args.check:
-        return check(result, BASELINE, args.threshold)
+        status = check(result, BASELINE, args.threshold)
+        if status != 0:
+            print(
+                "\nRe-measuring once before failing: a shared runner can "
+                "lose a slice of CPU to a neighbour mid-run. A real "
+                "regression fails this second attempt too."
+            )
+            second = measure(frames, repetitions, trials)
+            second["recorded"] = result["recorded"]
+            status = check(second, BASELINE, args.threshold)
+        return status
     return 0
 
 

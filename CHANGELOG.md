@@ -108,21 +108,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DNSResourceRecord`. Purely additive — no name changed meaning.
 
 ### Development
-- **A reproducible decode benchmark, and an advisory CI job that runs
-  it.** `scripts/benchmark.py` walks the 97-frame corpus and reports
-  frames/sec; `--compare` times `dpkt` and `scapy` on the same frames
-  (both dev-only extras in a new `bench` dependency group — the package
-  still has zero runtime dependencies). Because absolute throughput is
-  a property of the machine, every run also times a fixed calibration
-  workload and reports a normalized figure, which is what `--check`
-  compares against `benchmarks/baseline.json`. The CI job is
-  deliberately **advisory** (`continue-on-error`): a threshold chosen
-  without runner data would fail unrelated pull requests, so the job
-  measures and reports until a maintainer sets one. Comparison output
-  carries its own caveats — notably that the libraries are not asked
-  for identical work, since dpkt leaves the DNS-over-TCP payload as raw
-  bytes where this library decodes it — because a benchmark nobody can
-  check is the problem #86 set out to fix, not the goal.
+- **A reproducible decode benchmark, and a CI job that fails on a
+  regression.** `scripts/benchmark.py` walks the 97-frame corpus and
+  reports frames/sec; `--compare` times `dpkt` and `scapy` on the same
+  frames (both dev-only extras in a new `bench` dependency group — the
+  package still has zero runtime dependencies). Because absolute
+  throughput is a property of the machine, every run also times a fixed
+  calibration workload and reports a normalized figure, which is what
+  `--check` compares against `benchmarks/baseline.json`. **The CI job
+  blocks at 15% below the baseline**: measured, that is about four
+  times the noise it must tolerate — the job's first run landed 3.7%
+  from a baseline recorded on entirely different hardware, and
+  run-to-run spread on one machine is ~2%, while the Tier 1 changes
+  moved the number by 30-90% each. A failing check re-measures once
+  before failing, so a runner that loses CPU to a neighbour does not
+  block an unrelated pull request. Comparison output carries its own
+  caveats — notably that the libraries are not asked for identical
+  work, since dpkt leaves the DNS-over-TCP payload as raw bytes where
+  this library decodes it — because a benchmark nobody can check is the
+  problem #86 set out to fix, not the goal.
 - `tests/test_version.py` holds `netprotocols.__version__` against the
   version in `pyproject.toml`. The two were kept in step by hand and
   nothing checked them, so a bump that missed one would ship a package

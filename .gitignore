@@ -147,3 +147,6 @@ amass.log
 
 # Application-specific
 .logs/tests/fixtures/staging/
+
+# Written by the benchmark CI step (scripts/benchmark.py output)
+benchmark.out
