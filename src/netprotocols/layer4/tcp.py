@@ -16,6 +16,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols.layer4._ports import tcp_app_class
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -226,8 +227,6 @@ class TCP(Protocol):
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
         recognized. DNS over TCP is length-prefixed, so it chains through
         a :class:`~netprotocols.DNSOverTCP` shim."""
-        from netprotocols.layer4._ports import tcp_app_class
-
         return tcp_app_class(self.src_port, self.dst_port)
 
     @property

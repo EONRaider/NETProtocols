@@ -7,7 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A public protocol registry: third parties can now extend the decode
+  walk without editing library source.** Dispatch was four hardcoded
+  functions with dict literals inside them and no hook of any kind — a
+  protocol this library does not implement (MPLS, VXLAN, a proprietary
+  telemetry header) could only be added by forking. It is now five named
+  tables owned by `netprotocols.registry`, and registering against one
+  is all it takes:
+
+  ```python
+  from netprotocols.registry import register
+
+  @register("ethertype", 0x8847)
+  class MPLS(Protocol):
+      ...
+
+  register("ip.proto", 132, SCTP)   # for a class you did not write
+  ```
+
+  The tables are `ethertype`, `ip.proto`, `ip.proto.v6`, `udp.port` and
+  `tcp.port`, each named after the wire field it dispatches on.
+  `ip.proto.v6` **inherits** `ip.proto`, which is how the IPv6-only
+  gating generalises: the four extension headers are registered in the
+  v6 table alone, so an IPv4 packet with `protocol=0` still cannot
+  conjure a Hop-by-Hop layer — and because inheritance is resolved at
+  registration rather than at lookup, the gating costs nothing on the
+  hot path. Dispatch behaviour is unchanged entry for entry.
+
+  Registrations land in the process-wide `DEFAULT` registry;
+  `Registry.from_defaults()` gives an isolated one for embedding or test
+  isolation, and `Registry.derive()` makes a copy-on-write child.
+  Registering over an existing key raises `RegistryConflictError` unless
+  `override=True` is passed, so two packages claiming the same port
+  cannot silently resolve by import order; re-registering the *same*
+  class to the same key is a no-op, since a decorator re-runs whenever
+  its module does.
+
+  New public names: `Registry`, `register`, `register_all`, `DEFAULT`,
+  `RegistryConflictError`, `UnknownTableError`.
+
 ### Changed
+- **Port-based dispatch is a table lookup rather than a rebuild.**
+  `udp_app_class` and `tcp_app_class` re-ran their deferred imports and
+  rebuilt a `dict` literal on every call — they were outside the scope
+  of the earlier dispatch-hoisting work, which named only the EtherType
+  and IP-protocol functions. Both now read the registry's flat tables:
+  `udp.port` 303.1 → 46.0 ns (6.6x), `tcp.port` 186.8 → 45.1 ns (4.1x),
+  measured old and new shapes in one process. `ethertype` loses its
+  lazy-build guard (51.8 → 47.7 ns) and `ip.proto` is unchanged, having
+  already been a table. Corpus throughput moves about 1% — only 28 of
+  the 97 corpus frames reach a transport header and therefore do a port
+  dispatch at all — which is below this machine's run-to-run noise; the
+  per-call figures above are the measurement that resolves.
+- **The layer modules no longer import each other's classes.** The
+  built-in decoder map moved into `_defaults.py`, which registers it
+  once from `__init__.py` after every protocol class exists, so the
+  function-body imports that kept the module graph acyclic are gone
+  from `vlan.py`, `gre.py`, `tcp.py`, `udp.py` and `ipv6_ext.py`; those
+  dispatch helpers are now ordinary module-level imports. The tables
+  are built at package import instead of on first dispatch, so the
+  lazy-build branch is off the hot path entirely.
 - **DNS section parsing happens once, and no longer re-serializes the
   message to read it.** Six helpers called `bytes(self)` — a full
   re-serialization of the whole message — so a single `.answers` access

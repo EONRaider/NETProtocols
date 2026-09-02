@@ -458,6 +458,81 @@ The pairing is the point, and it is ours to lose: strictness usually
 costs throughput, and here it costs none. Stated without a competitor
 it needs no embargo.
 
+### 5.5 "Extend the decode walk without forking the library"
+**Status: VERIFIED** (#87)
+
+Any protocol this library does not implement can be registered against
+the wire value that names it, and then participates in frame walks like
+a built-in:
+
+```python
+from netprotocols import Protocol
+from netprotocols.registry import register
+
+@register("ethertype", 0x8847)
+class MPLS(Protocol):
+    ...
+```
+
+Five tables — `ethertype`, `ip.proto`, `ip.proto.v6`, `udp.port`,
+`tcp.port` — each named after the field it dispatches on. The registry
+*is* the dispatch mechanism, not a hook bolted onto hardcoded
+functions: the built-in decoders go in through the same public
+`register()` a third party calls (`src/netprotocols/_defaults.py`), so
+there is no privileged path and nothing to fall out of sync.
+
+Reproduce: `uv run pytest tests/test_registry.py` — 39 tests covering
+registration, conflict handling, table inheritance and isolation from
+the process-wide default.
+
+Three properties worth stating alongside it, because they are what
+make the extension point safe rather than merely present:
+
+- **Conflicts are loud.** Registering over an occupied key raises
+  `RegistryConflictError` naming the incumbent class, unless
+  `override=True` is passed. Two packages claiming the same port cannot
+  silently resolve by import order.
+- **Isolation is available.** `Registry.from_defaults()` gives a
+  registry whose registrations never reach the rest of the process —
+  the case that matters for anyone embedding this library rather than
+  writing an application.
+- **The IPv6 gating generalised rather than being special-cased.**
+  `ip.proto.v6` inherits `ip.proto`, so the extension headers stay
+  unreachable from IPv4 by virtue of which table they live in, and the
+  guarantee survives third-party registration.
+
+**Not yet claimable, and deliberately so:** whether competitors offer
+an equivalent. scapy's `bind_layers` and dpkt's per-module dicts both
+exist and neither has been audited for what it actually guarantees, so
+no comparative form of this claim is written here. See the embargo in
+the Rules and #124.
+
+### 5.6 "Port dispatch is a table lookup"
+**Status: VERIFIED** (#87)
+
+Measured old and new shapes in a single process, so machine speed
+cancels:
+
+| Table | Before | After | |
+|---|---|---|---|
+| `udp.port` | 303.1 ns | 46.0 ns | **6.6×** |
+| `tcp.port` | 186.8 ns | 45.1 ns | **4.1×** |
+| `ethertype` | 51.8 ns | 47.7 ns | 1.1× |
+| `ip.proto` | 58.1 ns | 57.9 ns | unchanged |
+
+The two port functions re-ran their deferred imports and rebuilt a
+`dict` literal on every call; they were outside the scope of #82, which
+named only the EtherType and IP-protocol functions. `ip.proto` was
+already a table and did not move.
+
+**State the per-call figures, not a corpus figure.** Corpus throughput
+moves about 1%, because only 28 of the 97 corpus frames reach a
+transport header and therefore do a port dispatch at all — and 1% is
+below this machine's run-to-run noise, which spans roughly ±10% between
+consecutive runs. Two interleaved A/B sets disagreed on the sign. The
+per-call measurement is the one that resolves; quoting a corpus number
+here would be quoting noise.
+
 ---
 
 ## 6. Claims we must not make

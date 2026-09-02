@@ -23,6 +23,11 @@ from netprotocols._base import (
     ipv6_to_bytes,
 )
 from netprotocols._enums import IPProtocol
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_IP_PROTO,
+    TABLE_IP_PROTO_V6,
+)
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -32,79 +37,31 @@ from netprotocols.utils.ipv4 import validate_ipv4_addr
 __all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 
-#: Numbers that only make sense inside an IPv6 chain (RFC 8200 §4.1):
-#: extension headers follow the IPv6 fixed header or one another, never
-#: an IPv4 header.
-_IPV6_ONLY_NUMBERS = frozenset(
-    {
-        IPProtocol.HOPOPT,
-        IPProtocol.IPV6_ROUTE,
-        IPProtocol.IPV6_FRAG,
-        IPProtocol.IPV6_DSTOPTS,
-    }
+#: The flat ``ip.proto`` and ``ip.proto.v6`` dispatch tables of the
+#: default registry, bound once at import. The v6 table inherits the
+#: other and adds the four extension headers, so the IPv6-only gating
+#: is the table's shape rather than a test on the hot path: an IPv4
+#: packet with ``protocol=0`` cannot conjure a Hop-by-Hop layer because
+#: the table it reads has no entry for 0. Registering mutates these
+#: dicts in place, so the references stay live — see
+#: :mod:`netprotocols.registry`.
+_IPV4_PROTOCOL_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(
+    TABLE_IP_PROTO
 )
-
-
-#: Payload dispatch tables, populated on first use. The imports they
-#: need must stay deferred to keep the layer modules acyclic (see
-#: ARCHITECTURE.md), so the tables are built once on the first call
-#: rather than at import time — every later call is a dict lookup.
-#:
-#: The IPv4 table simply omits the IPv6-only numbers, so the chain
-#: gating is baked into the table instead of being re-tested per call.
-_IPV6_PROTOCOL_CLASSES: dict[int, type[Protocol]] = {}
-_IPV4_PROTOCOL_CLASSES: dict[int, type[Protocol]] = {}
-
-
-def _build_ip_protocol_classes() -> None:
-    """Populate the dispatch tables (called once, on first use)."""
-    from netprotocols.layer3.gre import GRE
-    from netprotocols.layer3.icmp import ICMPv4, ICMPv6
-    from netprotocols.layer3.igmp import IGMP
-    from netprotocols.layer3.ipv6_ext import (
-        IPv6DestinationOptions,
-        IPv6Fragment,
-        IPv6HopByHopOptions,
-        IPv6Routing,
-    )
-    from netprotocols.layer4.tcp import TCP
-    from netprotocols.layer4.udp import UDP
-
-    _IPV6_PROTOCOL_CLASSES.update(
-        {
-            IPProtocol.HOPOPT: IPv6HopByHopOptions,
-            IPProtocol.ICMP: ICMPv4,
-            IPProtocol.IGMP: IGMP,
-            IPProtocol.GRE: GRE,
-            IPProtocol.IPV6_ROUTE: IPv6Routing,
-            IPProtocol.IPV6_FRAG: IPv6Fragment,
-            IPProtocol.IPV6_ICMP: ICMPv6,
-            IPProtocol.IPV6_DSTOPTS: IPv6DestinationOptions,
-            IPProtocol.TCP: TCP,
-            IPProtocol.UDP: UDP,
-        }
-    )
-    _IPV4_PROTOCOL_CLASSES.update(
-        {
-            number: protocol
-            for number, protocol in _IPV6_PROTOCOL_CLASSES.items()
-            if number not in _IPV6_ONLY_NUMBERS
-        }
-    )
+_IPV6_PROTOCOL_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(
+    TABLE_IP_PROTO_V6
+)
 
 
 def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
     """Map an IP protocol number to the class that decodes its payload.
 
     The number space is shared between IPv4 ``protocol`` and IPv6
-    ``next_header`` (the values are disjoint), so both classes dispatch
-    through this single registry — but the IPv6 extension headers are
-    handed out only when the caller is part of an IPv6 chain
-    (``ipv6=True``): a garbage IPv4 packet with ``protocol=0`` must not
-    decode a Hop-by-Hop layer.
+    ``next_header`` (the values are disjoint), so the two dispatch
+    through tables that share their entries — but the IPv6 extension
+    headers live in the v6 table alone and are handed out only when the
+    caller is part of an IPv6 chain (``ipv6=True``).
     """
-    if not _IPV6_PROTOCOL_CLASSES:
-        _build_ip_protocol_classes()
     table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES
     return table.get(number)
 

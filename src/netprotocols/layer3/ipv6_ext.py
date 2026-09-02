@@ -23,6 +23,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols.layer3.ip import _ip_protocol_class, _ip_protocol_name
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -85,14 +86,10 @@ class IPv6Option:
 
 
 def _next_in_ipv6_chain(number: int) -> type[Protocol] | None:
-    from netprotocols.layer3.ip import _ip_protocol_class
-
     return _ip_protocol_class(number, ipv6=True)
 
 
 def _next_header_name(number: int) -> str:
-    from netprotocols.layer3.ip import _ip_protocol_name
-
     return _ip_protocol_name(number)
 
 

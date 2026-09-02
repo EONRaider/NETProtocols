@@ -23,6 +23,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["VLAN"]
@@ -77,13 +78,9 @@ class VLAN(Protocol):
         return (self.pcp << 13) | (self.dei << 12) | self.vid
 
     def next_protocol(self) -> type[Protocol] | None:
-        from netprotocols.layer2.ethernet import _ethertype_class
-
         return _ethertype_class(self.ethertype)
 
     @property
     def ethertype_name(self) -> str:
         """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``."""
-        from netprotocols.layer2.ethernet import _ethertype_name
-
         return _ethertype_name(self.ethertype)
