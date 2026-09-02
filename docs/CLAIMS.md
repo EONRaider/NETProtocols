@@ -533,6 +533,59 @@ consecutive runs. Two interleaved A/B sets disagreed on the sign. The
 per-call measurement is the one that resolves; quoting a corpus number
 here would be quoting noise.
 
+### 5.7 "The chain walker ships with the library"
+**Status: VERIFIED** (#88)
+
+`decode_frame(frame)` returns a `Packet` of every decoded layer. Before
+this, the README taught a hand-rolled loop, ARCHITECTURE.md showed it
+again, and the test suite carried a private copy — the most-used
+function in the library was the one it did not ship.
+
+Reproduce: `uv run pytest tests/test_walk.py` — 79 tests, including one
+that walks the corpus with a hand-rolled loop and asserts the shipped
+walker agrees layer for layer, which is what made retiring the copies
+safe.
+
+Four properties are the actual claim, since a walker by itself is
+eight lines:
+
+- **Bounded depth.** `max_depth` (default 32) raises
+  `MaxDepthExceededError`. Chains already terminated — every header
+  validates its own declared length — so this bounds *cost*, not
+  correctness: a crafted frame cannot turn one walk into thousands of
+  decodes. Corpus maximum is 5 layers.
+- **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
+  buffers that begin mid-stack. gopacket has this; scapy and dpkt make
+  you name the class and hand-roll the rest.
+- **Partial success is reported, not guessed at.** `lax=True` returns
+  the layers that decoded plus `packet.stopped_by`. Not a lenient
+  parser — every returned layer met the ordinary strict rules.
+- **Per-call decoder overrides.** `decode_as={"udp.port": {6969: DNS}}`
+  without touching global state, built on #87's `Registry.derive()`.
+
+**Comparative forms are held.** dpkt's and scapy's equivalents have not
+been audited here, and the interesting comparison — what each does with
+a *malformed* frame — is a behavioural claim needing evidence, not a
+feature-table tick. See the embargo in the Rules.
+
+### 5.8 "memoryview walking, measured rather than assumed"
+**Status: VERIFIED** (#88)
+
+The roadmap proposed walking with `memoryview` internally. Measured on
+the corpus, that is **0.95x** — 5% *slower* — because for one small
+frame the view costs more to build than the copy it saves.
+
+So the walker slices whatever it is handed and never converts: `bytes`
+stays fastest for a single frame, and a `memoryview` over a large
+contiguous capture buffer keeps slices zero-copy, which is the case
+#100 measured at 1.8x. Byte-exact round-tripping through a
+`memoryview` is asserted over the corpus.
+
+This one is worth stating publicly *as a process claim*: the obvious
+optimisation was proposed, measured, and rejected on its own numbers,
+and both the number and its reproduction are written down. Rule 1 with
+teeth.
+
 ---
 
 ## 6. Claims we must not make

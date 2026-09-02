@@ -43,9 +43,12 @@ import socket
 from abc import ABC, abstractmethod
 from struct import Struct
 from struct import error as StructError
-from typing import Any, ClassVar, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from netprotocols.utils.exceptions import TruncatedHeaderError
+
+if TYPE_CHECKING:
+    from netprotocols.registry import Registry
 
 __all__ = [
     "Protocol",
@@ -140,11 +143,20 @@ class Protocol(ABC):
         """
         return self._struct.size
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """The class that decodes this header's payload, if known.
 
         ``None`` means the chain ends here: either the protocol never
         encapsulates another (ARP, UDP), or the encapsulated protocol
         is not implemented by this library.
+
+        ``registry`` selects the dispatch tables to resolve against.
+        Omitting it — the overwhelmingly common case — reads the
+        process-wide default directly, which is why this stays a single
+        dict lookup. :func:`~netprotocols.decode_frame` passes an
+        explicit registry when a caller asked for one, so a per-call
+        decoder override never has to mutate global state.
         """
         return None

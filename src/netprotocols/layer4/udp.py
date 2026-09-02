@@ -8,6 +8,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
 from netprotocols.layer4._ports import udp_app_class
+from netprotocols.registry import Registry
 
 __all__ = ["UDP"]
 
@@ -45,12 +46,14 @@ class UDP(Protocol):
             self.src_port, self.dst_port, self.length, self.checksum
         )
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """The application protocol carried by this datagram, chosen by
         well-known port (best-effort — see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port
         is recognized."""
-        return udp_app_class(self.src_port, self.dst_port)
+        return udp_app_class(self.src_port, self.dst_port, registry)
 
     @property
     def checksum_hex_str(self) -> str:

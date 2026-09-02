@@ -59,22 +59,28 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Decoding a captured frame
 
-Each class decodes its own header from the start of a buffer and
-tolerates trailing bytes, so you can walk a whole frame with two pieces
-of information every header provides: `header_len` (how many bytes it
-consumed) and `next_protocol()` (which class decodes what follows).
+`decode_frame()` walks the whole chain and hands back a `Packet`:
 
 ```python
-from netprotocols import Ethernet
+from netprotocols import decode_frame
 
-def decode_frame(frame: bytes) -> list:
-    layers, cursor, protocol = [], 0, Ethernet
-    while protocol is not None:
-        header = protocol.decode(frame[cursor:])
-        layers.append(header)
-        cursor += header.header_len
-        protocol = header.next_protocol()
-    return layers  # e.g. [Ethernet(...), IPv4(...), TCP(...)]
+packet = decode_frame(frame)
+print(packet)              # Packet(Ethernet(...), IPv4(...), TCP(...))
+print(packet[1].src)       # '192.168.1.96'
+print(packet.consumed)     # bytes the headers occupied
+```
+
+It works because every header answers two questions: `header_len` (how
+many bytes it consumed) and `next_protocol()` (which class decodes what
+follows). Trailing bytes are fine — `frame[packet.consumed:]` is
+whatever the chain did not decode.
+
+Start somewhere other than Ethernet when the buffer does — a tunnel
+payload, a packet quoted inside an ICMP error, a non-Ethernet link
+type:
+
+```python
+decode_frame(buf, start=IPv4)
 ```
 
 Malformed input raises exceptions rooted at a single base class:
@@ -83,7 +89,7 @@ Malformed input raises exceptions rooted at a single base class:
 from netprotocols import ProtocolError, TruncatedHeaderError, InvalidFieldError
 
 try:
-    layers = decode_frame(frame)
+    packet = decode_frame(frame)
 except TruncatedHeaderError:   # buffer shorter than the header claims
     ...
 except InvalidFieldError:      # nonsense field values (IHL < 5, bad address)
@@ -91,6 +97,46 @@ except InvalidFieldError:      # nonsense field values (IHL < 5, bad address)
 except ProtocolError:          # catches every library error
     ...
 ```
+
+A capture tool would usually rather keep the layers it got than lose
+frame 4,000,001 to an exception. `lax=True` reports instead of raising:
+
+```python
+packet = decode_frame(frame, lax=True)
+if packet.stopped_by is not None:
+    log.warning("stopped after %d layers: %s", len(packet), packet.stopped_by)
+```
+
+Lax mode never invents a layer and never guesses — each header is
+decoded exactly as strictly as before; the walk just declines to throw
+away the part that worked. Chain depth is bounded (`max_depth`,
+default 32), so a crafted frame cannot make the walker grind.
+
+## Decoding a protocol we do not ship
+
+The dispatch tables are public, so a protocol this library does not
+implement can join the walk without forking it:
+
+```python
+from netprotocols import Protocol
+from netprotocols.registry import register
+
+@register("ethertype", 0x8847)
+class MPLS(Protocol):
+    ...
+```
+
+The five tables are `ethertype`, `ip.proto`, `ip.proto.v6`, `udp.port`
+and `tcp.port`, each named after the wire field it dispatches on. To
+change decoding for one call only — DNS on a nonstandard port in one
+capture — say so per call instead of registering globally:
+
+```python
+decode_frame(frame, decode_as={"udp.port": {6969: DNS}})
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the tables fit together
+and how `ip.proto.v6` inherits `ip.proto`.
 
 ## Building and serializing headers
 

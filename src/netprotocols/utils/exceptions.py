@@ -9,6 +9,7 @@ __all__ = [
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "MaxDepthExceededError",
     "ProtocolError",
     "TruncatedHeaderError",
 ]
@@ -46,3 +47,14 @@ class InvalidIPv4AddressError(InvalidFieldError):
 
 class InvalidManufacturerCodeError(InvalidFieldError):
     """A string does not represent a valid OUI manufacturer prefix."""
+
+
+class MaxDepthExceededError(ProtocolError):
+    """A frame's header chain is longer than the walker was allowed.
+
+    Raised by :func:`~netprotocols.decode_frame` rather than by any
+    single decoder: every header validates its own length, so a chain
+    always terminates, but a crafted frame can nest far enough to waste
+    a capture tool's time. The bound turns that from a long walk into an
+    immediate, named error.
+    """

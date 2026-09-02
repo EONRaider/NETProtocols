@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`decode_frame()`: the chain walker ships with the library.** The
+  README taught a hand-rolled eight-line loop, ARCHITECTURE.md showed
+  it again, and the test suite kept its own copy — so the library's
+  most-used function was the one function it did not provide. It does
+  now, with the parts a copy-pasted loop never has:
+
+  ```python
+  from netprotocols import decode_frame
+
+  packet = decode_frame(frame)     # Packet(Ethernet(...), IPv4(...), TCP(...))
+  frame[packet.consumed:]          # whatever the chain did not decode
+  ```
+
+  - **An explicit starting layer.** `decode_frame(buf, start=IPv4)`
+    walks a buffer that begins mid-stack — a tunnel payload, a packet
+    quoted inside an ICMP error, a non-Ethernet link type. There was
+    previously no way to ask for this.
+  - **Bounded depth.** `max_depth` (default 32) caps the chain and
+    raises the new `MaxDepthExceededError`, rooted at `ProtocolError`
+    like everything else. Every header already validated its own
+    length, so a chain always terminated; the bound turns a crafted
+    frame's very long walk into an immediate named error. The deepest
+    chain in the 97-frame corpus is 5.
+  - **A lax mode that reports instead of raising.** `lax=True` ends the
+    walk on a `ProtocolError` and returns the layers decoded so far,
+    with the reason on `packet.stopped_by` — what a capture tool needs
+    when frame 4,000,001 is malformed. It relaxes the *walk*, never a
+    decoder: every layer returned was decoded under the ordinary strict
+    rules.
+  - **Per-call decoder overrides.** `decode_as={"udp.port": {6969: DNS}}`
+    reads DNS on a nonstandard port for one call, without touching
+    global state; `registry=` takes a prepared registry for bulk work.
+
+  `Packet` gains `stopped_by` (why a walk ended early, `None` for a
+  packet you built) and `consumed` (the bytes its headers occupy).
+  Both default to the constructed-packet values, so `Packet(eth, ip)`
+  is unchanged.
+
+  On `memoryview`: the walker slices what it is given and does not
+  convert. Measured on the corpus, wrapping each frame in a
+  `memoryview` runs at **0.95x** the plain-`bytes` walk — for one small
+  frame the view costs more to build than the copy it saves — while a
+  `memoryview` over a large capture buffer keeps slices zero-copy.
+  Converting internally would have been worse than either.
+
 - **A public protocol registry: third parties can now extend the decode
   walk without editing library source.** Dispatch was four hardcoded
   functions with dict literals inside them and no hook of any kind — a
@@ -48,6 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RegistryConflictError`, `UnknownTableError`.
 
 ### Changed
+- **`next_protocol()` accepts an optional registry.** Threading a
+  per-call registry through the walk needs the dispatch to be
+  redirectable, and `next_protocol()` read the process-wide tables
+  directly. It now takes `registry=None`, passed to the same dispatch
+  helpers as before, so no table knowledge is duplicated and the
+  default path stays a single `dict.get`. Measured in one process, the
+  optional parameter costs **+2.1 ns** per dispatch — roughly 0.1% of a
+  frame decode. Every existing zero-argument call is unaffected.
 - **Port-based dispatch is a table lookup rather than a rebuild.**
   `udp_app_class` and `tcp_app_class` re-ran their deferred imports and
   rebuilt a `dict` literal on every call — they were outside the scope

@@ -154,16 +154,34 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP — no
 collisions).
 
-A complete frame walk is a five-line loop:
+A complete frame walk is a five-line loop — which is exactly why it
+ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
+something every caller retypes:
 
 ```python
-layers, cursor, protocol = [], 0, Ethernet
+packet = decode_frame(frame)          # Packet(Ethernet(...), IPv4(...), TCP(...))
+```
+
+Underneath it is the loop the two answers imply:
+
+```python
+layers, cursor, protocol = [], 0, start
 while protocol is not None:
     header = protocol.decode(frame[cursor:])
     layers.append(header)
     cursor += header.header_len
-    protocol = header.next_protocol()
+    protocol = header.next_protocol(registry)
 ```
+
+The shipped version adds what a copy-pasted loop never has: a bounded
+depth (`max_depth`, so a crafted frame cannot make the walk grind), an
+explicit `start=` layer for buffers that begin mid-stack, a `lax=True`
+mode that reports partial success on `packet.stopped_by` instead of
+raising, and the `registry`/`decode_as` hook above. The walk slices
+whatever it is handed and never converts: `bytes` stays fastest for one
+frame, a `memoryview` over a big capture buffer stays zero-copy.
+Wrapping each frame in a `memoryview` internally measured *slower*
+(0.95x on the corpus), so the walker does not.
 
 **Where do those arrows live?** Not in the protocol classes. Every
 one of them is a row in a dispatch table owned by
@@ -281,6 +299,7 @@ src/netprotocols/
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
+├── walk.py         decode_frame(): the shipped chain walker
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums()
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify

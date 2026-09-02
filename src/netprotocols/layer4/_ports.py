@@ -19,7 +19,12 @@ DNS message, keeping the chain walk uniform.
 from __future__ import annotations
 
 from netprotocols._base import Protocol
-from netprotocols.registry import DEFAULT, TABLE_TCP_PORT, TABLE_UDP_PORT
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_TCP_PORT,
+    TABLE_UDP_PORT,
+    Registry,
+)
 
 __all__ = ["tcp_app_class", "udp_app_class"]
 
@@ -32,16 +37,22 @@ _UDP_APP_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_UDP_PORT)
 _TCP_APP_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_TCP_PORT)
 
 
-def udp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
+def udp_app_class(
+    src_port: int, dst_port: int, registry: Registry | None = None
+) -> type[Protocol] | None:
     """The class that decodes a UDP payload, chosen by well-known port.
 
     Returns ``None`` when neither port names a known application
     protocol — the common case, where the chain ends at UDP.
     """
-    return _UDP_APP_CLASSES.get(dst_port) or _UDP_APP_CLASSES.get(src_port)
+    if registry is None:
+        return _UDP_APP_CLASSES.get(dst_port) or _UDP_APP_CLASSES.get(src_port)
+    return registry.get_port(TABLE_UDP_PORT, src_port, dst_port)
 
 
-def tcp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
+def tcp_app_class(
+    src_port: int, dst_port: int, registry: Registry | None = None
+) -> type[Protocol] | None:
     """The class that decodes a TCP payload, chosen by well-known port.
 
     DNS over TCP is length-prefixed (RFC 1035 §4.2.2), so port 53 names
@@ -50,4 +61,6 @@ def tcp_app_class(src_port: int, dst_port: int) -> type[Protocol] | None:
     known application protocol (the common case, where the chain ends at
     TCP).
     """
-    return _TCP_APP_CLASSES.get(dst_port) or _TCP_APP_CLASSES.get(src_port)
+    if registry is None:
+        return _TCP_APP_CLASSES.get(dst_port) or _TCP_APP_CLASSES.get(src_port)
+    return registry.get_port(TABLE_TCP_PORT, src_port, dst_port)

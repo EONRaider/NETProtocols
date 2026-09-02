@@ -27,6 +27,7 @@ from netprotocols.registry import (
     DEFAULT,
     TABLE_IP_PROTO,
     TABLE_IP_PROTO_V6,
+    Registry,
 )
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -53,7 +54,9 @@ _IPV6_PROTOCOL_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(
 )
 
 
-def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
+def _ip_protocol_class(
+    number: int, *, ipv6: bool, registry: Registry | None = None
+) -> type[Protocol] | None:
     """Map an IP protocol number to the class that decodes its payload.
 
     The number space is shared between IPv4 ``protocol`` and IPv6
@@ -62,8 +65,11 @@ def _ip_protocol_class(number: int, *, ipv6: bool) -> type[Protocol] | None:
     headers live in the v6 table alone and are handed out only when the
     caller is part of an IPv6 chain (``ipv6=True``).
     """
-    table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES
-    return table.get(number)
+    if registry is None:
+        table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES
+        return table.get(number)
+    name = TABLE_IP_PROTO_V6 if ipv6 else TABLE_IP_PROTO
+    return registry.get(name, number)
 
 
 def _ip_protocol_name(number: int) -> str:
@@ -240,7 +246,9 @@ class IPv4(Protocol):
     def header_len(self) -> int:
         return self.ihl * 4
 
-    def next_protocol(self) -> type[Protocol] | None:
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
         """See :meth:`Protocol.next_protocol`.
 
         A non-first fragment (``fragment_offset > 0``) carries a slice
@@ -249,7 +257,7 @@ class IPv4(Protocol):
         """
         if self.fragment_offset > 0:
             return None
-        return _ip_protocol_class(self.protocol, ipv6=False)
+        return _ip_protocol_class(self.protocol, ipv6=False, registry=registry)
 
     @property
     def protocol_name(self) -> str:
@@ -382,8 +390,12 @@ class IPv6(Protocol):
             ipv6_to_bytes(self.dst),
         )
 
-    def next_protocol(self) -> type[Protocol] | None:
-        return _ip_protocol_class(self.next_header, ipv6=True)
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        return _ip_protocol_class(
+            self.next_header, ipv6=True, registry=registry
+        )
 
     @property
     def next_header_name(self) -> str:

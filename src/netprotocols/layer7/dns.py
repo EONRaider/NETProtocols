@@ -19,6 +19,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
+from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["DNS", "DNSOverTCP", "DNSResourceRecord"]
@@ -467,6 +468,13 @@ class DNSOverTCP(Protocol):
     def __bytes__(self) -> bytes:
         return self._struct.pack(self.message_length)
 
-    def next_protocol(self) -> type[Protocol] | None:
-        """The DNS message this length prefix frames."""
+    def next_protocol(
+        self, registry: Registry | None = None
+    ) -> type[Protocol] | None:
+        """The DNS message this length prefix frames.
+
+        A length shim has no wire field to dispatch on — it always
+        frames a DNS message — so ``registry`` is accepted for
+        signature compatibility and has nothing to select.
+        """
         return DNS

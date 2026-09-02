@@ -15,6 +15,7 @@ from netprotocols import (
     IPv6,
     ProtocolError,
     TruncatedHeaderError,
+    decode_frame,
 )
 
 
@@ -79,15 +80,9 @@ class TestChainWalk:
         """Walking a real frame: each layer's next_protocol() and
         header_len drive the cursor, exactly as a capture tool would."""
         frame = raw_eth_header + raw_arp_header
-        layers = []
-        cursor, protocol = 0, Ethernet
-        while protocol is not None:
-            header = protocol.decode(frame[cursor:])
-            layers.append(header)
-            cursor += header.header_len
-            protocol = header.next_protocol()
-        assert [type(layer) for layer in layers] == [Ethernet, ARP]
-        assert cursor == len(frame)
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, ARP]
+        assert packet.consumed == len(frame)
 
     def test_ipv4_dispatches_icmpv4_and_ipv6_dispatches_icmpv6(
         self, raw_ipv4_header, raw_ipv6_header
