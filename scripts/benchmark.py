@@ -263,6 +263,70 @@ def _comparison_caveats() -> list[str]:
     ]
 
 
+def _netprotocols_chain(frame: bytes) -> list[str]:
+    cursor, names = 0, []
+    protocol: type[Protocol] | None = Ethernet
+    while protocol is not None:
+        header = protocol.decode(frame[cursor:])
+        cursor += header.header_len
+        names.append(type(header).__name__)
+        protocol = header.next_protocol()
+    return names
+
+
+def _dpkt_chain(frame: bytes) -> list[str]:
+    import dpkt
+
+    layer: Any = dpkt.ethernet.Ethernet(frame)
+    names = []
+    while True:
+        names.append(type(layer).__name__)
+        payload = getattr(layer, "data", None)
+        if payload is None or isinstance(payload, (bytes, bytearray)):
+            if payload:
+                names.append(f"<{len(payload)} raw bytes>")
+            return names
+        layer = payload
+
+
+def depth_report(frames: list[bytes]) -> list[str]:
+    """Where the libraries stop, frame by frame.
+
+    Throughput means little without this: a decoder that gives up
+    earlier has less to do. This reports where each library stops on
+    the same bytes, so a speed comparison can be read next to the work
+    each one actually performed.
+    """
+    lines = ["", "Decode depth on the same frames:", ""]
+    deeper, same, example = 0, 0, ""
+    for frame in frames:
+        try:
+            ours = _netprotocols_chain(frame)
+        except ProtocolError:
+            continue
+        try:
+            theirs = _dpkt_chain(frame)
+        except ImportError:
+            return [*lines, "  dpkt not installed - skipped"]
+        except Exception:  # a parse failure is itself a result
+            continue
+        opaque = [name for name in theirs if name.startswith("<")]
+        if len(ours) > len(theirs) - len(opaque):
+            deeper += 1
+            if not example:
+                example = (
+                    f"    netprotocols: {' -> '.join(ours)}\n"
+                    f"    dpkt:         {' -> '.join(theirs)}"
+                )
+        else:
+            same += 1
+    lines.append(f"  netprotocols decodes further on {deeper} frames")
+    lines.append(f"  both stop at the same layer on {same} frames")
+    if example:
+        lines.extend(["", "  A frame where they differ:", example])
+    return lines
+
+
 def check(
     current: dict[str, Any], baseline_path: Path, threshold: float
 ) -> int:
@@ -304,6 +368,11 @@ def main() -> int:
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument(
         "--compare", action="store_true", help="also time dpkt and scapy"
+    )
+    parser.add_argument(
+        "--depth",
+        action="store_true",
+        help="report where each library stops decoding",
     )
     parser.add_argument(
         "--check", action="store_true", help="fail on a regression"
@@ -353,6 +422,8 @@ def main() -> int:
 
     if args.compare:
         print("\n".join(compare(frames, args.repetitions, args.trials)))
+    if args.depth:
+        print("\n".join(depth_report(frames)))
     if args.json:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
     if args.update_baseline:
