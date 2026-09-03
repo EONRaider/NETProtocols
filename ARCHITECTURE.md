@@ -90,11 +90,42 @@ Errors form a small typed hierarchy rooted at `ProtocolError`:
 ```
 ProtocolError
 ├── TruncatedHeaderError     buffer shorter than the header claims
-└── InvalidFieldError        field value violates the protocol's rules
-    ├── InvalidMACAddressError
-    ├── InvalidIPv4AddressError
-    └── InvalidManufacturerCodeError
+├── InvalidFieldError        field value violates the protocol's rules
+│   ├── InvalidMACAddressError
+│   ├── InvalidIPv4AddressError
+│   └── InvalidManufacturerCodeError
+└── MaxDepthExceededError    a frame's chain exceeded decode_frame's max_depth
 ```
+
+**Every raise carries structured context, not just a message.** A
+formatted string is easy for a human to read and impossible for a
+fuzzer, conformance suite, or validation tool to act on without
+regexing it — so every raise site in `src/` attaches `protocol` (the
+class that raised) and, where meaningful, `field` (the attribute at
+fault), `offset`, and `expected`/`actual`:
+
+```python
+try:
+    packet = decode_frame(frame)
+except ProtocolError as e:
+    print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
+```
+
+`offset` is relative to whatever buffer the error was found in: the
+`data` argument of a `decode()` call when `field` is `None` or names a
+fixed-header value, or the attribute `field` names when it's a raw
+`bytes` field parsed on demand (`options`, `body`, `sections`) — a TCP
+option error's `offset` is relative to `header.options`, not to the
+frame. `decode_frame` is the only code holding the cursor needed to
+rebase a layer's own offset to the whole frame, so it does — the
+result lands in `frame_offset`, left `None` by a bare
+`SomeClass.decode()` call with no frame to rebase against. A
+`__post_init__` validation error (values, not bytes) leaves `offset`
+`None` too; there is nothing to be positioned in.
+
+All five fields default to `None` and adding them never changes a
+message string — every existing `str(err)` and `match=` assertion
+holds unchanged.
 
 ## Walking a frame: the next_protocol() chain
 

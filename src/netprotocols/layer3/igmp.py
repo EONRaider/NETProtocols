@@ -153,7 +153,12 @@ class IGMP(Protocol):
             return None
         if len(self.body) < 4:
             raise InvalidFieldError(
-                "IGMPv3 report truncated before the record count"
+                "IGMPv3 report truncated before the record count",
+                protocol=type(self),
+                field="body",
+                offset=len(self.body),
+                expected=4,
+                actual=len(self.body),
             )
         return int.from_bytes(self.body[2:4], "big")
 
@@ -174,7 +179,12 @@ class IGMP(Protocol):
         cursor = 4  # past the reserved word (bytes 0-1) and count (2-3)
         for _ in range(count):
             if cursor + 8 > len(body):
-                raise InvalidFieldError("IGMPv3 group record truncated")
+                raise InvalidFieldError(
+                    "IGMPv3 group record truncated",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             record_type = body[cursor]
             aux_words = body[cursor + 1]
             num_sources = int.from_bytes(body[cursor + 2 : cursor + 4], "big")
@@ -184,13 +194,21 @@ class IGMP(Protocol):
             for _ in range(num_sources):
                 if cursor + 4 > len(body):
                     raise InvalidFieldError(
-                        "IGMPv3 group record source list truncated"
+                        "IGMPv3 group record source list truncated",
+                        protocol=type(self),
+                        field="body",
+                        offset=cursor,
                     )
                 sources.append(bytes_to_ipv4(body[cursor : cursor + 4]))
                 cursor += 4
             aux_len = aux_words * 4
             if cursor + aux_len > len(body):
-                raise InvalidFieldError("IGMPv3 auxiliary data truncated")
+                raise InvalidFieldError(
+                    "IGMPv3 auxiliary data truncated",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             aux_data = body[cursor : cursor + aux_len]
             cursor += aux_len
             records.append(
@@ -258,7 +276,12 @@ class IGMP(Protocol):
         cursor = 8
         for _ in range(count):
             if cursor + 4 > len(self.body):
-                raise InvalidFieldError("IGMPv3 query source list truncated")
+                raise InvalidFieldError(
+                    "IGMPv3 query source list truncated",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             sources.append(bytes_to_ipv4(self.body[cursor : cursor + 4]))
             cursor += 4
         return tuple(sources)

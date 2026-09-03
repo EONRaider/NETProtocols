@@ -98,6 +98,22 @@ except ProtocolError:          # catches every library error
     ...
 ```
 
+Every exception carries structured context alongside its message —
+`err.protocol` names the class that raised, `err.field` names the
+attribute at fault where one field is at fault, and `err.offset` /
+`err.frame_offset` locate the problem in bytes (in the header's own
+buffer, and rebased to the whole frame when the error came through
+`decode_frame`) — so a fuzzer, conformance suite, or validation tool
+can act on *where* and *what* failed without parsing the message:
+
+```python
+try:
+    packet = decode_frame(frame)
+except ProtocolError as e:
+    print(f"{e.protocol.__name__} at byte {e.frame_offset}: {e}")
+    # IPv4 at byte 14: IPv4 IHL must be at least 5, got 0
+```
+
 A capture tool would usually rather keep the layers it got than lose
 frame 4,000,001 to an exception. `lax=True` reports instead of raising:
 

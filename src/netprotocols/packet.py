@@ -29,7 +29,10 @@ class Packet:
         for layer in layers:
             if not isinstance(layer, Protocol):
                 raise InvalidFieldError(
-                    f"Cannot build packet: {layer!r} is not a Protocol"
+                    f"Cannot build packet: {layer!r} is not a Protocol",
+                    protocol=type(layer),
+                    expected=Protocol,
+                    actual=type(layer),
                 )
         self.layers: tuple[Protocol, ...] = layers
         #: Why the chain walk stopped early, or ``None`` when it ran to

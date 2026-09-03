@@ -170,15 +170,23 @@ class IPv4(Protocol):
     def __post_init__(self) -> None:
         if not 5 <= self.ihl <= 15:
             raise InvalidFieldError(
-                f"IPv4 IHL must be within 5-15, got {self.ihl}"
+                f"IPv4 IHL must be within 5-15, got {self.ihl}",
+                protocol=type(self),
+                field="ihl",
+                expected="5-15",
+                actual=self.ihl,
             )
         if self.ihl != 5 + len(self.options) // 4 or len(self.options) % 4:
             raise InvalidFieldError(
                 f"IPv4 IHL {self.ihl} disagrees with options length "
-                f"{len(self.options)} (expected {(self.ihl - 5) * 4} bytes)"
+                f"{len(self.options)} (expected {(self.ihl - 5) * 4} bytes)",
+                protocol=type(self),
+                field="ihl",
+                expected=(self.ihl - 5) * 4,
+                actual=len(self.options),
             )
-        validate_ipv4_addr(self.src)
-        validate_ipv4_addr(self.dst)
+        validate_ipv4_addr(self.src, protocol=type(self), field="src")
+        validate_ipv4_addr(self.dst, protocol=type(self), field="dst")
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
@@ -196,11 +204,23 @@ class IPv4(Protocol):
         ) = cls._unpack_fixed(data)
         ihl = ver_ihl & 0x0F
         if ihl < 5:
-            raise InvalidFieldError(f"IPv4 IHL must be at least 5, got {ihl}")
+            raise InvalidFieldError(
+                f"IPv4 IHL must be at least 5, got {ihl}",
+                protocol=cls,
+                offset=0,
+                field="ihl",
+                expected=">=5",
+                actual=ihl,
+            )
         if ihl * 4 > len(data):
             raise TruncatedHeaderError(
                 f"IPv4 header declares {ihl * 4} bytes, buffer holds "
-                f"{len(data)}"
+                f"{len(data)}",
+                protocol=cls,
+                offset=0,
+                field="ihl",
+                expected=ihl * 4,
+                actual=len(data),
             )
         # As in Ethernet/ARP, the addresses are generated here and
         # cannot fail validation. The constructor's other checks are
@@ -315,15 +335,28 @@ class IPv4(Protocol):
                 cursor += 1
                 continue
             if cursor + 1 >= len(raw):
-                raise InvalidFieldError("IPv4 option missing its length byte")
+                raise InvalidFieldError(
+                    "IPv4 option missing its length byte",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
+                )
             length = raw[cursor + 1]
             if length < 2:
                 raise InvalidFieldError(
-                    f"IPv4 option length must be at least 2, got {length}"
+                    f"IPv4 option length must be at least 2, got {length}",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
+                    expected=">=2",
+                    actual=length,
                 )
             if cursor + length > len(raw):
                 raise InvalidFieldError(
-                    "IPv4 option value runs past the options bytes"
+                    "IPv4 option value runs past the options bytes",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
                 )
             parsed.append(
                 IPv4Option(kind=kind, data=raw[cursor + 2 : cursor + length])

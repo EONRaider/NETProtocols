@@ -76,7 +76,9 @@ def _require_ip(layer: Protocol, ip: IPv4 | IPv6 | None) -> IPv4 | IPv6:
         raise InvalidFieldError(
             f"Computing a {type(layer).__name__} checksum requires the "
             f"enclosing IPv4/IPv6 layer (its pseudo-header covers the "
-            f"addresses)"
+            f"addresses)",
+            protocol=type(layer),
+            field="checksum",
         )
     return ip
 
@@ -127,7 +129,9 @@ def compute(
         if layer.checksum is None:
             raise InvalidFieldError(
                 "Computing a GRE checksum requires the Checksum-Present "
-                "bit and its field (RFC 2784 §2.5)"
+                "bit and its field (RFC 2784 §2.5)",
+                protocol=type(layer),
+                field="checksum",
             )
         return internet_checksum(_zeroed(bytes(layer), 4) + payload)
     if isinstance(layer, ICMPv6):
@@ -153,7 +157,9 @@ def compute(
         # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
         return raw or 0xFFFF
     raise InvalidFieldError(
-        f"{type(layer).__name__} has no checksum field to compute"
+        f"{type(layer).__name__} has no checksum field to compute",
+        protocol=type(layer),
+        field="checksum",
     )
 
 

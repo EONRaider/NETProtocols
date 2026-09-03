@@ -155,7 +155,11 @@ class TCP(Protocol):
     def __post_init__(self) -> None:
         if not 5 <= self.data_offset <= 15:
             raise InvalidFieldError(
-                f"TCP data offset must be within 5-15, got {self.data_offset}"
+                f"TCP data offset must be within 5-15, got {self.data_offset}",
+                protocol=type(self),
+                field="data_offset",
+                expected="5-15",
+                actual=self.data_offset,
             )
         if (
             self.data_offset != 5 + len(self.options) // 4
@@ -164,7 +168,11 @@ class TCP(Protocol):
             raise InvalidFieldError(
                 f"TCP data offset {self.data_offset} disagrees with options "
                 f"length {len(self.options)} (expected "
-                f"{(self.data_offset - 5) * 4} bytes)"
+                f"{(self.data_offset - 5) * 4} bytes)",
+                protocol=type(self),
+                field="data_offset",
+                expected=(self.data_offset - 5) * 4,
+                actual=len(self.options),
             )
 
     @classmethod
@@ -182,12 +190,22 @@ class TCP(Protocol):
         data_offset = offset_flags >> 12
         if data_offset < 5:
             raise InvalidFieldError(
-                f"TCP data offset must be at least 5, got {data_offset}"
+                f"TCP data offset must be at least 5, got {data_offset}",
+                protocol=cls,
+                offset=0,
+                field="data_offset",
+                expected=">=5",
+                actual=data_offset,
             )
         if data_offset * 4 > len(data):
             raise TruncatedHeaderError(
                 f"TCP header declares {data_offset * 4} bytes, buffer holds "
-                f"{len(data)}"
+                f"{len(data)}",
+                protocol=cls,
+                offset=0,
+                field="data_offset",
+                expected=data_offset * 4,
+                actual=len(data),
             )
         return cls(
             src_port=src_port,
@@ -278,15 +296,28 @@ class TCP(Protocol):
                 cursor += 1
                 continue
             if cursor + 1 >= len(raw):
-                raise InvalidFieldError("TCP option missing its length byte")
+                raise InvalidFieldError(
+                    "TCP option missing its length byte",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
+                )
             length = raw[cursor + 1]
             if length < 2:
                 raise InvalidFieldError(
-                    f"TCP option length must be at least 2, got {length}"
+                    f"TCP option length must be at least 2, got {length}",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
+                    expected=">=2",
+                    actual=length,
                 )
             if cursor + length > len(raw):
                 raise InvalidFieldError(
-                    "TCP option value runs past the options bytes"
+                    "TCP option value runs past the options bytes",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
                 )
             parsed.append(
                 TCPOption(kind=kind, data=raw[cursor + 2 : cursor + length])

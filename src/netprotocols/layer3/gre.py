@@ -68,7 +68,12 @@ class GRE(Protocol):
         end = cls._struct.size + optional_len
         if len(data) < end:
             raise TruncatedHeaderError(
-                f"GRE header declares {end} bytes, buffer holds {len(data)}"
+                f"GRE header declares {end} bytes, buffer holds {len(data)}",
+                protocol=cls,
+                offset=0,
+                field="fields",
+                expected=end,
+                actual=len(data),
             )
         return cls(
             flags=flags,
