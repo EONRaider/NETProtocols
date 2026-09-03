@@ -586,6 +586,56 @@ optimisation was proposed, measured, and rejected on its own numbers,
 and both the number and its reproduction are written down. Rule 1 with
 teeth.
 
+### 5.9 "Explains bad input instead of merely rejecting it"
+**Status: VERIFIED** (#91)
+
+Strictness is this library's security story — it raises where scapy
+silently fills in defaults — but until now every exception carried
+only a formatted string. Verified in the issue: the full attribute set
+on a raised `TruncatedHeaderError` was `args`, `add_note`,
+`with_traceback`. A fuzzing harness, conformance suite, or
+protocol-validation tool that wanted to know *where* a parse failed
+had to regex the message.
+
+Every raise site in `src/` now attaches structured context:
+
+```python
+try:
+    packet = decode_frame(frame)
+except ProtocolError as e:
+    print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
+    # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
+```
+
+`protocol` is set at every one of the 62 raise sites in the library
+(verified by an AST sweep during development, not just by eye); `field`
+and `offset`/`frame_offset` are set wherever there's a byte position or
+a single attribute to name. `offset` is honestly scoped: relative to
+the `decode()` buffer for a fixed-header error, relative to the
+attribute `field` names (`options`, `body`, `sections`) for an
+on-demand parse, and `None` — never guessed — for a `__post_init__`
+validation error, which sees field values and never the bytes they
+came from. `decode_frame` is the only code holding the cursor needed to
+rebase a layer-relative `offset` to the whole frame, so it is the only
+thing that sets `frame_offset`.
+
+No message string changed to make this true — every existing `str(err)`
+and `match=` assertion in the suite holds unchanged; the diagnostic
+fields are additive.
+
+Reproduce: `uv run pytest tests/test_diagnostics.py` — 32 tests across
+all three raise shapes (decode-time, construction-time, on-demand
+property) plus the rebasing behaviour end to end.
+
+**Why this is a differentiator, not a nicety.** Scapy mostly does not
+raise at all. dpkt raises bare `UnpackError` / `NeedData` with nothing
+attached. For the audience this library is built for — people parsing
+untrusted input — this is the difference between a library that
+rejects bad input and one that explains it. No competitor offers it,
+though that comparative form stays held under the standing embargo
+until this claim is audited the same way #124 audits the CI gate.
+
+
 ---
 
 ## 6. Claims we must not make

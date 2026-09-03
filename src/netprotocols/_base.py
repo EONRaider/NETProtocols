@@ -122,7 +122,11 @@ class Protocol(ABC):
         except StructError as e:
             raise TruncatedHeaderError(
                 f"{cls.__name__} header needs {cls._struct.size} bytes, "
-                f"buffer holds {len(data)}"
+                f"buffer holds {len(data)}",
+                protocol=cls,
+                offset=0,
+                expected=cls._struct.size,
+                actual=len(data),
             ) from e
 
     @classmethod

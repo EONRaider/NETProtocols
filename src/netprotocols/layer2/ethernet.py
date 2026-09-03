@@ -63,8 +63,8 @@ class Ethernet(Protocol):
     _struct: ClassVar[Struct] = Struct("!6s6sH")
 
     def __post_init__(self) -> None:
-        validate_mac_addr(self.dst)
-        validate_mac_addr(self.src)
+        validate_mac_addr(self.dst, protocol=type(self), field="dst")
+        validate_mac_addr(self.src, protocol=type(self), field="src")
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:

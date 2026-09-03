@@ -238,7 +238,12 @@ class DHCP(Protocol):
         if not raw:
             return {}
         if raw[:4] != _MAGIC_COOKIE:
-            raise InvalidFieldError("DHCP options missing the magic cookie")
+            raise InvalidFieldError(
+                "DHCP options missing the magic cookie",
+                protocol=type(self),
+                field="options",
+                offset=0,
+            )
         parsed: dict[int, bytes] = {}
         cursor = 4
         while cursor < len(raw):
@@ -249,12 +254,20 @@ class DHCP(Protocol):
             if code == _OPT_END:
                 break
             if cursor >= len(raw):
-                raise InvalidFieldError("DHCP option missing its length byte")
+                raise InvalidFieldError(
+                    "DHCP option missing its length byte",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
+                )
             length = raw[cursor]
             cursor += 1
             if cursor + length > len(raw):
                 raise InvalidFieldError(
-                    "DHCP option value runs past the buffer"
+                    "DHCP option value runs past the buffer",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
                 )
             parsed[code] = parsed.get(code, b"") + raw[cursor : cursor + length]
             cursor += length

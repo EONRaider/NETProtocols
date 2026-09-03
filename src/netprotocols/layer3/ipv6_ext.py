@@ -119,7 +119,11 @@ class _IPv6OptionsHeader(Protocol):
             raise InvalidFieldError(
                 f"{self.__class__.__name__} hdr_ext_len {self.hdr_ext_len} "
                 f"disagrees with options length {len(self.options)} "
-                f"(expected {expected} bytes)"
+                f"(expected {expected} bytes)",
+                protocol=type(self),
+                field="hdr_ext_len",
+                expected=expected,
+                actual=len(self.options),
             )
 
     @classmethod
@@ -129,7 +133,12 @@ class _IPv6OptionsHeader(Protocol):
         if declared > len(data):
             raise TruncatedHeaderError(
                 f"{cls.__name__} declares {declared} bytes, buffer holds "
-                f"{len(data)}"
+                f"{len(data)}",
+                protocol=cls,
+                offset=0,
+                field="hdr_ext_len",
+                expected=declared,
+                actual=len(data),
             )
         return cls(
             next_header=next_header,
@@ -178,13 +187,19 @@ class _IPv6OptionsHeader(Protocol):
                 continue
             if cursor + 1 >= len(raw):
                 raise InvalidFieldError(
-                    f"{self.__class__.__name__} option missing its length byte"
+                    f"{self.__class__.__name__} option missing its length byte",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
                 )
             length = raw[cursor + 1]
             if cursor + 2 + length > len(raw):
                 raise InvalidFieldError(
                     f"{self.__class__.__name__} option data runs past the "
-                    f"header"
+                    f"header",
+                    protocol=type(self),
+                    field="options",
+                    offset=cursor,
                 )
             parsed.append(
                 IPv6Option(
@@ -238,7 +253,11 @@ class IPv6Routing(Protocol):
             raise InvalidFieldError(
                 f"IPv6Routing hdr_ext_len {self.hdr_ext_len} disagrees "
                 f"with data length {len(self.data)} (expected {expected} "
-                f"bytes)"
+                f"bytes)",
+                protocol=type(self),
+                field="hdr_ext_len",
+                expected=expected,
+                actual=len(self.data),
             )
 
     @classmethod
@@ -250,7 +269,12 @@ class IPv6Routing(Protocol):
         if declared > len(data):
             raise TruncatedHeaderError(
                 f"IPv6Routing declares {declared} bytes, buffer holds "
-                f"{len(data)}"
+                f"{len(data)}",
+                protocol=cls,
+                offset=0,
+                field="hdr_ext_len",
+                expected=declared,
+                actual=len(data),
             )
         return cls(
             next_header=next_header,

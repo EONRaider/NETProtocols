@@ -51,13 +51,27 @@ class VLAN(Protocol):
     def __post_init__(self) -> None:
         if not 0 <= self.pcp <= 7:
             raise InvalidFieldError(
-                f"VLAN PCP must be within 0-7, got {self.pcp}"
+                f"VLAN PCP must be within 0-7, got {self.pcp}",
+                protocol=type(self),
+                field="pcp",
+                expected="0-7",
+                actual=self.pcp,
             )
         if self.dei not in (0, 1):
-            raise InvalidFieldError(f"VLAN DEI must be 0 or 1, got {self.dei}")
+            raise InvalidFieldError(
+                f"VLAN DEI must be 0 or 1, got {self.dei}",
+                protocol=type(self),
+                field="dei",
+                expected="0 or 1",
+                actual=self.dei,
+            )
         if not 0 <= self.vid <= 0xFFF:
             raise InvalidFieldError(
-                f"VLAN VID must be within 0-4095, got {self.vid}"
+                f"VLAN VID must be within 0-4095, got {self.vid}",
+                protocol=type(self),
+                field="vid",
+                expected="0-4095",
+                actual=self.vid,
             )
 
     @classmethod

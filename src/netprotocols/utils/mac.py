@@ -19,9 +19,19 @@ mac_regex = re.compile(
 )
 
 
-def validate_mac_addr(mac: str) -> str:
+def validate_mac_addr(
+    mac: str,
+    *,
+    protocol: type[object] | None = None,
+    field: str | None = None,
+) -> str:
     """Evaluate a string representing an IEEE 802 compliant MAC address.
 
+    :param protocol: The class this address belongs to, attached to a
+        raised error for diagnostics; the header ``__post_init__``
+        methods that call this pass their own class.
+    :param field: Name of the field being validated, likewise attached
+        for diagnostics.
     :returns: The supplied string, unchanged, if it is a valid MAC
         address.
     :raises InvalidMACAddressError: If the supplied value is not a
@@ -31,11 +41,17 @@ def validate_mac_addr(mac: str) -> str:
         match = mac_regex.match(mac)
     except TypeError as e:
         raise InvalidMACAddressError(
-            f"Invalid type for MAC address value {mac!r}"
+            f"Invalid type for MAC address value {mac!r}",
+            protocol=protocol,
+            field=field,
+            actual=mac,
         ) from e
     if match is None:
         raise InvalidMACAddressError(
-            f"Invalid format for MAC address value {mac!r}"
+            f"Invalid format for MAC address value {mac!r}",
+            protocol=protocol,
+            field=field,
+            actual=mac,
         )
     return mac
 
@@ -55,7 +71,9 @@ def random_mac(manufacturer: str | None = None) -> str:
         raise InvalidManufacturerCodeError(
             "A manufacturer code must be a string consisting of 3 octets "
             "represented as hexadecimal characters separated by colons "
-            '(i.e. "AA:BB:CC")'
+            '(i.e. "AA:BB:CC")',
+            field="manufacturer",
+            actual=manufacturer,
         )
     rand_mac: str = ":".join(
         "".join(choices(string.hexdigits.upper(), k=2))

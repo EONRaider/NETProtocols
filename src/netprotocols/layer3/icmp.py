@@ -108,7 +108,11 @@ class _ICMP(Protocol):
         if len(self.rest) != 4:
             raise InvalidFieldError(
                 f"{self.__class__.__name__} rest-of-header must be exactly "
-                f"4 bytes, got {len(self.rest)}"
+                f"4 bytes, got {len(self.rest)}",
+                protocol=type(self),
+                field="rest",
+                expected=4,
+                actual=len(self.rest),
             )
 
     @classmethod
@@ -307,18 +311,38 @@ class ICMPv6(_ICMP):
         body = self.body
         if len(body) < offset:
             raise InvalidFieldError(
-                f"{self.type_name} body ends before its fixed fields"
+                f"{self.type_name} body ends before its fixed fields",
+                protocol=type(self),
+                field="body",
+                offset=len(body),
+                expected=offset,
+                actual=len(body),
             )
         options: list[NDPOption] = []
         cursor = offset
         while cursor < len(body):
             if cursor + 2 > len(body):
-                raise InvalidFieldError("NDP option missing its length byte")
+                raise InvalidFieldError(
+                    "NDP option missing its length byte",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             length = body[cursor + 1] * 8
             if length == 0:
-                raise InvalidFieldError("NDP option length must not be zero")
+                raise InvalidFieldError(
+                    "NDP option length must not be zero",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             if cursor + length > len(body):
-                raise InvalidFieldError("NDP option runs past the message")
+                raise InvalidFieldError(
+                    "NDP option runs past the message",
+                    protocol=type(self),
+                    field="body",
+                    offset=cursor,
+                )
             options.append(
                 NDPOption(
                     type=body[cursor], data=body[cursor + 2 : cursor + length]

@@ -51,10 +51,10 @@ class ARP(Protocol):
     _struct: ClassVar[Struct] = Struct("!HHBBH6s4s6s4s")
 
     def __post_init__(self) -> None:
-        validate_mac_addr(self.sha)
-        validate_mac_addr(self.tha)
-        validate_ipv4_addr(self.spa)
-        validate_ipv4_addr(self.tpa)
+        validate_mac_addr(self.sha, protocol=type(self), field="sha")
+        validate_mac_addr(self.tha, protocol=type(self), field="tha")
+        validate_ipv4_addr(self.spa, protocol=type(self), field="spa")
+        validate_ipv4_addr(self.tpa, protocol=type(self), field="tpa")
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:

@@ -104,16 +104,31 @@ def _read_name(sections: bytes, at: int) -> int:
     cursor = at
     while True:
         if not 0 <= cursor < len(sections):
-            raise InvalidFieldError("DNS name runs past the message")
+            raise InvalidFieldError(
+                "DNS name runs past the message",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
         length = sections[cursor]
         if length == 0:
             return cursor + 1
         if length & 0xC0 == 0xC0:  # a pointer ends the in-line name
             if cursor + 1 >= len(sections):
-                raise InvalidFieldError("truncated DNS compression pointer")
+                raise InvalidFieldError(
+                    "truncated DNS compression pointer",
+                    protocol=DNS,
+                    field="sections",
+                    offset=cursor,
+                )
             return cursor + 2
         if length & 0xC0:
-            raise InvalidFieldError("reserved DNS label length bits set")
+            raise InvalidFieldError(
+                "reserved DNS label length bits set",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
         cursor += 1 + length
 
 
@@ -129,23 +144,50 @@ def _labels(sections: bytes, at: int) -> str:
     cursor = at
     while True:
         if not 0 <= cursor < len(sections):
-            raise InvalidFieldError("DNS name runs past the message")
+            raise InvalidFieldError(
+                "DNS name runs past the message",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
         length = sections[cursor]
         if length == 0:
             break
         if length & 0xC0 == 0xC0:  # compression pointer
             pointers += 1
             if pointers > _MAX_NAME_POINTERS:
-                raise InvalidFieldError("DNS name compression loops")
+                raise InvalidFieldError(
+                    "DNS name compression loops",
+                    protocol=DNS,
+                    field="sections",
+                    offset=cursor,
+                    expected=f"<={_MAX_NAME_POINTERS} pointers",
+                    actual=pointers,
+                )
             if cursor + 1 >= len(sections):
-                raise InvalidFieldError("truncated DNS compression pointer")
+                raise InvalidFieldError(
+                    "truncated DNS compression pointer",
+                    protocol=DNS,
+                    field="sections",
+                    offset=cursor,
+                )
             target = ((length & 0x3F) << 8) | sections[cursor + 1]
             cursor = target - _HEADER_LEN  # pointers count from the message
             continue
         if length & 0xC0:
-            raise InvalidFieldError("reserved DNS label length bits set")
+            raise InvalidFieldError(
+                "reserved DNS label length bits set",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
         if cursor + 1 + length > len(sections):
-            raise InvalidFieldError("DNS label runs past the message")
+            raise InvalidFieldError(
+                "DNS label runs past the message",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
         labels.append(
             sections[cursor + 1 : cursor + 1 + length].decode(
                 "ascii", "replace"
@@ -163,7 +205,12 @@ def _decode_txt(rdata: bytes) -> str:
         length = rdata[cursor]
         cursor += 1
         if cursor + length > len(rdata):
-            raise InvalidFieldError("DNS TXT character-string overruns")
+            raise InvalidFieldError(
+                "DNS TXT character-string overruns",
+                protocol=DNS,
+                field="rdata",
+                offset=cursor,
+            )
         parts.append(rdata[cursor : cursor + length].decode("ascii", "replace"))
         cursor += length
     return "".join(parts)
@@ -190,7 +237,12 @@ def _decode_rdata(sections: bytes, rtype: int, at: int, rdlength: int) -> str:
         rname = _labels(sections, rname_at)
         fixed = _read_name(sections, rname_at)
         if fixed + 20 > len(sections):
-            raise InvalidFieldError("DNS SOA record truncated")
+            raise InvalidFieldError(
+                "DNS SOA record truncated",
+                protocol=DNS,
+                field="sections",
+                offset=fixed,
+            )
         serial, refresh, retry, expire, minimum = (
             int.from_bytes(sections[fixed + i : fixed + i + 4], "big")
             for i in range(0, 20, 4)
@@ -205,14 +257,26 @@ def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
     name = _labels(sections, at)
     cursor = _read_name(sections, at)
     if cursor + 10 > len(sections):
-        raise InvalidFieldError("DNS resource record truncated")
+        raise InvalidFieldError(
+            "DNS resource record truncated",
+            protocol=DNS,
+            field="sections",
+            offset=cursor,
+        )
     rtype = int.from_bytes(sections[cursor : cursor + 2], "big")
     rclass = int.from_bytes(sections[cursor + 2 : cursor + 4], "big")
     ttl = int.from_bytes(sections[cursor + 4 : cursor + 8], "big")
     rdlength = int.from_bytes(sections[cursor + 8 : cursor + 10], "big")
     cursor += 10
     if cursor + rdlength > len(sections):
-        raise InvalidFieldError("DNS RDATA runs past the message")
+        raise InvalidFieldError(
+            "DNS RDATA runs past the message",
+            protocol=DNS,
+            field="sections",
+            offset=cursor,
+            expected=rdlength,
+            actual=len(sections) - cursor,
+        )
     record = DNSResourceRecord(
         name=name,
         rtype=rtype,
@@ -234,7 +298,12 @@ def _first_record(sections: bytes, qdcount: int) -> int:
         cursor = _read_name(sections, cursor)
         cursor += 4  # QTYPE + QCLASS
         if cursor > len(sections):
-            raise InvalidFieldError("DNS question section truncated")
+            raise InvalidFieldError(
+                "DNS question section truncated",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
     return cursor
 
 
@@ -386,7 +455,12 @@ class DNS(Protocol):
             return None
         end = _read_name(self.sections, 0)
         if end + 4 > len(self.sections):
-            raise InvalidFieldError("DNS question truncated")
+            raise InvalidFieldError(
+                "DNS question truncated",
+                protocol=type(self),
+                field="sections",
+                offset=end,
+            )
         qtype = int.from_bytes(self.sections[end : end + 2], "big")
         qclass = int.from_bytes(self.sections[end + 2 : end + 4], "big")
         return qtype, qclass

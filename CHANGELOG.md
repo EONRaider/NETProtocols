@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Structured diagnostics on every `ProtocolError`.** Every exception
+  used to carry only a formatted string — the full attribute set on a
+  raised `TruncatedHeaderError` was `args`, `add_note`,
+  `with_traceback`. A fuzzing harness, conformance suite, or
+  protocol-validation tool that wanted to know *where* a parse failed
+  had to regex the message. Every raise site in `src/` now attaches:
+
+  ```python
+  try:
+      packet = decode_frame(frame)
+  except ProtocolError as e:
+      print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
+      # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
+  ```
+
+  - `protocol` — the class that raised. Set on every single raise site.
+  - `field` — the attribute at fault, where one field is at fault.
+  - `offset` — byte offset of the problem, relative to the `decode()`
+    buffer for a fixed-header error, or to the `field` attribute
+    (`options`, `body`, `sections`) for an on-demand parse — a TCP
+    option error's offset is relative to `header.options`, not the
+    frame. `None` for a `__post_init__` validation error, which sees
+    field values, never the bytes they came from.
+  - `frame_offset` — `offset` rebased to the whole captured frame.
+    `decode_frame` is the only code holding the cursor needed to do
+    this, so it's the only thing that sets it; a bare
+    `SomeClass.decode()` call leaves it `None`.
+  - `expected` / `actual` — added wherever there's a concrete pair to
+    state beyond the message text.
+
+  All five default to `None`, and **no message string changed** — every
+  existing `str(err)` and `match=` assertion holds. New public name:
+  `MaxDepthExceededError` gains the same attributes as every other
+  `ProtocolError` subclass (it already existed as of the `decode_frame`
+  work; this is the first release to give it structured context too).
+
 - **`decode_frame()`: the chain walker ships with the library.** The
   README taught a hand-rolled eight-line loop, ARCHITECTURE.md showed
   it again, and the test suite kept its own copy — so the library's

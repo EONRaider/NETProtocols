@@ -147,13 +147,25 @@ def decode_frame(
                 raise MaxDepthExceededError(
                     f"chain still going after {max_depth} header{plural} "
                     f"({protocol.__name__} next); raise max_depth if this "
-                    f"frame is genuinely this deep"
+                    f"frame is genuinely this deep",
+                    protocol=protocol,
+                    offset=cursor,
+                    frame_offset=cursor,
                 )
             header = protocol.decode(data[cursor:])
             layers.append(header)
             cursor += header.header_len
             protocol = header.next_protocol(registry)
     except ProtocolError as error:
+        # decode() raises with offset relative to the slice it was
+        # handed (data[cursor:]); rebase it to the whole frame here,
+        # since this is the only code with the cursor to do it. Always
+        # set, strict or lax, so a caller catching the re-raise still
+        # gets a correct frame_offset.
+        if error.frame_offset is None:
+            error.frame_offset = (
+                cursor if error.offset is None else cursor + error.offset
+            )
         if not lax:
             raise
         stopped_by = error
