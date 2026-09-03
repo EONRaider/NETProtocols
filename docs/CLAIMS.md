@@ -267,9 +267,20 @@ Supporting facts, all verifiable:
 This fits in one screenshot and belongs near the top of the README.
 
 ### 2.2 "The only Python packet library you can dissect with `match`/`case`"
-**Status: VERIFIED (the capability); GATED ON #93 (the claim)**
+**Status: VERIFIED (the capability); COMPARATIVE — HELD (the claim)**
 
-It already works, with no code changes:
+> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
+> evidence below stands and should keep being re-measured; none of it
+> is published anywhere until then.
+
+The capability itself is no longer gated: #93 landed it in
+documentation and a regression suite. It already worked, with no code
+changes, and now says so where a reader can find it — a first-screen
+README example, a dedicated section there, and the mechanism explained
+in ARCHITECTURE.md (`__match_args__` from `@dataclass`, `IntEnum`
+subclassing `int`) so a contributor knows what would quietly break it.
+`tests/test_pattern_matching.py` pins both mechanisms and runs the
+README's own example over the corpus.
 
 ```python
 match ip:
@@ -277,16 +288,12 @@ match ip:
         ...
 ```
 
-Two facts make it work: frozen dataclasses auto-generate
-`__match_args__`, and `IntEnum` subclasses `int`, so the registries in
-`_enums.py` are usable as value patterns against plain-`int` fields.
-
-Competitors cannot: dpkt builds `__slots__` from a metaclass and
-generates no `__match_args__`; scapy routes fields through
-`__getattr__`; `construct` returns dicts.
-
-Gated only because claiming a feature that appears in no documentation
-is a bad look. Land #93 first, then say it loudly.
+What stays held is the *comparative* sentence — dpkt builds
+`__slots__` from a metaclass and generates no `__match_args__`; scapy
+routes fields through `__getattr__`; `construct` returns dicts — under
+Rule 5 like every other claim naming a competitor. Neither README.md
+nor ARCHITECTURE.md make the comparative form; both describe only this
+library's own mechanism.
 
 ### 2.3 "No library combines all five"
 **Status: VERIFIED, with one named exception**
