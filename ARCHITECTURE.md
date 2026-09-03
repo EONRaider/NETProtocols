@@ -61,6 +61,58 @@ Three design choices worth knowing:
   version = ver_ihl >> 4
   ```
 
+## Structural pattern matching
+
+Every decoded header works with `match`/`case` today, and nothing in
+`src/` was written to make that true — it falls out of the two design
+choices above, for reasons worth being precise about:
+
+```python
+match eth:
+    case Ethernet(ethertype=EtherType.IPV4):
+        ...
+
+match ip:
+    case IPv4(protocol=IPProtocol.TCP, ttl=t) if t > 32:
+        ...
+```
+
+1. **`@dataclass` auto-generates `__match_args__`** from the field
+   declaration order — `Ethernet.__match_args__ ==
+   ('dst', 'src', 'ethertype')` — so a *positional* class pattern
+   (`case Ethernet(dst, src, ethertype)`) works with no extra code. An
+   ordinary class has to declare `__match_args__` by hand to get that;
+   this library never does.
+2. **Every field with a fixed vocabulary of wire values is an
+   `IntEnum`**, defined in [`_enums.py`](src/netprotocols/_enums.py),
+   and `IntEnum` subclasses `int`. A *value* pattern therefore matches
+   the plain integer the wire actually carries —
+   `case Ethernet(ethertype=EtherType.IPV4)` matches an instance whose
+   `ethertype` field holds the `int` `0x0800` — with no cast, no
+   adapter, and no separate "typed" view to keep in sync with the raw
+   field.
+
+Keyword class patterns (`ClassName(field=pattern)`) work on *any*
+object exposing that attribute; `__match_args__` is only needed for
+the positional form. What a frozen dataclass adds is that the
+attribute is guaranteed to exist exactly as declared, with no
+proxying: a class pattern here either matches a real field or fails
+outright — a mistyped field name in a keyword pattern silently never
+matches rather than raising, on any object, dataclass or not, so this
+buys reliability rather than a new failure mode, not immunity from
+that one. (How this compares to other Python packet libraries is
+tracked in `docs/CLAIMS.md`, not stated here — see the embargo notes
+there.)
+
+**Keeping this working is a contributor obligation, not a given.**
+Field declaration order is part of a class's public API — reordering
+fields changes what a positional pattern binds to, silently, for
+anyone matching by position. And a field carrying a closed set of wire
+values should stay an `IntEnum` sourced from `_enums.py` rather than
+degrade to a bare `int`; the moment it does, `case Header(field=SomeEnum.X)`
+stops matching and fails silently (the pattern falls through to the
+next `case`, it does not raise) rather than loudly.
+
 ## The decode contract
 
 `decode(data)` is the heart of the library, and every protocol obeys

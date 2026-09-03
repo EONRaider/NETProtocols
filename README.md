@@ -27,6 +27,18 @@ Ethernet(dst='ff:ff:ff:ff:ff:ff', src='00:07:0d:af:f4:54', ethertype=2054)
 True
 ```
 
+Every header is also a structural pattern — no extra code, because a
+frozen dataclass auto-generates `__match_args__` and every enum field
+is an `IntEnum`, so a bare wire value matches a named one:
+
+```python
+match ip:
+    case IPv4(protocol=IPProtocol.TCP, ttl=t) if t > 32:
+        ...
+    case IPv4(protocol=IPProtocol.UDP):
+        ...
+```
+
 ## Installation
 
 ```
@@ -127,6 +139,28 @@ Lax mode never invents a layer and never guesses — each header is
 decoded exactly as strictly as before; the walk just declines to throw
 away the part that worked. Chain depth is bounded (`max_depth`,
 default 32), so a crafted frame cannot make the walker grind.
+
+## Structural pattern matching
+
+Every decoded header works with `match`/`case` today, with no code
+written for it: a frozen dataclass auto-generates `__match_args__`,
+and every enum field is an `IntEnum`, so a class pattern can match a
+named value against the plain `int` the wire actually carries. See
+[ARCHITECTURE.md](ARCHITECTURE.md#structural-pattern-matching) for why
+both of those hold and how to keep them holding.
+
+```python
+from netprotocols import IPv4, IPProtocol, TCP
+
+match packet.layers:
+    case [_, IPv4(protocol=IPProtocol.TCP) as ip, TCP(flags_str=f), *_] \
+            if "SYN" in f and "ACK" not in f:
+        print(f"connection attempt from {ip.src}")
+    case [_, IPv4() as ip, TCP(), *_]:
+        print(f"TCP from {ip.src}")
+    case _:
+        print("not a TCP-over-IPv4 frame")
+```
 
 ## Decoding a protocol we do not ship
 

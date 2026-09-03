@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`match`/`case` dissection is documented.** It already worked on
+  every decoded header, with zero code changes needed — a frozen
+  dataclass auto-generates `__match_args__`, and every field with a
+  fixed wire vocabulary is an `IntEnum`, so a value pattern binds the
+  plain `int` the decoder stored. None of that appeared anywhere:
+
+  ```python
+  match packet.layers:
+      case [_, IPv4(protocol=IPProtocol.TCP) as ip, TCP(flags_str=f), *_] \
+              if "SYN" in f and "ACK" not in f:
+          print(f"connection attempt from {ip.src}")
+  ```
+
+  README gains a first-screen example and a dedicated section;
+  ARCHITECTURE.md explains the two mechanisms and the two ways a
+  contributor can quietly break them (reordering a class's fields
+  changes what a positional pattern binds to; degrading a fixed-
+  vocabulary field from `IntEnum` to a bare `int` makes a value
+  pattern stop matching without raising). `tests/test_pattern_matching.py`
+  pins both mechanisms directly and runs the README's own example over
+  the corpus, so a regression in either is caught rather than
+  incidental.
+
 - **Structured diagnostics on every `ProtocolError`.** Every exception
   used to carry only a formatted string — the full attribute set on a
   raised `TruncatedHeaderError` was `args`, `add_note`,
