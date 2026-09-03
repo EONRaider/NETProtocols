@@ -13,13 +13,16 @@ counterexample; bump ``max_examples`` locally to explore.
 
 import contextlib
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from conftest import corpus_frames
 from netprotocols import (
     ARP,
+    DHCP,
     DNS,
+    GRE,
     IGMP,
     TCP,
     UDP,
@@ -37,6 +40,7 @@ from netprotocols import (
     Packet,
     ProtocolError,
 )
+from strategies import ROUND_TRIP_STRATEGIES
 from test_corpus import walk
 
 settings.register_profile(
@@ -60,6 +64,8 @@ ALL_PROTOCOLS = (
     TCP,
     UDP,
     DNS,
+    DHCP,
+    GRE,
 )
 
 CORPUS_FRAMES = [frame for _, _, frame in corpus_frames()]
@@ -176,6 +182,26 @@ class TestConstrainedRoundTrips:
             identification=identification,
         )
         assert IPv6Fragment.decode(bytes(header)) == header
+
+
+class TestGeneralizedRoundTrips:
+    """``bytes(decode(x)) == x`` for every protocol, not just the four
+    above — one property, parametrized over the strategies in
+    strategies.py (#97). The 14 single-example assertions living in
+    each protocol's own test file (``test_arp.py::test_round_trip`` and
+    similarly for the others) are kept as regression anchors pinned to
+    a real captured header, which this property does not replace: a
+    fixed example catches a specific regression fast and readably, a
+    generated one explores the space the fixed example cannot."""
+
+    @pytest.mark.parametrize("name", sorted(ROUND_TRIP_STRATEGIES))
+    @given(data=st.data())
+    def test_round_trip(self, name: str, data: st.DataObject) -> None:
+        header = data.draw(ROUND_TRIP_STRATEGIES[name])
+        raw = bytes(header)
+        decoded = type(header).decode(raw)
+        assert decoded == header
+        assert bytes(decoded) == raw
 
 
 class TestPacketProperties:

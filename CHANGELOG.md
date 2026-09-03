@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Development
+- **The round-trip property (`bytes(decode(x)) == x`) is now
+  Hypothesis-generated for all 18 protocols, not 4.** It previously
+  held only for `Ethernet`, `UDP`, `TCP` and `IPv6Fragment`; the other
+  14 rested on a single example each. `tests/strategies.py` adds one
+  reusable strategy per protocol — reusable because a strategy that
+  generates *valid* instances is useful for more than this one
+  property — and `tests/test_fuzz.py::TestGeneralizedRoundTrips`
+  asserts the property in one method, parametrized over all 14.
+
+  The interdependent-field protocols the issue specifically flagged
+  are generated as *consistent* combinations, never independently: IPv4
+  draws `ihl` first and sizes `options` to match; the three IPv6
+  extension headers draw `hdr_ext_len` first and size their TLV bytes
+  to match; GRE draws `flags` first and computes `fields`' length from
+  the same `_optional_len()` the decoder itself uses, so the two can
+  never silently disagree.
+
+  The 14 single-example assertions already living in each protocol's
+  own test file (`test_arp.py::test_round_trip` and so on) are kept as
+  regression anchors — a fixed example pinned to a real captured header
+  catches a specific regression fast and readably, which a generated
+  property does not replace.
+
+  One adjacent gap closed while surveying this: `DHCP` and `GRE` were
+  missing from `test_fuzz.py::ALL_PROTOCOLS` entirely, so neither had
+  ever been fuzzed with untrusted bytes for basic decode safety (`any
+  input either decodes or raises ProtocolError, never anything else`).
+  Both are now included.
+
 ### Added
 - **`match`/`case` dissection is documented.** It already worked on
   every decoded header, with zero code changes needed — a frozen
