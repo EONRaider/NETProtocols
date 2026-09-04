@@ -44,6 +44,41 @@ dpkt-throughput regression" section for the full profiling writeup,
 before/after numbers under both the old and new benchmark
 methodology, and updated 1.1/1.2/1.6 figures.
 
+### Documentation
+- **Corrected six README.md claims an independent audit against the
+  live repo found stale or overstated, none of them accidental
+  regressions — each had simply drifted from what it once described.**
+  Wheel size (85.6 KB / ~30× smaller than scapy) was measured against
+  the `2.0.0` wheel, two releases behind; rebuilt from `HEAD`, it's
+  88.3 KB / ~29× (`docs/CLAIMS.md` §1.5 corrected to match). The typing
+  bullet's "107 of [scapy's] files" enable strict mypy checking was a
+  raw `wc -l` over scapy's enabled-files list including blank lines
+  and comments; filtered the way scapy's own tooling does, it's 89
+  (`docs/CLAIMS.md` §2.1 corrected, with the mismeasurement documented
+  so it doesn't recur). The Pyodide/browser bullet credited "dpkt and
+  pypacker import cleanly" to the real-Pyodide CI job; that job only
+  ever imports netprotocols under Pyodide (confirmed by reading
+  `scripts/pyodide/check_in_pyodide.py`) — the dpkt/pypacker rows come
+  from a separate `sys.meta_path`-blocklist simulation under ordinary
+  CPython, not from CI (`docs/CLAIMS.md` §3.1 reworded to say so
+  explicitly). The CI-gating bullet's closing clause, "the rest have no
+  performance benchmark at all," was contradicted by the very citation
+  it points to — `docs/CLAIMS.md` §1.7 documents that scapy and
+  PyTCP-net_proto do ship benchmark scripts, just not CI-wired; reworded
+  to the claim the table actually supports (none of the ten *gates* on
+  a regression). The Contributing section's "`pytest`, `mypy`, and
+  `ruff check` — all three are enforced by CI on Python 3.12-3.14"
+  overstated the matrix: only `pytest` runs on 3.12-3.14; `mypy` and
+  `ruff check` each run on 3.12 only. The Roadmap section's "everything
+  through 2.2.0 has landed on `master`" didn't mention that a further,
+  unreleased fix (#147) has since landed on top of 2.2.0 — added a
+  clause naming it. A seventh finding — the Roadmap's claim that "only
+  2.0.0 was an actual PyPI release" — is contradicted by PyPI itself
+  (2.2.0, and in fact five earlier minor/patch versions, are also
+  published there); left unfixed pending a maintainer decision on
+  whether 2.2.0's publication was intentional, since fixing the prose
+  first would paper over a real process question.
+
 ## [2.2.0] - 2026-09-04
 
 ### Added

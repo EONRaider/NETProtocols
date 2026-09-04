@@ -70,18 +70,19 @@ below, its reproduction command, and its caveats):
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **An 85.6 KB wheel against scapy's 2.47 MB** — about 30× smaller.
+- **An 88.3 KB wheel against scapy's 2.47 MB** — about 29× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
   nfstream, stackforge, PyTCP-net_proto; full citations in
-  [docs/CLAIMS.md §1.7](docs/CLAIMS.md)) — none of them do.** Two of
-  the ten ship real benchmark code that simply never runs in CI
-  (construct disables it explicitly; stackforge's Criterion benches are
-  never invoked); the rest have no performance benchmark at all.
+  [docs/CLAIMS.md §1.7](docs/CLAIMS.md)) — none of them gate on one.**
+  Four of the ten (scapy, construct, stackforge, PyTCP-net_proto) ship
+  real benchmark code that simply never runs in CI (construct disables
+  it explicitly; stackforge's Criterion benches are never invoked); none
+  of the ten fails a build on a performance regression.
 - **Typed where the alternatives are not.** `mypy --strict` over the
   whole of `src/`, enforced in CI. scapy ships `py.typed` but enables
-  strict checking on 107 of its files, 2 of the 121 under
+  strict checking on 89 of its files, 2 of the 121 under
   `scapy/layers/` — the dissectors most code touches stay `Any`. dpkt
   ships no `py.typed` at all, and no third-party stub package exists
   for it.
@@ -92,10 +93,11 @@ below, its reproduction command, and its caveats):
   2022-08-18 and last committed 2024-05-05, still targets Python 2.7
   and 3.5–3.9, and remains marked Beta after twelve years.
 - **Runs where scapy cannot — including in the browser.** Verified
-  under a real Pyodide runtime in CI: scapy fails to import at all
-  under Pyodide (`from fcntl import ioctl` is unconditional in
-  `scapy/arch/`), where netprotocols, dpkt and pypacker all import
-  cleanly.
+  under a real Pyodide runtime in CI: netprotocols imports and decodes
+  the full corpus cleanly there, while scapy fails to import at all
+  (`from fcntl import ioctl` is unconditional in `scapy/arch/`). dpkt
+  was separately confirmed to import cleanly under the same missing
+  modules, though not inside this CI job; pypacker was not tested.
 - **The only one of these libraries a `match`/`case` statement
   dissects out of the box.** dpkt builds `__slots__` from a metaclass
   and generates no `__match_args__`; scapy routes fields through
@@ -394,9 +396,12 @@ comparative-claims embargo lift that closed it out:
 | [2.1.0](https://github.com/EONRaider/NETProtocols/issues/105) | Typed accessors and pattern-matching ergonomics |
 | [2.2.0](https://github.com/EONRaider/NETProtocols/issues/106) | Universal round-trip properties, nightly fuzzing, a pcap reader |
 
-Everything through 2.2.0 has landed on `master`; per the roadmap's own
-release policy, only 2.0.0 was an actual PyPI release, and the
-comparative claims above draw on the finished tree. New planned work
+Everything through 2.2.0 has landed on `master`, plus a since-landed
+decode-throughput fix
+([#147](https://github.com/EONRaider/NETProtocols/issues/147), not yet
+versioned); per the roadmap's own release policy, only 2.0.0 was an
+actual PyPI release, and the comparative claims above draw on the
+finished tree. New planned work
 will open fresh issues rather than restating a list here, so this
 section stays accurate without upkeep. The wave before this one — TCP
 and IPv4 option parsing, ICMP message bodies, NDP, IPv6
@@ -408,7 +413,8 @@ corpus fixture and `ipaddress` accessors — shipped in 1.3.0; see
 
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
-enforced by CI on Python 3.12–3.14. The test suite is anchored by a
+enforced by CI; the test suite runs across Python 3.12–3.14, while
+`mypy` and `ruff check` run on 3.12. The test suite is anchored by a
 97-frame corpus of real captured traffic across 17 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
