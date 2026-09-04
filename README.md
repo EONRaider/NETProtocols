@@ -74,12 +74,14 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 `decode_frame()` walks the whole chain and hands back a `Packet`:
 
 ```python
-from netprotocols import decode_frame
+from netprotocols import TCP, decode_frame
 
 packet = decode_frame(frame)
-print(packet)              # Packet(Ethernet(...), IPv4(...), TCP(...))
-print(packet[1].src)       # '192.168.1.96'
-print(packet.consumed)     # bytes the headers occupied
+print(packet)                 # Packet(Ethernet(...), IPv4(...), TCP(...))
+print(packet[1].src)          # '192.168.1.96' — position, unchanged
+print(packet[TCP].flags_str)  # first TCP layer, or KeyError if none
+print(packet.get(TCP))        # same lookup, None instead of raising
+print(packet.consumed)        # bytes the headers occupied
 ```
 
 It works because every header answers two questions: `header_len` (how
