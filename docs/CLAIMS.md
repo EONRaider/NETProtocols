@@ -148,6 +148,121 @@ still true — more true than it was, since the gap narrowed from the
 2.9× that motivated Tier 1 in the first place — it just now describes
 the other direction.
 
+### Re-measured after closing the dpkt-throughput regression (2026-09-04, #147)
+
+Re-measuring every held claim once #107/#124 closed surfaced a
+regression none of the five tiers had been watching for: decode
+throughput against dpkt had reversed from the Tier 1 finding (1.16×
+faster) to ~11% slower, without anyone profiling why. #147 root-caused
+it with `cProfile`/`pstats` against the corpus decode loop rather than
+guessing from the tier history — two of the three tiers first
+suspected turned out on inspection not to touch the decode happy path
+at all.
+
+**What the profile actually showed**, against the loop
+`scripts/benchmark.py` measured at the time (a hand-rolled walk loop,
+not `decode_frame()` — see the methodology fix below):
+
+1. **`bytes_to_ipv6` (added by #99, not one of the three originally
+   suspected tiers) accounted for ~18% of total corpus decode time.**
+   #99 replaced `socket.inet_ntop` with a hand-rolled RFC 5952
+   canonicalizer for a real, non-negotiable reason — Pyodide's CPython
+   build has `AF_INET6` disabled — but formatted each of the 8 address
+   words with a separate f-string inside a generator, markedly slower
+   than the C-level socket call it replaced. #99 landed chronologically
+   after #91 (the last of the three suspects the roadmap named), so it
+   was invisible to that suspect list even though it lands squarely in
+   the Tier-1-to-now window that produced the regression.
+2. **`decode_frame()`'s `Packet(*layers, ...)` construction paid an
+   `isinstance(layer, Protocol)` check per layer that goes through
+   `Protocol`'s ABC `__instancecheck__` machinery** — ~7-8% of
+   `decode_frame()`'s own time. Every element in that list came from
+   this module's own `protocol.decode()` calls immediately before, so
+   the invariant was already guaranteed; the check was pure redundant
+   validation on an internal path, not a relaxation of anything the
+   *public* `Packet(...)` constructor still validates for arbitrary
+   caller-supplied arguments.
+3. **#87's registry dispatch and #91's structured diagnostics were
+   both ruled out directly, not just re-confirmed.** Reading every
+   `next_protocol()` override confirmed each keeps the documented
+   single-`dict.get` fast path when no registry override is passed;
+   reading every raise site #91 touched confirmed diagnostic fields
+   are populated only inside a raise, never on the happy path. Neither
+   shows up in the profile in any meaningful way (~2-3% combined,
+   matching #87's own prior 5.6 measurement of a *win*).
+
+**Fixes**, both behavior-preserving and verified as such before being
+measured for speed:
+
+- `bytes_to_ipv6` rewritten to format all eight words with one
+  `%`-formatting call instead of eight separate f-string calls through
+  a generator, then slice the pre-split result for the compressed
+  forms. Byte-identical to the previous implementation and to glibc's
+  `inet_ntop` — verified by the existing
+  `test_bytes_to_ipv6_matches_glibc` hypothesis test (`tests/test_ip.py`)
+  plus a 200,000-address differential run against the prior
+  implementation during development, zero mismatches. 2.1× faster in
+  isolation.
+- `Packet` gained a private `_from_decoded()` fast-construction path
+  (`object.__new__` plus direct attribute assignment, the same
+  shortcut `_base.py` already documents for Ethernet/ARP/IPv4 field
+  construction), used only by `decode_frame()`. The public
+  `Packet(...)` constructor is untouched and still validates arbitrary
+  arguments.
+
+**A methodology fix, not just a code fix:** `scripts/benchmark.py`'s
+measured/gated function had never called `decode_frame()` — #88
+shipped it as the documented public chain-walking API, but the
+benchmark kept its own hand-rolled copy of the pre-#88 loop, unchanged
+since before Tier 1. Every decode-throughput figure published in this
+file to date, including the "94,453 f/s" one this section replaces,
+described code real callers of the documented API never actually ran.
+`decode_netprotocols()` and `_netprotocols_chain()` now call
+`decode_frame()` directly, and the now-dead hand-rolled `walk()` was
+deleted rather than kept side by side. This is why the number below is
+not a clean apples-to-apples successor to the figure it replaces:
+
+- Under the **old** methodology (hand-rolled loop), the two fixes
+  above closed the dpkt gap from 1.12× back to near parity (~1.02-1.03×
+  across repeated runs) — the two accidental-overhead fixes alone did
+  almost all of that work, confirming the profile.
+- Under the **new** methodology (`decode_frame()`, what ships),
+  `decode_frame()` carries real, deliberate overhead beyond that
+  hand-rolled loop — the bounded-depth check (section 5) and
+  materializing every layer into a returned `Packet` — measured at
+  +5.9% over the hand-rolled loop after the `Packet` fast path (down
+  from +16.5% before it). That is capability, not accident, and this
+  register does not trade it away to chase a bigger number.
+
+Re-measured with the harness both fixes and the methodology fix apply
+to:
+
+```
+uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9 --depth
+```
+
+- CPython 3.12.3, x86-64 Linux, 97 corpus frames, same machine class as
+  every prior measurement in this file, run-to-run variance ≈ ±2%.
+
+| | frames/sec | vs. netprotocols |
+|---|---|---|
+| **netprotocols (post-#147, 2.2.0, via `decode_frame()`)** | **97,739** | — |
+| dpkt 1.9.8 | 106,619 | 1.09× (dpkt is faster) |
+| scapy 2.7.0 | 18,144 | 0.19× |
+
+netprotocols now decodes the corpus at 97,739 f/s against dpkt's
+106,619 — dpkt is ~9% faster, an improvement on the ~11% gap this
+section replaces even after accounting for the harder, more honest
+workload now being measured. The vs.-scapy gap is essentially
+unchanged, 5.4× against the prior 5.6× (noise-level). Decode depth is
+unchanged: netprotocols still reaches further than dpkt on 27 of 97
+frames and matches it on the other 70 (see 1.6).
+
+`benchmarks/baseline.json` — five tiers and this fix stale at a
+v1.3.0-era figure (114,388 f/s) that predated everything above — was
+refreshed to this tree's number (98,007.5 f/s / 6.5677 normalized,
+matching methodology).
+
 ---
 
 ## 1. Performance
@@ -155,35 +270,42 @@ the other direction.
 ### 1.1 "2.1× faster than scapy at decoding"
 **Status: VERIFIED — and still understated**
 
-*Published 2026-09-04 (embargo lifted, #107).*
+*Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
+after #147 closed the dpkt-throughput regression below — see that
+section for the methodology change (the benchmark now measures
+`decode_frame()`, not a hand-rolled loop that predated it).*
 
 Was 36,500 frames/sec against scapy 2.7.0's 17,100 at v1.3.0. Tier 1
-brought it to 6.2×; re-measured after Tiers 2-4 (see the embargo-lift
-re-measurement above): **94,453 against 16,826, a 5.6× gap.** The ratio
-narrowed as netprotocols took on more work per frame (registry
-dispatch, structured errors, the chain walker), but the headline "2.1×"
-claim was always a conservative floor and stays true by a wide margin.
+brought it to 6.2×; post-Tiers-2-4 it read 5.6×; re-measured via
+`decode_frame()` after #147 (see the regression-close re-measurement
+above): **97,739 against 18,144, a 5.4× gap** — flat against the prior
+figure within this file's own noise band. The headline "2.1×" claim
+was always a conservative floor and stays true by a wide margin.
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
 
-The wording is a positioning decision, not a measurement one: 5.6× is
+The wording is a positioning decision, not a measurement one: 5.4× is
 what the corpus shows on one machine today, and whoever writes the
 README should pick the number they are willing to defend on someone
 else's.
 
 ### 1.2 "Within 15% of dpkt on decode"
-**Status: VERIFIED — true again, from the other side**
+**Status: VERIFIED — the gap narrowed back, on a harder workload**
 
-*Published 2026-09-04 (embargo lifted, #107).*
+*Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
+after #147 closed the dpkt-throughput regression below.*
 
 v1.3.0 was 2.9× slower than dpkt. Tier 1 (#82-#86) briefly put
-netprotocols 1.16× *faster*. Re-measured after Tiers 2-4 (see the
-embargo-lift re-measurement above): **94,453 f/s against dpkt 1.9.8's
-105,525 — netprotocols is now ~11% slower**, comfortably still inside
-the 15% band the claim names, just no longer ahead. The added surface
-across Tiers 2-4 — a registry-backed dispatch table (#87), a shipped
-chain walker (#88), and structured per-raise-site error context (#91)
-chief among them — cost more than #82-#85's dispatch win banked.
+netprotocols 1.16× *faster*. Post-Tiers-2-4 it read ~11% slower — a
+regression nobody had profiled, closed by #147 (see the re-measurement
+above for the full root-cause writeup and the methodology fix that
+switched the benchmark to `decode_frame()`, the documented public API,
+in the same pass). Re-measured via `decode_frame()`: **97,739 f/s
+against dpkt 1.9.8's 106,619 — netprotocols is now ~9% slower**,
+comfortably still inside the 15% band the claim names, and a smaller
+gap than the figure it replaces despite now measuring more work per
+call (the bounded-depth check and full `Packet` construction that the
+old hand-rolled benchmark loop never exercised).
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
 
@@ -263,7 +385,10 @@ file. Both move with releases — re-check before quoting.
 **Status: VERIFIED**
 
 *Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
-against the Tiers-2-4 tree — same 27/70 split as originally measured.*
+against the Tiers-2-4 tree, and again after #147's `decode_frame()`
+methodology fix — same 27/70 split as originally measured; depth
+comes from the decoders' own strictness, untouched by anything the
+throughput fix or the benchmark-methodology change did.*
 
 On the 97-frame corpus, netprotocols reaches a deeper layer than dpkt
 on **27 frames** and stops at the same layer on the other 70. dpkt

@@ -62,7 +62,7 @@ BASELINE = REPOSITORY / "benchmarks" / "baseline.json"
 
 sys.path.insert(0, str(REPOSITORY / "src"))
 
-from netprotocols import Ethernet, Protocol, ProtocolError  # noqa: E402
+from netprotocols import ProtocolError, decode_frame  # noqa: E402
 
 
 def read_pcap(path: Path) -> list[bytes]:
@@ -92,23 +92,11 @@ def corpus_frames() -> list[bytes]:
     ]
 
 
-def walk(frame: bytes) -> int:
-    """The documented chain walk; returns the number of layers."""
-    cursor, layers = 0, 0
-    protocol: type[Protocol] | None = Ethernet
-    while protocol is not None:
-        header = protocol.decode(frame[cursor:])
-        cursor += header.header_len
-        protocol = header.next_protocol()
-        layers += 1
-    return layers
-
-
 def decode_netprotocols(frames: list[bytes]) -> int:
     decoded = 0
     for frame in frames:
         try:
-            walk(frame)
+            decode_frame(frame)
         except ProtocolError:
             continue
         decoded += 1
@@ -264,14 +252,7 @@ def _comparison_caveats() -> list[str]:
 
 
 def _netprotocols_chain(frame: bytes) -> list[str]:
-    cursor, names = 0, []
-    protocol: type[Protocol] | None = Ethernet
-    while protocol is not None:
-        header = protocol.decode(frame[cursor:])
-        cursor += header.header_len
-        names.append(type(header).__name__)
-        protocol = header.next_protocol()
-    return names
+    return [type(layer).__name__ for layer in decode_frame(frame)]
 
 
 def _dpkt_chain(frame: bytes) -> list[str]:

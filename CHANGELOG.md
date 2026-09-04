@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Closed a decode-throughput regression against dpkt that nobody had
+  been watching tier over tier (#147).** Re-measuring every held claim
+  after #107/#124 closed showed netprotocols had gone from 1.16× faster
+  than dpkt right after Tier 1 to ~11% slower after Tiers 2-4 — a
+  reversal none of the five tiers' own re-measurements had caught,
+  because none of them profiled, only re-measured before/after.
+  `cProfile` against the corpus decode loop found two causes, neither
+  of them the tiers first suspected: `bytes_to_ipv6` (added by #99 for
+  Pyodide portability, not one of the three tiers originally named)
+  formatted its eight address words one f-string at a time through a
+  generator, ~18% of total corpus decode time; `decode_frame()`'s
+  `Packet` construction paid a redundant `isinstance` check, through
+  `Protocol`'s ABC machinery, on a list already guaranteed to hold only
+  `Protocol` instances, ~7-8% of `decode_frame()`'s own time. Both
+  fixed without changing observable behavior: `bytes_to_ipv6` now
+  formats all eight words in one `%`-format call (verified
+  byte-identical against glibc's `inet_ntop` via the existing
+  hypothesis test, 2.1× faster in isolation); `Packet` gained an
+  internal `_from_decoded()` fast-construction path, used only by
+  `decode_frame()` — the public `Packet(...)` constructor still
+  validates arbitrary arguments exactly as before.
+- **`scripts/benchmark.py` now measures `decode_frame()`, the
+  documented public chain-walking API, instead of a hand-rolled loop
+  that predated it (#147).** The benchmark's `decode_netprotocols()`
+  kept its own copy of the pre-#88 walk loop, never updated when
+  `decode_frame()` shipped, so every decode-throughput figure this
+  project has published — including every number in `docs/CLAIMS.md`
+  section 1 before this release — described code the documented API's
+  callers never actually ran. `benchmarks/baseline.json`, five tiers
+  and this fix stale at a v1.3.0-era figure, was refreshed to match.
+
+See `docs/CLAIMS.md`'s "Re-measured after closing the
+dpkt-throughput regression" section for the full profiling writeup,
+before/after numbers under both the old and new benchmark
+methodology, and updated 1.1/1.2/1.6 figures.
+
 ## [2.2.0] - 2026-09-04
 
 ### Added

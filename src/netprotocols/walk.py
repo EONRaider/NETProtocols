@@ -170,4 +170,4 @@ def decode_frame(
             raise
         stopped_by = error
 
-    return Packet(*layers, stopped_by=stopped_by)
+    return Packet._from_decoded(layers, stopped_by)
