@@ -410,8 +410,11 @@ Reproduce: `uv run --group bench python scripts/benchmark.py --depth`.
 This is the control on every throughput figure in 1.1-1.3, not a
 footnote to them: a decoder that stops earlier has less to do, so
 "faster" only means something stated beside "and it decoded more". The
-depth number travels with the speed number in the same sentence,
-including in README.md.
+depth number travels with the speed number as the very next point,
+including in README.md, where it is the bullet immediately following
+the throughput one (corrected 2026-09-04 from "the same sentence",
+which overstated how tightly the two are joined there — an independent
+audit for #101 caught the mismatch).
 
 ### 1.7 "Decode throughput is regression-gated in CI"
 **Status: VERIFIED** — including the comparative form, per the #124 audit below
@@ -701,7 +704,15 @@ Reproduce a nightly-style run locally:
 ### 5.3 "99% test coverage"
 **Status: VERIFIED**
 
-1,935 statements, 1 missed (99.95%). Enforced, not merely reported:
+*Statement count refreshed 2026-09-04 (an independent audit for #101
+caught it): this section previously read "1,935 statements", which had
+already drifted from 1,441 — still sitting, unfixed until now, in
+`pyproject.toml`'s own inline comment above `fail_under`. The
+percentage read as stable across both drifts by coincidence: the miss
+count never moved while the codebase grew around it. Exactly the kind
+of thing Rule 4 exists to catch.*
+
+2,091 statements, 1 missed (99.95%). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
 regression below the gate fails the build (#79).
@@ -813,10 +824,14 @@ this, the README taught a hand-rolled loop, ARCHITECTURE.md showed it
 again, and the test suite carried a private copy — the most-used
 function in the library was the one it did not ship.
 
-Reproduce: `uv run pytest tests/test_walk.py` — 79 tests, including one
-that walks the corpus with a hand-rolled loop and asserts the shipped
-walker agrees layer for layer, which is what made retiring the copies
-safe.
+Reproduce: `uv run pytest tests/test_walk.py` — 85 tests (up from the
+79 recorded when this section was written, caught by an independent
+audit for #101 on 2026-09-04; the file didn't gain tests, one already
+there — `test_matches_a_hand_rolled_walk_over_the_corpus`, parametrized
+over the first 40 corpus frames — now collects its full 40 instances
+because the corpus has since grown past that slice). One of the 85
+walks the corpus with a hand-rolled loop and asserts the shipped walker
+agrees layer for layer, which is what made retiring the copies safe.
 
 Four properties are the actual claim, since a walker by itself is
 eight lines:
