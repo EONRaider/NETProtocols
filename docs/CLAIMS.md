@@ -431,25 +431,25 @@ VLAN, GRE and DHCP topologies. Every frame's checksums verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
-**Status: PARTLY TRUE — precision required**
+**Status: VERIFIED**
 
-What is true: Hypothesis fuzzing asserts that decoding never raises
-outside `ProtocolError`, that chain walks terminate, that layers
-recompose, that five TLV/name accessors never hang, and — as of #97 —
-that `bytes(decode(x)) == x` is Hypothesis-generated for **all 18**
-protocols, up from 4. `tests/strategies.py` holds one reusable strategy
-per protocol; `tests/test_fuzz.py::TestGeneralizedRoundTrips`
-parametrizes the property over all 14 that were missing it. Reproduce:
+Hypothesis fuzzing asserts that decoding never raises outside
+`ProtocolError`, that chain walks terminate, that layers recompose,
+that five TLV/name accessors never hang, and that `bytes(decode(x)) ==
+x` is Hypothesis-generated for **all 18** protocols, up from 4.
+`tests/strategies.py` holds one reusable strategy per protocol;
+`tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
+property over all 14 that were missing it (#97). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
-What is **not** yet true: CI still runs a fixed 200 examples with
-`derandomize=True` (#98) — the same 200 inputs on every build since the
-profile was written, for every property including this one.
-
-Until #98 lands, say "property-based fuzzing of the decode path,
-including a universally-generated round-trip property", not "fuzzed
-with a fresh seed on every run" — the corpus evidence in 5.1 does not
-have this limitation and is strong on its own.
+CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
+examples with `derandomize=True`, so a landed PR's result is
+reproducible; a scheduled `.github/workflows/fuzz.yml` additionally
+runs the *entire* suite nightly under a `"nightly"` profile — 10,000
+examples, a real random seed each run — so fuzzing explores new
+ground every night instead of replaying the same 200 inputs forever.
+Reproduce a nightly-style run locally:
+`HYPOTHESIS_PROFILE=nightly uv run pytest`.
 
 ### 5.3 "99% test coverage"
 **Status: VERIFIED**

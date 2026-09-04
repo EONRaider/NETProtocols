@@ -125,6 +125,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   addresses, and disagrees with *itself* between Python 3.11 and 3.12).
   IPv4 addressing is unaffected; behavior for every existing platform
   is unchanged, exception type included (#99).
+- **Nightly fuzzing with a moving seed.** `tests/test_fuzz.py`'s
+  `"netprotocols"` Hypothesis profile is deterministic on purpose (200
+  examples, `derandomize=True`) so a pull request is reproducible — but
+  that also means every build since it was written has run the *same*
+  200 inputs. A new `"nightly"` profile (10,000 examples, a real random
+  seed each run) runs the whole suite on a new schedule,
+  `.github/workflows/fuzz.yml` (03:00 UTC daily, plus manual dispatch),
+  kept out of `ci.yml` deliberately — `ci.yml` is reused by
+  `release.yml` via `workflow_call`, and a `schedule:` trigger there
+  would fire the whole PR/release gate on a cron, not just this
+  exploratory job. `.hypothesis/`'s example database accumulates
+  across nightly runs via `actions/cache` (keyed by run id with a
+  prefix restore-key, since a fixed key would restore forever but
+  never actually save a new entry) and uploads as a workflow artifact
+  on failure, so a counterexample is recoverable without repo write
+  access; a failed scheduled run's own red build is the notification
+  (GitHub already does this by default), so nothing here files an
+  issue on top of it. Reproduce locally:
+  `HYPOTHESIS_PROFILE=nightly uv run pytest`. Also adds a targeted
+  strategy building well-formed TCP SYN options (MSS, window scale,
+  SACK-Permitted, SACK, timestamps) — the real-capture corpus never
+  caught a SYN, so unlike NOP/Timestamps these otherwise depend on
+  `max_examples` alone stumbling into a well-formed TLV by chance
+  (#98).
 
 ## [2.0.0] - 2026-09-04
 
