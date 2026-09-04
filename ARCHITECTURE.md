@@ -384,8 +384,9 @@ src/netprotocols/
 ├── registry.py     public dispatch tables: register(), Registry
 ├── walk.py         decode_frame(): the shipped chain walker
 ├── _defaults.py    the built-in decoder map, installed at import
-├── packet.py       Packet composition, with_checksums()
+├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify
+├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py,

@@ -14,6 +14,7 @@ from netprotocols._enums import (
     IPProtocol,
 )
 from netprotocols.checksum import compute, internet_checksum, verify
+from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.vlan import VLAN
@@ -78,6 +79,7 @@ __all__ = [
     "DNSResourceRecord",
     "EtherType",
     "Ethernet",
+    "FlowKey",
     "ICMPv4",
     "ICMPv6",
     "IGMPv3GroupRecord",
@@ -107,6 +109,7 @@ __all__ = [
     "__version__",
     "compute",
     "decode_frame",
+    "flow_key",
     "internet_checksum",
     "random_mac",
     "register",

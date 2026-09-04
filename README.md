@@ -142,6 +142,24 @@ decoded exactly as strictly as before; the walk just declines to throw
 away the part that worked. Chain depth is bounded (`max_depth`,
 default 32), so a crafted frame cannot make the walker grind.
 
+## Flow keys
+
+`Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,
+for a header pair that never went through `decode_frame`) returns a
+canonical, direction-independent key for a TCP/UDP conversation — both
+directions of one flow produce the same key:
+
+```python
+request = decode_frame(client_to_server_frame)
+reply = decode_frame(server_to_client_frame)
+assert request.flow_key() == reply.flow_key()
+```
+
+It returns `None`, not an error, when there is nothing to key on: no
+enclosing IP layer, no TCP/UDP layer, or a transport layer without
+ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
+convention for message types that have none).
+
 ## Structural pattern matching
 
 Every decoded header works with `match`/`case` today, with no code

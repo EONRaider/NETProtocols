@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from netprotocols._base import Protocol
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     ProtocolError,
 )
+
+if TYPE_CHECKING:
+    from netprotocols.flow import FlowKey
 
 __all__ = ["Packet"]
 
@@ -94,6 +97,34 @@ class Packet:
 
     def __len__(self) -> int:
         return len(self.layers)
+
+    def flow_key(self) -> FlowKey | None:
+        """The canonical :class:`~netprotocols.flow.FlowKey` for this
+        packet's conversation, found by walking :attr:`layers` for the
+        first enclosing IPv4/IPv6 header and the first TCP/UDP layer
+        and delegating to :func:`~netprotocols.flow.flow_key`.
+
+        ``None`` if either layer is missing — a packet with no
+        transport layer, or a bare TCP/UDP segment built without an IP
+        header — and ``None`` for a transport layer with no ports to
+        key on (ICMP; see :func:`~netprotocols.flow.flow_key`).
+        """
+        from netprotocols.flow import flow_key as _flow_key
+        from netprotocols.layer3.ip import IPv4, IPv6
+        from netprotocols.layer4.tcp import TCP
+        from netprotocols.layer4.udp import UDP
+
+        ip = next(
+            (layer for layer in self.layers if isinstance(layer, (IPv4, IPv6))),
+            None,
+        )
+        transport = next(
+            (layer for layer in self.layers if isinstance(layer, (TCP, UDP))),
+            None,
+        )
+        if ip is None or transport is None:
+            return None
+        return _flow_key(transport, ip=ip)
 
     @property
     def consumed(self) -> int:
