@@ -78,8 +78,15 @@ methodology, and updated 1.1/1.2/1.6 figures.
   published there); left unfixed pending a maintainer decision on
   whether 2.2.0's publication was intentional, since fixing the prose
   first would paper over a real process question.
-
-## [2.2.0] - 2026-09-04
+- **Resolved the seventh finding above: 2.2.0's PyPI publication was
+  confirmed intentional.** The Roadmap section's "per the roadmap's own
+  release policy, only 2.0.0 was an actual PyPI release" is now
+  "the roadmap's original 'only at a major version bump' release policy
+  wasn't actually held to: both 2.0.0 and 2.2.0 — a minor release — are
+  on PyPI," and the roadmap table's 2.2.0 row gained the same
+  **released** marker 2.0.0 already carried. Issue #107, the source
+  both docs draw this from, updated its own stated policy line with a
+  dated correction rather than silently rewriting history.
 
 ### Added
 - **Typed accessors for every enum-backed field.** `_enums.py` defines
