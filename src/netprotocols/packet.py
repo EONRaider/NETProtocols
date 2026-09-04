@@ -19,6 +19,13 @@ class Packet:
 
     >>> packet = Packet(ethernet_header, ipv4_header, tcp_header)
     >>> bytes(packet)  # ready to be sent through a raw socket
+
+    Indexing takes either an ``int`` (position on the wire) or a
+    protocol class (first layer of that type): ``packet[0]`` is the
+    outermost header, ``packet[TCP]`` is the first ``TCP`` layer —
+    raising ``KeyError`` if there isn't one, where :meth:`get` returns
+    ``None`` instead. A ``Packet`` is hashable and usable as a dict key
+    or set member, consistent with :meth:`__eq__`.
     """
 
     __slots__ = ("layers", "stopped_by")
@@ -59,16 +66,34 @@ class Packet:
             and str(self.stopped_by) == str(other.stopped_by)
         )
 
-    def __getitem__(self, index: int) -> Protocol:
-        return self.layers[index]
+    def __hash__(self) -> int:
+        return hash((self.layers, type(self.stopped_by), str(self.stopped_by)))
+
+    def __getitem__(self, key: int | type[Protocol]) -> Protocol:
+        """``packet[0]`` indexes by position; ``packet[TCP]`` returns the
+        first layer of that type in wire order.
+
+        :raises KeyError: a type key matches no layer (dict-like
+            convention: ``[key]`` raises, :meth:`get` returns ``None``).
+        """
+        if isinstance(key, int):
+            return self.layers[key]
+        for layer in self.layers:
+            if isinstance(layer, key):
+                return layer
+        raise KeyError(key)
+
+    def get(self, layer_type: type[Protocol]) -> Protocol | None:
+        """The first layer of ``layer_type`` in wire order, or ``None``
+        if the packet has none (see :meth:`__getitem__` for the
+        raising form)."""
+        for layer in self.layers:
+            if isinstance(layer, layer_type):
+                return layer
+        return None
 
     def __len__(self) -> int:
         return len(self.layers)
-
-    @property
-    def payload(self) -> bytes:
-        """The serialized form of all layers, outermost first."""
-        return bytes(self)
 
     @property
     def consumed(self) -> int:
