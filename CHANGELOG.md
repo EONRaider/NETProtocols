@@ -58,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Separately, `DNS.questions` adds a `tuple[DNSQuestion, ...]` walking
   every entry of the question section — `question_name`/`question_type`
   /`question_class` exposed only the first and are unchanged (#96).
+- **A typed `DHCPOption`, alongside `DHCP.option_map`.** `option_map`
+  was the only accessor in the library returning a bare
+  `dict[int, bytes]` rather than typed objects; it is unchanged (still
+  returns exactly what it always did). A new `parsed_options` property
+  wraps the same, already RFC-3396-concatenated, mapping into a
+  `tuple[DHCPOption, ...]`, mirroring `TCPOption`/`IPv4Option`: `code`,
+  `data`, `code_name`, and a decoded `.value` for the option codes this
+  library understands — a single `ipaddress.IPv4Address` for Subnet
+  Mask (1)/Requested IP Address (50)/Server Identifier (54), a tuple of
+  one or more for Router (3)/Domain Name Server (6) (RFC 2132 permits
+  repeating either), the integer seconds for IP Address Lease Time
+  (51), the raw byte for Message Type (53). `None` — never raises —
+  for codes this library does not decode and malformed option data
+  (#96).
 
 ## [2.0.0] - 2026-09-04
 

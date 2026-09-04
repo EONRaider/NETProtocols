@@ -11,6 +11,7 @@ from netprotocols import (
     DHCP,
     UDP,
     ARPHardwareType,
+    DHCPOption,
     Ethernet,
     InvalidFieldError,
     IPv4,
@@ -188,6 +189,109 @@ class TestDHCPOptions:
     def test_message_type_wrong_length_is_none(self):
         raw = build_dhcp(options=build_options([(53, b"\x05\x05")]))
         assert DHCP.decode(raw).message_type is None
+
+
+class TestDHCPParsedOptions:
+    """#96: `parsed_options` is a typed view over `option_map` -- one
+    `DHCPOption` per (already RFC-3396-concatenated) code, decoding the
+    well-known ones into real values."""
+
+    def test_empty_options_parses_empty(self):
+        assert DHCP.decode(build_dhcp(options=b"")).parsed_options == ()
+
+    def test_single_ipv4_address_options(self):
+        raw = build_dhcp(
+            options=build_options(
+                [
+                    (1, ipv4_bytes("255.255.255.0")),  # subnet mask
+                    (50, ipv4_bytes("192.168.1.100")),  # requested IP
+                    (54, ipv4_bytes("192.168.1.1")),  # server identifier
+                ]
+            )
+        )
+        mask, requested, server_id = DHCP.decode(raw).parsed_options
+        assert mask.code == 1
+        assert mask.code_name == "Subnet Mask"
+        assert mask.value == IPv4Address("255.255.255.0")
+        assert requested.code_name == "Requested IP Address"
+        assert requested.value == IPv4Address("192.168.1.100")
+        assert server_id.code_name == "Server Identifier"
+        assert server_id.value == IPv4Address("192.168.1.1")
+
+    def test_address_list_options(self):
+        raw = build_dhcp(
+            options=build_options(
+                [
+                    (3, ipv4_bytes("10.0.0.1")),  # router, single
+                    (
+                        6,
+                        ipv4_bytes("10.0.0.53") + ipv4_bytes("10.0.0.54"),
+                    ),  # DNS servers, two
+                ]
+            )
+        )
+        router, dns = DHCP.decode(raw).parsed_options
+        assert router.code_name == "Router"
+        assert router.value == (IPv4Address("10.0.0.1"),)
+        assert dns.code_name == "Domain Name Server"
+        assert dns.value == (
+            IPv4Address("10.0.0.53"),
+            IPv4Address("10.0.0.54"),
+        )
+
+    def test_lease_time_option(self):
+        raw = build_dhcp(
+            options=build_options([(51, (86400).to_bytes(4, "big"))])
+        )
+        (lease,) = DHCP.decode(raw).parsed_options
+        assert lease.code_name == "IP Address Lease Time"
+        assert lease.value == 86400
+
+    def test_message_type_option(self):
+        raw = build_dhcp(options=build_options([(53, b"\x05")]))  # ACK
+        (msg_type,) = DHCP.decode(raw).parsed_options
+        assert msg_type.code_name == "Message Type"
+        assert msg_type.value == 5
+
+    def test_unknown_code_keeps_raw_data_and_none_value(self):
+        raw = build_dhcp(options=build_options([(77, b"\x01\x02\x03")]))
+        (option,) = DHCP.decode(raw).parsed_options
+        assert option.code == 77
+        assert option.code_name == "unknown (77)"
+        assert option.data == b"\x01\x02\x03"
+        assert option.value is None
+
+    def test_wrong_length_degrades_to_none_rather_than_raising(self):
+        # Subnet Mask normally 4 bytes; 3 here is malformed but should
+        # not raise -- read `data` raw instead.
+        raw = build_dhcp(options=build_options([(1, b"\xff\xff\xff")]))
+        (option,) = DHCP.decode(raw).parsed_options
+        assert option.value is None
+        assert option.data == b"\xff\xff\xff"
+
+    def test_split_option_is_concatenated_before_wrapping(self):
+        # RFC 3396: mirrors test_split_option_is_concatenated above --
+        # parsed_options sees the already-concatenated bytes, not two
+        # separate DHCPOption entries.
+        raw = build_dhcp(
+            options=build_options([(43, b"\xaa\xbb"), (43, b"\xcc\xdd")])
+        )
+        (option,) = DHCP.decode(raw).parsed_options
+        assert option.code == 43
+        assert option.data == b"\xaa\xbb\xcc\xdd"
+
+    def test_wire_order_is_preserved(self):
+        raw = build_dhcp(
+            options=build_options([(53, b"\x01"), (1, b"\xff\xff\xff\x00")])
+        )
+        codes = [option.code for option in DHCP.decode(raw).parsed_options]
+        assert codes == [53, 1]
+
+    def test_direct_construction(self):
+        option = DHCPOption(code=1, data=ipv4_bytes("255.255.255.0"))
+        assert option.code_name == "Subnet Mask"
+        assert option.value == IPv4Address("255.255.255.0")
+        assert DHCPOption(code=0).data == b""
 
 
 class TestDHCPContract:

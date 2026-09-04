@@ -31,7 +31,7 @@ from netprotocols.layer3.ipv6_ext import (
 )
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
-from netprotocols.layer7.dhcp import DHCP
+from netprotocols.layer7.dhcp import DHCP, DHCPOption
 from netprotocols.layer7.dns import (
     DNS,
     DNSOverTCP,
@@ -82,6 +82,7 @@ __all__ = [
     "VLAN",
     "ARPHardwareType",
     "ARPOperation",
+    "DHCPOption",
     "DNSOverTCP",
     "DNSQuestion",
     "DNSResourceRecord",

@@ -5,9 +5,11 @@ DHCP extends the fixed BOOTP frame: a 236-byte header (op through the
 variable list of TLV options. The fixed header is decoded in full; the
 options are kept raw and parsed on demand, so ``bytes(DHCP.decode(x))
 == x`` holds by construction and a message with unusual or vendor
-options still round-trips exactly. ``option_map`` walks the TLV list,
-and ``message_type`` reads the DHCP message type (option 53) that
-distinguishes a DISCOVER from an ACK.
+options still round-trips exactly. ``option_map`` walks the TLV list
+into a ``{code: value}`` dict; ``parsed_options`` wraps the same walk
+into a tuple of typed :class:`DHCPOption`; ``message_type`` reads the
+DHCP message type (option 53) that distinguishes a DISCOVER from an
+ACK.
 
 DHCP rides UDP between the server port (67) and the client port (68);
 it is terminal — it never encapsulates another protocol.
@@ -29,7 +31,7 @@ from netprotocols._base import (
 from netprotocols._enums import ARPHardwareType
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["DHCP"]
+__all__ = ["DHCP", "DHCPOption"]
 
 #: The four-byte value that begins the options field (RFC 2131 §3;
 #: the dotted form 99.130.83.99).
@@ -41,6 +43,18 @@ _OPT_END = 255
 
 #: The DHCP Message Type option (RFC 2132 §9.6).
 _OPT_MESSAGE_TYPE = 53
+
+#: Option codes whose value is a single IPv4 address (RFC 2132 §3.3
+#: Subnet Mask, §9.1 Requested IP Address, §9.7 Server Identifier).
+_SINGLE_ADDRESS_CODES = frozenset({1, 50, 54})
+
+#: Option codes whose value is one or more IPv4 addresses, most
+#: preferred first (RFC 2132 §3.5 Router, §3.8 Domain Name Server).
+_ADDRESS_LIST_CODES = frozenset({3, 6})
+
+#: The IP Address Lease Time option: a 32-bit seconds count (RFC 2132
+#: §9.2).
+_OPT_LEASE_TIME = 51
 
 _OP_NAMES: dict[int, str] = {1: "BOOTREQUEST", 2: "BOOTREPLY"}
 
@@ -54,6 +68,74 @@ _MESSAGE_TYPE_NAMES: dict[int, str] = {
     7: "RELEASE",
     8: "INFORM",
 }
+
+#: DHCP option codes this library names (RFC 2132); unknown codes fall
+#: back to their numeric value.
+_OPTION_CODE_NAMES: dict[int, str] = {
+    1: "Subnet Mask",
+    3: "Router",
+    6: "Domain Name Server",
+    50: "Requested IP Address",
+    51: "IP Address Lease Time",
+    53: "Message Type",
+    54: "Server Identifier",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DHCPOption:
+    """One DHCP option (RFC 2132), already RFC-3396-concatenated if it
+    appeared more than once — see :attr:`DHCP.option_map`, which
+    :attr:`DHCP.parsed_options` wraps.
+
+    :param code: Option code — ``1`` Subnet Mask, ``3`` Router, ``6``
+        Domain Name Server, ``50`` Requested IP Address, ``51`` IP
+        Address Lease Time, ``53`` Message Type, ``54`` Server
+        Identifier, ... (see :attr:`code_name`).
+    :param data: The option's value bytes, kept raw.
+    """
+
+    code: int
+    data: bytes = b""
+
+    @property
+    def code_name(self) -> str:
+        """Display name of the option code, e.g. ``"Subnet Mask"``;
+        falls back to ``"unknown (n)"`` for codes this library does
+        not name."""
+        return _OPTION_CODE_NAMES.get(self.code, f"unknown ({self.code})")
+
+    @property
+    def value(
+        self,
+    ) -> int | IPv4Address | tuple[IPv4Address, ...] | None:
+        """The decoded value, for the codes this library understands:
+        a single :class:`~ipaddress.IPv4Address` for Subnet Mask (1),
+        Requested IP Address (50) and Server Identifier (54); a tuple
+        of one or more, most preferred first, for Router (3) and
+        Domain Name Server (6) (RFC 2132 permits repeating either); the
+        integer seconds for IP Address Lease Time (51); the raw
+        message-type byte as an ``int`` for Message Type (53, see
+        :attr:`DHCP.message_type`). ``None`` — read :attr:`data` raw
+        instead — for codes this library does not decode and data
+        whose length does not match its code (degrades, never
+        raises)."""
+        if self.code in _SINGLE_ADDRESS_CODES and len(self.data) == 4:
+            return IPv4Address(bytes_to_ipv4(self.data))
+        if (
+            self.code in _ADDRESS_LIST_CODES
+            and self.data
+            and len(self.data) % 4 == 0
+        ):
+            return tuple(
+                IPv4Address(bytes_to_ipv4(self.data[i : i + 4]))
+                for i in range(0, len(self.data), 4)
+            )
+        if self.code == _OPT_LEASE_TIME and len(self.data) == 4:
+            return int.from_bytes(self.data, "big")
+        if self.code == _OPT_MESSAGE_TYPE and len(self.data) == 1:
+            return self.data[0]
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +389,22 @@ class DHCP(Protocol):
             parsed[code] = parsed.get(code, b"") + raw[cursor : cursor + length]
             cursor += length
         return parsed
+
+    @property
+    def parsed_options(self) -> tuple[DHCPOption, ...]:
+        """The TLV options as a tuple of :class:`DHCPOption`, one per
+        option code, in first-appearance wire order — a typed view
+        over :attr:`option_map` (an option split across several
+        appearances is concatenated there already, per RFC 3396).
+        Empty when the message carries no options.
+
+        :raises InvalidFieldError: if the options are malformed (see
+            :attr:`option_map`).
+        """
+        return tuple(
+            DHCPOption(code=code, data=data)
+            for code, data in self.option_map.items()
+        )
 
     @property
     def message_type(self) -> int | None:
