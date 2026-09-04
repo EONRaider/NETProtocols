@@ -282,6 +282,13 @@ subclassing `int`) so a contributor knows what would quietly break it.
 `tests/test_pattern_matching.py` pins both mechanisms and runs the
 README's own example over the corpus.
 
+#94 refined the mechanism rather than replacing it: `IPv4`, `TCP` and
+`DHCP` run to 11-15 fields, wide enough that the plain auto-generated
+`__match_args__` is unusable positionally, so those three now
+hand-declare a short, documented, tested tuple instead (`IPv4.src,
+dst, protocol`; every other header still relies on the plain
+auto-generated one). Keyword patterns are unaffected either way.
+
 ```python
 match ip:
     case IPv4(protocol=IPProtocol.TCP, ttl=t) if t > 32:

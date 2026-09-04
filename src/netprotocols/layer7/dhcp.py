@@ -101,6 +101,16 @@ class DHCP(Protocol):
     file: bytes = b"\x00" * 128
     options: bytes = b""
 
+    #: Curated positional form for `match`/`case` (#94): declared by
+    #: hand because the auto-generated tuple would list all 15 fields,
+    #: unusable positionally. ``op`` gives message direction
+    #: (BOOTREQUEST/BOOTREPLY); ``chaddr`` is the client's persistent
+    #: hardware identity, correlating a client across an exchange more
+    #: reliably than ``xid`` alone (RFC 2131 §4.1); ``yiaddr`` is the
+    #: assigned/offered lease address — the fields a consumer walking a
+    #: DORA exchange actually keys on.
+    __match_args__ = ("op", "chaddr", "yiaddr")
+
     _struct: ClassVar[Struct] = Struct("!4BIHH4s4s4s4s16s64s128s")
 
     @classmethod

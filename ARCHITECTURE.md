@@ -81,8 +81,20 @@ match ip:
    declaration order — `Ethernet.__match_args__ ==
    ('dst', 'src', 'ethertype')` — so a *positional* class pattern
    (`case Ethernet(dst, src, ethertype)`) works with no extra code. An
-   ordinary class has to declare `__match_args__` by hand to get that;
-   this library never does.
+   ordinary class has to declare `__match_args__` by hand to get that.
+   Most headers here never do either — but a few of the widest ones
+   are a deliberate exception: `IPv4`, `TCP` and `DHCP` run to 14, 11
+   and 15 fields respectively, so their full auto-generated tuple is
+   unusable positionally (nobody writes, or gets right, a
+   fourteen-slot pattern). Those three hand-declare a short
+   `__match_args__` instead — `IPv4.__match_args__ ==
+   ('src', 'dst', 'protocol')` — the two or three fields someone
+   drafting a positional pattern actually reaches for. The override is
+   documented at each class and pinned by
+   `tests/test_pattern_matching.py`, so it cannot drift the way an
+   *accidental* override would; keyword patterns
+   (`case IPv4(protocol=6)`) are unaffected by any of this and stay
+   the documented default (#94).
 2. **Every field with a fixed vocabulary of wire values is an
    `IntEnum`**, defined in [`_enums.py`](src/netprotocols/_enums.py),
    and `IntEnum` subclasses `int`. A *value* pattern therefore matches
@@ -107,11 +119,16 @@ there.)
 **Keeping this working is a contributor obligation, not a given.**
 Field declaration order is part of a class's public API — reordering
 fields changes what a positional pattern binds to, silently, for
-anyone matching by position. And a field carrying a closed set of wire
-values should stay an `IntEnum` sourced from `_enums.py` rather than
-degrade to a bare `int`; the moment it does, `case Header(field=SomeEnum.X)`
-stops matching and fails silently (the pattern falls through to the
-next `case`, it does not raise) rather than loudly.
+anyone matching by position. (The curated three are the exception:
+`IPv4`/`TCP`/`DHCP`'s hand-declared `__match_args__` is independent of
+field order, so reordering *their* fields cannot break positional
+matching — but adding or renaming one of the fields the curated tuple
+names does need the tuple, and the test pinning it, updated by hand.)
+And a field carrying a closed set of wire values should stay an
+`IntEnum` sourced from `_enums.py` rather than degrade to a bare
+`int`; the moment it does, `case Header(field=SomeEnum.X)` stops
+matching and fails silently (the pattern falls through to the next
+`case`, it does not raise) rather than loudly.
 
 ## The decode contract
 

@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises — for a wire value this library does not enumerate, so
   `bytes(decode(x)) == x` is unaffected for unrecognized values; the
   raw `int` field stays canonical and round-trips regardless (#95).
+- **IPv4, TCP and DHCP curate a short `__match_args__` by hand.** Their
+  full auto-generated positional form runs to 11-15 fields — unusable
+  positionally, since nobody writes, or gets right, a fourteen-slot
+  pattern. `IPv4.__match_args__ == ('src', 'dst', 'protocol')`,
+  `TCP.__match_args__ == ('src_port', 'dst_port', 'flags')`,
+  `DHCP.__match_args__ == ('op', 'chaddr', 'yiaddr')` — the two or
+  three fields someone drafting `case IPv4(...)` actually reaches for.
+  Every other header (including the still-wide `IPv6`, at 8 fields)
+  keeps the plain auto-generated tuple, and keyword patterns
+  (`case IPv4(protocol=6)`) are unaffected either way and stay the
+  documented default. `__match_args__` is part of the public API once
+  documented, so the chosen order is pinned by
+  `tests/test_pattern_matching.py` rather than left free to drift.
+  ARCHITECTURE.md and `docs/CLAIMS.md` are updated to describe this as
+  a deliberate, tested exception rather than the "this library never
+  hand-declares `__match_args__`" absolute they stated before (#94).
 
 ## [2.0.0] - 2026-09-04
 

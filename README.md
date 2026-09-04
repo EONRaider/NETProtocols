@@ -187,6 +187,20 @@ named value against the plain `int` the wire actually carries. See
 [ARCHITECTURE.md](ARCHITECTURE.md#structural-pattern-matching) for why
 both of those hold and how to keep them holding.
 
+`IPv4`, `TCP` and `DHCP` are wide enough (11-15 fields) that their
+full auto-generated positional form is unusable, so those three
+additionally curate a short `__match_args__` by hand — the fields
+someone matching by position actually reaches for:
+
+```python
+match ip:
+    case IPv4(src, dst, IPProtocol.TCP):
+        print(f"TCP: {src} -> {dst}")
+```
+
+Keyword patterns (`case IPv4(protocol=IPProtocol.TCP)`) work on every
+field regardless, curated or not, and stay the documented default.
+
 ```python
 from netprotocols import IPv4, IPProtocol, TCP
 
