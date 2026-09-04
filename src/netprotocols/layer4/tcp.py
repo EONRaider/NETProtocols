@@ -137,6 +137,13 @@ class TCP(Protocol):
     urgent_pointer: int
     options: bytes = b""
 
+    #: Curated positional form for `match`/`case` (#94): declared by
+    #: hand because the auto-generated tuple would list all 11 fields,
+    #: unusable positionally. ``src_port``/``dst_port`` identify the
+    #: connection, ``flags`` says what kind of segment this is (SYN,
+    #: SYN-ACK, ...) — mirrors :attr:`~netprotocols.IPv4.__match_args__`.
+    __match_args__ = ("src_port", "dst_port", "flags")
+
     _struct: ClassVar[Struct] = Struct("!HHIIHHHH")
 
     #: Flag names by bit position, least-significant first.

@@ -159,6 +159,15 @@ class IPv4(Protocol):
     dst: str
     options: bytes = b""
 
+    #: Curated positional form for `match`/`case` (#94): declared by
+    #: hand because the auto-generated tuple would list all 14 fields,
+    #: unusable positionally. ``src``/``dst`` identify the two
+    #: endpoints, ``protocol`` says what the payload is — the fields
+    #: someone drafting ``case IPv4(...)`` actually reaches for.
+    #: Keyword patterns (``case IPv4(protocol=6)``) are unaffected and
+    #: stay the documented default.
+    __match_args__ = ("src", "dst", "protocol")
+
     _struct: ClassVar[Struct] = Struct("!BBHHHBBH4s4s")
 
     flag_names: ClassVar[dict[int, str]] = {
