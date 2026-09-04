@@ -10,6 +10,7 @@ from conftest import FIXTURES, read_pcap
 from netprotocols import (
     DHCP,
     UDP,
+    ARPHardwareType,
     Ethernet,
     InvalidFieldError,
     IPv4,
@@ -73,6 +74,8 @@ class TestDHCPFields:
         assert dhcp.op == 2
         assert dhcp.op_name == "BOOTREPLY"
         assert dhcp.htype == 1
+        assert dhcp.htype_name == "Ethernet"
+        assert dhcp.htype_enum == ARPHardwareType.ETHERNET
         assert dhcp.hlen == 6
         assert dhcp.xid == 0x3903F326
         assert dhcp.yiaddr == "192.168.1.100"
@@ -89,6 +92,13 @@ class TestDHCPFields:
     def test_unknown_op_degrades(self):
         dhcp = DHCP.decode(build_dhcp(op=7))
         assert dhcp.op_name == "unknown (0x07)"
+
+    def test_unknown_htype_degrades(self):
+        raw = bytearray(build_dhcp())
+        raw[1] = 99  # htype = 99 (not a hardware type this library names)
+        dhcp = DHCP.decode(bytes(raw))
+        assert dhcp.htype_name == "unknown (99)"
+        assert dhcp.htype_enum is None
 
     def test_address_objects(self):
         dhcp = DHCP.decode(

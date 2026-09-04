@@ -285,6 +285,18 @@ class IPv4(Protocol):
         return _ip_protocol_name(self.protocol)
 
     @property
+    def protocol_enum(self) -> IPProtocol | None:
+        """The payload protocol as an
+        :class:`~netprotocols.IPProtocol`, or ``None`` for a value this
+        library does not enumerate; :attr:`protocol` stays the
+        canonical ``int`` (see :attr:`protocol_name` for the display
+        form)."""
+        try:
+            return IPProtocol(self.protocol)
+        except ValueError:
+            return None
+
+    @property
     def flags_name(self) -> str:
         """Display name of the fragmentation flags, e.g.
         ``"Don't fragment (DF)"``."""
@@ -434,6 +446,17 @@ class IPv6(Protocol):
     def next_header_name(self) -> str:
         """Display name of the payload protocol, e.g. ``"IPv6-ICMP"``."""
         return _ip_protocol_name(self.next_header)
+
+    @property
+    def next_header_enum(self) -> IPProtocol | None:
+        """The payload protocol as an
+        :class:`~netprotocols.IPProtocol` (see
+        :attr:`IPv4.protocol_enum`); ``None`` for a value this library
+        does not enumerate."""
+        try:
+            return IPProtocol(self.next_header)
+        except ValueError:
+            return None
 
     @property
     def traffic_class_hex_str(self) -> str:

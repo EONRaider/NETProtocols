@@ -8,6 +8,7 @@ import pytest
 from netprotocols import (
     VLAN,
     Ethernet,
+    EtherType,
     InvalidFieldError,
     IPv4,
     Protocol,
@@ -34,6 +35,7 @@ class TestVLANFields:
         assert tag.vid == 42
         assert tag.ethertype == 0x0800
         assert tag.ethertype_name == "IPv4"
+        assert tag.ethertype_enum == EtherType.IPV4
         assert tag.header_len == 4
 
     def test_roundtrip(self) -> None:
@@ -43,6 +45,7 @@ class TestVLANFields:
     def test_unknown_ethertype_name_falls_back(self) -> None:
         tag = VLAN(pcp=0, dei=0, vid=0, ethertype=0xCAFE)
         assert tag.ethertype_name == "0xcafe"
+        assert tag.ethertype_enum is None
 
     def test_tci_packs_the_bitfields(self) -> None:
         assert VLAN(pcp=7, dei=1, vid=42, ethertype=0).tci == 0xE02A + 0x1000

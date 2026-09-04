@@ -2,7 +2,13 @@ from ipaddress import IPv4Address, ip_network
 
 import pytest
 
-from netprotocols import ARP, InvalidIPv4AddressError
+from netprotocols import (
+    ARP,
+    ARPHardwareType,
+    ARPOperation,
+    EtherType,
+    InvalidIPv4AddressError,
+)
 
 
 @pytest.fixture
@@ -33,8 +39,12 @@ class TestARP:
         assert arp.tha == "00:00:00:00:00:00"
         assert arp.tpa == "24.166.173.159"
         assert arp.oper_name == "request"
+        assert arp.oper_enum == ARPOperation.REQUEST
         assert arp.ptype_name == "IPv4"
+        assert arp.ptype_enum == EtherType.IPV4
         assert arp.ptype_hex_str == "0x0800"
+        assert arp.htype_name == "Ethernet"
+        assert arp.htype_enum == ARPHardwareType.ETHERNET
         assert arp.header_len == 28
 
     def test_round_trip(self, raw_arp_header):
@@ -52,9 +62,13 @@ class TestARP:
     def test_unknown_display_values_degrade(self, arp_reply):
         from dataclasses import replace
 
-        odd = replace(arp_reply, oper=9, ptype=0x1234)
+        odd = replace(arp_reply, oper=9, ptype=0x1234, htype=99)
         assert odd.oper_name == "unknown (9)"
+        assert odd.oper_enum is None
         assert odd.ptype_name == "0x1234"
+        assert odd.ptype_enum is None
+        assert odd.htype_name == "unknown (99)"
+        assert odd.htype_enum is None
 
     def test_build(self, arp_reply):
         assert arp_reply.oper_name == "reply"

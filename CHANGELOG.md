@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Typed accessors for every enum-backed field.** `_enums.py` defines
+  `EtherType`, `IPProtocol`, `ARPOperation` and `ARPHardwareType`, but
+  until now no decoded field exposed them — only the `*_name` display
+  strings, and the enums themselves were used only for dispatch. Every
+  field with a fixed wire vocabulary now has an `*_enum` companion
+  alongside the existing `int` field and its `*_name` string, mirroring
+  the `src`/`src_address` precedent 1.3.0 established for IP addresses:
+  `Ethernet.ethertype_enum`, `VLAN.ethertype_enum`, `GRE.protocol_enum`,
+  `IPv4.protocol_enum`, `IPv6.next_header_enum` (and the three IPv6
+  extension headers that share the field: `IPv6HopByHopOptions`,
+  `IPv6DestinationOptions`, `IPv6Routing`, `IPv6Fragment`),
+  `ARP.oper_enum`, `ARP.ptype_enum`, `ARP.htype_name`/`ARP.htype_enum`
+  (new — `ARPHardwareType` was exported but referenced nowhere), and
+  `DHCP.htype_name`/`DHCP.htype_enum`. Each returns `None` — never
+  raises — for a wire value this library does not enumerate, so
+  `bytes(decode(x)) == x` is unaffected for unrecognized values; the
+  raw `int` field stays canonical and round-trips regardless (#95).
+
 ## [2.0.0] - 2026-09-04
 
 ### Development

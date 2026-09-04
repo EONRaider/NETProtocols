@@ -95,3 +95,14 @@ class Ethernet(Protocol):
         """Display name of the EtherType, e.g. ``"IPv4"``; falls back to
         the hexadecimal value for types unknown to this library."""
         return _ethertype_name(self.ethertype)
+
+    @property
+    def ethertype_enum(self) -> EtherType | None:
+        """The EtherType as an :class:`~netprotocols.EtherType`, or
+        ``None`` for a value this library does not enumerate;
+        :attr:`ethertype` stays the canonical ``int`` and round-trips
+        regardless (see :attr:`ethertype_name` for the display form)."""
+        try:
+            return EtherType(self.ethertype)
+        except ValueError:
+            return None

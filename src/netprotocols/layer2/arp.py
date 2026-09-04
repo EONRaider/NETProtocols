@@ -14,7 +14,7 @@ from netprotocols._base import (
     ipv4_to_bytes,
     mac_to_bytes,
 )
-from netprotocols._enums import ARPOperation, EtherType
+from netprotocols._enums import ARPHardwareType, ARPOperation, EtherType
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import validate_mac_addr
 
@@ -26,8 +26,10 @@ class ARP(Protocol):
     """An ARP packet for IPv4-over-Ethernet (the only binding this
     library implements: 6-byte hardware, 4-byte protocol addresses).
 
-    :param htype: Hardware type; ``1`` for Ethernet.
-    :param ptype: Protocol type as an EtherType; ``0x0800`` for IPv4.
+    :param htype: Hardware type; ``1`` for Ethernet (see
+        :class:`~netprotocols.ARPHardwareType`).
+    :param ptype: Protocol type as an EtherType; ``0x0800`` for IPv4
+        (see :class:`~netprotocols.EtherType`).
     :param hlen: Hardware address length in bytes; ``6`` for Ethernet.
     :param plen: Protocol address length in bytes; ``4`` for IPv4.
     :param oper: Operation code; ``1`` request, ``2`` reply (see
@@ -100,6 +102,17 @@ class ARP(Protocol):
             return f"unknown ({self.oper})"
 
     @property
+    def oper_enum(self) -> ARPOperation | None:
+        """The operation code as an :class:`~netprotocols.ARPOperation`,
+        or ``None`` for a value this library does not enumerate;
+        :attr:`oper` stays the canonical ``int`` (see :attr:`oper_name`
+        for the display form)."""
+        try:
+            return ARPOperation(self.oper)
+        except ValueError:
+            return None
+
+    @property
     def ptype_name(self) -> str:
         """Display name of the protocol type, e.g. ``"IPv4"``."""
         try:
@@ -108,9 +121,41 @@ class ARP(Protocol):
             return f"{self.ptype:#06x}"
 
     @property
+    def ptype_enum(self) -> EtherType | None:
+        """The protocol type as an :class:`~netprotocols.EtherType` (see
+        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
+        value this library does not enumerate."""
+        try:
+            return EtherType(self.ptype)
+        except ValueError:
+            return None
+
+    @property
     def ptype_hex_str(self) -> str:
         """The protocol type as a hexadecimal string, e.g. ``"0x0800"``."""
         return f"{self.ptype:#06x}"
+
+    @property
+    def htype_name(self) -> str:
+        """Display name of the hardware type, e.g. ``"Ethernet"``; falls
+        back to the numeric value for types this library does not
+        name."""
+        try:
+            return ARPHardwareType(self.htype).display_name
+        except ValueError:
+            return f"unknown ({self.htype})"
+
+    @property
+    def htype_enum(self) -> ARPHardwareType | None:
+        """The hardware type as an
+        :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
+        this library does not enumerate; :attr:`htype` stays the
+        canonical ``int`` (see :attr:`htype_name` for the display
+        form)."""
+        try:
+            return ARPHardwareType(self.htype)
+        except ValueError:
+            return None
 
     @property
     def spa_address(self) -> IPv4Address:
