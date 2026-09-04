@@ -88,6 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `None` — never raises — for every other kind and for malformed data
   on one of these three (a bad pointer, an unrecognized Timestamp
   flag, a short buffer) (#96).
+- **`IPv6Routing.segments` and `IPv6Option.value` for Router Alert /
+  Jumbo Payload.** `IPv6Routing.data` was entirely unparsed — no
+  segment-list extraction for any routing type. RH0 (`routing_type`
+  ``0``, deprecated by RFC 5095 but still seen — RFC 2460 §4.4) and
+  Mobile IPv6 (``2``, RFC 6275 §6.4) both store a 4-byte reserved field
+  followed by one IPv6 address per segment; `segments` decodes that
+  into a `tuple[ipaddress.IPv6Address, ...]`. RPL Source Routing (``3``,
+  RFC 6554) is deliberately **not** decoded: RFC 6554 §3 elides a
+  shared prefix from each intermediate address relative to the
+  enclosing packet's *destination* address, context this
+  one-extension-header accessor does not have — `data` stays available
+  raw. `None` for every other routing type and for malformed address
+  data. Separately, `IPv6Option.value` (Hop-by-Hop / Destination
+  Options TLVs) now decodes Router Alert (5, RFC 2711 §2.1) and Jumbo
+  Payload (194, RFC 2675 §2) into typed `int`s, the last of #96's four
+  pieces (`IPv6Option` "likewise decode[d] no values"); `None` for
+  every other type and malformed data, same contract throughout this
+  tier (#96).
 
 ## [2.0.0] - 2026-09-04
 

@@ -1,5 +1,8 @@
 """IPv6 extension headers (RFC 8200 §4.3-4.6), driven by corpus frames."""
 
+import socket
+from ipaddress import IPv6Address
+
 import pytest
 
 from conftest import FIXTURES, read_pcap
@@ -189,6 +192,7 @@ class TestOptionTLVs:
         assert alert.type == 5
         assert alert.type_name == "Router Alert"
         assert alert.data == b"\x00\x00"
+        assert alert.value == 0  # MLD
         assert padn.type == 1
         assert padn.type_name == "PadN"
         assert padn.data == b""
@@ -205,6 +209,7 @@ class TestOptionTLVs:
         assert jumbo.type == 194
         assert jumbo.type_name == "Jumbo Payload"
         assert jumbo.data == b"\x00\x10\x00\x00"
+        assert jumbo.value == 0x00100000
         assert jumbo.unrecognized_action == 3
 
     def test_destination_options_share_the_parser(self):
@@ -240,6 +245,118 @@ class TestOptionTLVs:
         hbh = IPv6HopByHopOptions.decode(raw)
         _ = hbh.parsed_options
         assert bytes(hbh) == raw
+
+
+class TestIPv6OptionValue:
+    """#96: `.value` decodes Router Alert and Jumbo Payload (RFC 2711
+    §2.1, RFC 2675 §2); every other type, and malformed data on one of
+    these two, degrades to `None` rather than raising."""
+
+    def test_unnamed_type_value_is_none(self):
+        assert IPv6Option(type=138, data=b"\xca\xfe").value is None
+
+    def test_pad1_and_padn_value_is_none(self):
+        assert IPv6Option(type=0).value is None
+        assert IPv6Option(type=1, data=b"\x00\x00").value is None
+
+    def test_router_alert_wrong_length_is_none(self):
+        assert IPv6Option(type=5, data=b"\x00").value is None
+
+    def test_jumbo_payload_wrong_length_is_none(self):
+        assert IPv6Option(type=194, data=b"\x00\x10\x00").value is None
+
+    def test_direct_construction(self):
+        assert IPv6Option(type=5, data=b"\x00\x01").value == 1  # RSVP
+        jumbo_len = 4_294_967_295  # max 32-bit value
+        option = IPv6Option(type=194, data=jumbo_len.to_bytes(4, "big"))
+        assert option.value == jumbo_len
+
+
+class TestIPv6RoutingSegments:
+    """#96: `segments` decodes RH0 and Mobile IPv6's address list (RFC
+    2460 §4.4, RFC 6275 §6.4); RPL (routing_type 3) is deliberately
+    left undecoded (its addresses are compressed relative to the
+    enclosing packet's destination, context this accessor lacks)."""
+
+    def test_rh0_two_segments(self):
+        reserved = b"\x00\x00\x00\x00"
+        addr_a = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
+        addr_b = socket.inet_pton(socket.AF_INET6, "2001:db8::2")
+        data = reserved + addr_a + addr_b
+        routing = IPv6Routing(
+            next_header=6,
+            hdr_ext_len=len(data) // 8,
+            routing_type=0,
+            segments_left=2,
+            data=data,
+        )
+        assert routing.segments == (
+            IPv6Address("2001:db8::1"),
+            IPv6Address("2001:db8::2"),
+        )
+
+    def test_rh0_no_segments_is_an_empty_tuple(self):
+        data = b"\x00\x00\x00\x00"  # reserved only, no addresses
+        routing = IPv6Routing(
+            next_header=6,
+            hdr_ext_len=0,
+            routing_type=0,
+            segments_left=0,
+            data=data,
+        )
+        assert routing.segments == ()
+
+    def test_mobile_ipv6_single_home_address(self):
+        reserved = b"\x00\x00\x00\x00"
+        home = socket.inet_pton(socket.AF_INET6, "2001:db8::dead")
+        data = reserved + home
+        routing = IPv6Routing(
+            next_header=59,
+            hdr_ext_len=len(data) // 8,
+            routing_type=2,
+            segments_left=1,
+            data=data,
+        )
+        assert routing.segments == (IPv6Address("2001:db8::dead"),)
+
+    def test_rpl_is_deliberately_not_decoded(self):
+        # RFC 6554 compresses addresses relative to the destination
+        # address, so this library does not attempt it -- even data
+        # shaped exactly like a valid RH0/MIPv6 payload stays None.
+        reserved = b"\x00\x00\x00\x00"
+        addr = socket.inet_pton(socket.AF_INET6, "2001:db8::1")
+        routing = IPv6Routing(
+            next_header=6,
+            hdr_ext_len=(len(reserved) + len(addr)) // 8,
+            routing_type=3,
+            segments_left=1,
+            data=reserved + addr,
+        )
+        assert routing.segments is None
+        assert routing.data == reserved + addr  # still available raw
+
+    def test_other_routing_types_are_none(self):
+        routing = IPv6Routing(
+            next_header=59,
+            hdr_ext_len=0,
+            routing_type=253,  # reserved for experimentation, RFC 3692
+            segments_left=0,
+            data=b"\x00\x00\x00\x00",
+        )
+        assert routing.segments is None
+
+    def test_malformed_address_area_is_none(self):
+        # 4-byte reserved + 8 bytes: not a whole number of 16-byte
+        # addresses.
+        data = b"\x00\x00\x00\x00" + b"\xff" * 8
+        routing = IPv6Routing(
+            next_header=6,
+            hdr_ext_len=len(data) // 8,
+            routing_type=0,
+            segments_left=1,
+            data=data,
+        )
+        assert routing.segments is None
 
 
 class TestRegistryGating:

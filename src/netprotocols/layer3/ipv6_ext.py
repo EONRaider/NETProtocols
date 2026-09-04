@@ -19,10 +19,11 @@ round-trip holds by construction.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import IPv6Address
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol
+from netprotocols._base import Protocol, bytes_to_ipv6
 from netprotocols._enums import IPProtocol
 from netprotocols.layer3.ip import _ip_protocol_class, _ip_protocol_name
 from netprotocols.registry import Registry
@@ -43,14 +44,19 @@ __all__ = [
 #: (RFC 8200 §4.2): Pad1, one byte of padding.
 _OPT_PAD1 = 0
 
+#: Option types this library decodes a typed :attr:`IPv6Option.value`
+#: for, beyond naming.
+_OPT_ROUTER_ALERT = 5
+_OPT_JUMBO_PAYLOAD = 194
+
 #: Option types this library names (RFC 8200 §4.2; RFC 2711 for Router
 #: Alert; RFC 2675 for Jumbo Payload); unknown types fall back to their
 #: numeric value.
 _OPTION_TYPE_NAMES: dict[int, str] = {
     _OPT_PAD1: "Pad1",
     1: "PadN",
-    5: "Router Alert",
-    194: "Jumbo Payload",
+    _OPT_ROUTER_ALERT: "Router Alert",
+    _OPT_JUMBO_PAYLOAD: "Jumbo Payload",
 }
 
 
@@ -85,6 +91,22 @@ class IPv6Option:
         Parameter Problem, ``3`` discard and send the Parameter Problem
         only to a non-multicast destination."""
         return self.type >> 6
+
+    @property
+    def value(self) -> int | None:
+        """The decoded value, for the types this library understands:
+        the 2-byte value as an ``int`` for Router Alert (5, RFC 2711
+        §2.1 — ``0`` MLD, ``1`` RSVP, ``2`` Active Networks); the
+        4-byte jumbogram payload length as an ``int`` for Jumbo Payload
+        (194, RFC 2675 §2 — used when the enclosing IPv6 header's
+        ``payload_length`` is ``0``). ``None`` — read :attr:`data` raw
+        instead — for every other type and for data whose length does
+        not match its type (degrades, never raises)."""
+        if self.type == _OPT_ROUTER_ALERT and len(self.data) == 2:
+            return int.from_bytes(self.data, "big")
+        if self.type == _OPT_JUMBO_PAYLOAD and len(self.data) == 4:
+            return int.from_bytes(self.data, "big")
+        return None
 
 
 def _next_in_ipv6_chain(
@@ -238,6 +260,15 @@ class IPv6DestinationOptions(_IPv6OptionsHeader):
     """The Destination Options header (RFC 8200 §4.6), protocol 60."""
 
 
+#: Routing types whose type-specific data this library decodes into a
+#: :attr:`IPv6Routing.segments` address list: RH0 (deprecated by RFC
+#: 5095, but still seen — RFC 2460 §4.4, a 4-byte reserved field then
+#: one 16-byte address per segment) and Mobile IPv6 (RFC 6275 §6.4,
+#: the same 4-byte-reserved-then-addresses shape, always one address).
+_ROUTING_TYPE_RH0 = 0
+_ROUTING_TYPE_MOBILE_IPV6 = 2
+
+
 @dataclass(frozen=True, slots=True)
 class IPv6Routing(Protocol):
     """The Routing header (RFC 8200 §4.4), protocol 43.
@@ -333,6 +364,36 @@ class IPv6Routing(Protocol):
             return IPProtocol(self.next_header)
         except ValueError:
             return None
+
+    @property
+    def segments(self) -> tuple[IPv6Address, ...] | None:
+        """The segment list, for the routing types this library
+        decodes: RH0 (:data:`routing_type` ``0``) and Mobile IPv6
+        (``2``) both store a 4-byte reserved field followed by one
+        :class:`~ipaddress.IPv6Address` per segment — decoded here
+        as-is.
+
+        RPL Source Routing (``3``, RFC 6554) is deliberately **not**
+        decoded: RFC 6554 §3 elides a shared prefix from each
+        intermediate address, relative to the enclosing packet's
+        *destination* address — context this accessor, scoped to one
+        extension header, does not have. Read :attr:`data` raw for it.
+
+        ``None`` for every other routing type and for data whose
+        length is not ``4 + 16 * N`` bytes for some ``N`` (degrades,
+        never raises)."""
+        if self.routing_type not in (
+            _ROUTING_TYPE_RH0,
+            _ROUTING_TYPE_MOBILE_IPV6,
+        ):
+            return None
+        addresses = self.data[4:]
+        if len(self.data) < 4 or len(addresses) % 16:
+            return None
+        return tuple(
+            IPv6Address(bytes_to_ipv6(addresses[i : i + 16]))
+            for i in range(0, len(addresses), 16)
+        )
 
 
 @dataclass(frozen=True, slots=True)
