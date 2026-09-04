@@ -265,6 +265,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identical, and `memoryview.hex` takes a separator too, so a
   decode-time view still works. No API change.
 
+### Removed
+- **BREAKING: `Packet.payload` is gone.** It was always exactly
+  `bytes(self)` — a redundant duplicate of `__bytes__`/`bytes(packet)`,
+  which already existed and is the unambiguous spelling — so it is
+  deleted outright rather than deprecated. This is the breaking change
+  behind the 2.0.0 major bump. Replace `packet.payload` with
+  `bytes(packet)`.
+
+### Added
+- **`Packet` indexes by protocol type, not just position, and is
+  hashable.** `packet[TCP]` returns the first `TCP` layer in wire order
+  (`KeyError` if there is none); `packet.get(TCP)` returns `None`
+  instead of raising. `packet[0]` keeps indexing positionally —
+  `__getitem__` branches on whether the key is an `int` or a type.
+  `Packet.__hash__` mirrors exactly what `__eq__` already compares
+  (`layers`, and `stopped_by`'s type and `str()`, not its identity —
+  `ProtocolError` has no custom `__eq__`), so a `Packet` is now usable
+  as a dict key or set member.
+
 ### Fixed
 - **The release workflow can no longer publish untested code.** Pushing
   a `v*` tag ran `uv build` and `uv publish` with no dependency on the
