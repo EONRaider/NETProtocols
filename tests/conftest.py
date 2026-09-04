@@ -6,33 +6,25 @@ others), locally captured frames, and the real-capture corpus under
 ``tests/fixtures/`` (see its MANIFEST.md).
 """
 
-import struct
 from pathlib import Path
 
 import pytest
 
+from netprotocols.pcap import read_pcap
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def read_pcap(path: Path) -> list[bytes]:
-    """Minimal classic-pcap reader for the fixture corpus (test-only;
-    independent of any library or application pcap code)."""
-    data = path.read_bytes()
-    magic = data[:4]
-    if magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
-        endian = ">"
-    elif magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
-        endian = "<"
-    else:
-        raise ValueError(f"{path.name}: not a pcap")
-    frames = []
-    cursor = 24
-    while cursor + 16 <= len(data):
-        (incl_len,) = struct.unpack_from(f"{endian}I", data, cursor + 8)
-        cursor += 16
-        frames.append(data[cursor : cursor + incl_len])
-        cursor += incl_len
-    return frames
+def pcap_frames(path: Path) -> list[bytes]:
+    """Every frame's raw bytes from one pcap file, in order.
+
+    A thin adapter over :func:`netprotocols.pcap.read_pcap` for call
+    sites that only want frame bytes, not timestamps (see
+    :func:`corpus_frames` for both) — this suite no longer carries its
+    own pcap-parsing implementation (#100); it exercises the shipped
+    one, the same as any other caller would.
+    """
+    return [frame.data for frame in read_pcap(path.read_bytes())]
 
 
 def corpus_frames() -> list[tuple[str, int, bytes]]:
@@ -40,7 +32,7 @@ def corpus_frames() -> list[tuple[str, int, bytes]]:
     return [
         (pcap.name, index, frame)
         for pcap in sorted(FIXTURES.glob("*.pcap"))
-        for index, frame in enumerate(read_pcap(pcap))
+        for index, frame in enumerate(pcap_frames(pcap))
     ]
 
 

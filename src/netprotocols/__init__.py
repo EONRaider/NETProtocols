@@ -41,6 +41,12 @@ from netprotocols.layer7.dns import (
     SOARecord,
 )
 from netprotocols.packet import Packet
+from netprotocols.pcap import (
+    CapturedFrame,
+    read_captures,
+    read_pcap,
+    read_pcapng,
+)
 from netprotocols.registry import (
     DEFAULT,
     Registry,
@@ -54,6 +60,7 @@ from netprotocols.utils.exceptions import (
     InvalidIPv4AddressError,
     InvalidMACAddressError,
     InvalidManufacturerCodeError,
+    MalformedCaptureError,
     MaxDepthExceededError,
     ProtocolError,
     TruncatedHeaderError,
@@ -82,6 +89,7 @@ __all__ = [
     "VLAN",
     "ARPHardwareType",
     "ARPOperation",
+    "CapturedFrame",
     "DHCPOption",
     "DNSOverTCP",
     "DNSQuestion",
@@ -106,6 +114,7 @@ __all__ = [
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
     "MXRecord",
+    "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
     "Packet",
@@ -123,6 +132,9 @@ __all__ = [
     "flow_key",
     "internet_checksum",
     "random_mac",
+    "read_captures",
+    "read_pcap",
+    "read_pcapng",
     "register",
     "register_all",
     "validate_ipv4_addr",

@@ -597,15 +597,27 @@ the corpus, that is **0.95x** — 5% *slower* — because for one small
 frame the view costs more to build than the copy it saves.
 
 So the walker slices whatever it is handed and never converts: `bytes`
-stays fastest for a single frame, and a `memoryview` over a large
-contiguous capture buffer keeps slices zero-copy, which is the case
-#100 measured at 1.8x. Byte-exact round-tripping through a
-`memoryview` is asserted over the corpus.
+stays fastest for a single frame. `netprotocols.pcap` (#100) tried the
+same idea one level up — slicing each frame lazily out of a
+`memoryview` over the whole capture buffer, instead of copying the
+buffer once and slicing `bytes` per frame — on the theory that a
+memoryview over a *large contiguous* buffer would keep those slices
+zero-copy. Measured, it was not a win: **0.91x-0.98x** across
+synthetic captures from ~6MB to ~140MB, sometimes measurably slower.
+The reason generalizes #88's own finding rather than contradicting it:
+a real capture is many *small* frames, not one large one, and a
+`memoryview` slice's own object overhead is paid per frame — it adds
+up faster than the one-time copy it was meant to avoid. `read_pcap`/
+`read_pcapng`/`read_captures` therefore copy their input once up
+front and return plain `bytes` per frame regardless of whether they
+were given `bytes` or a `memoryview`; the parameter still accepts
+either, for caller convenience, not for a performance contract.
 
-This one is worth stating publicly *as a process claim*: the obvious
-optimisation was proposed, measured, and rejected on its own numbers,
-and both the number and its reproduction are written down. Rule 1 with
-teeth.
+This one is worth stating publicly *as a process claim* twice over:
+the obvious optimisation was proposed, measured, and rejected on its
+own numbers — once for a single frame (#88), and again for a whole
+capture's worth of them (#100) — and every number and its reproduction
+is written down. Rule 1 with teeth.
 
 ### 5.9 "Explains bad input instead of merely rejecting it"
 **Status: VERIFIED** (#91)
