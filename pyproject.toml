@@ -1,6 +1,6 @@
 [project]
 name = "netprotocols"
-version = "2.0.0"
+version = "2.2.0"
 description = "Low-level implementations of common networking protocols"
 readme = "README.md"
 license = "MIT"
