@@ -23,6 +23,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols._enums import EtherType
 from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
@@ -38,7 +39,8 @@ class VLAN(Protocol):
     :param dei: Drop eligible indicator, ``0`` or ``1``.
     :param vid: VLAN identifier, ``0``-``4095`` (``0`` = priority tag,
         ``0xFFF`` = wildcard).
-    :param ethertype: EtherType of the payload that follows this tag.
+    :param ethertype: EtherType of the payload that follows this tag
+        (see :class:`~netprotocols.EtherType`).
     """
 
     pcp: int
@@ -101,3 +103,14 @@ class VLAN(Protocol):
     def ethertype_name(self) -> str:
         """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``."""
         return _ethertype_name(self.ethertype)
+
+    @property
+    def ethertype_enum(self) -> EtherType | None:
+        """The tagged payload's EtherType as an
+        :class:`~netprotocols.EtherType` (see
+        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
+        value this library does not enumerate."""
+        try:
+            return EtherType(self.ethertype)
+        except ValueError:
+            return None

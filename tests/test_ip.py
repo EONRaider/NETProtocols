@@ -2,7 +2,14 @@ from ipaddress import IPv4Address, IPv6Address, ip_network
 
 import pytest
 
-from netprotocols import TCP, InvalidFieldError, IPv4, IPv4Option, IPv6
+from netprotocols import (
+    TCP,
+    InvalidFieldError,
+    IPProtocol,
+    IPv4,
+    IPv4Option,
+    IPv6,
+)
 
 
 def ipv4_with_options(options: bytes) -> IPv4:
@@ -42,6 +49,7 @@ class TestIPv4:
         assert ip.ttl == 64
         assert ip.protocol == 6
         assert ip.protocol_name == "TCP"
+        assert ip.protocol_enum == IPProtocol.TCP
         assert ip.checksum == 0x2B51
         assert ip.checksum_hex_str == "0x2b51"
         assert ip.src == "192.168.1.96"
@@ -61,7 +69,9 @@ class TestIPv4:
         unknown = (
             b"\x45" + raw_ipv4_header[1:9] + b"\xfd" + raw_ipv4_header[10:]
         )
-        assert IPv4.decode(unknown).protocol_name == "unknown (253)"
+        decoded = IPv4.decode(unknown)
+        assert decoded.protocol_name == "unknown (253)"
+        assert decoded.protocol_enum is None
 
     def test_ihl_out_of_range_rejected(self, raw_ipv4_header):
         from dataclasses import replace
@@ -122,6 +132,7 @@ class TestIPv6:
         assert ip.payload_length == 120
         assert ip.next_header == 6
         assert ip.next_header_name == "TCP"
+        assert ip.next_header_enum == IPProtocol.TCP
         assert ip.hop_limit == 255
         assert ip.src == "fe80::1"
         assert ip.dst == "ff02::1"
@@ -148,6 +159,12 @@ class TestIPv6:
         ip = IPv6.decode(raw_ipv6_header)
         assert ip.traffic_class_hex_str == "0x00"
         assert ip.flow_label_hex_str == "0x00000"
+
+    def test_unknown_next_header_enum_is_none(self, raw_ipv6_header):
+        unknown = raw_ipv6_header[:6] + b"\xfd" + raw_ipv6_header[7:]
+        decoded = IPv6.decode(unknown)
+        assert decoded.next_header_name == "unknown (253)"
+        assert decoded.next_header_enum is None
 
 
 class TestIPv4Options:

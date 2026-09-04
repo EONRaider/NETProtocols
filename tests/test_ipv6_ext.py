@@ -46,6 +46,7 @@ class TestMLDBehindHopByHop:
         assert hbh.header_len == 8
         assert hbh.next_header == IPProtocol.IPV6_ICMP
         assert hbh.next_header_name == "IPv6-ICMP"
+        assert hbh.next_header_enum == IPProtocol.IPV6_ICMP
         # Router Alert option (type 5, length 2, value 0 = MLD).
         assert hbh.options[:4] == b"\x05\x02\x00\x00"
 
@@ -117,6 +118,7 @@ class TestDecodeContract:
         assert routing.header_len == 8
         assert routing.next_protocol() is ICMPv6
         assert routing.next_header_name == "IPv6-ICMP"
+        assert routing.next_header_enum == IPProtocol.IPV6_ICMP
 
     def test_fragment_round_trip_preserves_reserved_bits(self):
         raw = b"\x3a\xa5\x01\x5b\xde\xad\xbe\xef"
@@ -127,6 +129,19 @@ class TestDecodeContract:
         assert fragment.m_flag == 1
         assert bytes(fragment) == raw
         assert fragment.next_header_name == "IPv6-ICMP"
+        assert fragment.next_header_enum == IPProtocol.IPV6_ICMP
+
+    def test_unknown_next_header_enum_is_none(self):
+        # 253/254 are reserved for experimentation (RFC 3692) and named
+        # by no IPProtocol member this library enumerates.
+        for cls in (IPv6HopByHopOptions, IPv6DestinationOptions):
+            header = cls.decode(b"\xfd\x00\x05\x02\x00\x00\x01\x00")
+            assert header.next_header_name == "unknown (253)"
+            assert header.next_header_enum is None
+        routing = IPv6Routing.decode(b"\xfd\x00\x03\x01" + b"\x00" * 4)
+        assert routing.next_header_enum is None
+        fragment = IPv6Fragment.decode(b"\xfd\xa5\x01\x5b\xde\xad\xbe\xef")
+        assert fragment.next_header_enum is None
 
     def test_trailing_bytes_tolerated(self):
         header = IPv6HopByHopOptions.decode(self.RAW_HBH + b"payload")

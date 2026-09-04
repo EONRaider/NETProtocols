@@ -9,6 +9,7 @@ from conftest import FIXTURES, read_pcap
 from netprotocols import (
     GRE,
     Ethernet,
+    EtherType,
     ICMPv4,
     IPProtocol,
     IPv4,
@@ -66,6 +67,7 @@ class TestGREFields:
         assert gre.header_len == 4
         assert gre.protocol_type == 0x0800
         assert gre.protocol_name == "IPv4"
+        assert gre.protocol_enum == EtherType.IPV4
         assert gre.version == 0
         assert gre.checksum_present == 0
         assert gre.key_present == 0
@@ -117,9 +119,9 @@ class TestGREFields:
 
     def test_unknown_protocol_type_name(self):
         # Transparent Ethernet Bridging (0x6558) is not decoded here.
-        assert GRE.decode(build_gre(protocol_type=0x6558)).protocol_name == (
-            "0x6558"
-        )
+        gre = GRE.decode(build_gre(protocol_type=0x6558))
+        assert gre.protocol_name == "0x6558"
+        assert gre.protocol_enum is None
 
 
 class TestGREChain:

@@ -22,6 +22,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols._enums import EtherType
 from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import TruncatedHeaderError
@@ -121,6 +122,16 @@ class GRE(Protocol):
         """Display name of ``protocol_type``, e.g. ``"IPv4"``; falls back
         to the hexadecimal value for EtherTypes unknown to this library."""
         return _ethertype_name(self.protocol_type)
+
+    @property
+    def protocol_enum(self) -> EtherType | None:
+        """``protocol_type`` as an :class:`~netprotocols.EtherType` (see
+        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
+        value this library does not enumerate."""
+        try:
+            return EtherType(self.protocol_type)
+        except ValueError:
+            return None
 
     @property
     def checksum(self) -> int | None:

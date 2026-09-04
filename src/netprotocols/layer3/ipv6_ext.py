@@ -23,6 +23,7 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol
+from netprotocols._enums import IPProtocol
 from netprotocols.layer3.ip import _ip_protocol_class, _ip_protocol_name
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
@@ -100,7 +101,8 @@ def _next_header_name(number: int) -> str:
 class _IPv6OptionsHeader(Protocol):
     """Shared shape of the TLV-style extension headers.
 
-    :param next_header: Protocol number of what follows this header.
+    :param next_header: Protocol number of what follows this header
+        (see :class:`~netprotocols.IPProtocol`).
     :param hdr_ext_len: Header length in 8-octet units, excluding the
         first 8 octets; must equal ``(len(options) - 6) // 8``.
     :param options: The header's remaining bytes (TLV-encoded options),
@@ -166,6 +168,17 @@ class _IPv6OptionsHeader(Protocol):
         return _next_header_name(self.next_header)
 
     @property
+    def next_header_enum(self) -> IPProtocol | None:
+        """What follows this header as an
+        :class:`~netprotocols.IPProtocol` (see
+        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
+        this library does not enumerate."""
+        try:
+            return IPProtocol(self.next_header)
+        except ValueError:
+            return None
+
+    @property
     def parsed_options(self) -> tuple[IPv6Option, ...]:
         """The option TLVs as a tuple of :class:`IPv6Option`, in wire
         order, parsed on demand (RFC 8200 §4.2) — padding included:
@@ -229,7 +242,8 @@ class IPv6DestinationOptions(_IPv6OptionsHeader):
 class IPv6Routing(Protocol):
     """The Routing header (RFC 8200 §4.4), protocol 43.
 
-    :param next_header: Protocol number of what follows this header.
+    :param next_header: Protocol number of what follows this header
+        (see :class:`~netprotocols.IPProtocol`).
     :param hdr_ext_len: Header length in 8-octet units, excluding the
         first 8; must equal ``(len(data) - 4) // 8``.
     :param routing_type: Routing variant (e.g. 2 for Mobile IPv6,
@@ -309,12 +323,24 @@ class IPv6Routing(Protocol):
         """Display name of what follows, e.g. ``"TCP"``."""
         return _next_header_name(self.next_header)
 
+    @property
+    def next_header_enum(self) -> IPProtocol | None:
+        """What follows this header as an
+        :class:`~netprotocols.IPProtocol` (see
+        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
+        this library does not enumerate."""
+        try:
+            return IPProtocol(self.next_header)
+        except ValueError:
+            return None
+
 
 @dataclass(frozen=True, slots=True)
 class IPv6Fragment(Protocol):
     """The Fragment header (RFC 8200 §4.5), protocol 44 — fixed 8 bytes.
 
-    :param next_header: Protocol number of the *reassembled* payload.
+    :param next_header: Protocol number of the *reassembled* payload
+        (see :class:`~netprotocols.IPProtocol`).
     :param reserved: Reserved byte, carried verbatim.
     :param fragment_offset: Offset of this fragment's data in 8-octet
         units (13 bits).
@@ -370,3 +396,14 @@ class IPv6Fragment(Protocol):
     def next_header_name(self) -> str:
         """Display name of the reassembled payload's protocol."""
         return _next_header_name(self.next_header)
+
+    @property
+    def next_header_enum(self) -> IPProtocol | None:
+        """The reassembled payload's protocol as an
+        :class:`~netprotocols.IPProtocol` (see
+        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
+        this library does not enumerate."""
+        try:
+            return IPProtocol(self.next_header)
+        except ValueError:
+            return None

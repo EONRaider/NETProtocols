@@ -26,6 +26,7 @@ from netprotocols._base import (
     bytes_to_mac,
     ipv4_to_bytes,
 )
+from netprotocols._enums import ARPHardwareType
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["DHCP"]
@@ -61,7 +62,9 @@ class DHCP(Protocol):
 
     :param op: Message op code — ``1`` request (client→server), ``2``
         reply (server→client).
-    :param htype: Hardware address type (``1`` = Ethernet).
+    :param htype: Hardware address type (``1`` = Ethernet; see
+        :class:`~netprotocols.ARPHardwareType` — the same registry
+        :class:`~netprotocols.ARP` uses).
     :param hlen: Hardware address length (``6`` for Ethernet).
     :param hops: Relay hop count.
     :param xid: Transaction identifier correlating a request and reply.
@@ -167,6 +170,28 @@ class DHCP(Protocol):
     def op_name(self) -> str:
         """Display name of the op code, e.g. ``"BOOTREQUEST"``."""
         return _OP_NAMES.get(self.op, f"unknown ({self.op:#04x})")
+
+    @property
+    def htype_name(self) -> str:
+        """Display name of the hardware type, e.g. ``"Ethernet"``; falls
+        back to the numeric value for types this library does not
+        name."""
+        try:
+            return ARPHardwareType(self.htype).display_name
+        except ValueError:
+            return f"unknown ({self.htype})"
+
+    @property
+    def htype_enum(self) -> ARPHardwareType | None:
+        """The hardware type as an
+        :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
+        this library does not enumerate; :attr:`htype` stays the
+        canonical ``int`` (see :attr:`htype_name` for the display
+        form)."""
+        try:
+            return ARPHardwareType(self.htype)
+        except ValueError:
+            return None
 
     @property
     def is_broadcast(self) -> bool:

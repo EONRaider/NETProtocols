@@ -1,6 +1,6 @@
 import pytest
 
-from netprotocols import ARP, Ethernet, InvalidMACAddressError
+from netprotocols import ARP, Ethernet, EtherType, InvalidMACAddressError
 
 
 class TestEthernet:
@@ -10,6 +10,7 @@ class TestEthernet:
         assert eth.src == "00:07:0d:af:f4:54"
         assert eth.ethertype == 0x0806
         assert eth.ethertype_name == "ARP"
+        assert eth.ethertype_enum == EtherType.ARP
         assert eth.header_len == 14
 
     def test_round_trip(self, raw_eth_header):
@@ -34,6 +35,7 @@ class TestEthernet:
         )
         assert eth.next_protocol() is None
         assert eth.ethertype_name == "0x88cc"
+        assert eth.ethertype_enum is None
 
     def test_invalid_mac_rejected(self):
         with pytest.raises(InvalidMACAddressError):
