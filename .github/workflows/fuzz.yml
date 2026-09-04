@@ -1,0 +1,64 @@
+name: Nightly fuzz
+
+# Separate from ci.yml on purpose: ci.yml is reused via workflow_call
+# by release.yml specifically so the release gate and the PR gate never
+# drift apart (see the comment at the top of ci.yml). Folding a
+# schedule trigger into it would fire that whole ladder on a cron too,
+# not just this exploratory job.
+on:
+  schedule:
+    # Arbitrary; 03:00 UTC lands after most contributors' working day
+    # across common timezones, clear of any push/PR traffic.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # tests/test_fuzz.py's own "netprotocols" profile is deliberately
+  # derandomize=True at 200 examples, so CI has run the *same* 200
+  # inputs on every push since it was written. This job runs the whole
+  # suite under the "nightly" profile instead (10,000 examples, a real
+  # random seed each time — see tests/test_fuzz.py's module docstring),
+  # so it explores new ground every run rather than replaying the same
+  # counterexample search forever. Pinned to Python 3.12 only, unlike
+  # the "test" job's full matrix: this is an exploratory job, not a
+  # compatibility gate, and 3x the interpreters would 3x its cost for
+  # no extra coverage of what it is actually looking for.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      # Keyed by run id with a prefix restore-key: a fixed key would
+      # restore forever but (actions/cache never overwrites an existing
+      # key) never actually save a new one, so nothing would
+      # accumulate. This restores the most recent run's cache and saves
+      # today's as a new entry, so Hypothesis's example database grows
+      # night over night instead of starting cold every time.
+      - name: Restore accumulated Hypothesis examples
+        uses: actions/cache@v4
+        with:
+          path: .hypothesis
+          key: hypothesis-nightly-${{ github.run_id }}
+          restore-keys: |
+            hypothesis-nightly-
+      - name: Run the full suite under the nightly fuzz profile
+        env:
+          HYPOTHESIS_PROFILE: nightly
+        run: uv run --frozen pytest
+      # A failed scheduled run already notifies repo watchers by
+      # default (GitHub's standard behavior) — that red run *is* the
+      # report; nothing here files an issue on top of it. This just
+      # makes the minimal counterexample recoverable without needing
+      # repo write access to re-run the job locally.
+      - name: Upload the failing example database
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypothesis-nightly-failure-${{ github.run_id }}
+          path: .hypothesis
+          retention-days: 30

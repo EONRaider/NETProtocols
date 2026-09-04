@@ -6,12 +6,24 @@ anything else — and the documented chain walk terminates under the
 same rule. Strategies mix pure random bytes with mutations of real
 corpus frames (much better at reaching deep decode branches).
 
-The hypothesis profile is deterministic (``derandomize=True``) so an
-unrelated pull request can never trip a freshly discovered
-counterexample; bump ``max_examples`` locally to explore.
+Two Hypothesis profiles are registered:
+
+- ``"netprotocols"`` (the default, loaded unless overridden): 200
+  examples, ``derandomize=True`` so an unrelated pull request can
+  never trip a freshly discovered counterexample.
+- ``"nightly"``: 10,000 examples, a real random seed each run
+  (``derandomize=False``) — the profile ``.github/workflows/fuzz.yml``
+  runs on a schedule, deliberately trading determinism for a moving
+  seed that explores new ground on every run instead of replaying the
+  same 200 inputs forever (#98).
+
+Select a profile with ``HYPOTHESIS_PROFILE`` (read once, at import
+time) — e.g. ``HYPOTHESIS_PROFILE=nightly pytest tests/test_fuzz.py``
+reproduces a nightly run locally.
 """
 
 import contextlib
+import os
 
 import pytest
 from hypothesis import given, settings
@@ -39,6 +51,7 @@ from netprotocols import (
     IPv6Routing,
     Packet,
     ProtocolError,
+    TCPOption,
 )
 from strategies import ROUND_TRIP_STRATEGIES
 from test_corpus import walk
@@ -46,7 +59,10 @@ from test_corpus import walk
 settings.register_profile(
     "netprotocols", max_examples=200, deadline=None, derandomize=True
 )
-settings.load_profile("netprotocols")
+settings.register_profile(
+    "nightly", max_examples=10_000, deadline=None, derandomize=False
+)
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "netprotocols"))
 
 ALL_PROTOCOLS = (
     Ethernet,
@@ -182,6 +198,101 @@ class TestConstrainedRoundTrips:
             identification=identification,
         )
         assert IPv6Fragment.decode(bytes(header)) == header
+
+
+# TCP option kinds a real SYN carries (RFC 9293 §3.2; RFC 7323 for
+# Window Scale and Timestamps; RFC 2018 for SACK). The real-capture
+# corpus never caught a SYN (tests/fixtures/MANIFEST.md), so unlike
+# NOP/Timestamps (kinds 1, 8 — exercised via other captured traffic),
+# MSS/window-scale/SACK are otherwise fuzzed only as arbitrary bytes
+# inside ``fuzz_input`` above, which essentially never lands on a
+# well-formed TLV by chance. This strategy builds one on purpose.
+_KIND_NOP = 1
+_KIND_MSS = 2
+_KIND_WINDOW_SCALE = 3
+_KIND_SACK_PERMITTED = 4
+_KIND_SACK = 5
+_KIND_TIMESTAMPS = 8
+
+
+@st.composite
+def tcp_syn_options(draw: st.DrawFn) -> tuple[bytes, list[TCPOption]]:
+    """Well-formed SYN-shaped option bytes (MSS, window scale,
+    SACK-Permitted, timestamps, then a 1-2 block SACK, NOP-padded to a
+    multiple of 4), paired with the :class:`TCPOption` list
+    ``TCP.decode`` should produce from them."""
+    mss = draw(st.integers(min_value=0, max_value=0xFFFF))
+    shift = draw(st.integers(min_value=0, max_value=0xFF))
+    tsval = draw(st.integers(min_value=0, max_value=0xFFFFFFFF))
+    tsecr = draw(st.integers(min_value=0, max_value=0xFFFFFFFF))
+    # Capped at 2 blocks (not RFC 2018's 4): MSS + window scale +
+    # SACK-Permitted + timestamps already spend 19 of the 40 bytes TCP's
+    # 4-bit data offset allows for options, leaving room for at most 2
+    # 8-byte SACK blocks plus up-to-3 bytes of NOP padding.
+    blocks = draw(
+        st.lists(
+            st.tuples(
+                st.integers(min_value=0, max_value=0xFFFFFFFF),
+                st.integers(min_value=0, max_value=0xFFFFFFFF),
+            ),
+            min_size=1,
+            max_size=2,
+        )
+    )
+    sack_data = b"".join(
+        left.to_bytes(4, "big") + right.to_bytes(4, "big")
+        for left, right in blocks
+    )
+
+    raw = (
+        bytes([_KIND_MSS, 4])
+        + mss.to_bytes(2, "big")
+        + bytes([_KIND_WINDOW_SCALE, 3, shift])
+        + bytes([_KIND_SACK_PERMITTED, 2])
+        + bytes([_KIND_TIMESTAMPS, 10])
+        + tsval.to_bytes(4, "big")
+        + tsecr.to_bytes(4, "big")
+        + bytes([_KIND_SACK, 2 + len(sack_data)])
+        + sack_data
+    )
+    padding = (-len(raw)) % 4
+    raw += bytes([_KIND_NOP]) * padding
+
+    expected = [
+        TCPOption(kind=_KIND_MSS, data=mss.to_bytes(2, "big")),
+        TCPOption(kind=_KIND_WINDOW_SCALE, data=bytes([shift])),
+        TCPOption(kind=_KIND_SACK_PERMITTED),
+        TCPOption(
+            kind=_KIND_TIMESTAMPS,
+            data=tsval.to_bytes(4, "big") + tsecr.to_bytes(4, "big"),
+        ),
+        TCPOption(kind=_KIND_SACK, data=sack_data),
+        *([TCPOption(kind=_KIND_NOP)] * padding),
+    ]
+    return raw, expected
+
+
+class TestTCPSynOptionsRoundTrip:
+    @given(drawn=tcp_syn_options())
+    def test_synthesized_options_round_trip_and_decode(
+        self, drawn: tuple[bytes, list[TCPOption]]
+    ) -> None:
+        raw, expected_options = drawn
+        header = TCP(
+            src_port=1234,
+            dst_port=443,
+            seq=0,
+            ack=0,
+            data_offset=5 + len(raw) // 4,
+            reserved=0,
+            flags=0b0_0000_0010,  # SYN
+            window=0xFFFF,
+            checksum=0,
+            urgent_pointer=0,
+            options=raw,
+        )
+        assert TCP.decode(bytes(header)) == header
+        assert list(header.parsed_options) == expected_options
 
 
 class TestGeneralizedRoundTrips:
