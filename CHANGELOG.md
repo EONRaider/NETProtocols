@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every entry of the question section — `question_name`/`question_type`
   /`question_class` exposed only the first and are unchanged (#96).
 
+## [2.0.0] - 2026-09-04
+
 ### Development
 - **The round-trip property (`bytes(decode(x)) == x`) is now
   Hypothesis-generated for all 18 protocols, not 4.** It previously
