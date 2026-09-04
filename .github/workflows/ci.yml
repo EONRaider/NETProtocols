@@ -50,6 +50,29 @@ jobs:
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import netprotocols; print(netprotocols.__version__)"
 
+  # Proves the README's browser/WASM claim (#99) against the real
+  # thing, not a simulation of it: boots an actual Pyodide runtime
+  # (scripts/pyodide/run_in_pyodide.mjs, via Node — no browser needed,
+  # same WebAssembly build either way) and decodes the whole
+  # real-capture corpus with the wheel this job just built. See
+  # scripts/pyodide/check_in_pyodide.py for what it checks and why.
+  pyodide:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: scripts/pyodide
+      - run: >-
+          node scripts/pyodide/run_in_pyodide.mjs
+          "$GITHUB_WORKSPACE" scripts/pyodide/check_in_pyodide.py
+
   # Blocking, at 15% below the committed baseline. The threshold has
   # runner data behind it: this job's first run measured 3.7% away from
   # a baseline recorded on entirely different hardware, and run-to-run

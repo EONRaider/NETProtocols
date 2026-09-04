@@ -324,7 +324,7 @@ out of a full TCP/IP stack rather than a standalone codec. We are MIT,
 ## 3. Purity and portability
 
 ### 3.1 "Runs where scapy cannot — including the browser"
-**Status: GATED ON #99**
+**Status: VERIFIED (the capability, via CI's `pyodide` job); COMPARATIVE — HELD (the claim)**
 
 > ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
 > evidence below stands and should keep being re-measured; none of it
@@ -452,11 +452,12 @@ with a fresh seed on every run" — the corpus evidence in 5.1 does not
 have this limitation and is strong on its own.
 
 ### 5.3 "99% test coverage"
-**Status: VERIFIED, GATE PENDING #79**
+**Status: VERIFIED**
 
-1,441 statements, 3 missed. But coverage is currently *reported* and
-never *enforced*, so this is a snapshot rather than a guarantee until
-#79 adds `fail_under`.
+1,935 statements, 1 missed (99.95%). Enforced, not merely reported:
+`[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
+runs with `--cov-report=term` on every push and pull request, so a
+regression below the gate fails the build (#79).
 
 ### 5.4 "Validation that cannot be skipped, on a decode path that does not pay for it"
 **Status: VERIFIED**

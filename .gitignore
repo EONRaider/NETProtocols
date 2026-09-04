@@ -150,3 +150,8 @@ amass.log
 
 # Written by the benchmark CI step (scripts/benchmark.py output)
 benchmark.out
+
+# npm dependency (the pyodide package itself) for scripts/pyodide/ —
+# CI installs it fresh from package-lock.json, same as any other
+# lockfile-pinned dependency.
+scripts/pyodide/node_modules/
