@@ -177,6 +177,7 @@ class TestIPv4Options:
         assert alert.kind == 148
         assert alert.kind_name == "Router Alert"
         assert alert.data == b"\x00\x00"
+        assert alert.value == 0  # "router shall examine packet"
         assert bytes(ip) == raw  # parsing never re-encodes
 
     def test_record_route(self):
@@ -236,3 +237,87 @@ class TestIPv4Options:
         option = IPv4Option(kind=148, data=b"\x00\x00")
         assert option.kind_name == "Router Alert"
         assert IPv4Option(kind=0).data == b""
+
+
+class TestIPv4OptionValue:
+    """#96: `.value` decodes Record Route, Timestamp and Router Alert
+    (RFC 791 §3.1, RFC 2113); every other kind, and malformed data on
+    one of these three, degrades to `None` rather than raising."""
+
+    def test_record_route_decodes_the_addresses_recorded_so_far(self):
+        # pointer=12: two 4-byte addresses already recorded (RFC 791
+        # §3.1 -- the smallest legal pointer, 4, means none yet).
+        route_area = (
+            IPv4Address("192.0.2.1").packed + IPv4Address("192.0.2.2").packed
+        )
+        data = bytes([12]) + route_area
+        ip = ipv4_with_options(bytes([7, 2 + len(data)]) + data)
+        record = ip.parsed_options[0]
+        assert record.value == (
+            IPv4Address("192.0.2.1"),
+            IPv4Address("192.0.2.2"),
+        )
+
+    def test_record_route_pointer_at_minimum_is_no_addresses_yet(self):
+        data = bytes([4])  # pointer=4, nothing recorded yet
+        ip = ipv4_with_options(bytes([7, 2 + len(data)]) + data)
+        record = ip.parsed_options[0]
+        assert record.value == ()
+
+    def test_record_route_pointer_below_minimum_is_none(self):
+        data = bytes([2])  # 2 < 4: not a legal pointer value
+        ip = ipv4_with_options(bytes([7, 2 + len(data)]) + data)
+        record = ip.parsed_options[0]
+        assert record.value is None
+
+    def test_record_route_pointer_past_the_route_area_is_none(self):
+        # pointer=12 claims two filled addresses; only one is present.
+        data = bytes([12]) + IPv4Address("10.0.0.1").packed
+        ip = ipv4_with_options(bytes([7, 2 + len(data)]) + data)
+        record = ip.parsed_options[0]
+        assert record.value is None
+
+    def test_timestamp_flag_0_is_plain_milliseconds(self):
+        entries = (100_000).to_bytes(4, "big") + (100_004).to_bytes(4, "big")
+        data = bytes([4, 0]) + entries  # pointer=4, overflow=0, flag=0
+        ip = ipv4_with_options(bytes([68, 2 + len(data)]) + data)
+        timestamp = ip.parsed_options[0]
+        assert timestamp.value == (100_000, 100_004)
+
+    def test_timestamp_flag_1_pairs_address_with_timestamp(self):
+        entry = IPv4Address("192.0.2.9").packed + (12_345).to_bytes(4, "big")
+        data = bytes([4, 1]) + entry  # flag=1: address precedes timestamp
+        ip = ipv4_with_options(bytes([68, 2 + len(data)]) + data)
+        timestamp = ip.parsed_options[0]
+        assert timestamp.value == ((IPv4Address("192.0.2.9"), 12_345),)
+
+    def test_timestamp_flag_3_also_pairs_address_with_timestamp(self):
+        entry = IPv4Address("192.0.2.10").packed + (5).to_bytes(4, "big")
+        data = bytes([4, 3]) + entry  # flag=3: prespecified addresses
+        ip = ipv4_with_options(bytes([68, 2 + len(data)]) + data)
+        timestamp = ip.parsed_options[0]
+        assert timestamp.value == ((IPv4Address("192.0.2.10"), 5),)
+
+    def test_timestamp_unrecognized_flag_is_none(self):
+        data = bytes([4, 2]) + b"\x00\x00\x00\x00"  # flag=2 is not defined
+        ip = ipv4_with_options(bytes([68, 2 + len(data)]) + data)
+        timestamp = ip.parsed_options[0]
+        assert timestamp.value is None
+
+    def test_router_alert_malformed_length_is_none(self):
+        data = b"\x00"  # Router Alert is always exactly 2 bytes
+        ip = ipv4_with_options(bytes([148, 2 + len(data)]) + data)
+        alert = ip.parsed_options[0]
+        assert alert.value is None
+
+    def test_unnamed_kind_value_is_none(self):
+        ip = ipv4_with_options(b"\x83\x03\x01")  # Loose Source Route
+        option = ip.parsed_options[0]
+        assert option.value is None
+
+    def test_direct_construction(self):
+        route_area = IPv4Address("198.51.100.1").packed
+        option = IPv4Option(kind=7, data=bytes([8]) + route_area)
+        assert option.value == (IPv4Address("198.51.100.1"),)
+        alert = IPv4Option(kind=148, data=b"\x00\x00")
+        assert alert.value == 0

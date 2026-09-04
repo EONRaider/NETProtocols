@@ -72,6 +72,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (51), the raw byte for Message Type (53). `None` — never raises —
   for codes this library does not decode and malformed option data
   (#96).
+- **`IPv4Option.value` decodes Record Route, Timestamp and Router
+  Alert.** `IPv4Option` had `kind_name` and no `.value` — the three
+  common kinds (RFC 791 §3.1, RFC 2113) were named but their contents
+  left raw, unlike `TCPOption`, which already decodes its values.
+  Record Route (7) decodes to a `tuple[ipaddress.IPv4Address, ...]` of
+  the addresses recorded so far — the option's own pointer byte says
+  how many of the address slots are actually filled, not the option's
+  total length. Timestamp (68) decodes to `tuple[int, ...]` of plain
+  millisecond timestamps when its flag selects that shape, or
+  `tuple[tuple[ipaddress.IPv4Address, int], ...]` of (address,
+  timestamp) pairs when the flag says each entry carries one — the
+  overflow counter and pointer are not decoded, read `data` raw for
+  those. Router Alert (148) decodes to the 2-byte value as `int`.
+  `None` — never raises — for every other kind and for malformed data
+  on one of these three (a bad pointer, an unrecognized Timestamp
+  flag, a short buffer) (#96).
 
 ## [2.0.0] - 2026-09-04
 

@@ -4,8 +4,9 @@ The IPv4 options are kept as raw ``bytes`` (IHL aware), so
 ``bytes(IPv4.decode(x)) == x`` holds by construction; the
 ``parsed_options`` accessor walks the option TLV list on demand and
 never re-encodes, mirroring TCP's. The common kinds — Record Route,
-Timestamp, Router Alert (RFC 791 §3.1, RFC 2113) — are named, and
-unknown kinds keep their raw data.
+Timestamp, Router Alert (RFC 791 §3.1, RFC 2113) — are named via
+``kind_name`` and decoded into a typed ``value``; unknown kinds keep
+their raw data.
 """
 
 from __future__ import annotations
@@ -85,14 +86,20 @@ def _ip_protocol_name(number: int) -> str:
 _OPT_EOL = 0
 _OPT_NOP = 1
 
+#: Option kinds this library decodes a typed :attr:`IPv4Option.value`
+#: for, beyond naming (RFC 791 §3.1; RFC 2113 for Router Alert).
+_OPT_RECORD_ROUTE = 7
+_OPT_TIMESTAMP = 68
+_OPT_ROUTER_ALERT = 148
+
 #: IPv4 option kinds this library names (RFC 791 §3.1; RFC 2113 for
 #: Router Alert); unknown kinds fall back to their numeric value.
 _OPTION_KIND_NAMES: dict[int, str] = {
     _OPT_EOL: "End of Option List",
     _OPT_NOP: "No-Operation",
-    7: "Record Route",
-    68: "Timestamp",
-    148: "Router Alert",
+    _OPT_RECORD_ROUTE: "Record Route",
+    _OPT_TIMESTAMP: "Timestamp",
+    _OPT_ROUTER_ALERT: "Router Alert",
 }
 
 
@@ -116,6 +123,79 @@ class IPv4Option:
         falls back to ``"unknown (n)"`` for kinds this library does not
         name."""
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
+
+    @property
+    def value(
+        self,
+    ) -> (
+        int
+        | tuple[IPv4Address, ...]
+        | tuple[int, ...]
+        | tuple[tuple[IPv4Address, int], ...]
+        | None
+    ):
+        """The decoded value, for the kinds this library understands:
+
+        - Record Route (7): the addresses recorded so far, as a tuple
+          of :class:`~ipaddress.IPv4Address` — ``data[0]`` is the
+          pointer to the next free slot (RFC 791 §3.1: the smallest
+          legal value is 4, meaning none recorded yet), so the number
+          of addresses already filled in is ``(pointer - 4) // 4``.
+        - Timestamp (68): the low nibble of ``data[1]`` is the flag
+          (RFC 791 §3.1) selecting the entry shape — ``0`` a tuple of
+          plain millisecond timestamps (``tuple[int, ...]``), ``1`` or
+          ``3`` a tuple of ``(address, timestamp)`` pairs
+          (``tuple[tuple[IPv4Address, int], ...]``) since each entry
+          also carries the IP module's address. The overflow counter
+          (high nibble of ``data[1]``) and an unrecognized flag value
+          are not decoded here — read :attr:`data` raw for those.
+        - Router Alert (148): the 2-byte value as an ``int`` (RFC 2113
+          §2; ``0`` is the only value currently defined — "router
+          shall examine packet").
+
+        ``None`` — read :attr:`data` raw instead — for kinds this
+        library does not decode, an unrecognized Timestamp flag, and
+        data whose length or pointer is inconsistent with its kind
+        (degrades, never raises)."""
+        if self.kind == _OPT_RECORD_ROUTE and len(self.data) >= 1:
+            return self._record_route_addresses()
+        if self.kind == _OPT_TIMESTAMP and len(self.data) >= 2:
+            return self._timestamp_entries()
+        if self.kind == _OPT_ROUTER_ALERT and len(self.data) == 2:
+            return int.from_bytes(self.data, "big")
+        return None
+
+    def _record_route_addresses(self) -> tuple[IPv4Address, ...] | None:
+        pointer = self.data[0]
+        route_area = self.data[1:]
+        filled_bytes = pointer - 4
+        if pointer < 4 or filled_bytes % 4 or filled_bytes > len(route_area):
+            return None
+        filled = route_area[:filled_bytes]
+        return tuple(
+            IPv4Address(bytes_to_ipv4(filled[i : i + 4]))
+            for i in range(0, len(filled), 4)
+        )
+
+    def _timestamp_entries(
+        self,
+    ) -> tuple[int, ...] | tuple[tuple[IPv4Address, int], ...] | None:
+        flag = self.data[1] & 0x0F
+        entries = self.data[2:]
+        if flag == 0 and entries and len(entries) % 4 == 0:
+            return tuple(
+                int.from_bytes(entries[i : i + 4], "big")
+                for i in range(0, len(entries), 4)
+            )
+        if flag in (1, 3) and entries and len(entries) % 8 == 0:
+            return tuple(
+                (
+                    IPv4Address(bytes_to_ipv4(entries[i : i + 4])),
+                    int.from_bytes(entries[i + 4 : i + 8], "big"),
+                )
+                for i in range(0, len(entries), 8)
+            )
+        return None
 
 
 @dataclass(frozen=True, slots=True)
