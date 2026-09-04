@@ -284,6 +284,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ProtocolError` has no custom `__eq__`), so a `Packet` is now usable
   as a dict key or set member.
 
+- **Canonical, direction-independent flow keys.** `netprotocols.flow`
+  is a new small module (`FlowKey`, `flow_key()`) that folds a TCP/UDP
+  segment and its enclosing IPv4/IPv6 header into a key that is
+  identical for both directions of one conversation:
+
+  ```python
+  from netprotocols import flow_key
+
+  flow_key(tcp, ip=ipv4) == flow_key(reply_tcp, ip=reply_ipv4)  # True
+  ```
+
+  `FlowKey` is a `NamedTuple` — canonicalizing the two directions is
+  comparing the two `(address, port)` endpoint tuples and always
+  emitting the lexicographically smaller one first, which a plain
+  tuple already orders natively; every other frozen dataclass in this
+  codebase models a wire format (`decode()`/`__bytes__`/`_struct`), and
+  a derived key isn't one. `Packet.flow_key()` is the convenience form:
+  it walks `self.layers` for the first IPv4/IPv6 and TCP/UDP layers and
+  delegates to the free function, `None` if either is missing. Reads
+  whichever of `IPv4.protocol` / `IPv6.next_header` the enclosing
+  header actually has — the same semantic field, different attribute
+  name. A transport layer with no ports (ICMP) returns `None` from
+  both forms, rather than raising or inventing a port-slot convention
+  for a message type that has none.
+
 ### Fixed
 - **The release workflow can no longer publish untested code.** Pushing
   a `v*` tag ran `uv build` and `uv publish` with no dependency on the
