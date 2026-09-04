@@ -7,6 +7,7 @@ from netprotocols import (
     IPv4,
     IPv6,
     NDPOption,
+    TruncatedHeaderError,
 )
 
 #: The target of the corpus Neighbor Solicitation/Advertisement pair.
@@ -64,6 +65,29 @@ class TestICMPv4:
         icmp = ICMPv4(type=11, code=0, checksum=0, rest=b"\x00" * 4)
         assert icmp.embedded_packet is None
 
+    def test_embedded_chain_decodes_the_truncated_original(
+        self, raw_ipv4_header
+    ):
+        """RFC 792 quotes only the invoking IP header plus 8 bytes of
+        what follows — never a full TCP header — so this is a routine
+        partial decode, not malformed input: no try/except needed, and
+        the walk reports why it stopped rather than raising."""
+        original = raw_ipv4_header + b"\x01\x02\x03\x04\x05\x06\x07\x08"
+        icmp = ICMPv4.decode(b"\x0b\x00\x00\x00\x00\x00\x00\x00" + original)
+        chain = icmp.embedded_chain
+        assert chain is not None
+        assert len(chain) == 1
+        assert isinstance(chain[0], IPv4)
+        assert chain[0].src == "192.168.1.96"
+        assert isinstance(chain.stopped_by, TruncatedHeaderError)
+
+    def test_echo_types_have_no_embedded_chain(self, raw_icmpv4_echo_request):
+        assert ICMPv4.decode(raw_icmpv4_echo_request).embedded_chain is None
+
+    def test_embedded_chain_with_an_empty_body_degrades_to_none(self):
+        icmp = ICMPv4(type=11, code=0, checksum=0, rest=b"\x00" * 4)
+        assert icmp.embedded_chain is None
+
     def test_unknown_type_name(self):
         icmp = ICMPv4(type=200, code=0, checksum=0, rest=b"\x00" * 4)
         assert icmp.type_name == "Unknown, Unassigned or Deprecated"
@@ -104,6 +128,30 @@ class TestICMPv6:
         assert icmp.identifier is None
         embedded = IPv6.decode(icmp.embedded_packet)
         assert embedded.src == "fe80::1"
+
+    def test_embedded_chain_decodes_the_truncated_original(
+        self, raw_ipv6_header
+    ):
+        """As RFC 792 for ICMPv4 error messages: the invoking header
+        plus a truncated transport header (RFC 4443 uses "as much of
+        the invoking packet as fits" rather than a fixed 8 bytes, but
+        a short quote is equally routine) decodes as far as it can,
+        with no try/except and no raise for the truncation."""
+        original = raw_ipv6_header + b"\x01\x02\x03\x04\x05\x06\x07\x08"
+        icmp = ICMPv6.decode(b"\x03\x00\x00\x00\x00\x00\x00\x00" + original)
+        chain = icmp.embedded_chain
+        assert chain is not None
+        assert len(chain) == 1
+        assert isinstance(chain[0], IPv6)
+        assert chain[0].src == "fe80::1"
+        assert isinstance(chain.stopped_by, TruncatedHeaderError)
+
+    def test_echo_types_have_no_embedded_chain(self, raw_icmpv6_echo_request):
+        assert ICMPv6.decode(raw_icmpv6_echo_request).embedded_chain is None
+
+    def test_embedded_chain_with_an_empty_body_degrades_to_none(self):
+        icmp = ICMPv6(type=1, code=0, checksum=0, rest=b"\x00" * 4)
+        assert icmp.embedded_chain is None
 
     def test_ndp_types_have_no_echo_or_error_fields(self):
         icmp = ICMPv6(

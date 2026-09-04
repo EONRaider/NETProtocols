@@ -142,6 +142,24 @@ decoded exactly as strictly as before; the walk just declines to throw
 away the part that worked. Chain depth is bounded (`max_depth`,
 default 32), so a crafted frame cannot make the walker grind.
 
+One case where reaching for `lax=True` is the *right* default, not
+just a convenience: an ICMP error message's embedded packet. RFC 792
+only guarantees the invoking IP header plus 8 bytes of what follows —
+never a full TCP/UDP header — so decoding it with the strict path
+raises on ordinary, correctly formed traffic. `ICMPv4`/`ICMPv6` expose
+this pre-wired as `embedded_chain`:
+
+```python
+icmp.embedded_chain  # decode_frame(icmp.embedded_packet, lax=True, start=IPv4)
+                      # → Packet([IPv4(...)]), stopped_by=TruncatedHeaderError(...)
+```
+
+`embedded_packet` stays available for the raw bytes; reach for
+`embedded_chain` when you want them already decoded and are prepared
+to read `stopped_by`. Outside this one RFC-mandated case, a *complete*
+frame that fails to decode is still a bug to raise on — `lax=True`
+elsewhere is a capture tool's choice, not a default.
+
 ## Flow keys
 
 `Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,

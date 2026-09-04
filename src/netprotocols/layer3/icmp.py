@@ -15,6 +15,18 @@ x`` holds by construction: an echo's ``identifier`` /
 message's ``ndp_target_address`` / ``ndp_options`` parse the RFC 4861
 target and option TLVs (a source/target link-layer address reads back
 as a MAC string).
+
+``embedded_chain`` goes one step further than ``embedded_packet`` and
+decodes it, via :func:`~netprotocols.decode_frame` in **lax** mode —
+deliberately, not out of caution: RFC 792 only guarantees the invoking
+IP header plus 8 bytes of what follows, so the embedded transport
+header is routinely truncated, and that is expected input, not
+malformed input. Reach for ``embedded_chain`` when you want the
+decoded headers and are prepared to read ``stopped_by``; reach for
+``embedded_packet`` when you want the raw bytes and will decode them
+yourself. Neither accessor is a reason to default to ``lax=True``
+elsewhere — a *complete* frame that fails to decode is still a bug to
+raise on, not to quietly report.
 """
 
 from __future__ import annotations
@@ -24,7 +36,10 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv6, bytes_to_mac
+from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.packet import Packet
 from netprotocols.utils.exceptions import InvalidFieldError
+from netprotocols.walk import decode_frame
 
 __all__ = ["ICMPv4", "ICMPv6", "NDPOption"]
 
@@ -179,6 +194,31 @@ class _ICMP(Protocol):
         if self.type not in self._error_types or not self.body:
             return None
         return self.body
+
+    @property
+    def embedded_chain(self) -> Packet | None:
+        """:attr:`embedded_packet`, decoded as far as the RFC-792
+        truncation allows — ``None`` for the same cases
+        :attr:`embedded_packet` degrades to (non-error message types,
+        an empty body).
+
+        RFC 792 says an error message quotes only the invoking IP
+        header plus the first 8 bytes of what follows it — not a full
+        TCP/UDP header — so this is a *legitimate* partial decode, not
+        malformed input. It uses :func:`~netprotocols.decode_frame` in
+        lax mode for exactly that reason: no ``try``/``except`` needed,
+        and the walk reports why it stopped on the returned packet's
+        ``stopped_by`` (typically
+        :class:`~netprotocols.TruncatedHeaderError` for the truncated
+        transport header) rather than raising. Starts at
+        :class:`~netprotocols.IPv4` for an :class:`ICMPv4` message,
+        :class:`~netprotocols.IPv6` for :class:`ICMPv6`.
+        """
+        raw = self.embedded_packet
+        if raw is None:
+            return None
+        start = IPv4 if isinstance(self, ICMPv4) else IPv6
+        return decode_frame(raw, lax=True, start=start)
 
 
 @dataclass(frozen=True, slots=True)

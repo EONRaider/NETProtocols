@@ -309,6 +309,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both forms, rather than raising or inventing a port-slot convention
   for a message type that has none.
 
+- **`ICMPv4`/`ICMPv6` gain `embedded_chain`: an error message's
+  embedded packet, already decoded.** `decode_frame(lax=True,
+  start=...)` already handled this — an RFC-792 error message quotes
+  only the invoking IP header plus 8 bytes of what follows, never a
+  full TCP/UDP header, so decoding it needs the lax path and no
+  `try`/`except`, verified with zero new code before this landed.
+  `embedded_chain` is the pre-wired convenience next to the existing
+  raw `embedded_packet`, same shape as an accessor-plus-typed-view pair
+  elsewhere in this codebase:
+
+  ```python
+  icmp.embedded_chain
+  # decode_frame(icmp.embedded_packet, lax=True, start=IPv4)
+  # → Packet([IPv4(...)]), stopped_by=TruncatedHeaderError(...)
+  ```
+
+  `None` for the same cases `embedded_packet` degrades to (non-error
+  message types, an empty body); starts at `IPv4` for an `ICMPv4`
+  message, `IPv6` for `ICMPv6`. The README documents the distinction
+  the issue asked for: `embedded_chain`'s `lax=True` is the *right*
+  default here because the truncation is RFC-mandated, expected input
+  — not a license to reach for `lax=True` on a complete frame that
+  fails to decode, which is still a bug to raise on.
+
 ### Fixed
 - **The release workflow can no longer publish untested code.** Pushing
   a `v*` tag ran `uv build` and `uv publish` with no dependency on the
