@@ -3,6 +3,7 @@ crafted cases for the decode contract and compression safety."""
 
 import socket
 import struct
+from ipaddress import IPv4Address, IPv6Address
 
 import pytest
 
@@ -12,11 +13,14 @@ from netprotocols import (
     TCP,
     UDP,
     DNSOverTCP,
+    DNSQuestion,
     DNSResourceRecord,
     Ethernet,
     InvalidFieldError,
     IPv4,
     IPv6,
+    MXRecord,
+    SOARecord,
     TruncatedHeaderError,
 )
 from test_corpus import walk
@@ -188,6 +192,74 @@ class TestDNSFields:
         assert bytes(dns) == raw
 
 
+def build_questions(entries: list[tuple[str, int, int]]) -> bytes:
+    """A DNS message with one question per ``(name, qtype, qclass)``."""
+    header = struct.pack("!HHHHHH", 0x1234, 0x0100, len(entries), 0, 0, 0)
+    body = b"".join(
+        encode_name(name) + struct.pack("!HH", qtype, qclass)
+        for name, qtype, qclass in entries
+    )
+    return header + body
+
+
+class TestDNSQuestions:
+    """#96: `questions` exposes every entry of the question section;
+    `question_name`/`question_type`/`question_class` above still expose
+    only the first, kept for backward compatibility."""
+
+    def test_single_question_matches_the_first_question_accessors(self):
+        raw = build_query(["example", "com"], qtype=1)
+        dns = DNS.decode(raw)
+        assert dns.questions == (
+            DNSQuestion(name="example.com", qtype=1, qclass=1),
+        )
+        assert dns.questions[0].name == dns.question_name
+        assert dns.questions[0].qtype == dns.question_type
+        assert dns.questions[0].qclass == dns.question_class
+
+    def test_multiple_questions_are_all_returned(self):
+        raw = build_questions(
+            [("a.example.com", 1, 1), ("b.example.com", 28, 1)]
+        )
+        dns = DNS.decode(raw)
+        assert dns.questions == (
+            DNSQuestion(name="a.example.com", qtype=1, qclass=1),
+            DNSQuestion(name="b.example.com", qtype=28, qclass=1),
+        )
+        # The single-question accessors still see only the first.
+        assert dns.question_name == "a.example.com"
+
+    def test_no_questions_is_empty(self):
+        dns = DNS.decode(struct.pack("!HHHHHH", 1, 0x8180, 0, 0, 0, 0))
+        assert dns.questions == ()
+
+    def test_round_trip_unaffected_by_parsing(self):
+        raw = build_questions(
+            [("a.example.com", 1, 1), ("b.example.com", 28, 1)]
+        )
+        dns = DNS.decode(raw)
+        _ = dns.questions
+        assert bytes(dns) == raw
+
+    def test_truncated_second_question_raises(self):
+        # First question is well-formed; the second is missing its
+        # QTYPE/QCLASS.
+        header = struct.pack("!HHHHHH", 1, 0x0100, 2, 0, 0, 0)
+        body = encode_name("a.example.com") + struct.pack("!HH", 1, 1)
+        body += encode_name("b.example.com")  # no QTYPE/QCLASS follows
+        with pytest.raises(InvalidFieldError):
+            _ = DNS.decode(header + body).questions
+
+    def test_corpus_questions_match_the_first_question_accessors(self):
+        for frame in CORPUS_DNS:
+            dns = walk(frame)[0][-1]
+            if dns.qdcount == 0:
+                continue
+            assert dns.questions[0].name == dns.question_name
+            assert dns.questions[0].qtype == dns.question_type
+            assert dns.questions[0].qclass == dns.question_class
+
+
 class TestDNSResourceRecords:
     @staticmethod
     def _ipv6(addr: str) -> bytes:
@@ -207,6 +279,7 @@ class TestDNSResourceRecords:
         assert record.rclass == 1
         assert record.ttl == 300
         assert record.rdata_text == "192.0.2.1"
+        assert record.rdata_value == IPv4Address("192.0.2.1")
 
     def test_aaaa_record(self):
         raw = build_response(
@@ -217,6 +290,7 @@ class TestDNSResourceRecords:
         (record,) = DNS.decode(raw).answers
         assert record.rtype_name == "AAAA"
         assert record.rdata_text == "2001:db8::1"
+        assert record.rdata_value == IPv6Address("2001:db8::1")
 
     def test_cname_target_name(self):
         raw = build_response(
@@ -229,6 +303,7 @@ class TestDNSResourceRecords:
         (record,) = DNS.decode(raw).answers
         assert record.rtype_name == "CNAME"
         assert record.rdata_text == "target.example.com"
+        assert record.rdata_value == "target.example.com"
 
     def test_mx_record(self):
         rdata = struct.pack("!H", 10) + encode_name("mail.example.com")
@@ -238,6 +313,9 @@ class TestDNSResourceRecords:
         (record,) = DNS.decode(raw).answers
         assert record.rtype_name == "MX"
         assert record.rdata_text == "10 mail.example.com"
+        assert record.rdata_value == MXRecord(
+            preference=10, exchange="mail.example.com"
+        )
 
     def test_txt_record(self):
         rdata = bytes([5]) + b"hello" + bytes([6]) + b"world!"
@@ -247,6 +325,7 @@ class TestDNSResourceRecords:
         (record,) = DNS.decode(raw).answers
         assert record.rtype_name == "TXT"
         assert record.rdata_text == "helloworld!"
+        assert record.rdata_value == ["hello", "world!"]
 
     def test_soa_record(self):
         rdata = (
@@ -260,6 +339,15 @@ class TestDNSResourceRecords:
         (record,) = DNS.decode(raw).authorities
         assert record.rtype_name == "SOA"
         assert record.rdata_text == "ns.example.com admin.example.com 1 2 3 4 5"
+        assert record.rdata_value == SOARecord(
+            mname="ns.example.com",
+            rname="admin.example.com",
+            serial=1,
+            refresh=2,
+            retry=3,
+            expire=4,
+            minimum=5,
+        )
 
     def test_unknown_type_keeps_hex_rdata(self):
         raw = build_response(
@@ -271,6 +359,7 @@ class TestDNSResourceRecords:
         assert record.rtype_name == "99"
         assert record.rdata == b"\xde\xad\xbe\xef"
         assert record.rdata_text == "deadbeef"
+        assert record.rdata_value is None
 
     def test_sections_split_by_count(self):
         raw = build_response(

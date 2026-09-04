@@ -32,7 +32,14 @@ from netprotocols.layer3.ipv6_ext import (
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP
-from netprotocols.layer7.dns import DNS, DNSOverTCP, DNSResourceRecord
+from netprotocols.layer7.dns import (
+    DNS,
+    DNSOverTCP,
+    DNSQuestion,
+    DNSResourceRecord,
+    MXRecord,
+    SOARecord,
+)
 from netprotocols.packet import Packet
 from netprotocols.registry import (
     DEFAULT,
@@ -76,6 +83,7 @@ __all__ = [
     "ARPHardwareType",
     "ARPOperation",
     "DNSOverTCP",
+    "DNSQuestion",
     "DNSResourceRecord",
     "EtherType",
     "Ethernet",
@@ -96,6 +104,7 @@ __all__ = [
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "MXRecord",
     "MaxDepthExceededError",
     "NDPOption",
     "Packet",
@@ -103,6 +112,7 @@ __all__ = [
     "ProtocolError",
     "Registry",
     "RegistryConflictError",
+    "SOARecord",
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",

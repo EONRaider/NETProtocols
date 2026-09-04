@@ -41,8 +41,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ARCHITECTURE.md and `docs/CLAIMS.md` are updated to describe this as
   a deliberate, tested exception rather than the "this library never
   hand-declares `__match_args__`" absolute they stated before (#94).
-
-## [2.0.0] - 2026-09-04
+- **DNS resource records expose typed RDATA, and every question, not
+  just the first.** `DNSResourceRecord.rdata_text` decoded A/AAAA/MX/
+  SOA/etc. into a display string only; a new `rdata_value` field adds
+  the typed decoding alongside it (`rdata_text` is unchanged) —
+  `ipaddress.IPv4Address`/`IPv6Address` for A/AAAA, the decompressed
+  target `str` for NS/CNAME/PTR, a new `MXRecord(preference, exchange)`
+  for MX, a new `SOARecord(mname, rname, serial, refresh, retry,
+  expire, minimum)` for SOA, `list[str]` of character-strings for TXT,
+  and `None` — never raises — for the types this library does not
+  decode. Computed eagerly at parse time, like `rdata_text` always has
+  been: a name inside RDATA (a CNAME's target, for instance) can use
+  DNS compression against the *whole* message, so decoding it needs
+  the same message-wide context `rdata_text` already required, which a
+  property computed lazily from `rdata` alone could not resolve.
+  Separately, `DNS.questions` adds a `tuple[DNSQuestion, ...]` walking
+  every entry of the question section — `question_name`/`question_type`
+  /`question_class` exposed only the first and are unchanged (#96).
 
 ### Development
 - **The round-trip property (`bytes(decode(x)) == x`) is now

@@ -15,14 +15,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+from ipaddress import IPv4Address, IPv6Address
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, NamedTuple, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["DNS", "DNSOverTCP", "DNSResourceRecord"]
+__all__ = [
+    "DNS",
+    "DNSOverTCP",
+    "DNSQuestion",
+    "DNSResourceRecord",
+    "MXRecord",
+    "SOARecord",
+]
 
 #: A compressed name must not follow more than this many pointers; the
 #: bound makes a maliciously looping name terminate instead of hanging.
@@ -60,6 +68,62 @@ _RR_TYPE_NAMES: dict[int, str] = {
 }
 
 
+class MXRecord(NamedTuple):
+    """MX RDATA (RFC 1035 §3.3.9): a mail exchange preference and host.
+
+    A domain can list several MX records; a mail transfer agent tries
+    the lowest :attr:`preference` first (RFC 5321 §5.1) — this type
+    just carries the two fields as decoded, the ordering policy is the
+    caller's.
+
+    :param preference: Preference value; lower is tried first.
+    :param exchange: The mail exchange host name, decompressed.
+    """
+
+    preference: int
+    exchange: str
+
+
+class SOARecord(NamedTuple):
+    """SOA RDATA (RFC 1035 §3.3.13): a zone's authority record.
+
+    :param mname: Primary name server for the zone, decompressed.
+    :param rname: Mailbox of the zone's administrator, decompressed
+        (its first ``.`` stands in for the ``@`` of an email address).
+    :param serial: Zone serial number; a secondary compares this to its
+        own to detect a change.
+    :param refresh: Seconds a secondary waits between checks of
+        :attr:`serial`.
+    :param retry: Seconds a secondary waits before retrying a failed
+        refresh.
+    :param expire: Seconds after which a secondary stops treating its
+        copy of the zone as authoritative if it cannot reach the
+        primary.
+    :param minimum: TTL applied to negative-answer caching (RFC 2308).
+    """
+
+    mname: str
+    rname: str
+    serial: int
+    refresh: int
+    retry: int
+    expire: int
+    minimum: int
+
+
+class DNSQuestion(NamedTuple):
+    """One entry of the question section (RFC 1035 §4.1.2).
+
+    :param name: QNAME, decompressed to dotted form.
+    :param qtype: Query type (``1`` = A, ``28`` = AAAA, ...).
+    :param qclass: Query class (``1`` = IN).
+    """
+
+    name: str
+    qtype: int
+    qclass: int
+
+
 @dataclass(frozen=True, slots=True)
 class DNSResourceRecord:
     """One DNS resource record (RFC 1035 §4.1.3).
@@ -76,6 +140,19 @@ class DNSResourceRecord:
         ``"preference exchange"`` for MX, the concatenated strings for
         TXT, the field tuple for SOA; the hexadecimal RDATA for types
         this library does not special-case.
+    :param rdata_value: A *typed* decoding of ``rdata`` — an
+        :class:`~ipaddress.IPv4Address`/:class:`~ipaddress.IPv6Address`
+        for A/AAAA, the decompressed target ``str`` for CNAME/NS/PTR,
+        :class:`list`\\ [:class:`str`] of character-strings for TXT,
+        :class:`MXRecord` for MX, :class:`SOARecord` for SOA; ``None``
+        for types this library does not decode (read :attr:`rdata_text`
+        or :attr:`rdata` raw instead). Computed eagerly at parse time,
+        like :attr:`rdata_text` — a name inside RDATA (CNAME's target,
+        MX's exchange, SOA's mname/rname) can use DNS compression
+        against the *whole* message, not just the bytes of this one
+        record, so decoding it needs the same message-wide context
+        :attr:`rdata_text` already required; a value computed lazily
+        from ``rdata`` alone could not resolve such a pointer.
     """
 
     name: str
@@ -84,6 +161,15 @@ class DNSResourceRecord:
     ttl: int
     rdata: bytes
     rdata_text: str
+    rdata_value: (
+        IPv4Address
+        | IPv6Address
+        | list[str]
+        | MXRecord
+        | SOARecord
+        | str
+        | None
+    ) = None
 
     @property
     def rtype_name(self) -> str:
@@ -197,8 +283,8 @@ def _labels(sections: bytes, at: int) -> str:
     return ".".join(labels) if labels else "."
 
 
-def _decode_txt(rdata: bytes) -> str:
-    """Concatenate the character-strings of a TXT record (§3.3.14)."""
+def _decode_txt_strings(rdata: bytes) -> list[str]:
+    """The character-strings of a TXT record, in wire order (§3.3.14)."""
     parts: list[str] = []
     cursor = 0
     while cursor < len(rdata):
@@ -213,24 +299,32 @@ def _decode_txt(rdata: bytes) -> str:
             )
         parts.append(rdata[cursor : cursor + length].decode("ascii", "replace"))
         cursor += length
-    return "".join(parts)
+    return parts
 
 
-def _decode_rdata(sections: bytes, rtype: int, at: int, rdlength: int) -> str:
-    """A human-readable rendering of the RDATA at ``at``; names follow
-    compression against the whole message."""
+def _decode_rdata_value(
+    sections: bytes, rtype: int, at: int, rdlength: int
+) -> IPv4Address | IPv6Address | list[str] | MXRecord | SOARecord | str | None:
+    """A *typed* decoding of the RDATA at ``at``, for the record types
+    this library understands; ``None`` for the rest — read
+    :func:`_decode_rdata_text`/the raw bytes instead. Names follow
+    compression against the whole message, which is why this takes
+    ``sections`` and an absolute offset rather than the RDATA bytes
+    alone (RFC 1035 §4.1.4)."""
     rdata = sections[at : at + rdlength]
     if rtype == 1 and rdlength == 4:  # A
-        return bytes_to_ipv4(rdata)
+        return IPv4Address(bytes_to_ipv4(rdata))
     if rtype == 28 and rdlength == 16:  # AAAA
-        return bytes_to_ipv6(rdata)
+        return IPv6Address(bytes_to_ipv6(rdata))
     if rtype in (2, 5, 12):  # NS, CNAME, PTR — a single name
         return _labels(sections, at)
     if rtype == 15 and rdlength >= 2:  # MX — preference + exchange
         preference = int.from_bytes(rdata[:2], "big")
-        return f"{preference} {_labels(sections, at + 2)}"
+        return MXRecord(
+            preference=preference, exchange=_labels(sections, at + 2)
+        )
     if rtype == 16:  # TXT
-        return _decode_txt(rdata)
+        return _decode_txt_strings(rdata)
     if rtype == 6:  # SOA — mname, rname, then five 32-bit fields
         mname = _labels(sections, at)
         rname_at = _read_name(sections, at)
@@ -247,7 +341,46 @@ def _decode_rdata(sections: bytes, rtype: int, at: int, rdlength: int) -> str:
             int.from_bytes(sections[fixed + i : fixed + i + 4], "big")
             for i in range(0, 20, 4)
         )
-        return f"{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"
+        return SOARecord(
+            mname=mname,
+            rname=rname,
+            serial=serial,
+            refresh=refresh,
+            retry=retry,
+            expire=expire,
+            minimum=minimum,
+        )
+    return None
+
+
+def _decode_rdata_text(
+    rdata: bytes,
+    value: (
+        IPv4Address
+        | IPv6Address
+        | list[str]
+        | MXRecord
+        | SOARecord
+        | str
+        | None
+    ),
+) -> str:
+    """The human-readable rendering of RDATA, formatted from its
+    already-decoded ``value`` where there is one; the hexadecimal RDATA
+    for the types :func:`_decode_rdata_value` returns ``None`` for."""
+    if isinstance(value, MXRecord):
+        return f"{value.preference} {value.exchange}"
+    if isinstance(value, SOARecord):
+        return (
+            f"{value.mname} {value.rname} {value.serial} {value.refresh} "
+            f"{value.retry} {value.expire} {value.minimum}"
+        )
+    if isinstance(value, list):  # TXT
+        return "".join(value)
+    if isinstance(value, str):  # NS, CNAME, PTR
+        return value
+    if value is not None:  # IPv4Address | IPv6Address
+        return str(value)
     return rdata.hex()
 
 
@@ -277,13 +410,16 @@ def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
             expected=rdlength,
             actual=len(sections) - cursor,
         )
+    rdata = sections[cursor : cursor + rdlength]
+    value = _decode_rdata_value(sections, rtype, cursor, rdlength)
     record = DNSResourceRecord(
         name=name,
         rtype=rtype,
         rclass=rclass,
         ttl=ttl,
-        rdata=sections[cursor : cursor + rdlength],
-        rdata_text=_decode_rdata(sections, rtype, cursor, rdlength),
+        rdata=rdata,
+        rdata_text=_decode_rdata_text(rdata, value),
+        rdata_value=value,
     )
     return record, cursor + rdlength
 
@@ -305,6 +441,39 @@ def _first_record(sections: bytes, qdcount: int) -> int:
                 offset=cursor,
             )
     return cursor
+
+
+@lru_cache(maxsize=_RECORD_CACHE_SIZE)
+def _parse_questions(sections: bytes, qdcount: int) -> tuple[DNSQuestion, ...]:
+    """Parse every entry of the question section (RFC 1035 §4.1.2).
+
+    Cached on the (immutable) section bytes and count, mirroring
+    :func:`_parse_records` — reading :attr:`DNS.questions` more than
+    once for equal messages parses it once. Independent of
+    :func:`_first_record`, which only needs the *offset* past the
+    questions and so does the cheaper :func:`_read_name` walk rather
+    than decoding every name with :func:`_labels`.
+
+    :raises InvalidFieldError: if a question's name or its QTYPE/QCLASS
+        run past the message (bounded — never hangs or over-reads).
+    """
+    questions: list[DNSQuestion] = []
+    cursor = 0
+    for _ in range(qdcount):
+        name = _labels(sections, cursor)
+        cursor = _read_name(sections, cursor)
+        if cursor + 4 > len(sections):
+            raise InvalidFieldError(
+                "DNS question section truncated",
+                protocol=DNS,
+                field="sections",
+                offset=cursor,
+            )
+        qtype = int.from_bytes(sections[cursor : cursor + 2], "big")
+        qclass = int.from_bytes(sections[cursor + 2 : cursor + 4], "big")
+        questions.append(DNSQuestion(name=name, qtype=qtype, qclass=qclass))
+        cursor += 4
+    return tuple(questions)
 
 
 @lru_cache(maxsize=_RECORD_CACHE_SIZE)
@@ -478,6 +647,19 @@ class DNS(Protocol):
         is no question."""
         fixed = self._question_fixed()
         return None if fixed is None else fixed[1]
+
+    @property
+    def questions(self) -> tuple[DNSQuestion, ...]:
+        """Every question in the question section, parsed on demand
+        (RFC 1035 §4.1.2) — :attr:`question_name` and its two siblings
+        above expose only the first, kept for backward compatibility;
+        a message with more than one question (rare, but legal) needs
+        this instead. Empty when :attr:`qdcount` is ``0``.
+
+        :raises InvalidFieldError: if a question is malformed (see
+            :func:`_parse_questions`).
+        """
+        return _parse_questions(self.sections, self.qdcount)
 
     # -- resource records (parsed on demand, never re-encoded) --
 
