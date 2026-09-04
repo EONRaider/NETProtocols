@@ -404,6 +404,8 @@ src/netprotocols/
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071: internet_checksum, compute, verify
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
+├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
+│                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py,

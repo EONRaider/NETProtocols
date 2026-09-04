@@ -11,6 +11,7 @@ __all__ = [
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "MalformedCaptureError",
     "MaxDepthExceededError",
     "ProtocolError",
     "TruncatedHeaderError",
@@ -105,6 +106,23 @@ class InvalidIPv4AddressError(InvalidFieldError):
 
 class InvalidManufacturerCodeError(InvalidFieldError):
     """A string does not represent a valid OUI manufacturer prefix."""
+
+
+class MalformedCaptureError(ProtocolError):
+    """A byte buffer does not hold a well-formed classic-pcap or pcapng
+    capture — a bad magic number, a block/record header that runs past
+    the buffer, a length field that disagrees with the bytes actually
+    available, or a pcapng block that references an interface no
+    Interface Description Block has declared yet.
+
+    Raised by :mod:`netprotocols.pcap`, never by a header decoder — a
+    corrupt or truncated *capture file* is a different failure shape
+    than a malformed header inside one already-extracted frame (a
+    :class:`TruncatedHeaderError`/:class:`InvalidFieldError` case), so
+    it gets its own type rather than reusing those. There is no
+    ``lax`` partial-success mode: a capture container is either well-
+    formed or it is not trustworthy enough to keep reading from.
+    """
 
 
 class MaxDepthExceededError(ProtocolError):

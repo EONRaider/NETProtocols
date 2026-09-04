@@ -5,7 +5,7 @@ from ipaddress import IPv6Address
 
 import pytest
 
-from conftest import FIXTURES, read_pcap
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     Ethernet,
     EtherType,
@@ -29,7 +29,7 @@ class TestMLDBehindHopByHop:
     hop-by-hop header carrying a Router Alert option."""
 
     def frames(self) -> list[bytes]:
-        return read_pcap(FIXTURES / "ipv6_mld.pcap")
+        return pcap_frames(FIXTURES / "ipv6_mld.pcap")
 
     def test_chain_reaches_icmpv6_through_the_extension_header(self):
         for frame in self.frames():
@@ -74,7 +74,7 @@ class TestMLDBehindHopByHop:
 
 class TestFragmentHeader:
     def fragments(self) -> list[IPv6Fragment]:
-        frames = read_pcap(FIXTURES / "ipv6_fragments.pcap")
+        frames = pcap_frames(FIXTURES / "ipv6_fragments.pcap")
         out = []
         for frame in frames:
             layers, _ = walk(frame)

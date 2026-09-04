@@ -7,7 +7,7 @@ from ipaddress import IPv4Address, IPv6Address
 
 import pytest
 
-from conftest import FIXTURES, read_pcap
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     DNS,
     TCP,
@@ -25,7 +25,7 @@ from netprotocols import (
 )
 from test_corpus import walk
 
-CORPUS_DNS = read_pcap(FIXTURES / "udp_dns.pcap")
+CORPUS_DNS = pcap_frames(FIXTURES / "udp_dns.pcap")
 
 
 def build_query(qname_labels: list[str], qtype: int = 1) -> bytes:

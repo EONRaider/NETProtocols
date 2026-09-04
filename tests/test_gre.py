@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from conftest import FIXTURES, read_pcap
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     GRE,
     Ethernet,
@@ -185,7 +185,7 @@ class TestGREChain:
 
 class TestCorpusGRE:
     def test_captured_frames_are_ip_in_gre(self):
-        frames = read_pcap(FIXTURES / "gre.pcap")
+        frames = pcap_frames(FIXTURES / "gre.pcap")
         assert frames
         for frame in frames:
             layers = walk(frame)[0]
@@ -206,7 +206,8 @@ class TestCorpusGRE:
 
     def test_corpus_has_plain_and_keyed_tunnels(self):
         keys = {
-            walk(frame)[0][2].key for frame in read_pcap(FIXTURES / "gre.pcap")
+            walk(frame)[0][2].key
+            for frame in pcap_frames(FIXTURES / "gre.pcap")
         }
         assert None in keys  # plain tunnel: no key
         assert any(key is not None for key in keys)  # keyed tunnel

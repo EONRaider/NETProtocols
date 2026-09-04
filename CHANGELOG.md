@@ -149,6 +149,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   caught a SYN, so unlike NOP/Timestamps these otherwise depend on
   `max_examples` alone stumbling into a well-formed TLV by chance
   (#98).
+- **A pcap/pcapng reader that takes bytes, not filenames.** New
+  `netprotocols.pcap`: `read_captures(buffer)` auto-detects classic
+  pcap vs. pcapng from its magic number and yields `CapturedFrame`
+  (`timestamp` in nanoseconds since the Unix epoch, normalized from
+  whatever resolution the source recorded, `data` the frame's raw
+  bytes); `read_pcap()`/`read_pcapng()` are the same for a caller who
+  already knows the format. pcapng support covers exactly the block
+  types frames can come from — Section Header, Interface Description
+  (read only for its `if_tsresol` option), Enhanced Packet, and Simple
+  Packet (which the format gives no timestamp at all, hence `0`);
+  every other block type is skipped wholesale. A malformed or
+  truncated capture raises the new `MalformedCaptureError`
+  (`ProtocolError` family, no `lax` mode — a corrupt *container* is a
+  different failure shape than a malformed header inside one already-
+  extracted frame). Format detection is eager; producing frames is
+  lazy (a generator), so a bad record downstream doesn't invalidate
+  what already iterated cleanly, and a huge capture is never forced
+  into a list of frames nobody asked for.
+
+  `tests/conftest.py` drops the private classic-pcap reader every test
+  file reached for — `pcap_frames()` is now a thin adapter over the
+  shipped `read_pcap()`, and `~10` test files were migrated onto it (a
+  real migration, not a rename: `tests/test_pcap.py` keeps its own
+  independent reference reader, deliberately never importing the
+  module it is cross-checking, the same "standalone, so a shared bug
+  can't cancel itself out" precedent as `scripts/benchmark.py` and
+  `scripts/check_fixtures.py`).
+
+  One design idea was tried and reverted on measurement: slicing each
+  frame lazily out of a `memoryview` over the whole buffer, to keep
+  large captures zero-copy. Measured across synthetic captures up to
+  ~140MB, it was 0.91x-0.98x — never faster, sometimes slower — because
+  a real capture is many *small* frames, and a `memoryview` slice's own
+  overhead is paid per frame; #88's identical finding for a single
+  frame generalizes rather than being contradicted. `docs/CLAIMS.md`
+  5.8 is corrected accordingly — it previously forward-referenced this
+  issue with an unverified "1.8x" figure (#100).
 
 ## [2.0.0] - 2026-09-04
 

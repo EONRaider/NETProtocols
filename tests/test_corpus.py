@@ -10,7 +10,7 @@ import contextlib
 
 import pytest
 
-from conftest import FIXTURES, corpus_frames, read_pcap
+from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     ARP,
     DNS,
@@ -144,7 +144,7 @@ class TestFragmentHandling:
     bytes decoded as 'ICMPv4 type 192')."""
 
     def fragments(self) -> list[IPv4]:
-        frames = read_pcap(FIXTURES / "ipv4_fragments.pcap")
+        frames = pcap_frames(FIXTURES / "ipv4_fragments.pcap")
         layers = [walk(frame)[0] for frame in frames]
         return [stack[1] for stack in layers if isinstance(stack[1], IPv4)]
 
@@ -168,7 +168,7 @@ class TestRepresentativeFrames:
     """Hand-verified field asserts, one frame per scenario family."""
 
     def test_ttl_exceeded_error_message(self):
-        frame = read_pcap(FIXTURES / "icmpv4_ttl_exceeded.pcap")[0]
+        frame = pcap_frames(FIXTURES / "icmpv4_ttl_exceeded.pcap")[0]
         layers, _ = walk(frame)
         assert [type(layer) for layer in layers] == [Ethernet, IPv4, ICMPv4]
         icmp = layers[2]
@@ -185,7 +185,7 @@ class TestRepresentativeFrames:
         assert embedded.dst == outer.dst or embedded.src == outer.dst
 
     def test_loopback_echo_pair(self):
-        frames = read_pcap(FIXTURES / "icmpv4_echo_lo.pcap")
+        frames = pcap_frames(FIXTURES / "icmpv4_echo_lo.pcap")
         echoes = [walk(frame)[0][2] for frame in frames]
         types = [icmp.type for icmp in echoes]  # type: ignore[attr-defined]
         assert 8 in types and 0 in types
@@ -209,7 +209,7 @@ class TestRepresentativeFrames:
         assert requests == replies
 
     def test_ndp_neighbor_discovery(self):
-        frames = read_pcap(FIXTURES / "ipv6_ndp_mld.pcap")
+        frames = pcap_frames(FIXTURES / "ipv6_ndp_mld.pcap")
         ndp = [
             layer
             for frame in frames
@@ -233,7 +233,7 @@ class TestRepresentativeFrames:
         assert {1, 2} <= lla_types
 
     def test_dns_responses_over_both_ip_versions(self):
-        frames = read_pcap(FIXTURES / "udp_dns.pcap")
+        frames = pcap_frames(FIXTURES / "udp_dns.pcap")
         stacks = [[type(layer) for layer in walk(frame)[0]] for frame in frames]
         assert any(stack[1] is IPv4 and stack[2] is UDP for stack in stacks)
         assert any(stack[1] is IPv6 and stack[2] is UDP for stack in stacks)
@@ -246,7 +246,7 @@ class TestRepresentativeFrames:
         """Every dns_tcp frame walks the TCP application dispatch on
         genuine bytes: the 2-byte length shim frames a DNS message whose
         length agrees, and the captured answers resolve."""
-        frames = read_pcap(FIXTURES / "dns_tcp.pcap")
+        frames = pcap_frames(FIXTURES / "dns_tcp.pcap")
         stacks = [walk(frame)[0] for frame in frames]
         for stack in stacks:
             assert [type(layer) for layer in stack] == [
@@ -280,7 +280,7 @@ class TestRepresentativeFrames:
         )
 
     def test_vlan_single_and_qinq_tags_chain_to_the_payload(self):
-        frames = read_pcap(FIXTURES / "vlan_icmp.pcap")
+        frames = pcap_frames(FIXTURES / "vlan_icmp.pcap")
         stacks = [walk(frame)[0] for frame in frames]
 
         # A single 802.1Q tag: exactly one VLAN layer between Ethernet

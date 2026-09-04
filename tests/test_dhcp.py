@@ -6,7 +6,7 @@ from ipaddress import IPv4Address, ip_network
 
 import pytest
 
-from conftest import FIXTURES, read_pcap
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     DHCP,
     UDP,
@@ -332,7 +332,7 @@ class TestDHCPContract:
 
 class TestCorpusDHCP:
     def test_dora_exchange_decodes(self):
-        frames = read_pcap(FIXTURES / "dhcp.pcap")
+        frames = pcap_frames(FIXTURES / "dhcp.pcap")
         assert frames
         for frame in frames:
             layers = walk(frame)[0]
@@ -351,7 +351,7 @@ class TestCorpusDHCP:
         offer = next(
             dhcp
             for dhcp in (
-                walk(f)[0][-1] for f in read_pcap(FIXTURES / "dhcp.pcap")
+                walk(f)[0][-1] for f in pcap_frames(FIXTURES / "dhcp.pcap")
             )
             if dhcp.message_type == 2
         )

@@ -10,7 +10,7 @@ import struct
 
 import pytest
 
-from conftest import FIXTURES, read_pcap
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     IGMP,
     IGMPv3GroupRecord,
@@ -317,7 +317,7 @@ class TestIGMPContract:
 )
 class TestCorpusIGMP:
     def test_captured_frames_decode_and_verify(self):
-        frames = read_pcap(FIXTURES / "igmp.pcap")
+        frames = pcap_frames(FIXTURES / "igmp.pcap")
         assert frames
         for frame in frames:
             layers, _ = walk(frame)

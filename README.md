@@ -160,6 +160,29 @@ to read `stopped_by`. Outside this one RFC-mandated case, a *complete*
 frame that fails to decode is still a bug to raise on — `lax=True`
 elsewhere is a capture tool's choice, not a default.
 
+## Reading captures
+
+`read_captures()` takes the bytes of a capture file — not a path — and
+auto-detects classic pcap vs. pcapng from its magic number:
+
+```python
+from netprotocols import decode_frame, read_captures
+
+data = open("traffic.pcap", "rb").read()  # or however you got the bytes
+for timestamp, frame in read_captures(data):
+    packet = decode_frame(frame, lax=True)
+    ...
+```
+
+Each `CapturedFrame` is `(timestamp, data)` — `timestamp` normalized to
+nanoseconds since the Unix epoch regardless of the source format's own
+resolution (classic pcap's microseconds or nanoseconds; pcapng's
+per-interface `if_tsresol`). `read_pcap()`/`read_pcapng()` are the same
+thing for a caller who already knows the format and wants to skip
+detection. A malformed or truncated capture raises
+`MalformedCaptureError`, the same `ProtocolError` family every other
+exception in this library belongs to.
+
 ## Flow keys
 
 `Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,
