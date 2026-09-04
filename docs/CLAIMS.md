@@ -367,19 +367,25 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "~30× smaller wheel than scapy"
+### 1.5 "~29× smaller wheel than scapy"
 **Status: VERIFIED** — re-measure at each release (Rule 4)
 
-*Published 2026-09-04 (embargo lifted, #107).*
+*Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04:
+the prior figure here was built from `netprotocols-2.0.0`, two releases
+behind the tree every other number in this file now describes — this
+was stale, not a real regression.*
 
-85.6 KB wheel (`uv build`, `netprotocols-2.0.0-py3-none-any.whl`,
-87,684 bytes) against scapy 2.7.0's 2.47 MB (2,590,982 bytes, current
-PyPI `bdist_wheel`) — **29.6× smaller**, down from the ~46× recorded at
-v1.3.0. 6,371 lines (`wc -l` over `src/`) against scapy's unchanged
-246,813 — netprotocols grew from 3,732 lines as Tiers 2-4 added the
-registry, walker, structured diagnostics and new protocol coverage;
-scapy's line count and wheel size are both stable since the version on
-file. Both move with releases — re-check before quoting.
+88.3 KB wheel (`uv build`, `netprotocols-2.2.0-py3-none-any.whl`,
+90,390 bytes, deterministic across repeated builds) against scapy
+2.7.0's 2.47 MB (2,590,982 bytes, current PyPI `bdist_wheel`) —
+**28.7× smaller**, down from the ~46× recorded at v1.3.0 and the 29.6×
+this section previously quoted from the 2.0.0-era build. 6,413 lines
+(`wc -l` over `src/`) against scapy's unchanged 246,813 — netprotocols
+grew from 3,732 lines as Tiers 2-4 added the registry, walker,
+structured diagnostics and new protocol coverage, plus smaller
+increments since; scapy's line count and wheel size are both stable
+since the version on file. Both move with releases — re-check before
+quoting.
 
 ### 1.6 "Decodes further into the stack than dpkt, on the same bytes"
 **Status: VERIFIED**
@@ -474,11 +480,14 @@ Supporting facts, all re-verified against `secdev/scapy` @ `03f455c`
 
 - Scapy **does** ship `py.typed`, so the marker alone proves nothing.
   Its own mypy configuration (`.config/mypy/mypy_enabled.txt`) now
-  enables **107 files** (up from 88), of which **two of the
-  one-hundred-twenty-one under `scapy/layers/`** (`can.py`, `l2.py`;
-  up from "two of ninety-two" as the directory grew) — the dissectors
-  anyone actually touches are still unchecked. `Packet.__getattr__`
-  erases every field to `Any`.
+  enables **89 files** (up from 88; a prior pass at this figure counted
+  107 by taking a raw `wc -l` of that file, which includes its blank
+  lines and comments — filtering those out the same way scapy's own
+  `.config/mypy/mypy_check.py` does gives 89, corrected 2026-09-04), of
+  which **two of the one-hundred-twenty-one under `scapy/layers/`**
+  (`can.py`, `l2.py`; up from "two of ninety-two" as the directory
+  grew) — the dissectors anyone actually touches are still unchecked.
+  `Packet.__getattr__` erases every field to `Any`.
 - dpkt still ships no `py.typed`; `types-dpkt` and `dpkt-stubs` still
   do not exist on PyPI (both 404 on `pypi.org/pypi/<name>/json`).
   Everything downstream becomes `Any`.
@@ -548,12 +557,13 @@ out of a full TCP/IP stack rather than a standalone codec. We are MIT,
 ### 3.1 "Runs where scapy cannot — including the browser"
 **Status: VERIFIED**
 
-*Published 2026-09-04 (embargo lifted, #107). Capability proved under
-a real Pyodide runtime by #99; the comparative claim was held pending
-the roadmap and is now stated.*
+*Published 2026-09-04 (embargo lifted, #107). Corrected 2026-09-04: the
+original text of this section credited the whole table below to #99's
+real-Pyodide CI job, which overstated what that job actually runs —
+see the note after the table.*
 
 Blocking exactly the modules Pyodide removes (`fcntl`, `termios`,
-`resource`, `grp`, `pwd`) and re-importing:
+`resource`, `grp`, `pwd`) under ordinary CPython and re-importing:
 
 ```
 OK    netprotocols
@@ -569,9 +579,22 @@ Scapy's `from fcntl import ioctl` is **unconditional** in
 be *imported* under Pyodide — not "cannot sniff". It is also absent
 from Pyodide's built package set.
 
-Was gated on testing it before selling it; #99 did exactly that
-(`scripts/pyodide/check_in_pyodide.py`, CI's `pyodide` job), so the
-claim is no longer conditional on anything.
+This table is a **simulation** — a `sys.meta_path` blocklist run under
+ordinary CPython, not Pyodide itself — and it is the only evidence
+behind the dpkt/pypacker rows above. #99's CI `pyodide` job
+(`scripts/pyodide/check_in_pyodide.py`) runs under a **real** Pyodide
+WebAssembly runtime, but only imports and decodes the full corpus with
+netprotocols there; it never attempts `import dpkt` or `import
+pypacker` inside Pyodide at all. What #99 adds on top of the
+simulation: it confirms, inside the real runtime, that the five
+POSIX-only modules above are genuinely still absent (so the
+simulation's precondition holds) and that netprotocols decodes the
+entire real-capture corpus there raising nothing but `ProtocolError`.
+So "scapy cannot import under Pyodide" is real-Pyodide-verified by
+inference (scapy's unconditional `fcntl` import, confirmed absent in
+CI) plus source citation; "dpkt and pypacker import cleanly under
+Pyodide" is verified only by the CPython-side simulation above, not by
+#99's CI job.
 
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
