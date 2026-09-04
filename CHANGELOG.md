@@ -187,6 +187,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   5.8 is corrected accordingly — it previously forward-referenced this
   issue with an unverified "1.8x" figure (#100).
 
+### Documentation
+- **The comparative-claims embargo is lifted (#107, #124).** `docs/CLAIMS.md`
+  1.7 gained a per-project table auditing ten comparable Python packet
+  libraries' CI configurations (dpkt, scapy, pypacker, construct,
+  pcapkit, dnspython, pyshark, nfstream, stackforge, PyTCP-net_proto)
+  for an actual performance-regression gate — cited file:line or
+  workflow, dated 2026-09-04; none of the ten gate on one, so the
+  comparative form of 1.7's claim is now stated with that evidence
+  (#124). Every section that previously carried a
+  `COMPARATIVE — HELD` banner is re-measured against the current tree
+  and published: decode throughput (1.1, 1.2), encoding throughput
+  (1.3), import time (1.4), wheel size (1.5), decode depth (1.6), the
+  `mypy --strict` comparison (2.1), `match`/`case` exclusivity (2.2),
+  the five-property combination (2.3), Pyodide/browser support (3.1),
+  and the permissive-licence wedge (4.1). One finding moved against
+  this project rather than for it and is reported as such: three tiers
+  of added surface since Tier 1 (#87's dispatch rewrite, #88's chain
+  walker, #91's structured errors chief among them) reversed decode
+  throughput from 1.16× faster than dpkt back to roughly 11% slower —
+  still within the 15% band claim 1.2 names, just no longer ahead.
+  Two new reproduction scripts back claims that previously had none:
+  `scripts/benchmark_encode.py` (1.3) and `scripts/benchmark_import.py`
+  (1.4). `README.md` gains a "Why NETProtocols" section drawing the
+  now-published claims into the project's front door, in the tone
+  `docs/CLAIMS.md` 4.2 sets for writing about competitors.
+
 ## [2.0.0] - 2026-09-04
 
 ### Development

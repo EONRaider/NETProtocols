@@ -47,6 +47,80 @@ pip install netprotocols
 
 Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
+## Why NETProtocols
+
+Measured against `dpkt 1.9.8` and `scapy 2.7.0` on a 97-frame corpus of
+real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured
+2026-09-04 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every number
+below, its reproduction command, and its caveats):
+
+- **Within 15% of dpkt on decode, 5.6× faster than scapy** —
+  `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
+  the faster of the two comparators on this corpus; the gap moves both
+  ways as this library and dpkt each change, and this file's job is to
+  say so honestly rather than only when it's flattering.
+- **Decodes further into the stack than dpkt on 27 of 97 corpus
+  frames** — DNS and DHCP payloads that dpkt leaves as raw bytes,
+  netprotocols continues decoding. A throughput number means little
+  without knowing how much work it bought.
+- **4.5× faster than dpkt at re-encoding** (`bytes(header)`,
+  `scripts/benchmark_encode.py`) — the other half of "codec" that
+  nobody else benchmarks.
+- **Imports in 54 ms; `scapy.all` takes 458+ ms** (`scripts/benchmark_import.py`),
+  and never touches the host doing it — importing scapy populates live
+  interface and routing tables as a side effect of the import
+  statement.
+- **An 85.6 KB wheel against scapy's 2.47 MB** — about 30× smaller.
+- **Regression-gated in CI, which — as far as we could establish by
+  auditing ten comparable Python packet libraries' CI configurations
+  (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
+  nfstream, stackforge, PyTCP-net_proto; full citations in
+  [docs/CLAIMS.md §1.7](docs/CLAIMS.md)) — none of them do.** Two of
+  the ten ship real benchmark code that simply never runs in CI
+  (construct disables it explicitly; stackforge's Criterion benches are
+  never invoked); the rest have no performance benchmark at all.
+- **Typed where the alternatives are not.** `mypy --strict` over the
+  whole of `src/`, enforced in CI. scapy ships `py.typed` but enables
+  strict checking on 107 of its files, 2 of the 121 under
+  `scapy/layers/` — the dissectors most code touches stay `Any`. dpkt
+  ships no `py.typed` at all, and no third-party stub package exists
+  for it.
+- **The only MIT-licensed, strictly-typed, zero-dependency packet codec
+  still under active maintenance.** scapy is GPL-2.0; pypacker is
+  GPLv2; the newer entrants `stackforge` and `PyTCP-net_proto` are both
+  GPL-3.0. The other permissive option, dpkt (BSD), last released
+  2022-08-18 and last committed 2024-05-05, still targets Python 2.7
+  and 3.5–3.9, and remains marked Beta after twelve years.
+- **Runs where scapy cannot — including in the browser.** Verified
+  under a real Pyodide runtime in CI: scapy fails to import at all
+  under Pyodide (`from fcntl import ioctl` is unconditional in
+  `scapy/arch/`), where netprotocols, dpkt and pypacker all import
+  cleanly.
+- **The only one of these libraries a `match`/`case` statement
+  dissects out of the box.** dpkt builds `__slots__` from a metaclass
+  and generates no `__match_args__`; scapy routes fields through
+  `__getattr__`; construct returns dicts. None gives you a pattern to
+  match against.
+
+None of this makes scapy less than an extraordinary piece of software —
+it crafts, sends, sniffs and fuzzes across thousands of protocols, and
+this library does none of that. The comparison above is scoped to what
+both are: a codec that turns bytes into typed objects and back.
+
+One `mypy --strict` run says more than the bullets above:
+
+```
+# scapy 2.7.0 — a field name that does not exist
+p.ThisFieldDoesNotExist   → Any     (no error)
+
+# dpkt 1.9.8 — the whole module
+import dpkt.ethernet      → error: missing library stubs or py.typed
+
+# netprotocols — a typo in a real field name
+ip.proto                  → error: "IPv4" has no attribute
+                              "proto"; maybe "protocol"?
+```
+
 ## Protocol coverage
 
 | Layer | Protocol | Class | Notes |
@@ -306,24 +380,29 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-Planned work lives in the issue tracker rather than being restated
-here, so this section cannot drift out of date the way a copied list
-does. The current plan is
-[#107](https://github.com/EONRaider/NETProtocols/issues/107) — five
-tiers, each mapped to a release:
+The post-1.3.0 roadmap,
+[#107](https://github.com/EONRaider/NETProtocols/issues/107), is
+complete — five tiers plus a competitor CI audit
+([#124](https://github.com/EONRaider/NETProtocols/issues/124)) and the
+comparative-claims embargo lift that closed it out:
 
 | Version | Theme |
 |---|---|
 | [1.3.1](https://github.com/EONRaider/NETProtocols/issues/102) | Hygiene |
 | [1.4.0](https://github.com/EONRaider/NETProtocols/issues/103) | Decode performance |
-| [2.0.0](https://github.com/EONRaider/NETProtocols/issues/104) | A public protocol registry, a shipped chain walker, flow keys |
+| [2.0.0](https://github.com/EONRaider/NETProtocols/issues/104) | A public protocol registry, a shipped chain walker, flow keys — **released** |
 | [2.1.0](https://github.com/EONRaider/NETProtocols/issues/105) | Typed accessors and pattern-matching ergonomics |
 | [2.2.0](https://github.com/EONRaider/NETProtocols/issues/106) | Universal round-trip properties, nightly fuzzing, a pcap reader |
 
-The previous wave — TCP and IPv4 option parsing, ICMP message bodies,
-NDP, IPv6 extension-header TLV options, the GRE checksum arm, a
-DNS-over-TCP corpus fixture and `ipaddress` accessors — shipped in
-1.3.0; see [CHANGELOG.md](CHANGELOG.md).
+Everything through 2.2.0 has landed on `master`; per the roadmap's own
+release policy, only 2.0.0 was an actual PyPI release, and the
+comparative claims above draw on the finished tree. New planned work
+will open fresh issues rather than restating a list here, so this
+section stays accurate without upkeep. The wave before this one — TCP
+and IPv4 option parsing, ICMP message bodies, NDP, IPv6
+extension-header TLV options, the GRE checksum arm, a DNS-over-TCP
+corpus fixture and `ipaddress` accessors — shipped in 1.3.0; see
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 

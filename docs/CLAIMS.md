@@ -12,14 +12,16 @@ in someone's head.
 Tracked by [#101](https://github.com/EONRaider/NETProtocols/issues/101);
 roadmap context in [#107](https://github.com/EONRaider/NETProtocols/issues/107).
 
-> **Standing embargo: no comparative claims until the roadmap closes.**
-> Nothing in this file that mentions scapy, dpkt or any other library
-> goes into the README, release notes, package metadata or a post until
-> [#107](https://github.com/EONRaider/NETProtocols/issues/107) is
-> finished. Keep measuring, keep recording — that is what the file is
-> for — and ship the comparison once, complete, rather than in pieces
-> that each need defending. Entries under embargo are marked
-> `COMPARATIVE — HELD`.
+> **Embargo lifted 2026-09-04.** [#107](https://github.com/EONRaider/NETProtocols/issues/107)
+> closed once its last two pieces landed: [#124](https://github.com/EONRaider/NETProtocols/issues/124)
+> (auditing ten competitor projects' CI for a performance gate — none
+> gate, see 1.7) and a full re-measurement of every comparative claim
+> below against the roadmap's finished state. Every section that
+> previously carried a `COMPARATIVE — HELD` banner is now published,
+> with the date and commit it was re-measured at. The discipline that
+> produced this file doesn't stop here — Rule 4 (re-measure before
+> every release that quotes a number) still applies to everything
+> below, embargo or not.
 
 ## Rules
 
@@ -37,11 +39,16 @@ roadmap context in [#107](https://github.com/EONRaider/NETProtocols/issues/107).
 4. **Re-measure before every release that quotes a number.** Hardware
    moves, upstream releases move, and our own hot path is about to
    move a great deal.
-5. **Comparative claims stay unpublished until the roadmap closes.**
-   The numbers move under our feet: claim 1.2 went from "2.9× slower
-   than dpkt" to "1.16× faster" inside a single tier, and Tier 2
-   onwards will move them again. A comparison published mid-flight is
-   one we have to defend, retract, or re-measure in public.
+5. **Comparative claims stayed unpublished until the roadmap closed —
+   done as of 2026-09-04.** The numbers moved under our feet the whole
+   way: claim 1.2 went from "2.9× slower than dpkt" after Tier 1's
+   measurement, to "1.16× faster" later that same tier, to "~11%
+   slower" once Tiers 2-4 landed and were re-measured for the embargo
+   lift. That volatility is exactly why this rule existed — a
+   comparison published mid-flight is one we would have had to defend,
+   retract, or re-measure in public. It doesn't relax now that
+   publishing has started: Rule 4 still binds every number below at
+   every release.
 
 ## Measurement baseline
 
@@ -100,102 +107,163 @@ Note also that the v1.3.0 figure of 36,500 f/s above predates #83, which
 alone accounts for most of the gap to the ~58,000 f/s the same corpus
 walk showed once that had merged.
 
+### Re-measured for the embargo lift (2026-09-04, #107/#124)
+
+Tiers 2-4 (#87's dispatch rewrite, #88's chain walker, #91's structured
+errors, #93-#96's typing work, #97-#100's fuzzing/pcap/pyodide additions)
+have all merged since the Tier 1 re-measurement above. Re-measured with
+the same harness, matching the Tier 1 methodology (30 repetitions, best
+of 9):
+
+```
+uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9 --depth
+```
+
+- CPython 3.12.3, x86-64 Linux, 97 corpus frames, same machine class as
+  every prior measurement in this file, run-to-run variance ≈ ±3%.
+
+| | frames/sec | vs. netprotocols |
+|---|---|---|
+| **netprotocols (post-Tier-4, 2.0.0)** | **94,453** | — |
+| dpkt 1.9.8 | 105,525 | 1.12× (dpkt is faster) |
+| scapy 2.7.0 | 16,826 | 0.18× |
+
+**This reverses the Tier 1 finding for the dpkt comparison.** Tier 1 put
+netprotocols 1.16× *faster* than dpkt; three tiers of added surface —
+registry dispatch (#87), the chain walker (#88), and per-raise-site
+structured error context (#91) among them — moved the needle back the
+other way. netprotocols now decodes the corpus at 94,453 f/s against
+dpkt's 105,525, roughly **11% slower**. The vs.-scapy gap also narrowed,
+from 6.2× (Tier 1) to **5.6×**, though it remains a wide margin. Decode
+depth is unchanged: netprotocols still reaches further than dpkt on 27
+of 97 frames and matches it on the other 70 (see 1.6) — the two
+libraries still do different amounts of work, so the caveats from the
+Tier 1 re-measurement above still apply in full, including to a claim
+that is now more modest than it once was rather than less.
+
+This is reported plainly rather than smoothed over: the point of this
+register (Rule 1, Rule 4) is that a number gets published because it
+was measured, not because it was flattering. "Within 15%" (1.2) is
+still true — more true than it was, since the gap narrowed from the
+2.9× that motivated Tier 1 in the first place — it just now describes
+the other direction.
+
 ---
 
 ## 1. Performance
 
 ### 1.1 "2.1× faster than scapy at decoding"
-**Status: VERIFIED — and now understated**
+**Status: VERIFIED — and still understated**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
-Was 36,500 frames/sec against scapy 2.7.0's 17,100. Re-measured after
-Tier 1: **121,945 against 19,657, a 6.2× gap** (see the re-measurement
-above for the method and its caveats).
+Was 36,500 frames/sec against scapy 2.7.0's 17,100 at v1.3.0. Tier 1
+brought it to 6.2×; re-measured after Tiers 2-4 (see the embargo-lift
+re-measurement above): **94,453 against 16,826, a 5.6× gap.** The ratio
+narrowed as netprotocols took on more work per frame (registry
+dispatch, structured errors, the chain walker), but the headline "2.1×"
+claim was always a conservative floor and stays true by a wide margin.
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
 
-The wording is a positioning decision, not a measurement one: 6.2× is
-what the corpus shows on one machine, and whoever writes the README
-should pick the number they are willing to defend on someone else's.
+The wording is a positioning decision, not a measurement one: 5.6× is
+what the corpus shows on one machine today, and whoever writes the
+README should pick the number they are willing to defend on someone
+else's.
 
 ### 1.2 "Within 15% of dpkt on decode"
-**Status: gate satisfied — measured, and the claim is now too modest**
+**Status: VERIFIED — true again, from the other side**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
-#82, #83, #84 (and #85) have merged and #86 has re-measured on the real
-tree, which is exactly what this claim was waiting for. Measured:
-**121,945 f/s against dpkt 1.9.8's 105,292 — 1.16× dpkt**, where
-v1.3.0 was 2.9× slower. The prediction in #103 was 86% of dpkt; the
-extra came from #85, which the scratch prototype did not include, and
-from best-of rather than mean.
+v1.3.0 was 2.9× slower than dpkt. Tier 1 (#82-#86) briefly put
+netprotocols 1.16× *faster*. Re-measured after Tiers 2-4 (see the
+embargo-lift re-measurement above): **94,453 f/s against dpkt 1.9.8's
+105,525 — netprotocols is now ~11% slower**, comfortably still inside
+the 15% band the claim names, just no longer ahead. The added surface
+across Tiers 2-4 — a registry-backed dispatch table (#87), a shipped
+chain walker (#88), and structured per-raise-site error context (#91)
+chief among them — cost more than #82-#85's dispatch win banked.
 
-Before this is published as "faster than dpkt", two caveats from the
-re-measurement section apply and are not optional: the two libraries do
-not parse to the same depth (we go deeper on the DNS frames), and this
-is one machine. A cautious public form — "matches dpkt on the corpus
-walk while decoding further into the stack" — is defensible on the
-evidence; "1.16× faster than dpkt" is defensible only with the machine
-and the depth caveat attached.
+Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
 
-Recommend re-running the harness on a second machine before this
-reaches the README. Front-page wording is the maintainer's call.
+Two caveats from the re-measurement section apply and are not optional:
+the two libraries do not parse to the same depth (netprotocols goes
+deeper on 27 of 97 frames), and this is one machine. The defensible
+public form is "within 15% of dpkt on the corpus walk, while decoding
+further into the stack on more than a quarter of it" — not "faster than
+dpkt," which is no longer true and was never true robustly enough to
+have shipped it while it briefly was.
 
-### 1.3 "5.3× faster than dpkt at encoding"
-**Status: VERIFIED** — and never yet claimed
+### 1.3 "4.5× faster than dpkt at encoding"
+**Status: VERIFIED**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107). Re-measured under
+CPython 3.12, resolving the cross-version caveat this section used to
+carry — it now shares a baseline with the corpus decode numbers above.*
 
-`bytes(header)` re-serialization, ops/sec:
+`bytes(header)` re-serialization on a decoded synthetic Ethernet
+header, best of 9 trials × 20,000 reps, ops/sec:
 
 | Library | ops/sec | Note |
 |---|---|---|
-| **NETProtocols 1.3.0** | **1,443,863** | repacks from fields |
-| scapy 2.7.0 | 685,620 | returns cached original bytes — not a real repack |
-| dpkt 1.9.8 | 270,485 | repacks from fields |
+| **NETProtocols 2.0.0** | **1,150,600** | repacks from fields |
+| scapy 2.7.0 | 559,309 | returns cached original bytes — not a real repack |
+| dpkt 1.9.8 | 254,037 | repacks from fields |
 
-Nobody benchmarks this direction. It is the half of "codec" we already
-win, and it is true right now. Measured under CPython 3.13 on a single
-synthetic Ethernet header; **re-measure under 3.12 before quoting
-alongside the corpus decode numbers**, so the two share a baseline.
+Reproduce: `uv run --group bench python scripts/benchmark_encode.py`
+(added this session; previously this figure had no checked-in
+reproduction script, which Rule 1 does not actually permit — fixed
+along with the re-measurement).
 
-### 1.4 "Imports in 40 ms; scapy takes 570–870 ms"
+Nobody benchmarks this direction; it remains the half of "codec" this
+library already wins. The ratio against dpkt narrowed from the 5.3×
+recorded at v1.3.0 to 4.5× — netprotocols' own absolute rate dropped
+somewhat less than its decode rate did over the same tiers (encoding
+never touched the registry/walker/error-context surface that grew
+decode's cost), while dpkt's own number held essentially flat. Still a
+wide, clean win.
+
+### 1.4 "Imports in 54 ms; scapy takes 458+ ms"
 **Status: VERIFIED**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
-Also: 85 modules loaded against `scapy.all`'s 259 (dpkt: 117).
+Reproduce: `uv run --group bench python scripts/benchmark_import.py`
+(added this session, Rule 1). Best of 5 fresh-process runs each:
+netprotocols **54.0 ms**, scapy.all **458.3 ms** — netprotocols imports
+**8.5× faster**, down from the implied ~14-21× at v1.3.0's "40 ms vs
+570-870 ms." netprotocols' own import cost grew (40 ms → 54 ms) as
+Tiers 2-4 added the registry, walker, diagnostics and new protocol
+modules; scapy's did not move enough to change the picture. Also: 92
+modules loaded against `scapy.all`'s 259 (dpkt, not part of this claim:
+117 modules, 41.0 ms).
 
-Worth pairing with the observation that importing scapy performs live
-host introspection — it populated four interfaces and eight routes on
-the measuring machine simply by being imported. A codec that turns
-bytes into objects should never touch the host.
+Worth pairing with the observation that importing scapy still performs
+live host introspection — it populated four interfaces and eight routes
+on the measuring machine simply by being imported, unchanged from the
+original measurement. A codec that turns bytes into objects should
+never touch the host.
 
-### 1.5 "~46× smaller wheel than scapy"
-**Status: NEEDS RE-MEASUREMENT** at each release
+### 1.5 "~30× smaller wheel than scapy"
+**Status: VERIFIED** — re-measure at each release (Rule 4)
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
-50 KB wheel against scapy's 2.47 MB; 3,732 lines against 246,813.
-Both move with releases — re-check before quoting.
+85.6 KB wheel (`uv build`, `netprotocols-2.0.0-py3-none-any.whl`,
+87,684 bytes) against scapy 2.7.0's 2.47 MB (2,590,982 bytes, current
+PyPI `bdist_wheel`) — **29.6× smaller**, down from the ~46× recorded at
+v1.3.0. 6,371 lines (`wc -l` over `src/`) against scapy's unchanged
+246,813 — netprotocols grew from 3,732 lines as Tiers 2-4 added the
+registry, walker, structured diagnostics and new protocol coverage;
+scapy's line count and wheel size are both stable since the version on
+file. Both move with releases — re-check before quoting.
 
 ### 1.6 "Decodes further into the stack than dpkt, on the same bytes"
-**Status: VERIFIED (the measurement)**
+**Status: VERIFIED**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
+against the Tiers-2-4 tree — same 27/70 split as originally measured.*
 
 On the 97-frame corpus, netprotocols reaches a deeper layer than dpkt
 on **27 frames** and stops at the same layer on the other 70. dpkt
@@ -210,12 +278,12 @@ Reproduce: `uv run --group bench python scripts/benchmark.py --depth`.
 
 This is the control on every throughput figure in 1.1-1.3, not a
 footnote to them: a decoder that stops earlier has less to do, so
-"faster" only means something stated beside "and it decoded more".
-When the embargo lifts, the depth number travels with the speed number
-in the same sentence.
+"faster" only means something stated beside "and it decoded more". The
+depth number travels with the speed number in the same sentence,
+including in README.md.
 
 ### 1.7 "Decode throughput is regression-gated in CI"
-**Status: VERIFIED** — non-comparative, so not under embargo
+**Status: VERIFIED** — including the comparative form, per the #124 audit below
 
 Every pull request runs the corpus benchmark and fails at 15% below
 `benchmarks/baseline.json` (`.github/workflows/ci.yml`). Throughput is
@@ -225,9 +293,34 @@ failing so a noisy runner does not block unrelated work.
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --check`.
 
-The tempting comparative form — "no other Python packet library gates
-performance in CI" — is **not claimed**: their CI has not been audited,
-and rule 1 applies to us as much as to them.
+**"No other Python packet library in this comparison set gates
+performance in CI" — audited 2026-09-04 (#124), and the claim is now
+made.** Every project below was inspected at the commit/date shown; two
+distinctions were applied throughout: *running* a benchmark is not
+*gating* on one (a build must actually fail on regression), and a
+microbenchmark (one synthetic frame) is noted as such rather than
+counted as equivalent to a corpus benchmark.
+
+| Project | Repo @ commit (date inspected) | Runs a benchmark in CI | Fails build on regression | Commits a baseline | Gates? |
+|---|---|---|---|---|---|
+| dpkt | `kbandla/dpkt` @ `4f8958e` (2024-05-05, last commit) | No — no benchmark code anywhere in the tree or its history | No | No | **No** |
+| scapy | `secdev/scapy` @ `03f455c` (2026-09-03) | No — `test/benchmark/dissection_and_build.py` is a microbenchmark (one hardcoded packet, `N=10000`) that only `print()`s a number; never invoked by `.github/workflows/unittests.yml` or `tox.ini` | No | No | **No** |
+| pypacker | `gitlab.com/mike01/pypacker` @ `8ae3890` (2026-07-27) — canonical repo; the `mike01/pypacker` GitHub mirror is frozen since 2020 | No — no CI pipeline exists on the canonical repo at all. Historically (GitHub/Travis, deleted 2018) ran the full unittest file, which incidentally included assertion-free perf-logging methods (`tests/test_pypacker.py::PerfTestCase`) | No | No — only `logger.info()` output, never compared | **No** |
+| construct | `construct/construct` @ `28c6e57` (2025-04-22) | Yes — `tests/test_benchmarks.py` is a real corpus-style `pytest-benchmark` suite (190+ cases), **but** CI runs it with `--benchmark-disable` (`.github/workflows/main.yml:33`), which collects zero timing data | No | No — `make benchsave` exists but is never invoked by CI | **No** |
+| pcapkit | `JarryShaw/PyPCAPKit` @ `d86947e` (2026-08-31) | No — zero benchmark infrastructure; the only "benchmark" hit is an unrelated port-name comment | No | No | **No** |
+| dnspython | `rthalley/dnspython` @ `bc3009d` (2026-08-31) | No — no benchmark tooling in the dependency list or CI steps | No | No | **No** |
+| pyshark | `KimiNewt/pyshark` @ `91441d3` (2026-03-22) | No — CI runs `pytest` only | No | No | **No** |
+| nfstream | `nfstream/nfstream` @ `1426d78` (2026-08-01) | No — five CI workflows (build/test × 3 OSes, CodeQL, fuzz), none time anything | No | No | **No** |
+| stackforge | `AKOrojo/stackforge` @ `f0cf66b` (2026-03-15) | No — real Criterion benches exist (`crates/stackforge-core/benches/{packet_parse,layer_dispatch,pcap_throughput}.rs`), but `.github/workflows/test.yml` runs `cargo test`/`pytest`, never `cargo bench` | No | No | **No** |
+| PyTCP-net_proto | `ccie18643/PyTCP` (`packages/net_proto/`) @ `e24ab3e` (2026-08-09) | No — `.github/workflows/ci.yml` runs lint, `make test`, and a privileged real-TAP smoke test; a manual `tools/bench_rx_ring.py` microbenchmark exists but is wired to no CI job and benchmarks the RX daemon, not `net_proto` itself | No | No | **No** |
+
+Zero of ten. The closest any project comes is construct (a real corpus
+suite, deliberately disabled in CI) and stackforge (real Criterion
+benches, never invoked) — both have the harness and skip the gate.
+Reproduce this table: each repo was attached read-only via `add_repo`
+and inspected at the commit shown; re-run before quoting, since CI
+configuration is exactly the kind of thing that changes without a
+version bump.
 
 ---
 
@@ -236,9 +329,8 @@ and rule 1 applies to us as much as to them.
 ### 2.1 The `mypy --strict` comparison
 **Status: VERIFIED** — the single strongest demo we have
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107). Re-run against scapy
+2.7.0 and dpkt 1.9.8 (unchanged versions) at their current commits.*
 
 ```
 # scapy 2.7.0 — a field name that does not exist
@@ -252,26 +344,30 @@ ip.proto                  → error: "IPv4" has no attribute
                               "proto"; maybe "protocol"?
 ```
 
-Supporting facts, all verifiable:
+Supporting facts, all re-verified against `secdev/scapy` @ `03f455c`
+(2026-09-03) and `kbandla/dpkt` @ `4f8958e` (2024-05-05, unchanged):
 
 - Scapy **does** ship `py.typed`, so the marker alone proves nothing.
-  Its own mypy configuration enables 88 files, of which **two of the
-  ninety-two under `scapy/layers/`** — the dissectors anyone actually
-  touches are unchecked. `Packet.__getattr__` erases every field to
-  `Any`.
-- dpkt ships no `py.typed`; `types-dpkt` and `dpkt-stubs` do not exist
-  on PyPI. Everything downstream becomes `Any`.
+  Its own mypy configuration (`.config/mypy/mypy_enabled.txt`) now
+  enables **107 files** (up from 88), of which **two of the
+  one-hundred-twenty-one under `scapy/layers/`** (`can.py`, `l2.py`;
+  up from "two of ninety-two" as the directory grew) — the dissectors
+  anyone actually touches are still unchecked. `Packet.__getattr__`
+  erases every field to `Any`.
+- dpkt still ships no `py.typed`; `types-dpkt` and `dpkt-stubs` still
+  do not exist on PyPI (both 404 on `pypi.org/pypi/<name>/json`).
+  Everything downstream becomes `Any`.
 - Ours is `mypy strict = true` over the whole of `src/`, enforced in
-  CI.
+  CI, unchanged.
 
 This fits in one screenshot and belongs near the top of the README.
 
 ### 2.2 "The only Python packet library you can dissect with `match`/`case`"
-**Status: VERIFIED (the capability); COMPARATIVE — HELD (the claim)**
+**Status: VERIFIED**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107). The comparative form
+below was held pending the roadmap; the capability itself has been
+verified since #93.*
 
 The capability itself is no longer gated: #93 landed it in
 documentation and a regression suite. It already worked, with no code
@@ -295,19 +391,20 @@ match ip:
         ...
 ```
 
-What stays held is the *comparative* sentence — dpkt builds
-`__slots__` from a metaclass and generates no `__match_args__`; scapy
-routes fields through `__getattr__`; `construct` returns dicts — under
-Rule 5 like every other claim naming a competitor. Neither README.md
-nor ARCHITECTURE.md make the comparative form; both describe only this
-library's own mechanism.
+The comparative sentence is now published: dpkt builds `__slots__`
+from a metaclass and generates no `__match_args__`; scapy routes
+fields through `__getattr__`; `construct` returns dicts. None of the
+three gives a reader a `case IPv4(protocol=...)` pattern to match
+against. This was re-checked against the same commits inspected for
+2.1 (`secdev/scapy` @ `03f455c`, `kbandla/dpkt` @ `4f8958e`) plus
+`construct/construct` @ `28c6e57` (2025-04-22, inspected for #124) —
+`construct`'s `Struct`/`Container` types are dict-like, not
+dataclasses, and generate no `__match_args__` either.
 
 ### 2.3 "No library combines all five"
 **Status: VERIFIED, with one named exception**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
 Zero dependencies + frozen-dataclass headers + `IntEnum` registries +
 `match`/`case` dissection + `py.typed` with real (non-`Any`) field
@@ -324,11 +421,11 @@ out of a full TCP/IP stack rather than a standalone codec. We are MIT,
 ## 3. Purity and portability
 
 ### 3.1 "Runs where scapy cannot — including the browser"
-**Status: VERIFIED (the capability, via CI's `pyodide` job); COMPARATIVE — HELD (the claim)**
+**Status: VERIFIED**
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107). Capability proved under
+a real Pyodide runtime by #99; the comparative claim was held pending
+the roadmap and is now stated.*
 
 Blocking exactly the modules Pyodide removes (`fcntl`, `termios`,
 `resource`, `grp`, `pwd`) and re-importing:
@@ -347,7 +444,9 @@ Scapy's `from fcntl import ioctl` is **unconditional** in
 be *imported* under Pyodide — not "cannot sniff". It is also absent
 from Pyodide's built package set.
 
-Gated because we should test it before we sell it.
+Was gated on testing it before selling it; #99 did exactly that
+(`scripts/pyodide/check_in_pyodide.py`, CI's `pyodide` job), so the
+claim is no longer conditional on anything.
 
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
@@ -379,9 +478,7 @@ there without a separate build. Say nothing about embedded targets.
 
 **Status: VERIFIED** — and probably the most actionable claim here
 
-> ⏸ **COMPARATIVE — HELD until the roadmap (#107) closes.** The
-> evidence below stands and should keep being re-measured; none of it
-> is published anywhere until then.
+*Published 2026-09-04 (embargo lifted, #107).*
 
 | Project | Licence |
 |---|---|
@@ -399,10 +496,12 @@ there without a separate build. Say nothing about embedded targets.
 
 For anyone embedding a packet codec in a commercial product, the GPL
 column is unavailable. That leaves dpkt and us — and dpkt was last
-released **2022-08-18**, last committed **2024-05-05**, still
-advertises Python 2.7 and 3.5–3.9 in its classifiers, is still marked
-`Development Status :: 4 - Beta` after twelve years, has 95 open
-issues, and cannot be type-checked at all.
+released **2022-08-18**, last committed **2024-05-05** (both
+unchanged, re-confirmed against PyPI's JSON API and `kbandla/dpkt` @
+`4f8958e`), still advertises Python 2.7 and 3.5–3.9 in its classifiers,
+is still marked `Development Status :: 4 - Beta` after twelve years,
+has **77 open issues** (down from 95; re-counted 2026-09-04), and
+cannot be type-checked at all.
 
 This may be a stronger and more immediately usable wedge than the
 browser story. It also costs nothing to start saying.
@@ -525,8 +624,12 @@ make the extension point safe rather than merely present:
 **Not yet claimable, and deliberately so:** whether competitors offer
 an equivalent. scapy's `bind_layers` and dpkt's per-module dicts both
 exist and neither has been audited for what it actually guarantees, so
-no comparative form of this claim is written here. See the embargo in
-the Rules and #124.
+no comparative form of this claim is written here. This is separate
+from — and not resolved by — #124's CI-gate audit or the roadmap's
+embargo lift, both of which were scoped to the eleven claims that
+carried a `COMPARATIVE — HELD` banner; this one never did, because it
+was never measured in the first place. It would need its own audit,
+the same way #124 gave 1.7 one, before a comparative form belongs here.
 
 ### 5.6 "Port dispatch is a table lookup"
 **Status: VERIFIED** (#87)
@@ -587,7 +690,9 @@ eight lines:
 **Comparative forms are held.** dpkt's and scapy's equivalents have not
 been audited here, and the interesting comparison — what each does with
 a *malformed* frame — is a behavioural claim needing evidence, not a
-feature-table tick. See the embargo in the Rules.
+feature-table tick. Like 5.5, this predates and is unrelated to the
+roadmap's now-lifted embargo — it stays unpublished because nobody has
+looked, not because #107 was open.
 
 ### 5.8 "memoryview walking, measured rather than assumed"
 **Status: VERIFIED** (#88)
@@ -665,20 +770,24 @@ raise at all. dpkt raises bare `UnpackError` / `NeedData` with nothing
 attached. For the audience this library is built for — people parsing
 untrusted input — this is the difference between a library that
 rejects bad input and one that explains it. No competitor offers it,
-though that comparative form stays held under the standing embargo
-until this claim is audited the same way #124 audits the CI gate.
+though that comparative form stays unpublished until this specific
+claim gets its own audit the way #124 gave 1.7 one — the roadmap's
+embargo lift did not cover it, since it was never a measured `HELD`
+section to begin with.
 
 
 ---
 
 ## 6. Claims we must not make
 
-- ❌ **"Faster than dpkt"** (unqualified) — no longer false, and still
-  not publishable. Post-Tier-1 measurement puts decode at 1.16× dpkt on
-  one machine and 1.06-1.16× across two CI runners (1.2), while
-  decoding further on 27 of 97 frames (1.6). Unqualified, it still
-  hides the machine, the corpus and the depth difference — and under
-  the standing embargo it is not published at all until #107 closes.
+- ❌ **"Faster than dpkt"** (unqualified) — false again, and was never
+  safe to publish unqualified even in the one tier where it was true.
+  Post-Tier-1 measurement briefly put decode at 1.16× dpkt; re-measured
+  after Tiers 2-4 (1.2) netprotocols is ~11% *slower*, still decoding
+  further on 27 of 97 frames (1.6). The number moved twice inside one
+  roadmap — proof, not incidentally, of why this file holds comparative
+  claims until they are re-measured rather than trusting the last
+  number on file.
 - ❌ **"Superior to scapy"** with no axis named. Scapy crafts, sends,
   sniffs, fuzzes and covers thousands of protocols; we decode and
   re-encode a couple of dozen headers. On *codec* axes — typing,
