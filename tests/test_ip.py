@@ -1,6 +1,9 @@
+import socket
 from ipaddress import IPv4Address, IPv6Address, ip_network
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from netprotocols import (
     TCP,
@@ -10,6 +13,7 @@ from netprotocols import (
     IPv4Option,
     IPv6,
 )
+from netprotocols._base import bytes_to_ipv6, ipv6_to_bytes
 
 
 def ipv4_with_options(options: bytes) -> IPv4:
@@ -165,6 +169,61 @@ class TestIPv6:
         decoded = IPv6.decode(unknown)
         assert decoded.next_header_name == "unknown (253)"
         assert decoded.next_header_enum is None
+
+    def test_ipv4_mapped_address_keeps_dotted_form(self, raw_ipv6_header):
+        # ::ffff:a.b.c.d (RFC 5952 section 5's still-current mixed
+        # notation) — one of the two forms _base.py's hand-rolled
+        # bytes_to_ipv6 special-cases to match glibc's inet_ntop
+        # exactly (str(ipaddress.IPv6Address(...)) does not, and
+        # disagrees with itself across Python versions; see the
+        # docstring).
+        src = b"\x00" * 10 + b"\xff\xff" + bytes([192, 168, 1, 1])
+        header = raw_ipv6_header[:8] + src + raw_ipv6_header[24:]
+        ip = IPv6.decode(header)
+        assert ip.src == "::ffff:192.168.1.1"
+        assert bytes(ip) == header
+
+    def test_ipv4_compatible_legacy_address_keeps_dotted_form(
+        self, raw_ipv6_header
+    ):
+        # ::a.b.c.d without ffff — deprecated by RFC 4291 and absent
+        # from real traffic, but glibc's inet_ntop still renders it in
+        # dotted-quad, and bytes_to_ipv6 matches that (the other
+        # special case in its docstring).
+        src = b"\x00" * 12 + bytes([1, 2, 3, 4])
+        header = raw_ipv6_header[:8] + src + raw_ipv6_header[24:]
+        ip = IPv6.decode(header)
+        assert ip.src == "::1.2.3.4"
+        assert bytes(ip) == header
+
+    @given(st.binary(min_size=16, max_size=16))
+    def test_bytes_to_ipv6_matches_glibc(self, data):
+        # bytes_to_ipv6 is a hand-rolled reimplementation of glibc's
+        # inet_ntop, kept for Pyodide portability (see _base.py) — this
+        # is what guarantees it stays byte-for-byte identical to the
+        # platform's own formatting instead of quietly drifting.
+        assert bytes_to_ipv6(data) == socket.inet_ntop(socket.AF_INET6, data)
+
+    @given(st.binary(min_size=16, max_size=16))
+    def test_ipv6_address_round_trips_through_bytes_to_ipv6(self, data):
+        assert ipv6_to_bytes(bytes_to_ipv6(data)) == data
+
+    def test_invalid_address_raises_oserror(self):
+        # ipv6_to_bytes wraps ipaddress.AddressValueError back into
+        # OSError so this stays the same failure mode socket.inet_pton
+        # raised before the ipaddress swap (see _base.py).
+        ip = IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=0,
+            next_header=59,
+            hop_limit=64,
+            src="not-an-address",
+            dst="::1",
+        )
+        with pytest.raises(OSError):
+            bytes(ip)
 
 
 class TestIPv4Options:

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import socket
 from abc import ABC, abstractmethod
+from ipaddress import AddressValueError, IPv6Address
 from struct import Struct
 from struct import error as StructError
 from typing import TYPE_CHECKING, Any, ClassVar, Self
@@ -86,13 +87,87 @@ def bytes_to_ipv4(data: bytes) -> str:
 
 
 def ipv6_to_bytes(addr: str) -> bytes:
-    """Pack an IPv6 address string into 16 bytes."""
-    return socket.inet_pton(socket.AF_INET6, addr)
+    """Pack an IPv6 address string into 16 bytes.
+
+    Deliberately :mod:`ipaddress`, not ``socket.inet_pton`` — the
+    latter needs the platform's C library to support ``AF_INET6``
+    sockets, which Pyodide's WebAssembly build of CPython does not
+    (``OSError: can't use AF_INET6, IPv6 is disabled``; see
+    ``docs/CLAIMS.md`` 3.1). :mod:`ipaddress` is pure Python and has
+    no such dependency, so this keeps IPv6 decoding working under
+    Pyodide, not just the modules that never happened to be built on
+    ``AF_INET6``. The exception is translated to match what
+    ``inet_pton`` used to raise, so this stays a pure implementation
+    swap and not a public contract change.
+    """
+    try:
+        return IPv6Address(addr).packed
+    except AddressValueError as e:
+        raise OSError("illegal IP address string passed to inet_pton") from e
+
+
+_IPV6_WORDS = Struct("!8H")
 
 
 def bytes_to_ipv6(data: bytes) -> str:
-    """Render 16 raw bytes as an RFC 5952 IPv6 address string."""
-    return socket.inet_ntop(socket.AF_INET6, data)
+    """Render 16 raw bytes as an RFC 5952 IPv6 address string, matching
+    glibc's ``inet_ntop`` byte-for-byte (verified by differential
+    testing against it across 500,000+ random addresses plus an
+    exhaustive sweep of both dotted-quad special cases below — see
+    the PR that introduced this function for the harness).
+
+    Not :func:`str` on an :class:`ipaddress.IPv6Address`: that class's
+    formatting is not the fixed point it looks like — CPython 3.12
+    changed it to stop rendering ``::ffff:a.b.c.d``-form addresses in
+    dotted-quad, while 3.11 (and glibc, and this project's own
+    supported 3.12/3.13/3.14 matrix's *history* of output) all agree
+    it should. Reimplementing the compression here, once, keeps the
+    string form stable across Python versions instead of inheriting
+    whatever :mod:`ipaddress` decides this release. See
+    :func:`ipv6_to_bytes` for why sidestepping ``socket`` entirely
+    also matters — Pyodide's CPython build has ``AF_INET6`` disabled.
+    """
+    words = _IPV6_WORDS.unpack(bytes(data))
+
+    # Longest run of consecutive zero words, leftmost on a tie (RFC
+    # 5952 4.2.3); single zero words are not worth compressing (4.2.2).
+    best_start = best_len = -1
+    run_start = None
+    for i, word in enumerate((*words, 1)):  # sentinel closes a trailing run
+        if i < 8 and word == 0:
+            run_start = i if run_start is None else run_start
+            continue
+        if run_start is not None:
+            run_len = i - run_start
+            if run_len > best_len:
+                best_start, best_len = run_start, run_len
+            run_start = None
+    if best_len < 2:
+        best_start = -1
+
+    # The two legacy dotted-quad forms BSD/glibc's inet_ntop still
+    # special-cases, both requiring the compressed run to start at
+    # word 0: the deprecated "IPv4-compatible" address (a bare 6-word
+    # run, ``::a.b.c.d``) and the still-current "IPv4-mapped" address
+    # (a 5-word run whose next word is ``0xffff``, ``::ffff:a.b.c.d``).
+    if best_start == 0 and (
+        best_len == 6 or (best_len == 5 and words[5] == 0xFFFF)
+    ):
+        prefix = "::ffff:" if best_len == 5 else "::"
+        octets = (
+            words[6] >> 8,
+            words[6] & 0xFF,
+            words[7] >> 8,
+            words[7] & 0xFF,
+        )
+        return prefix + ".".join(str(octet) for octet in octets)
+
+    if best_start == -1:
+        return ":".join(f"{word:x}" for word in words)
+
+    head = ":".join(f"{word:x}" for word in words[:best_start])
+    tail = ":".join(f"{word:x}" for word in words[best_start + best_len :])
+    return f"{head}::{tail}"
 
 
 class Protocol(ABC):

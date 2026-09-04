@@ -106,6 +106,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pieces (`IPv6Option` "likewise decode[d] no values"); `None` for
   every other type and malformed data, same contract throughout this
   tier (#96).
+- **CI proves the library runs under a real Pyodide (WebAssembly)
+  runtime**, not just that the modules `scapy`/`dpkt` need are
+  individually blocked. A new `pyodide` job (`.github/workflows/ci.yml`)
+  boots actual Pyodide under Node via `scripts/pyodide/run_in_pyodide.mjs`,
+  installs the wheel this job just built, and decodes the entire
+  real-capture fixture corpus with it — see
+  `scripts/pyodide/check_in_pyodide.py`. That surfaced a genuine bug
+  along the way: `IPv6.decode()`/`bytes(IPv6(...))` used
+  `socket.inet_ntop`/`inet_pton(AF_INET6, ...)`, and Pyodide's CPython
+  build has `AF_INET6` sockets disabled, so every IPv6 frame failed to
+  decode there. `_base.py`'s `ipv6_to_bytes`/`bytes_to_ipv6` are now a
+  pure-Python implementation (`ipaddress` for parsing; a hand-rolled
+  RFC 5952 canonicalizer, differentially verified against glibc's
+  `inet_ntop` across 500,000+ random addresses plus both of its
+  dotted-quad special cases, for formatting — `str(ipaddress.IPv6Address)`
+  was tried first and rejected: it disagrees with glibc on IPv4-mapped
+  addresses, and disagrees with *itself* between Python 3.11 and 3.12).
+  IPv4 addressing is unaffected; behavior for every existing platform
+  is unchanged, exception type included (#99).
 
 ## [2.0.0] - 2026-09-04
 

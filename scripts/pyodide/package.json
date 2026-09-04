@@ -1,0 +1,9 @@
+{
+  "name": "netprotocols-pyodide-check",
+  "private": true,
+  "type": "module",
+  "description": "Node-side driver that runs check_in_pyodide.py inside a real Pyodide (WASM) runtime, proving netprotocols' browser support claim (issue #99).",
+  "dependencies": {
+    "pyodide": "0.29.4"
+  }
+}
