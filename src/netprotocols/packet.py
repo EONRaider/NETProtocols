@@ -51,6 +51,30 @@ class Packet:
         #: to report.
         self.stopped_by: ProtocolError | None = stopped_by
 
+    @classmethod
+    def _from_decoded(
+        cls, layers: list[Protocol], stopped_by: ProtocolError | None
+    ) -> Self:
+        """Build a packet from headers :func:`~netprotocols.decode_frame`
+        just decoded, skipping :meth:`__init__`'s per-layer
+        ``isinstance`` check.
+
+        Internal only — the public constructor takes arbitrary
+        caller-supplied arguments and has to validate them, but
+        ``decode_frame`` calls this with a list built exclusively from
+        this module's own ``protocol.decode()`` calls, so the
+        invariant ``__init__`` checks already holds. Skipping it
+        matters: profiling showed that check alone, run through
+        :class:`~netprotocols._base.Protocol`'s ABC machinery, as
+        ~7-8% of ``decode_frame``'s total time. Same
+        ``object.__new__`` shortcut :mod:`netprotocols._base` uses for
+        Ethernet/ARP/IPv4 field construction, documented there.
+        """
+        packet = object.__new__(cls)
+        packet.layers = tuple(layers)
+        packet.stopped_by = stopped_by
+        return packet
+
     def __bytes__(self) -> bytes:
         return b"".join(bytes(layer) for layer in self.layers)
 

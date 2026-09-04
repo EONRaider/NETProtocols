@@ -54,7 +54,7 @@ real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured
 2026-09-04 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every number
 below, its reproduction command, and its caveats):
 
-- **Within 15% of dpkt on decode, 5.6× faster than scapy** —
+- **Within 15% of dpkt on decode, 5.4× faster than scapy** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
   the faster of the two comparators on this corpus; the gap moves both
   ways as this library and dpkt each change, and this file's job is to
