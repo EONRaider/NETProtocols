@@ -59,3 +59,36 @@ jobs:
           fi
           echo "Tag ${GITHUB_REF_NAME} matches packaged version ${built}."
       - run: uv publish --trusted-publishing always
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      # CHANGELOG.md is the single source of truth for release notes, so
+      # extract this tag's own section rather than maintaining a second
+      # copy anywhere. A missing section fails loudly instead of
+      # publishing an empty-body release.
+      - name: Extract this version's CHANGELOG section
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            found && /^## \[/ { exit }
+            found { print }
+            $0 ~ "^## \\[" ver "\\]" { found=1 }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No '## [${version}]' section found in CHANGELOG.md."
+            exit 1
+          fi
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "netprotocols ${GITHUB_REF_NAME#v}" \
+            --notes-file release-notes.md \
+            --latest
