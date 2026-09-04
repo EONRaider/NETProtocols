@@ -87,6 +87,31 @@ methodology, and updated 1.1/1.2/1.6 figures.
   **released** marker 2.0.0 already carried. Issue #107, the source
   both docs draw this from, updated its own stated policy line with a
   dated correction rather than silently rewriting history.
+- **A fresh independent audit for #101 found four more genuine drifts
+  and fixed them, none of them regressions — just the register falling
+  behind a codebase and a README that both kept moving.** `docs/CLAIMS.md`
+  §5.3's statement count (1,935) had drifted from the live count of
+  2,091 as the codebase grew — the coverage percentage held steady only
+  because the miss count never moved, masking it; `pyproject.toml`'s own
+  inline comment was still quoting an even older 1,441 and is now
+  corrected too. §5.7's "79 tests" for `tests/test_walk.py` undercounted
+  the live 85: one test parametrized over the corpus's first 40 frames
+  now collects its full 40 instances because the corpus has since grown
+  past that slice, not because tests were added. §1.6 overstated its own
+  claim about README.md, saying the decode-depth figure travels with the
+  throughput figure "in the same sentence" there; they're adjacent
+  bullets, not one sentence — corrected. README's Pyodide/browser bullet
+  said outright that "pypacker was not tested", contradicted by
+  `docs/CLAIMS.md` §3.1's own simulation table two paragraphs away, which
+  shows pypacker importing cleanly under the identical CPython-side
+  check used for dpkt; reworded to say so, and to stop implying the
+  scapy-import failure was observed directly inside the real Pyodide CI
+  run rather than established by source citation plus that simulation.
+  README's CI-gating bullet lumped PyTCP-net_proto in with three
+  libraries whose benchmark code targets the library being compared;
+  `docs/CLAIMS.md` §1.7's own citation notes PyTCP-net_proto's benchmark
+  exercises its RX daemon instead — reworded to keep that distinction
+  rather than flattening it.
 
 ### Added
 - **Typed accessors for every enum-backed field.** `_enums.py` defines

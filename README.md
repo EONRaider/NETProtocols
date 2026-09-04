@@ -75,11 +75,14 @@ below, its reproduction command, and its caveats):
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
   nfstream, stackforge, PyTCP-net_proto; full citations in
-  [docs/CLAIMS.md §1.7](docs/CLAIMS.md)) — none of them gate on one.**
-  Four of the ten (scapy, construct, stackforge, PyTCP-net_proto) ship
-  real benchmark code that simply never runs in CI (construct disables
-  it explicitly; stackforge's Criterion benches are never invoked); none
-  of the ten fails a build on a performance regression.
+  [docs/CLAIMS.md §1.7](docs/CLAIMS.md#17-decode-throughput-is-regression-gated-in-ci)) — none of them gate on one.**
+  Three of the ten (scapy, construct, stackforge) ship benchmark code
+  that targets the library being compared but never runs in CI
+  (construct disables it explicitly; stackforge's Criterion benches are
+  never invoked). A fourth, PyTCP-net_proto, ships a benchmark too, but
+  it exercises its RX daemon rather than the compared `net_proto`
+  package, and isn't wired to CI either. None of the ten fails a build
+  on a performance regression.
 - **Typed where the alternatives are not.** `mypy --strict` over the
   whole of `src/`, enforced in CI. scapy ships `py.typed` but enables
   strict checking on 89 of its files, 2 of the 121 under
@@ -92,12 +95,14 @@ below, its reproduction command, and its caveats):
   GPL-3.0. The other permissive option, dpkt (BSD), last released
   2022-08-18 and last committed 2024-05-05, still targets Python 2.7
   and 3.5–3.9, and remains marked Beta after twelve years.
-- **Runs where scapy cannot — including in the browser.** Verified
-  under a real Pyodide runtime in CI: netprotocols imports and decodes
-  the full corpus cleanly there, while scapy fails to import at all
-  (`from fcntl import ioctl` is unconditional in `scapy/arch/`). dpkt
-  was separately confirmed to import cleanly under the same missing
-  modules, though not inside this CI job; pypacker was not tested.
+- **Runs where scapy cannot — including in the browser.** Under a real
+  Pyodide runtime in CI, netprotocols imports and decodes the full
+  corpus cleanly. Scapy cannot even be attempted there: it is absent
+  from Pyodide's package set, and `from fcntl import ioctl` is
+  unconditional in `scapy/arch/` — confirmed by that same CI run still
+  missing the module, plus the source citation. dpkt and pypacker were
+  both confirmed to import cleanly under the same missing modules, but
+  via a separate CPython-side simulation, not inside the CI job.
 - **The only one of these libraries a `match`/`case` statement
   dissects out of the box.** dpkt builds `__slots__` from a metaclass
   and generates no `__match_args__`; scapy routes fields through
