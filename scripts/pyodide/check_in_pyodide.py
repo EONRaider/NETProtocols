@@ -58,11 +58,11 @@ def install_wheel() -> None:
     """Extract the wheel built by the CI job's ``uv build`` step onto
     ``sys.path``, exactly as a real ``pip``/``micropip`` install would
     leave it, minus the network fetch micropip would otherwise need."""
+    import tempfile
     import zipfile
 
     (wheel,) = (REPO / "dist").glob("*.whl")
-    target = Path("/tmp/netprotocols-wheel")
-    target.mkdir(exist_ok=True)
+    target = Path(tempfile.mkdtemp(prefix="netprotocols-wheel-"))
     zipfile.ZipFile(wheel).extractall(target)
     sys.path.insert(0, str(target))
 

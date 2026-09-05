@@ -110,7 +110,7 @@ def decode_dpkt(frames: list[bytes]) -> int:
     for frame in frames:
         try:
             dpkt.ethernet.Ethernet(frame)
-        except Exception:
+        except Exception:  # dpkt has no shared "malformed frame" exception
             continue
         decoded += 1
     return decoded
@@ -124,7 +124,7 @@ def decode_scapy(frames: list[bytes]) -> int:
         try:
             packet = Ether(frame)
             packet.layers()  # force the lazy chain to materialize
-        except Exception:
+        except Exception:  # scapy has no shared "malformed frame" exception
             continue
         decoded += 1
     return decoded

@@ -44,6 +44,27 @@ dpkt-throughput regression" section for the full profiling writeup,
 before/after numbers under both the old and new benchmark
 methodology, and updated 1.1/1.2/1.6 figures.
 
+### Development
+- **Addressed CodeFactor's static-analysis findings on the tooling
+  scripts (#156).** `scripts/pyodide/check_in_pyodide.py` extracted
+  the built wheel into a hardcoded, predictable `/tmp/netprotocols-
+  wheel` path; it now uses `tempfile.mkdtemp()`, verified against a
+  real Pyodide runtime (`node scripts/pyodide/run_in_pyodide.mjs`)
+  decoding the full corpus unchanged. `scripts/check_fixtures.py`'s
+  `_check_l3` — one 137-line function walking IPv4, IPv6, GRE
+  tunneling, VLAN and every upper-layer checksum — is split into one
+  small function per protocol; output is byte-identical on the full
+  97-frame fixture corpus before and after. `scripts/benchmark.py`'s
+  three broad `except Exception: continue` blocks are unchanged but
+  now documented: `dpkt` and `scapy` have no shared "malformed frame"
+  exception the way this project's own `ProtocolError` does, so a
+  bare `except` is the correct interop boundary, not a swallowed bug.
+  The flagged duplication between `benchmark.py` and
+  `check_in_pyodide.py`'s minimal pcap readers is left as-is — both
+  scripts' docstrings already document that each verification path
+  must stand on its own, independent of the others, which a shared
+  helper would undo for a cosmetic DRY gain.
+
 ### Documentation
 - **Corrected six README.md claims an independent audit against the
   live repo found stale or overstated, none of them accidental
