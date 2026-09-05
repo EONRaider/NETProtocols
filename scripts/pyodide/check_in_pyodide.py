@@ -22,12 +22,15 @@ with it, proving the library does its actual job here, not just that
 
 from __future__ import annotations
 
-import struct
 import sys
 from pathlib import Path
 
 REPO = Path("/repo")
 FIXTURES = REPO / "tests" / "fixtures"
+
+sys.path.insert(0, str(REPO / "scripts"))
+
+from _pcap import corpus_frames  # noqa: E402
 
 #: Modules scapy/dpkt need but Pyodide's WebAssembly build of CPython
 #: does not provide (no ioctls, ttys, rlimits, or /etc/passwd under
@@ -67,35 +70,6 @@ def install_wheel() -> None:
     sys.path.insert(0, str(target))
 
 
-def read_pcap(path: Path) -> list[bytes]:
-    """Minimal classic-pcap reader (standalone, like scripts/benchmark.py
-    and scripts/check_fixtures.py — this job must not depend on the
-    library it is trying to prove works)."""
-    data = path.read_bytes()
-    magic = data[:4]
-    if magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
-        endian = ">"
-    elif magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
-        endian = "<"
-    else:
-        raise ValueError(f"{path.name}: not a pcap")
-    frames, cursor = [], 24
-    while cursor + 16 <= len(data):
-        (incl_len,) = struct.unpack_from(f"{endian}I", data, cursor + 8)
-        cursor += 16
-        frames.append(data[cursor : cursor + incl_len])
-        cursor += incl_len
-    return frames
-
-
-def corpus_frames() -> list[bytes]:
-    return [
-        frame
-        for pcap in sorted(FIXTURES.glob("*.pcap"))
-        for frame in read_pcap(pcap)
-    ]
-
-
 def main() -> int:
     assert_posix_modules_absent()
     install_wheel()
@@ -103,7 +77,7 @@ def main() -> int:
     import netprotocols
     from netprotocols import ProtocolError, decode_frame
 
-    frames = corpus_frames()
+    frames = corpus_frames(FIXTURES)
     if len(frames) < 40:
         print(f"FAIL: corpus too small ({len(frames)} frames)")
         return 1

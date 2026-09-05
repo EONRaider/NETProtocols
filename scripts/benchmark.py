@@ -61,35 +61,11 @@ FIXTURES = REPOSITORY / "tests" / "fixtures"
 BASELINE = REPOSITORY / "benchmarks" / "baseline.json"
 
 sys.path.insert(0, str(REPOSITORY / "src"))
+sys.path.insert(0, str(REPOSITORY / "scripts"))
+
+from _pcap import corpus_frames  # noqa: E402
 
 from netprotocols import ProtocolError, decode_frame  # noqa: E402
-
-
-def read_pcap(path: Path) -> list[bytes]:
-    """Minimal classic-pcap reader (standalone, like check_fixtures)."""
-    data = path.read_bytes()
-    magic = data[:4]
-    if magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
-        endian = ">"
-    elif magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
-        endian = "<"
-    else:
-        raise ValueError(f"{path.name}: not a pcap")
-    frames, cursor = [], 24
-    while cursor + 16 <= len(data):
-        (incl_len,) = struct.unpack_from(f"{endian}I", data, cursor + 8)
-        cursor += 16
-        frames.append(data[cursor : cursor + incl_len])
-        cursor += incl_len
-    return frames
-
-
-def corpus_frames() -> list[bytes]:
-    return [
-        frame
-        for pcap in sorted(FIXTURES.glob("*.pcap"))
-        for frame in read_pcap(pcap)
-    ]
 
 
 def decode_netprotocols(frames: list[bytes]) -> int:
@@ -365,7 +341,7 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="write the results here")
     args = parser.parse_args()
 
-    frames = corpus_frames()
+    frames = corpus_frames(FIXTURES)
     if not frames:
         print(f"No fixtures found under {FIXTURES}", file=sys.stderr)
         return 1
