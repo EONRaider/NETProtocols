@@ -1,6 +1,6 @@
 # NETProtocols
 
-[![CodeFactor](https://www.codefactor.io/repository/github/eonraider/rootwire/badge)](https://www.codefactor.io/repository/github/eonraider/rootwire)
+[![CodeFactor](https://www.codefactor.io/repository/github/eonraider/netprotocols/badge/master)](https://www.codefactor.io/repository/github/eonraider/netprotocols/overview/master)
 [![CI](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml)
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
