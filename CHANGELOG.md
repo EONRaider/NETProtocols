@@ -44,6 +44,38 @@ dpkt-throughput regression" section for the full profiling writeup,
 before/after numbers under both the old and new benchmark
 methodology, and updated 1.1/1.2/1.6 figures.
 
+### Development
+- **Addressed CodeFactor's static-analysis findings on the tooling
+  scripts (#156).** `scripts/pyodide/check_in_pyodide.py` extracted
+  the built wheel into a hardcoded, predictable `/tmp/netprotocols-
+  wheel` path; it now uses `tempfile.mkdtemp()`, verified against a
+  real Pyodide runtime (`node scripts/pyodide/run_in_pyodide.mjs`)
+  decoding the full corpus unchanged. `scripts/check_fixtures.py`'s
+  `_check_l3` — one 137-line function walking IPv4, IPv6, GRE
+  tunneling, VLAN and every upper-layer checksum — is split into one
+  small function per protocol; output is byte-identical on the full
+  97-frame fixture corpus before and after. `scripts/benchmark.py`'s
+  three broad `except Exception: continue` blocks are unchanged but
+  now documented: `dpkt` and `scapy` have no shared "malformed frame"
+  exception the way this project's own `ProtocolError` does, so a
+  bare `except` is the correct interop boundary, not a swallowed bug.
+  The flagged duplication between `benchmark.py` and
+  `check_in_pyodide.py`'s minimal pcap readers — nearly byte-identical
+  `read_pcap`/`corpus_frames` functions — is now shared via a new
+  `scripts/_pcap.py`. An initial pass left the duplication in place,
+  reasoning both scripts' docstrings required each verification path
+  to stand fully independent of the others; re-reading them shows that
+  claim is narrower than stated — "standalone" there means not
+  depending on netprotocols (the thing each script verifies), the same
+  usage `CONTRIBUTING.md` and `check_fixtures.py`'s own docstring use,
+  never independence from sibling scripts. `_pcap.py` is itself
+  stdlib-only and does not import netprotocols, so it preserves the
+  property the docstrings actually document. Verified against a real
+  Pyodide runtime after the extraction: the corpus still decodes
+  unchanged, and `check_fixtures.py`'s own, materially different
+  `read_pcap` (it additionally validates linktype and length) is
+  untouched, since it was never part of this duplication.
+
 ### Documentation
 - **Corrected six README.md claims an independent audit against the
   live repo found stale or overstated, none of them accidental

@@ -57,144 +57,203 @@ def pseudo_v6(src: bytes, dst: bytes, proto: int, length: int) -> bytes:
     return src + dst + struct.pack("!IBBBB", length, 0, 0, 0, proto)
 
 
+def _check_icmpv4(upper: bytes, stats: Counter) -> list[str]:
+    stats["icmpv4"] += 1
+    if (
+        internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
+        != struct.unpack_from("!H", upper, 2)[0]
+    ):
+        return ["icmpv4-checksum"]
+    return []
+
+
+def _check_igmp(upper: bytes, stats: Counter) -> list[str]:
+    stats["igmp"] += 1
+    # IGMP: whole message, checksum at bytes 2-3, no pseudo-header.
+    if (
+        internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
+        != struct.unpack_from("!H", upper, 2)[0]
+    ):
+        return ["igmp-checksum"]
+    return []
+
+
+def _check_tcp(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter
+) -> list[str]:
+    stats["tcp"] += 1
+    upper_len = len(upper)
+    zeroed = upper[:16] + b"\x00\x00" + upper[18:]
+    if (
+        internet_checksum(pseudo_v4(src, dst, 6, upper_len) + zeroed)
+        != struct.unpack_from("!H", upper, 16)[0]
+    ):
+        return ["tcp-checksum"]
+    return []
+
+
+def _check_udp(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter
+) -> list[str]:
+    stats["udp"] += 1
+    upper_len = len(upper)
+    wire = struct.unpack_from("!H", upper, 6)[0]
+    if wire == 0:
+        stats["udp-no-checksum"] += 1
+        return []
+    zeroed = upper[:6] + b"\x00\x00" + upper[8:]
+    computed = (
+        internet_checksum(pseudo_v4(src, dst, 17, upper_len) + zeroed) or 0xFFFF
+    )
+    if computed != wire:
+        return ["udp-checksum"]
+    return []
+
+
+def _check_gre(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter, depth: int
+) -> list[str]:
+    # GRE: a 4-byte header (flags word + inner EtherType) plus the
+    # optional checksum/key/sequence words the flag bits announce
+    # (RFC 2890), then the tunnelled packet — validated in turn.
+    stats["gre"] += 1
+    gre_flags = struct.unpack_from("!H", upper, 0)[0]
+    inner_ethertype = struct.unpack_from("!H", upper, 2)[0]
+    optional = (
+        (4 if gre_flags & 0x8000 else 0)
+        + (4 if gre_flags & 0x2000 else 0)
+        + (4 if gre_flags & 0x1000 else 0)
+    )
+    return _check_l3(inner_ethertype, upper[4 + optional :], stats, depth + 1)
+
+
+def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
+    failures: list[str] = []
+    ihl = (payload[0] & 0x0F) * 4
+    header = payload[:ihl]
+    stats["ipv4"] += 1
+    if (
+        internet_checksum(header[:10] + b"\x00\x00" + header[12:ihl])
+        != struct.unpack_from("!H", header, 10)[0]
+    ):
+        failures.append("ipv4-header-checksum")
+    src, dst = header[12:16], header[16:20]
+    proto = header[9]
+    total_length = struct.unpack_from("!H", header, 2)[0]
+    flags_frag = struct.unpack_from("!H", header, 6)[0]
+    if flags_frag & 0x1FFF:
+        stats["ipv4-fragment"] += 1
+        return failures  # non-first fragment: no upper-layer header
+    if flags_frag & 0x2000 == 0x2000 and flags_frag & 0x1FFF == 0:
+        stats["ipv4-first-fragment"] += 1
+        return failures  # first fragment: upper checksum spans all parts
+    upper = payload[ihl:total_length]
+    upper_len = len(upper)
+    if proto == 1 and upper_len >= 8:
+        failures += _check_icmpv4(upper, stats)
+    elif proto == 2 and upper_len >= 8:
+        failures += _check_igmp(upper, stats)
+    elif proto == 6 and upper_len >= 20:
+        failures += _check_tcp(src, dst, upper, stats)
+    elif proto == 17 and upper_len >= 8:
+        failures += _check_udp(src, dst, upper, stats)
+    elif proto == 47 and upper_len >= 4:
+        failures += _check_gre(src, dst, upper, stats, depth)
+    return failures
+
+
+def _check_icmpv6(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter
+) -> list[str]:
+    stats["icmpv6"] += 1
+    upper_len = len(upper)
+    zeroed = upper[:2] + b"\x00\x00" + upper[4:]
+    if (
+        internet_checksum(pseudo_v6(src, dst, 58, upper_len) + zeroed)
+        != struct.unpack_from("!H", upper, 2)[0]
+    ):
+        return ["icmpv6-checksum"]
+    return []
+
+
+def _check_tcp6(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter
+) -> list[str]:
+    stats["tcp6"] += 1
+    upper_len = len(upper)
+    zeroed = upper[:16] + b"\x00\x00" + upper[18:]
+    if (
+        internet_checksum(pseudo_v6(src, dst, 6, upper_len) + zeroed)
+        != struct.unpack_from("!H", upper, 16)[0]
+    ):
+        return ["tcp6-checksum"]
+    return []
+
+
+def _check_udp6(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter
+) -> list[str]:
+    stats["udp6"] += 1
+    upper_len = len(upper)
+    zeroed = upper[:6] + b"\x00\x00" + upper[8:]
+    computed = (
+        internet_checksum(pseudo_v6(src, dst, 17, upper_len) + zeroed) or 0xFFFF
+    )
+    if computed != struct.unpack_from("!H", upper, 6)[0]:
+        return ["udp6-checksum"]
+    return []
+
+
+def _check_ipv6(payload: bytes, stats: Counter) -> list[str]:
+    failures: list[str] = []
+    stats["ipv6"] += 1
+    payload_length, next_header = struct.unpack_from("!HB", payload, 4)
+    src, dst = payload[8:24], payload[24:40]
+    upper = payload[40 : 40 + payload_length]
+    # Walk extension headers (hop-by-hop 0, routing 43, dest-opts 60).
+    while next_header in (0, 43, 60) and len(upper) >= 8:
+        stats["ipv6-ext-header"] += 1
+        ext_len = (upper[1] + 1) * 8
+        next_header, upper = upper[0], upper[ext_len:]
+    if next_header == 44 and len(upper) >= 8:
+        if struct.unpack_from("!H", upper, 2)[0] & 0xFFF8:
+            stats["ipv6-fragment"] += 1
+            return failures  # non-first fragment: no upper header
+        stats["ipv6-first-fragment"] += 1
+        # The upper-layer checksum spans the reassembled datagram, not
+        # this fragment's slice: nothing verifiable here.
+        return failures
+    upper_len = len(upper)
+    if next_header == 58 and upper_len >= 4:
+        failures += _check_icmpv6(src, dst, upper, stats)
+    elif next_header == 6 and upper_len >= 20:
+        failures += _check_tcp6(src, dst, upper, stats)
+    elif next_header == 17 and upper_len >= 8:
+        failures += _check_udp6(src, dst, upper, stats)
+    return failures
+
+
 def _check_l3(
     ethertype: int, payload: bytes, stats: Counter, depth: int = 0
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
     is itself an EtherType. Returns a list of failure strings."""
-    failures: list[str] = []
     if depth > 8:
-        return failures  # bound pathological tunnel nesting
+        return []  # bound pathological tunnel nesting
 
     if ethertype == 0x0806:
         stats["arp"] += 1
-        return failures
+        return []
 
     if ethertype == 0x0800 and len(payload) >= 20:
-        ihl = (payload[0] & 0x0F) * 4
-        header = payload[:ihl]
-        stats["ipv4"] += 1
-        if (
-            internet_checksum(header[:10] + b"\x00\x00" + header[12:ihl])
-            != struct.unpack_from("!H", header, 10)[0]
-        ):
-            failures.append("ipv4-header-checksum")
-        src, dst = header[12:16], header[16:20]
-        proto = header[9]
-        total_length = struct.unpack_from("!H", header, 2)[0]
-        flags_frag = struct.unpack_from("!H", header, 6)[0]
-        if flags_frag & 0x1FFF:
-            stats["ipv4-fragment"] += 1
-            return failures  # non-first fragment: no upper-layer header
-        if flags_frag & 0x2000 == 0x2000 and flags_frag & 0x1FFF == 0:
-            stats["ipv4-first-fragment"] += 1
-            return failures  # first fragment: upper checksum spans all parts
-        upper = payload[ihl:total_length]
-        upper_len = len(upper)
-        if proto == 1 and upper_len >= 8:
-            stats["icmpv4"] += 1
-            if (
-                internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
-                != struct.unpack_from("!H", upper, 2)[0]
-            ):
-                failures.append("icmpv4-checksum")
-        elif proto == 2 and upper_len >= 8:
-            stats["igmp"] += 1
-            # IGMP: whole message, checksum at bytes 2-3, no pseudo-header.
-            if (
-                internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
-                != struct.unpack_from("!H", upper, 2)[0]
-            ):
-                failures.append("igmp-checksum")
-        elif proto == 6 and upper_len >= 20:
-            stats["tcp"] += 1
-            zeroed = upper[:16] + b"\x00\x00" + upper[18:]
-            if (
-                internet_checksum(pseudo_v4(src, dst, 6, upper_len) + zeroed)
-                != struct.unpack_from("!H", upper, 16)[0]
-            ):
-                failures.append("tcp-checksum")
-        elif proto == 17 and upper_len >= 8:
-            stats["udp"] += 1
-            wire = struct.unpack_from("!H", upper, 6)[0]
-            if wire == 0:
-                stats["udp-no-checksum"] += 1
-            else:
-                zeroed = upper[:6] + b"\x00\x00" + upper[8:]
-                computed = (
-                    internet_checksum(
-                        pseudo_v4(src, dst, 17, upper_len) + zeroed
-                    )
-                    or 0xFFFF
-                )
-                if computed != wire:
-                    failures.append("udp-checksum")
-        elif proto == 47 and upper_len >= 4:
-            # GRE: a 4-byte header (flags word + inner EtherType) plus the
-            # optional checksum/key/sequence words the flag bits announce
-            # (RFC 2890), then the tunnelled packet — validated in turn.
-            stats["gre"] += 1
-            gre_flags = struct.unpack_from("!H", upper, 0)[0]
-            inner_ethertype = struct.unpack_from("!H", upper, 2)[0]
-            optional = (
-                (4 if gre_flags & 0x8000 else 0)
-                + (4 if gre_flags & 0x2000 else 0)
-                + (4 if gre_flags & 0x1000 else 0)
-            )
-            failures += _check_l3(
-                inner_ethertype, upper[4 + optional :], stats, depth + 1
-            )
-        return failures
+        return _check_ipv4(payload, stats, depth)
 
     if ethertype == 0x86DD and len(payload) >= 40:
-        stats["ipv6"] += 1
-        payload_length, next_header = struct.unpack_from("!HB", payload, 4)
-        src, dst = payload[8:24], payload[24:40]
-        upper = payload[40 : 40 + payload_length]
-        # Walk extension headers (hop-by-hop 0, routing 43, dest-opts 60).
-        while next_header in (0, 43, 60) and len(upper) >= 8:
-            stats["ipv6-ext-header"] += 1
-            ext_len = (upper[1] + 1) * 8
-            next_header, upper = upper[0], upper[ext_len:]
-        if next_header == 44 and len(upper) >= 8:
-            if struct.unpack_from("!H", upper, 2)[0] & 0xFFF8:
-                stats["ipv6-fragment"] += 1
-                return failures  # non-first fragment: no upper header
-            stats["ipv6-first-fragment"] += 1
-            # The upper-layer checksum spans the reassembled datagram,
-            # not this fragment's slice: nothing verifiable here.
-            return failures
-        upper_len = len(upper)
-        if next_header == 58 and upper_len >= 4:
-            stats["icmpv6"] += 1
-            zeroed = upper[:2] + b"\x00\x00" + upper[4:]
-            if (
-                internet_checksum(pseudo_v6(src, dst, 58, upper_len) + zeroed)
-                != struct.unpack_from("!H", upper, 2)[0]
-            ):
-                failures.append("icmpv6-checksum")
-        elif next_header == 6 and upper_len >= 20:
-            stats["tcp6"] += 1
-            zeroed = upper[:16] + b"\x00\x00" + upper[18:]
-            if (
-                internet_checksum(pseudo_v6(src, dst, 6, upper_len) + zeroed)
-                != struct.unpack_from("!H", upper, 16)[0]
-            ):
-                failures.append("tcp6-checksum")
-        elif next_header == 17 and upper_len >= 8:
-            stats["udp6"] += 1
-            zeroed = upper[:6] + b"\x00\x00" + upper[8:]
-            computed = (
-                internet_checksum(pseudo_v6(src, dst, 17, upper_len) + zeroed)
-                or 0xFFFF
-            )
-            if computed != struct.unpack_from("!H", upper, 6)[0]:
-                failures.append("udp6-checksum")
-        return failures
+        return _check_ipv6(payload, stats)
 
     stats[f"other-0x{ethertype:04x}"] += 1
-    return failures
+    return []
 
 
 def check_frame(frame: bytes, stats: Counter) -> list[str]:
