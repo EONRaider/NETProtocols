@@ -104,6 +104,26 @@ class TestMinOptionLength:
             length_includes_header=False,
         ) == [(5, b"")]
 
+    @pytest.mark.parametrize("min_option_length", [None, 0, 1])
+    @pytest.mark.parametrize("declared_length", [0, 1])
+    def test_length_includes_header_enforces_a_floor_of_two_regardless(
+        self, min_option_length, declared_length
+    ):
+        """When the length counts its own two header bytes, a declared
+        length below 2 can never advance the cursor (0 leaves it in
+        place; 1 backs it up into the length byte) -- this floor is
+        structural, so it applies even if a caller passes no
+        min_option_length, or one weaker than 2. Regression against a
+        hang: every one of these must raise, never loop forever."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            walk(
+                bytes([2, declared_length]),
+                min_option_length=min_option_length,
+            )
+        err = excinfo.value
+        assert err.expected == ">=2"
+        assert err.actual == declared_length
+
 
 class TestLengthIncludesHeaderTrue:
     """TCP/IPv4 shape: the length byte counts the kind and length bytes

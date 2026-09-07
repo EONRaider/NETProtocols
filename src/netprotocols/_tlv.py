@@ -81,14 +81,25 @@ def walk_kind_length_value(
                 offset=cursor,
             )
         length = raw[cursor + 1]
-        if min_option_length is not None and length < min_option_length:
+        # When the length counts the kind and length bytes themselves,
+        # it can never validly be below 2 -- that floor is structural,
+        # not a per-caller policy, so it applies even if a future
+        # caller passes a lower (or no) min_option_length. Below 2,
+        # `end = cursor + length` would not advance past `cursor`,
+        # hanging the walk forever on a length of 0.
+        effective_min = min_option_length
+        if length_includes_header:
+            effective_min = (
+                2 if effective_min is None else max(2, effective_min)
+            )
+        if effective_min is not None and length < effective_min:
             raise InvalidFieldError(
                 f"{protocol.__name__} option length must be at least "
-                f"{min_option_length}, got {length}",
+                f"{effective_min}, got {length}",
                 protocol=protocol,
                 field=field,
                 offset=cursor,
-                expected=f">={min_option_length}",
+                expected=f">={effective_min}",
                 actual=length,
             )
         if length_includes_header:
