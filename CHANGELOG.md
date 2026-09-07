@@ -145,6 +145,8 @@ methodology, and updated 1.1/1.2/1.6 figures.
   exercises its RX daemon instead — reworded to keep that distinction
   rather than flattening it.
 
+## [2.2.0] - 2026-09-04
+
 ### Added
 - **Typed accessors for every enum-backed field.** `_enums.py` defines
   `EtherType`, `IPProtocol`, `ARPOperation` and `ARPHardwareType`, but
