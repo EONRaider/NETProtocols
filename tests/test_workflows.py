@@ -1,4 +1,6 @@
-"""Tests that the release workflow cannot publish without the QA ladder.
+"""Tests that the release workflow cannot publish without the QA ladder,
+and that every workflow file under .github/workflows/ holds this
+project's baseline structural bar.
 
 A published version can only be yanked, never replaced, so the gate that
 stops a broken tag reaching PyPI is worth asserting rather than trusting.
@@ -7,9 +9,16 @@ job, or ``workflow_call:`` from the CI workflow, and releases keep
 working while the gate quietly stops existing.
 
 These parse the workflow YAML by indentation rather than with a YAML
-library, to avoid adding a dependency for four assertions. The files are
-small and uniformly two-space indented; a parse failure here fails the
-test loudly instead of passing vacuously.
+library, to avoid adding a dependency for a handful of assertions. The
+files are small and uniformly two-space indented; a parse failure here
+fails the test loudly instead of passing vacuously.
+
+The commit-SHA-pinning check in particular is parametrized over every
+file a glob of .github/workflows/*.yml finds, rather than a fixed list
+of workflow names. A fixed list quietly stops covering a file the
+moment someone adds a new one and forgets to update the list here --
+the same failure mode as ALL_PROTOCOLS silently skipping DNSOverTCP
+(see the fuzz-completeness test), just relocated to CI's own workflows.
 """
 
 import re
@@ -20,6 +29,9 @@ import pytest
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
+FUZZ = WORKFLOWS / "fuzz.yml"
+DEPENDABOT = WORKFLOWS.parent / "dependabot.yml"
+ALL_WORKFLOWS = sorted(WORKFLOWS.glob("*.yml"))
 
 
 def job_blocks(workflow: Path) -> dict[str, str]:
@@ -46,6 +58,11 @@ def job_blocks(workflow: Path) -> dict[str, str]:
 @pytest.fixture(scope="module")
 def release_jobs() -> dict[str, str]:
     return job_blocks(RELEASE)
+
+
+@pytest.fixture(scope="module")
+def ci_jobs() -> dict[str, str]:
+    return job_blocks(CI)
 
 
 class TestReleaseGate:
@@ -102,7 +119,7 @@ class TestReleaseGate:
 
     def test_every_local_reusable_reference_resolves(self) -> None:
         """A `uses: ./…` pointing at nothing fails the release, not CI."""
-        for workflow in sorted(WORKFLOWS.glob("*.yml")):
+        for workflow in ALL_WORKFLOWS:
             for ref in re.findall(r"uses:\s*(\./\S+)", workflow.read_text()):
                 # removeprefix, not lstrip: lstrip("./") would strip the
                 # leading dot of ".github" as well.
@@ -116,3 +133,148 @@ class TestReleaseGate:
                     f"{workflow.name} calls {ref}, but that workflow does "
                     f"not declare a workflow_call trigger"
                 )
+
+
+class TestActionPinning:
+    """Every third-party action, in every workflow, must be pinned.
+
+    Parametrized over ``ALL_WORKFLOWS`` -- a glob of
+    .github/workflows/*.yml -- rather than a fixed list of files, so a
+    workflow added after this test was written is covered automatically
+    instead of silently skipped.
+    """
+
+    @pytest.mark.parametrize("workflow", ALL_WORKFLOWS, ids=lambda p: p.name)
+    def test_remote_actions_are_pinned_to_a_commit_sha(
+        self, workflow: Path
+    ) -> None:
+        """A branch or tag ref (`@v4`, `@main`) is a moving target: the
+        code that runs under it can change without this repository's
+        own history recording it. `uses: ./…` local reusable-workflow
+        references are exempt -- they resolve to a file in this repo
+        (checked above) and cannot be "pinned" to a SHA at all.
+        """
+        for line in workflow.read_text().splitlines():
+            match = re.match(r"\s*uses:\s*(\S+)", line)
+            if not match:
+                continue
+            ref = match.group(1)
+            if ref.startswith("."):
+                continue
+            _, sep, pin = ref.rpartition("@")
+            assert sep and re.fullmatch(r"[0-9a-f]{40}", pin), (
+                f"{workflow.name}: {ref!r} is not pinned to a 40-character "
+                f"commit SHA"
+            )
+
+
+class TestCIWorkflow:
+    """Structural checks on jobs added to ci.yml's own QA ladder."""
+
+    def test_has_a_dependency_scan_job(self, ci_jobs: dict[str, str]) -> None:
+        """Third-party CI dependencies must be audited for known CVEs."""
+        block = ci_jobs.get("dependency-scan")
+        assert block is not None, "ci.yml has no dependency-scan job"
+        assert "pip-audit" in block, (
+            "dependency-scan job no longer runs pip-audit"
+        )
+
+    def test_build_verifies_reproducibility(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The build job must diff two independent builds, not just one."""
+        block = ci_jobs.get("build")
+        assert block is not None, "ci.yml has no build job"
+        assert "reproducible" in block.lower(), (
+            "build job no longer verifies that the wheel build is reproducible"
+        )
+        assert block.count("uv build") >= 3, (
+            "reproducible-build-diff step must build the wheel twice, in "
+            "addition to the job's own initial build, to have anything "
+            "to diff"
+        )
+
+
+class TestReleaseWorkflow:
+    def test_publish_attests_build_provenance(
+        self, release_jobs: dict[str, str]
+    ) -> None:
+        """Downloaders must be able to verify the wheel/sdist provenance."""
+        publish = release_jobs.get("publish")
+        assert publish is not None, "release.yml has no publish job"
+        assert "attest-build-provenance" in publish, (
+            "publish job no longer attests build provenance for the "
+            "artifacts it uploads"
+        )
+
+
+class TestFuzzWorkflow:
+    def test_has_a_concurrency_group(self) -> None:
+        """Without one, an overlapping nightly run could waste a runner
+        racing a still-running previous one instead of replacing it."""
+        assert re.search(r"^concurrency:", FUZZ.read_text(), re.M), (
+            "fuzz.yml no longer declares a top-level concurrency group"
+        )
+
+
+# Each new workflow file's defining job, and one distinctive thing that
+# job must still do. A missing file or job fails outright; a present job
+# missing its needle means the workflow was gutted without anyone
+# noticing, since none of these run on every push the way ci.yml does.
+NEW_WORKFLOW_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "mutation.yml": ("mutation", ("mutmut run",)),
+    "codeql.yml": (
+        "analyze",
+        ("codeql-action/init", "codeql-action/analyze"),
+    ),
+    "scorecard.yml": ("analysis", ("ossf/scorecard-action",)),
+    "docs-lint.yml": ("lychee", ("lycheeverse/lychee-action",)),
+    "pr-title-lint.yml": (
+        "lint-pr-title",
+        ("action-semantic-pull-request",),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "filename", sorted(NEW_WORKFLOW_REQUIREMENTS), ids=lambda name: name
+)
+def test_new_workflow_has_its_defining_job(filename: str) -> None:
+    workflow = WORKFLOWS / filename
+    assert workflow.is_file(), f"{filename} is missing from .github/workflows/"
+    job_name, needles = NEW_WORKFLOW_REQUIREMENTS[filename]
+    blocks = job_blocks(workflow)
+    block = blocks.get(job_name)
+    assert block is not None, f"{filename} has no {job_name!r} job"
+    for needle in needles:
+        assert needle in block, (
+            f"{filename}'s {job_name!r} job no longer runs {needle!r}"
+        )
+
+
+def test_dependabot_declares_the_required_ecosystems() -> None:
+    """dependabot.yml must keep both Python and Actions pins current.
+
+    Every `uses:` SHA this suite checks (TestActionPinning) will drift
+    out of date the moment nothing bumps it -- that's github-actions'
+    job. The Python side (uv, or pip as a fallback ecosystem name) is
+    what keeps the dev dependency-group underneath dependency-scan
+    current.
+    """
+    assert DEPENDABOT.is_file(), ".github/dependabot.yml is missing"
+    ecosystems = set(
+        re.findall(
+            r'package-ecosystem:\s*"?([A-Za-z0-9_-]+)"?',
+            DEPENDABOT.read_text(),
+        )
+    )
+    assert ecosystems & {"uv", "pip"}, (
+        f"dependabot.yml declares {ecosystems or '{}'}, none of which is "
+        f"'uv' or 'pip' -- Python dependency updates would stop being "
+        f"tracked"
+    )
+    assert "github-actions" in ecosystems, (
+        f"dependabot.yml declares {ecosystems or '{}'}, missing "
+        f"'github-actions' -- the SHA pins this test suite requires "
+        f"would go stale silently"
+    )
