@@ -1,0 +1,75 @@
+name: Docs lint
+
+# Runs lycheeverse/lychee (a link checker) over the small set of
+# hand-maintained docs that carry the project's external claims and
+# cross-references: README.md, ARCHITECTURE.md, CONTRIBUTING.md,
+# CHANGELOG.md, and docs/CLAIMS.md. Two triggers, for two different
+# failure modes: the pull_request path filter catches a broken link
+# introduced *by* a docs edit, and the weekly schedule catches a link
+# that was fine when written but has since gone dead out from under an
+# otherwise-unchanged file (a renamed issue, a retired badge service, a
+# moved external page) -- which no docs PR would ever surface.
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "README.md"
+      - "ARCHITECTURE.md"
+      - "CONTRIBUTING.md"
+      - "CHANGELOG.md"
+      - "docs/CLAIMS.md"
+  schedule:
+    # Arbitrary; weekly on Mondays, clear of fuzz.yml's/mutation.yml's
+    # daily 03:00/04:00 UTC slots and scorecard.yml's Sunday 05:00 slot.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # lychee-action's `token` input defaults to `${{ github.token }}`,
+      # which it exports as GITHUB_TOKEN; lychee reads that itself to
+      # check github.com links through the API instead of scraping the
+      # page. That's what keeps the ~15 github.com/EONRaider/NETProtocols
+      # issue/release links in these docs from tripping an anonymous
+      # rate limit -- most relevant on the weekly schedule run, which
+      # has no pull request author's own browsing to blend in with.
+      #
+      # --timeout/--max-retries/--retry-wait-time are more generous
+      # than lychee's own defaults (20s/3/1s) to absorb a slow or
+      # momentarily rate-limited external host without failing the
+      # build outright.
+      #
+      # --exclude covers img.shields.io, which serves this project's
+      # three static README badges: a shared, heavily-trafficked CDN
+      # known to intermittently rate-limit or time out under bulk/CI
+      # traffic across many unrelated repos, independent of whether
+      # any given badge URL is actually broken. Every other file was
+      # checked by hand for placeholder/example domains (example.com,
+      # localhost, and the like) before this workflow was added; none
+      # were found, so no other entries are excluded here.
+      - name: Check links in the project's hand-maintained docs
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --no-progress
+            --verbose
+            --timeout 30
+            --max-retries 3
+            --retry-wait-time 10
+            --exclude '^https://img\.shields\.io'
+            README.md
+            ARCHITECTURE.md
+            CONTRIBUTING.md
+            CHANGELOG.md
+            docs/CLAIMS.md
