@@ -288,35 +288,39 @@ class TestMutationWorkflow:
         "netprotocols.layer7.dns.x__labels*",
     )
 
-    def test_run_applies_the_documented_dns_scope_filters(self) -> None:
-        """Checks the *exact* set of filters `mutmut run` is actually
-        invoked with, parsed the way bash itself would read the
-        continuation lines -- not just anywhere in the file, and not a
-        bare substring check.
+    @staticmethod
+    def _parse_mutmut_run_filters(text: str) -> list[str]:
+        """Parse the quoted argument lines of a `mutmut run` invocation
+        exactly as bash would read the continuation lines -- not just
+        anywhere in the file, and not a bare substring check.
 
         A bare substring check over a loosely-extracted block has two
         independent gaps a more literal, line-by-line parse closes:
 
         1. Each argument line must end with a continuation backslash
            to keep the shell command going onto the next line. A line
-           silently missing it ends the real `mutmut run` invocation
-           right there -- anything quoted on later lines is never
+           without one ends the real `mutmut run` invocation right
+           there -- anything on later lines, quoted or not, is never
            actually passed to mutmut, no matter how legitimate it
            looks in the source. Requiring the backslash explicitly
            here (rather than tolerating its absence and hoping the
            parse boundary happens to land in the right place) is what
            makes the check trace real bash semantics instead of an
            incidental regex artifact.
-        2. Presence-only checking cannot notice an *extra* filter
-           tacked onto the command -- pyproject.toml's only_mutate
-           comment documents exactly four filters, and a fifth would
-           silently widen the audited DNS scope without failing
-           anything. Comparing the complete parsed filter set against
-           EXPECTED_FILTERS, rather than checking each expected
-           pattern's presence, catches both a missing filter and an
-           extra one.
+        2. A line that bash *does* still consider part of the command
+           (because the previous line ended in " \\") but that isn't a
+           single-quoted filter -- an unquoted word, say -- is still a
+           real positional argument as far as bash and mutmut are
+           concerned; bash expands it (glob expansion, in the unquoted
+           case) and hands it over like any other argument. Silently
+           stopping the parse there, the same as at a legitimate
+           unbackslashed last line, would let such a line slip past
+           the equality check below unnoticed. So a continued line
+           that fails to parse as a quoted filter fails this check
+           loudly instead: it is never the normal way for the command
+           to end, only a normal-looking line with nothing after it
+           is.
         """
-        text = MUTATION.read_text()
         match = re.search(
             r"(?m)^          uv run --frozen mutmut run \\\n"
             r"(?P<rest>(?:.*\n)*)",
@@ -327,19 +331,41 @@ class TestMutationWorkflow:
             "expected 'uv run --frozen mutmut run \\' shape"
         )
 
-        # Parse the quoted argument lines exactly as bash would read
-        # them: a line ending in " \" continues the command onto the
-        # next line, and a line without one is the last argument --
-        # parsing stops there even if more quoted-looking lines follow,
-        # because bash would never see them as part of this command.
         filters: list[str] = []
+        continues = True
         for line in match.group("rest").splitlines():
+            if not continues:
+                # The previous line ended the bash command (no
+                # trailing " \"). Whatever follows in the file --
+                # more workflow steps, comments, blank lines -- was
+                # never part of this invocation, so it is out of
+                # scope for this parse, not a parse failure.
+                break
             argument = re.fullmatch(r"            '([^']+)'( \\)?", line)
-            if argument is None:
-                break
+            assert argument is not None, (
+                "mutation.yml's mutmut run command still continues "
+                f"(the previous line ended with ' \\') onto a line "
+                f"that is not a single-quoted filter argument: "
+                f"{line!r} -- bash would still pass this to mutmut "
+                f"as a real positional argument"
+            )
             filters.append(argument.group(1))
-            if argument.group(2) is None:
-                break
+            continues = argument.group(2) is not None
+        return filters
+
+    def test_run_applies_the_documented_dns_scope_filters(self) -> None:
+        """Checks the *exact* set of filters `mutmut run` is actually
+        invoked with.
+
+        Presence-only checking cannot notice an *extra* filter tacked
+        onto the command -- pyproject.toml's only_mutate comment
+        documents exactly four filters, and a fifth would silently
+        widen the audited DNS scope without failing anything.
+        Comparing the complete parsed filter set against
+        EXPECTED_FILTERS, rather than checking each expected pattern's
+        presence, catches both a missing filter and an extra one.
+        """
+        filters = self._parse_mutmut_run_filters(MUTATION.read_text())
 
         assert sorted(filters) == sorted(self.EXPECTED_FILTERS), (
             f"mutation.yml's mutmut run step actually applies "
@@ -348,6 +374,38 @@ class TestMutationWorkflow:
             f"{sorted(self.EXPECTED_FILTERS)} -- it would mutate either "
             f"more or less of dns.py than was ever audited"
         )
+
+    def test_run_rejects_an_unquoted_argument_on_a_continued_line(
+        self,
+    ) -> None:
+        """Regression test: a continued line that is not a quoted
+        filter must fail loudly, not be silently dropped.
+
+        All four real filters are present and correctly continued,
+        followed by one more continued line that is an unquoted
+        wildcard rather than a quoted filter. Bash would still pass
+        that word to mutmut as a fifth positional argument -- it is
+        not a shell syntax error, just an argument this parse must not
+        let slide by unnoticed. Before the fix that replaced a bare
+        `break` with this assertion, the loop stopped as soon as the
+        unquoted line failed to match, leaving `filters` holding
+        exactly the four expected entries and the equality check in
+        `test_run_applies_the_documented_dns_scope_filters` passing
+        despite the extra argument -- this proves that gap is closed.
+        """
+        malformed = (
+            "          uv run --frozen mutmut run \\\n"
+            "            'netprotocols.checksum.*' \\\n"
+            "            'netprotocols._tlv.*' \\\n"
+            "            'netprotocols.layer7.dns.x__read_name*' \\\n"
+            "            'netprotocols.layer7.dns.x__labels*' \\\n"
+            "            some_extra_target\n"
+        )
+
+        with pytest.raises(
+            AssertionError, match="not a single-quoted filter argument"
+        ):
+            self._parse_mutmut_run_filters(malformed)
 
 
 # Each new workflow file's defining job, and one distinctive thing that
