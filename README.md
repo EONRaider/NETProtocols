@@ -72,7 +72,7 @@ below, its reproduction command, and its caveats):
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **An 88.3 KB wheel against scapy's 2.47 MB** — about 29× smaller.
+- **A 90.4 KiB wheel against scapy's 2.47 MiB** — 28.0× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,

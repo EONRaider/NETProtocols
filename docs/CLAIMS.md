@@ -375,9 +375,9 @@ the prior figure here was built from `netprotocols-2.0.0`, two releases
 behind the tree every other number in this file now describes — this
 was stale, not a real regression.*
 
-90.4 KB wheel (`uv build`, `netprotocols-2.2.1-py3-none-any.whl`,
+90.4 KiB wheel (`uv build`, `netprotocols-2.2.1-py3-none-any.whl`,
 92,553 bytes, deterministic across repeated builds) against scapy
-2.7.0's 2.47 MB (2,590,982 bytes, current PyPI `bdist_wheel`) —
+2.7.0's 2.47 MiB (2,590,982 bytes, current PyPI `bdist_wheel`) —
 **28.0× smaller**, down from the ~46× recorded at v1.3.0 and the 29.6×
 this section previously quoted from the 2.0.0-era build. 6,466 lines
 (`wc -l` over `src/`) against scapy's unchanged 246,813 — netprotocols
