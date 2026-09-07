@@ -14,8 +14,8 @@ files are small and uniformly two-space indented; a parse failure here
 fails the test loudly instead of passing vacuously.
 
 The commit-SHA-pinning check in particular is parametrized over every
-file a glob of .github/workflows/*.yml finds, rather than a fixed list
-of workflow names. A fixed list quietly stops covering a file the
+file a glob of .github/workflows/*.yml and *.yaml finds, rather than a
+fixed list of workflow names. A fixed list quietly stops covering a file the
 moment someone adds a new one and forgets to update the list here --
 the same failure mode as ALL_PROTOCOLS silently skipping DNSOverTCP
 (see the fuzz-completeness test), just relocated to CI's own workflows.
@@ -31,7 +31,7 @@ CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
 FUZZ = WORKFLOWS / "fuzz.yml"
 DEPENDABOT = WORKFLOWS.parent / "dependabot.yml"
-ALL_WORKFLOWS = sorted(WORKFLOWS.glob("*.yml"))
+ALL_WORKFLOWS = sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
 
 
 def job_blocks(workflow: Path) -> dict[str, str]:
