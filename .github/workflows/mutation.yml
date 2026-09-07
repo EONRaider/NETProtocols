@@ -1,0 +1,78 @@
+name: Nightly mutation testing
+
+# Separate from ci.yml on purpose, same reasoning as fuzz.yml: ci.yml is
+# reused via workflow_call by release.yml, so folding a schedule trigger
+# into it would fire mutation testing on every release too, not just
+# once a night.
+on:
+  schedule:
+    # Arbitrary; offset an hour past fuzz.yml's 03:00 UTC slot so the
+    # two nightly jobs don't contend for the same runner pool.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Mutation testing itself is exploratory/maintenance, not a
+  # compatibility gate, so this is pinned to one interpreter — same
+  # reasoning as fuzz.yml's "fuzz" job.
+  mutation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+      # mutmut hashes each mutated file plus the tests that cover it and
+      # skips re-running mutants whose inputs haven't changed since the
+      # last recorded result, so carrying its cache forward night over
+      # night saves real work — same accumulation pattern as fuzz.yml's
+      # Hypothesis example database. Keyed by run id with a prefix
+      # restore-key for the same reason: a fixed key would restore
+      # forever but never save a new entry.
+      - name: Restore accumulated mutmut cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .mutmut-cache
+            mutants
+          key: mutmut-nightly-${{ github.run_id }}
+          restore-keys: |
+            mutmut-nightly-
+      - name: Install the project with dev dependencies
+        run: uv sync --group dev --frozen
+      # Scope (src/netprotocols/checksum.py, src/netprotocols/_tlv.py,
+      # and DNS's name-compression functions in
+      # src/netprotocols/layer7/dns.py) and the surviving-mutant
+      # threshold are both read from the project's mutmut config
+      # (pyproject.toml's [tool.mutmut] table), not hardcoded here, so
+      # this step and that config can't drift apart. That config —
+      # and the mutmut dependency itself — lands with the mutmut-audit
+      # item; until then this job is expected to fail for lack of
+      # either.
+      - name: Run mutmut against the scoped targets
+        run: uv run --frozen mutmut run
+      # A failed scheduled run already notifies repo watchers by
+      # default (GitHub's standard behavior) — that red run *is* the
+      # report; nothing here files an issue on top of it. This just
+      # makes the surviving mutants recoverable without needing repo
+      # write access to re-run mutmut locally. Covers both the
+      # sqlite-file cache and the mutated-copies directory since either
+      # may be what a given mutmut version writes; whichever doesn't
+      # exist is silently skipped.
+      - name: Upload mutmut results on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutmut-nightly-failure-${{ github.run_id }}
+          path: |
+            .mutmut-cache
+            mutants
+          if-no-files-found: ignore
+          retention-days: 30
