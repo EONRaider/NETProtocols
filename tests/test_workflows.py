@@ -289,31 +289,65 @@ class TestMutationWorkflow:
     )
 
     def test_run_applies_the_documented_dns_scope_filters(self) -> None:
-        """Checks the filters inside the actual `mutmut run` argument
-        block, not just anywhere in the file -- a bare substring check
-        would still pass if a filter were dropped from the real command
-        while its text lingered in a comment (this file's own comment
-        block above the step names all four, for exactly the reason
-        that error would be easy to make)."""
+        """Checks the *exact* set of filters `mutmut run` is actually
+        invoked with, parsed the way bash itself would read the
+        continuation lines -- not just anywhere in the file, and not a
+        bare substring check.
+
+        A bare substring check over a loosely-extracted block has two
+        independent gaps a more literal, line-by-line parse closes:
+
+        1. Each argument line must end with a continuation backslash
+           to keep the shell command going onto the next line. A line
+           silently missing it ends the real `mutmut run` invocation
+           right there -- anything quoted on later lines is never
+           actually passed to mutmut, no matter how legitimate it
+           looks in the source. Requiring the backslash explicitly
+           here (rather than tolerating its absence and hoping the
+           parse boundary happens to land in the right place) is what
+           makes the check trace real bash semantics instead of an
+           incidental regex artifact.
+        2. Presence-only checking cannot notice an *extra* filter
+           tacked onto the command -- pyproject.toml's only_mutate
+           comment documents exactly four filters, and a fifth would
+           silently widen the audited DNS scope without failing
+           anything. Comparing the complete parsed filter set against
+           EXPECTED_FILTERS, rather than checking each expected
+           pattern's presence, catches both a missing filter and an
+           extra one.
+        """
         text = MUTATION.read_text()
         match = re.search(
             r"(?m)^          uv run --frozen mutmut run \\\n"
-            r"(?P<filters>(?:            '[^']+'\s*\\?\n?)+)",
+            r"(?P<rest>(?:.*\n)*)",
             text,
         )
         assert match is not None, (
             "mutation.yml's mutmut run step no longer matches the "
-            "expected 'uv run --frozen mutmut run \\' + quoted-filter-"
-            "lines shape"
+            "expected 'uv run --frozen mutmut run \\' shape"
         )
-        filters = match.group("filters")
-        for pattern in self.EXPECTED_FILTERS:
-            assert pattern in filters, (
-                f"mutation.yml's mutmut run step is missing the "
-                f"{pattern!r} filter documented next to only_mutate in "
-                f"pyproject.toml -- it would mutate more of dns.py than "
-                f"was ever audited"
-            )
+
+        # Parse the quoted argument lines exactly as bash would read
+        # them: a line ending in " \" continues the command onto the
+        # next line, and a line without one is the last argument --
+        # parsing stops there even if more quoted-looking lines follow,
+        # because bash would never see them as part of this command.
+        filters: list[str] = []
+        for line in match.group("rest").splitlines():
+            argument = re.fullmatch(r"            '([^']+)'( \\)?", line)
+            if argument is None:
+                break
+            filters.append(argument.group(1))
+            if argument.group(2) is None:
+                break
+
+        assert sorted(filters) == sorted(self.EXPECTED_FILTERS), (
+            f"mutation.yml's mutmut run step actually applies "
+            f"{sorted(filters)}, which does not exactly match the "
+            f"filters documented next to only_mutate in pyproject.toml, "
+            f"{sorted(self.EXPECTED_FILTERS)} -- it would mutate either "
+            f"more or less of dns.py than was ever audited"
+        )
 
 
 # Each new workflow file's defining job, and one distinctive thing that
