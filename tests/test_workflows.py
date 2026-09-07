@@ -135,6 +135,47 @@ class TestReleaseGate:
                 )
 
 
+def uses_ref(line: str) -> str | None:
+    """The action reference on a ``uses:`` step line, or ``None`` if the
+    line isn't one. Matches both the standard YAML list form
+    (``- uses: ...``) and the bare form (``uses: ...``) -- a regex
+    anchored past only the list marker's optional dash previously
+    missed every real ``- uses:`` line in this repo, silently turning
+    :class:`TestActionPinning` into a no-op."""
+    match = re.match(r"\s*(?:-\s*)?uses:\s*(\S+)", line)
+    return match.group(1) if match else None
+
+
+class TestUsesRefMatching:
+    """Regression coverage for :func:`uses_ref` itself, independent of
+    which real workflow files currently exist -- this is what actually
+    failed silently before, so it gets tested directly rather than only
+    through TestActionPinning's end-to-end check."""
+
+    def test_matches_the_list_form(self):
+        assert (
+            uses_ref("      - uses: actions/checkout@" + "a" * 40)
+            == "actions/checkout@" + "a" * 40
+        )
+
+    def test_matches_the_bare_form(self):
+        assert (
+            uses_ref("      uses: actions/checkout@" + "a" * 40)
+            == "actions/checkout@" + "a" * 40
+        )
+
+    def test_list_form_with_a_moving_tag_is_still_extracted(self):
+        """Extraction doesn't itself judge the ref -- TestActionPinning
+        does that -- but it must not silently drop an unpinned list-form
+        line the way the pre-fix regex did."""
+        assert uses_ref("      - uses: actions/checkout@v4") == (
+            "actions/checkout@v4"
+        )
+
+    def test_non_uses_line_does_not_match(self):
+        assert uses_ref("      run: echo hello") is None
+
+
 class TestActionPinning:
     """Every third-party action, in every workflow, must be pinned.
 
@@ -155,11 +196,8 @@ class TestActionPinning:
         (checked above) and cannot be "pinned" to a SHA at all.
         """
         for line in workflow.read_text().splitlines():
-            match = re.match(r"\s*uses:\s*(\S+)", line)
-            if not match:
-                continue
-            ref = match.group(1)
-            if ref.startswith("."):
+            ref = uses_ref(line)
+            if ref is None or ref.startswith("."):
                 continue
             _, sep, pin = ref.rpartition("@")
             assert sep and re.fullmatch(r"[0-9a-f]{40}", pin), (
