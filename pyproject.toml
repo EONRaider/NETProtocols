@@ -34,6 +34,7 @@ bench = [
 ]
 dev = [
     "hypothesis>=6.100",
+    "mutmut>=3.7.0",
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-cov>=6.0",
@@ -83,3 +84,46 @@ show_missing = true
 # figure so a legitimately unreachable branch does not fail CI, and
 # well above it so the bar is actually held.
 fail_under = 98
+
+[tool.mutmut]
+# Scoped mutation-testing audit (backlog: mutmut-audit), not a
+# full-codebase run: only the checksum module (every protocol's
+# checksum handling routes through it), the shared TLV walker, and
+# DNS's name-compression byte walk carry real correctness stakes dense
+# enough to justify the runtime. `source_paths` still lists the whole
+# `src` tree because mutmut mirrors it under `mutants/` to keep the
+# package importable; `only_mutate` is what actually narrows which
+# files get mutated (everything else is copied through unmodified).
+source_paths = ["src"]
+only_mutate = [
+    "src/netprotocols/checksum.py",
+    "src/netprotocols/_tlv.py",
+    "src/netprotocols/layer7/dns.py",
+]
+pytest_add_cli_args_test_selection = [
+    "tests/test_checksum.py",
+    "tests/test_tlv.py",
+    "tests/test_dns.py",
+]
+# dns.py's in-scope surface is narrower still: only the low-level
+# name-compression byte walk (_read_name/_labels and any private
+# helpers they call), not the record/question parsing built on top of
+# it. mutmut has no config-level way to scope below a whole file, so
+# reproduce the audited DNS slice with a `mutant_names` filter on top
+# of the file-level scope above:
+#   uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
+#       'netprotocols.layer7.dns.x__read_name*' \
+#       'netprotocols.layer7.dns.x__labels*'
+# Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
+# the DNS/DNSOverTCP dataclasses, ...) are out of scope for this audit
+# and were not triaged.
+#
+# Triage note — one accepted-equivalent survivor: `_pseudo_header`'s
+# IPv6 arm packs its 32-bit length field with `struct.pack("!IBBBB",
+# ...)`; a mutant swapping "I" for the signed "i" only diverges from
+# the original for a payload >= 2**31 bytes (2 GiB), which no test in
+# this suite can construct or run in reasonable time/memory. The same
+# mutation on the IPv4 arm's 16-bit length field *is* killed — see
+# test_ipv4_pseudo_header_length_field_is_unsigned in test_checksum.py,
+# which exercises the exact signed/unsigned boundary at a testable
+# (40 KB) scale.
