@@ -2,6 +2,7 @@
 
 [![CodeFactor](https://www.codefactor.io/repository/github/eonraider/netprotocols/badge/master)](https://www.codefactor.io/repository/github/eonraider/netprotocols/overview/master)
 [![CI](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/EONRaider/NETProtocols/badge)](https://securityscorecards.dev/viewer/?uri=github.com/EONRaider/NETProtocols)
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Typed](https://img.shields.io/badge/typing-strict-informational)
