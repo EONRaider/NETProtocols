@@ -30,6 +30,7 @@ WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
 FUZZ = WORKFLOWS / "fuzz.yml"
+MUTATION = WORKFLOWS / "mutation.yml"
 DEPENDABOT = WORKFLOWS.parent / "dependabot.yml"
 ALL_WORKFLOWS = sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
 
@@ -220,7 +221,11 @@ class TestCIWorkflow:
     def test_build_verifies_reproducibility(
         self, ci_jobs: dict[str, str]
     ) -> None:
-        """The build job must diff two independent builds, not just one."""
+        """The build job must actually compare two independent builds'
+        artifacts, not merely claim to and build the wheel some number
+        of times -- a block containing the word "reproducible" and
+        three "uv build" calls would previously pass this test without
+        ever diffing anything."""
         block = ci_jobs.get("build")
         assert block is not None, "ci.yml has no build job"
         assert "reproducible" in block.lower(), (
@@ -230,6 +235,18 @@ class TestCIWorkflow:
             "reproducible-build-diff step must build the wheel twice, in "
             "addition to the job's own initial build, to have anything "
             "to diff"
+        )
+        assert "sha256sum" in block, (
+            "reproducible-build-diff step no longer hashes the built "
+            "artifacts to compare them"
+        )
+        assert re.search(r'\$hash1"?\s*!=\s*"?\$hash2', block), (
+            "reproducible-build-diff step no longer compares the two "
+            "builds' hashes against each other"
+        )
+        assert "exit 1" in block, (
+            "reproducible-build-diff step no longer fails the job when "
+            "the compared hashes differ"
         )
 
 
@@ -253,6 +270,33 @@ class TestFuzzWorkflow:
         assert re.search(r"^concurrency:", FUZZ.read_text(), re.M), (
             "fuzz.yml no longer declares a top-level concurrency group"
         )
+
+
+class TestMutationWorkflow:
+    # pyproject.toml's [tool.mutmut] only_mutate covers the whole of
+    # checksum.py, _tlv.py, and dns.py, but the audited DNS surface is
+    # only its name-compression byte walk -- mutmut has no config-level
+    # way to scope below a whole file, so pyproject.toml's own comment
+    # documents these positional filters as the way to reproduce that
+    # narrower scope. If the workflow step doesn't pass them, it mutates
+    # (and reports on) all of dns.py's untriaged record/RDATA/dataclass
+    # code every night, silently wider than what was ever audited.
+    EXPECTED_FILTERS = (
+        "netprotocols.checksum.*",
+        "netprotocols._tlv.*",
+        "netprotocols.layer7.dns.x__read_name*",
+        "netprotocols.layer7.dns.x__labels*",
+    )
+
+    def test_run_applies_the_documented_dns_scope_filters(self) -> None:
+        text = MUTATION.read_text()
+        for pattern in self.EXPECTED_FILTERS:
+            assert pattern in text, (
+                f"mutation.yml's mutmut run step is missing the "
+                f"{pattern!r} filter documented next to only_mutate in "
+                f"pyproject.toml -- it would mutate more of dns.py than "
+                f"was ever audited"
+            )
 
 
 # Each new workflow file's defining job, and one distinctive thing that
