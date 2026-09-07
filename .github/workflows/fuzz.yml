@@ -12,6 +12,10 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -29,8 +33,8 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       # Keyed by run id with a prefix restore-key: a fixed key would
@@ -40,7 +44,7 @@ jobs:
       # today's as a new entry, so Hypothesis's example database grows
       # night over night instead of starting cold every time.
       - name: Restore accumulated Hypothesis examples
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .hypothesis
           key: hypothesis-nightly-${{ github.run_id }}
@@ -57,7 +61,7 @@ jobs:
       # repo write access to re-run the job locally.
       - name: Upload the failing example database
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hypothesis-nightly-failure-${{ github.run_id }}
           path: .hypothesis
