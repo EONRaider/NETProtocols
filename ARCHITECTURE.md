@@ -397,6 +397,8 @@ headers and `bytes(packet)` joins them, ready for a raw socket.
 src/netprotocols/
 ├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
+├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
+│                   options TLV walker
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
 ├── walk.py         decode_frame(): the shipped chain walker
@@ -457,7 +459,14 @@ the same:
    enforces it) and put the registration in `_defaults.py` alongside
    the rest. Numbers valid only inside an IPv6 chain go in
    `ip.proto.v6` rather than `ip.proto`, which is the whole of the
-   gating.
+   gating. Reuse the shared helpers rather than re-deriving the same
+   pattern in a new module: `hex_str`
+   ([`_base.py`](src/netprotocols/_base.py)) for a hex-formatted
+   field, the `_ip_protocol_enum`
+   ([`layer3/ip.py`](src/netprotocols/layer3/ip.py)) /
+   `_ethertype_enum` ([`layer2/ethernet.py`](src/netprotocols/layer2/ethernet.py))
+   pattern for an enum-or-`None` accessor, and `walk_kind_length_value`
+   ([`_tlv.py`](src/netprotocols/_tlv.py)) for TLV-shaped options.
 5. **Add display properties** for anything a human would want rendered
    (`flags_str`-style names, hex strings). Degrade gracefully on
    unknown values — return `"unknown (47)"`, never raise from a
