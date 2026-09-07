@@ -4,6 +4,14 @@ on:
   push:
     tags: ["v*"]
 
+# Serialize runs for the same tag/ref instead of cancelling one mid-publish:
+# a release that's already uploading to PyPI or cutting a GitHub release
+# must run to completion, so a re-trigger queues behind it rather than
+# tearing it down.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -23,10 +31,11 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+      attestations: write
       contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv build
       # The QA ladder cannot catch a mistagged release: every check
       # passes because the code is fine and only the tag is wrong. Read
@@ -58,6 +67,16 @@ jobs:
             exit 1
           fi
           echo "Tag ${GITHUB_REF_NAME} matches packaged version ${built}."
+      # Lets anyone who downloads the wheel or sdist verify, via GitHub's
+      # attestation API, that this exact workflow run built it from this
+      # exact commit -- run before the artifacts are published so a
+      # failed attestation blocks the release instead of trailing it.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
       - run: uv publish --trusted-publishing always
 
   github-release:
@@ -66,7 +85,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       # CHANGELOG.md is the single source of truth for release notes, so
       # extract this tag's own section rather than maintaining a second
       # copy anywhere. A missing section fails loudly instead of
