@@ -47,6 +47,8 @@ def _ethertype_name(ethertype: int) -> str:
 
 
 def _ethertype_enum(ethertype: int) -> EtherType | None:
+    """The ``EtherType`` member for a numeric value, or ``None`` if it
+    isn't one this library recognizes."""
     try:
         return EtherType(ethertype)
     except ValueError:

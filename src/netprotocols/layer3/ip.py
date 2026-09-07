@@ -83,6 +83,8 @@ def _ip_protocol_name(number: int) -> str:
 
 
 def _ip_protocol_enum(number: int) -> IPProtocol | None:
+    """The ``IPProtocol`` member for a numeric value, or ``None`` if it
+    isn't one this library recognizes."""
     try:
         return IPProtocol(number)
     except ValueError:
