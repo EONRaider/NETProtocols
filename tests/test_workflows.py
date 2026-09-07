@@ -289,9 +289,26 @@ class TestMutationWorkflow:
     )
 
     def test_run_applies_the_documented_dns_scope_filters(self) -> None:
+        """Checks the filters inside the actual `mutmut run` argument
+        block, not just anywhere in the file -- a bare substring check
+        would still pass if a filter were dropped from the real command
+        while its text lingered in a comment (this file's own comment
+        block above the step names all four, for exactly the reason
+        that error would be easy to make)."""
         text = MUTATION.read_text()
+        match = re.search(
+            r"(?m)^          uv run --frozen mutmut run \\\n"
+            r"(?P<filters>(?:            '[^']+'\s*\\?\n?)+)",
+            text,
+        )
+        assert match is not None, (
+            "mutation.yml's mutmut run step no longer matches the "
+            "expected 'uv run --frozen mutmut run \\' + quoted-filter-"
+            "lines shape"
+        )
+        filters = match.group("filters")
         for pattern in self.EXPECTED_FILTERS:
-            assert pattern in text, (
+            assert pattern in filters, (
                 f"mutation.yml's mutmut run step is missing the "
                 f"{pattern!r} filter documented next to only_mutate in "
                 f"pyproject.toml -- it would mutate more of dns.py than "
