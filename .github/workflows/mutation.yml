@@ -47,17 +47,24 @@ jobs:
             mutmut-nightly-
       - name: Install the project with dev dependencies
         run: uv sync --group dev --frozen
-      # Scope (src/netprotocols/checksum.py, src/netprotocols/_tlv.py,
-      # and DNS's name-compression functions in
-      # src/netprotocols/layer7/dns.py) and the surviving-mutant
-      # threshold are both read from the project's mutmut config
-      # (pyproject.toml's [tool.mutmut] table), not hardcoded here, so
-      # this step and that config can't drift apart. That config —
-      # and the mutmut dependency itself — lands with the mutmut-audit
-      # item; until then this job is expected to fail for lack of
-      # either.
+      # File-level scope (src/netprotocols/checksum.py, _tlv.py, and
+      # dns.py) comes from the project's mutmut config (pyproject.toml's
+      # [tool.mutmut] table) via only_mutate, not hardcoded here.
+      # dns.py's in-scope surface is narrower still -- only the
+      # name-compression byte walk, not the record/RDATA/dataclass code
+      # the rest of the file holds -- and mutmut has no config-level way
+      # to express that, so these positional filters (kept in lockstep
+      # with the ones documented next to only_mutate in pyproject.toml)
+      # are what actually narrow it; a filter added or renamed there
+      # without a matching update here is exactly the kind of drift this
+      # comment can't prevent on its own.
       - name: Run mutmut against the scoped targets
-        run: uv run --frozen mutmut run
+        run: |
+          uv run --frozen mutmut run \
+            'netprotocols.checksum.*' \
+            'netprotocols._tlv.*' \
+            'netprotocols.layer7.dns.x__read_name*' \
+            'netprotocols.layer7.dns.x__labels*'
       # A failed scheduled run already notifies repo watchers by
       # default (GitHub's standard behavior) — that red run *is* the
       # report; nothing here files an issue on top of it. This just
