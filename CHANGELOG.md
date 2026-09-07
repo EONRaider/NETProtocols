@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.2.1] - 2026-09-07
 
 ### Fixed
 - **Closed a decode-throughput regression against dpkt that nobody had
@@ -144,6 +144,12 @@ methodology, and updated 1.1/1.2/1.6 figures.
   `docs/CLAIMS.md` §1.7's own citation notes PyTCP-net_proto's benchmark
   exercises its RX daemon instead — reworded to keep that distinction
   rather than flattening it.
+- **Restored this file's own missing `## [2.2.0]` version header.** A
+  prior documentation commit deleted it while inserting an adjacent
+  bullet, which silently re-merged the entire tagged, PyPI-published
+  2.2.0 release back under `## [Unreleased]` — the section below is
+  what a `git show` of the `v2.2.0` tag's own CHANGELOG.md actually
+  contained at release time.
 
 ## [2.2.0] - 2026-09-04
 

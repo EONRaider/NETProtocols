@@ -8,6 +8,6 @@
   "recorded": {
     "on": "CPython 3.12.3 / x86_64 / Linux",
     "python": "3.12.3",
-    "netprotocols": "2.2.0"
+    "netprotocols": "2.2.1"
   }
 }
