@@ -46,6 +46,13 @@ def _ethertype_name(ethertype: int) -> str:
         return f"{ethertype:#06x}"
 
 
+def _ethertype_enum(ethertype: int) -> EtherType | None:
+    try:
+        return EtherType(ethertype)
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True, slots=True)
 class Ethernet(Protocol):
     """An Ethernet II header.
@@ -102,7 +109,4 @@ class Ethernet(Protocol):
         ``None`` for a value this library does not enumerate;
         :attr:`ethertype` stays the canonical ``int`` and round-trips
         regardless (see :attr:`ethertype_name` for the display form)."""
-        try:
-            return EtherType(self.ethertype)
-        except ValueError:
-            return None
+        return _ethertype_enum(self.ethertype)

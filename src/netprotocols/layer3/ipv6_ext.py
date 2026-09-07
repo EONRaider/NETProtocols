@@ -25,7 +25,12 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv6
 from netprotocols._enums import IPProtocol
-from netprotocols.layer3.ip import _ip_protocol_class, _ip_protocol_name
+from netprotocols._tlv import walk_kind_length_value
+from netprotocols.layer3.ip import (
+    _ip_protocol_class,
+    _ip_protocol_enum,
+    _ip_protocol_name,
+)
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -43,6 +48,9 @@ __all__ = [
 #: The one option type that is a lone byte with no length or data
 #: (RFC 8200 §4.2): Pad1, one byte of padding.
 _OPT_PAD1 = 0
+
+#: The lone-byte kinds, precomputed once for :func:`.walk_kind_length_value`.
+_LONE_BYTE_KINDS = frozenset({_OPT_PAD1})
 
 #: Option types this library decodes a typed :attr:`IPv6Option.value`
 #: for, beyond naming.
@@ -195,10 +203,7 @@ class _IPv6OptionsHeader(Protocol):
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
         this library does not enumerate."""
-        try:
-            return IPProtocol(self.next_header)
-        except ValueError:
-            return None
+        return _ip_protocol_enum(self.next_header)
 
     @property
     def parsed_options(self) -> tuple[IPv6Option, ...]:
@@ -211,39 +216,17 @@ class _IPv6OptionsHeader(Protocol):
             missing or its data runs past the header (bounded — never
             hangs or over-reads).
         """
-        raw = self.options
-        parsed: list[IPv6Option] = []
-        cursor = 0
-        while cursor < len(raw):
-            option_type = raw[cursor]
-            if option_type == _OPT_PAD1:
-                parsed.append(IPv6Option(type=option_type))
-                cursor += 1
-                continue
-            if cursor + 1 >= len(raw):
-                raise InvalidFieldError(
-                    f"{self.__class__.__name__} option missing its length byte",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            length = raw[cursor + 1]
-            if cursor + 2 + length > len(raw):
-                raise InvalidFieldError(
-                    f"{self.__class__.__name__} option data runs past the "
-                    f"header",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            parsed.append(
-                IPv6Option(
-                    type=option_type,
-                    data=raw[cursor + 2 : cursor + 2 + length],
-                )
+        return tuple(
+            IPv6Option(type=option_type, data=data)
+            for option_type, data in walk_kind_length_value(
+                self.options,
+                lone_byte_kinds=_LONE_BYTE_KINDS,
+                terminator_kind=None,
+                min_option_length=None,
+                length_includes_header=False,
+                protocol=type(self),
             )
-            cursor += 2 + length
-        return tuple(parsed)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,10 +343,7 @@ class IPv6Routing(Protocol):
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
         this library does not enumerate."""
-        try:
-            return IPProtocol(self.next_header)
-        except ValueError:
-            return None
+        return _ip_protocol_enum(self.next_header)
 
     @property
     def segments(self) -> tuple[IPv6Address, ...] | None:
@@ -464,7 +444,4 @@ class IPv6Fragment(Protocol):
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
         this library does not enumerate."""
-        try:
-            return IPProtocol(self.next_header)
-        except ValueError:
-            return None
+        return _ip_protocol_enum(self.next_header)

@@ -23,7 +23,11 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, hex_str
 from netprotocols._enums import EtherType
-from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
+from netprotocols.layer2.ethernet import (
+    _ethertype_class,
+    _ethertype_enum,
+    _ethertype_name,
+)
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import TruncatedHeaderError
 
@@ -128,10 +132,7 @@ class GRE(Protocol):
         """``protocol_type`` as an :class:`~netprotocols.EtherType` (see
         :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
         value this library does not enumerate."""
-        try:
-            return EtherType(self.protocol_type)
-        except ValueError:
-            return None
+        return _ethertype_enum(self.protocol_type)
 
     @property
     def checksum(self) -> int | None:
