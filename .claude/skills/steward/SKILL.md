@@ -23,4 +23,4 @@ When a CI check fails or CodeRabbit (or any other bot/reviewer) reports a findin
 3. **Delegate review of that fix** to a second, separate sub-agent before pushing — distinct from the agent that implemented the fix. This agent should verify the fix actually closes the gap (ideally by constructing a case that would have slipped past the old code and confirming the new code catches it, not just that the reported symptom is gone), and check it didn't introduce the same class of bug elsewhere.
 4. Only after both steps pass does the fix get pushed and the finding marked resolved.
 
-This applies to fixes for CI-reported bugs specifically. It does not require every commit or every piece of new feature work in this repo to go through this two-step delegation — just the fix-a-bug-CI-found loop, where the risk of an author's blind spots recurring is highest.
+This applies to fixes for bugs reported by CI, CodeRabbit, another bot, or a human reviewer — the fix-a-reported-bug loop, where the risk of an author's blind spots recurring is highest. It does not require every commit or every piece of new feature work in this repo to go through this two-step delegation.
