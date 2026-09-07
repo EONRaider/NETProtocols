@@ -1,0 +1,33 @@
+name: PR Title Lint
+
+# Enforces Conventional Commits shape (https://www.conventionalcommits.org/)
+# on the *pull request title* only — e.g. `feat: ...`, `fix: ...`,
+# `docs: ...`, `chore: ...`. This is unrelated to this repo's guidance on
+# individual commit messages within a PR (see CONTRIBUTING.md); nothing
+# here checks or rewrites those.
+#
+# Runs on `pull_request` (not `pull_request_target`) so it only ever sees
+# the PR's own metadata with a read-only, non-elevated token — no need for
+# the elevated-permissions trigger the action's own docs suggest for
+# repos that also want its optional "[WIP]" title support, which this
+# repo doesn't use.
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, edited, synchronize]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint-pr-title:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
