@@ -20,6 +20,7 @@ from netprotocols._base import (
     Protocol,
     bytes_to_ipv4,
     bytes_to_ipv6,
+    hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
 )
@@ -394,7 +395,7 @@ class IPv4(Protocol):
     @property
     def checksum_hex_str(self) -> str:
         """The header checksum as a hexadecimal string, e.g. ``"0xf24e"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)
 
     @property
     def src_address(self) -> IPv4Address:
@@ -550,12 +551,12 @@ class IPv6(Protocol):
     @property
     def traffic_class_hex_str(self) -> str:
         """The traffic class as a hexadecimal string, e.g. ``"0x00"``."""
-        return f"{self.traffic_class:#04x}"
+        return hex_str(self.traffic_class, 4)
 
     @property
     def flow_label_hex_str(self) -> str:
         """The flow label as a hexadecimal string, e.g. ``"0x9f8c3"``."""
-        return f"{self.flow_label:#07x}"
+        return hex_str(self.flow_label, 7)
 
     @property
     def src_address(self) -> IPv6Address:

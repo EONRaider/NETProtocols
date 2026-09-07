@@ -11,6 +11,7 @@ from netprotocols._base import (
     Protocol,
     bytes_to_ipv4,
     bytes_to_mac,
+    hex_str,
     ipv4_to_bytes,
     mac_to_bytes,
 )
@@ -133,7 +134,7 @@ class ARP(Protocol):
     @property
     def ptype_hex_str(self) -> str:
         """The protocol type as a hexadecimal string, e.g. ``"0x0800"``."""
-        return f"{self.ptype:#06x}"
+        return hex_str(self.ptype, 6)
 
     @property
     def htype_name(self) -> str:

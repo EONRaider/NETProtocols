@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol
+from netprotocols._base import Protocol, hex_str
 from netprotocols._enums import EtherType
 from netprotocols.layer2.ethernet import _ethertype_class, _ethertype_name
 from netprotocols.registry import Registry
@@ -170,4 +170,4 @@ class GRE(Protocol):
         """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``, or
         ``None`` when no checksum is present."""
         checksum = self.checksum
-        return None if checksum is None else f"{checksum:#06x}"
+        return None if checksum is None else hex_str(checksum, 6)

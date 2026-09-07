@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol
+from netprotocols._base import Protocol, hex_str
 from netprotocols.layer4._ports import tcp_app_class
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
@@ -270,12 +270,12 @@ class TCP(Protocol):
     @property
     def flags_hex_str(self) -> str:
         """The flag bits as a hexadecimal string, e.g. ``"0x012"``."""
-        return f"{self.flags:#05x}"
+        return hex_str(self.flags, 5)
 
     @property
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x2e5b"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)
 
     # -- options TLV list (parsed on demand, never re-encoded) --
 
