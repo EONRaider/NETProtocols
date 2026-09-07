@@ -63,7 +63,24 @@ select = [
     "C4",        # flake8-comprehensions
     "SIM",       # flake8-simplify
     "RUF",       # ruff-specific
+    "D100", "D101", "D103", # pydocstyle: missing docstring on a
+                             # public module/class/function -- the
+                             # narrow slice of pydocstyle that already
+                             # holds repo-wide (see per-file-ignores)
+                             # without adopting its prose-style rules
+                             # (D2xx/D4xx) or its "public" definition's
+                             # blind spot for underscore-prefixed
+                             # helpers, which this can't catch.
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests rely on descriptive names, not docstrings, by established
+# convention (95 classes / 42 functions currently undocumented), and
+# scripts/ is maintainer-only benchmark/fixture tooling, not the
+# shipped package -- scoping the new pydocstyle rules to src/ avoids
+# mandating a sweep unrelated to what they exist to catch.
+"tests/*" = ["D100", "D101", "D103"]
+"scripts/*" = ["D100", "D101", "D103"]
 
 [tool.mypy]
 strict = true
