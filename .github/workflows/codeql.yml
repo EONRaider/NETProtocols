@@ -1,0 +1,50 @@
+name: CodeQL
+
+# Advanced-setup workflow (a checked-in file) rather than GitHub's
+# built-in "default setup", so this analysis lives in version control
+# alongside the rest of this repository's CI (ci.yml, fuzz.yml,
+# release.yml, mutation.yml, scorecard.yml) and its action pins are
+# reviewable the same way theirs are. Default setup is configured
+# through repository settings instead of a file, so it isn't available
+# to author from here.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Arbitrary; weekly on Sundays, clear of fuzz.yml's and mutation.yml's
+    # daily 03:00/04:00 UTC slots and scorecard.yml's own Sunday 05:00
+    # UTC slot.
+    - cron: "0 6 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Python is interpreted, so there is nothing for autobuild (or a
+      # manual build step) to do: build-mode: none has CodeQL extract
+      # the database straight from source instead. This is the build
+      # mode the CodeQL Action's own docs recommend for interpreted
+      # languages, and it sidesteps the question of an autobuild step
+      # fitting this project's uv-based build at all.
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: python
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
