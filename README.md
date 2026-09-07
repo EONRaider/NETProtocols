@@ -402,14 +402,18 @@ comparative-claims embargo lift that closed it out:
 | [2.1.0](https://github.com/EONRaider/NETProtocols/issues/105) | Typed accessors and pattern-matching ergonomics |
 | [2.2.0](https://github.com/EONRaider/NETProtocols/issues/106) | Universal round-trip properties, nightly fuzzing, a pcap reader — **released** |
 
-Everything through 2.2.0 has landed on `master`, plus a since-landed
+Everything through 2.2.0 has landed on `master`. The since-landed
 decode-throughput fix
-([#147](https://github.com/EONRaider/NETProtocols/issues/147), not yet
-versioned). 2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0
-and 2.2.0 rather than as their own versions, but the roadmap's original
-"only at a major version bump" release policy wasn't actually held to:
-both 2.0.0 and 2.2.0 — a minor release — are on PyPI, and the
-comparative claims above draw on the finished tree. New planned work
+([#147](https://github.com/EONRaider/NETProtocols/issues/147)) and a
+CodeFactor tooling cleanup
+([#156](https://github.com/EONRaider/NETProtocols/issues/156)) are now
+released as
+[2.2.1](https://github.com/EONRaider/NETProtocols/releases/tag/v2.2.1).
+2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0 and 2.2.0
+rather than as their own versions, but the roadmap's original "only at
+a major version bump" release policy wasn't actually held to: 2.0.0,
+2.2.0 and now 2.2.1 are all on PyPI, and the comparative claims above
+draw on the finished tree. New planned work
 will open fresh issues rather than restating a list here, so this
 section stays accurate without upkeep. The wave before this one — TCP
 and IPv4 option parsing, ICMP message bodies, NDP, IPv6
