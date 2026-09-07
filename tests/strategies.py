@@ -130,7 +130,9 @@ def ipv6_headers(draw: st.DrawFn) -> IPv6:
     )
 
 
-def _ipv6_options_headers[P: Protocol](cls: type[P]) -> st.SearchStrategy[P]:
+def _ipv6_options_headers[P: (IPv6HopByHopOptions, IPv6DestinationOptions)](
+    cls: type[P],
+) -> st.SearchStrategy[P]:
     """Shared strategy for the two TLV-style extension headers
     (:class:`IPv6HopByHopOptions`, :class:`IPv6DestinationOptions`):
     ``hdr_ext_len`` and ``options`` are the interdependent pair —
@@ -168,7 +170,7 @@ def ipv6_routing_headers(draw: st.DrawFn) -> IPv6Routing:
     )
 
 
-def _icmp_headers[P: Protocol](cls: type[P]) -> st.SearchStrategy[P]:
+def _icmp_headers[P: (ICMPv4, ICMPv6)](cls: type[P]) -> st.SearchStrategy[P]:
     """Shared strategy for :class:`ICMPv4`/:class:`ICMPv6`: both are
     the same shape (``rest`` fixed at 4 bytes, ``body`` free)."""
 

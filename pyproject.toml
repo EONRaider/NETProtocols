@@ -67,7 +67,7 @@ select = [
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src"]
+files = ["src", "tests/conftest.py", "tests/strategies.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
