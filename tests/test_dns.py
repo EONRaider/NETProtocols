@@ -23,6 +23,12 @@ from netprotocols import (
     SOARecord,
     TruncatedHeaderError,
 )
+from netprotocols.layer7.dns import (
+    _HEADER_LEN,
+    _MAX_NAME_POINTERS,
+    _labels,
+    _read_name,
+)
 from test_corpus import walk
 
 CORPUS_DNS = pcap_frames(FIXTURES / "udp_dns.pcap")
@@ -460,43 +466,193 @@ class TestDNSContract:
     def test_looping_pointer_raises_not_hangs(self):
         # Pointer at offset 12 that references itself.
         loop = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0\x0c"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(loop).question_name
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert err.expected == f"<={_MAX_NAME_POINTERS} pointers"
+        assert err.actual == _MAX_NAME_POINTERS + 1
+        assert str(err) == "DNS name compression loops"
 
     def test_reserved_label_bits_rejected(self):
         # Label length byte with 0x40 set (reserved), not a pointer.
         bad = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x40\x00"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(bad).question_name
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert str(err) == "reserved DNS label length bits set"
 
     def test_name_running_past_message_raises(self):
         # Declares a 9-byte label but the buffer ends first.
         bad = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x09abc"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(bad).question_type
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 10
+        assert str(err) == "DNS name runs past the message"
 
     def test_lone_pointer_byte_raises_reading_past_name(self):
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0"
-        with pytest.raises(InvalidFieldError):
-            _ = DNS.decode(raw).question_type  # via _read_name
-        with pytest.raises(InvalidFieldError):
-            _ = DNS.decode(raw).question_name  # via _labels
+        dns = DNS.decode(raw)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _ = dns.question_type  # via _read_name
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert str(err) == "truncated DNS compression pointer"
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _ = dns.question_name  # via _labels
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert str(err) == "truncated DNS compression pointer"
 
     def test_reserved_length_bits_raise_reading_past_name(self):
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x40\x00"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(raw).question_type  # via _read_name
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert str(err) == "reserved DNS label length bits set"
 
     def test_label_overruns_message_in_labels(self):
         # Declares a 9-byte label but only three bytes follow.
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\x09abc"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(raw).question_name  # via _labels
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == 0
+        assert str(err) == "DNS label runs past the message"
 
     def test_question_without_qtype_qclass_raises(self):
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + encode_name("a")
         with pytest.raises(InvalidFieldError):
             _ = DNS.decode(raw).question_type
+
+
+def pointer_chain(hops: int) -> bytes:
+    """``hops`` chained 2-byte compression pointers ending in a root
+    label: pointer 0 (at sections offset 0) targets pointer 1, ...,
+    the last one targets a trailing zero byte. Offsets are message-
+    relative (``_HEADER_LEN`` back in), matching what ``_labels``
+    subtracts when it follows a pointer."""
+    sections = bytearray()
+    for i in range(hops):
+        target = _HEADER_LEN + (i + 1) * 2
+        sections += bytes([0xC0 | (target >> 8), target & 0xFF])
+    sections += b"\x00"  # root, ends the walk
+    return bytes(sections)
+
+
+class TestReadNameAndLabelsDirectly:
+    """Unit tests against :func:`_read_name`/:func:`_labels` themselves,
+    at the level of their own byte-cursor arithmetic — independent of
+    the higher-level :class:`DNS` scenarios above, some of which cannot
+    tell these functions' errors apart from an unrelated raise a level
+    up (e.g. ``_question_fixed``'s own truncation check also raises
+    ``InvalidFieldError``, so a generic ``pytest.raises`` there cannot
+    prove *this* function is what raised, or with which message)."""
+
+    def test_read_name_treats_reaching_the_end_as_truncated(self):
+        """A label that exactly consumes the buffer, with no
+        terminating zero byte and no room for one, is still truncated
+        — regression against loosening the upper bound on the loop's
+        bounds check from ``<`` to ``<=``, which would let the cursor
+        land one past the last valid index and read out of range."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _read_name(b"\x03abc", 0)
+        assert excinfo.value.offset == 4
+
+    def test_read_name_recognizes_pointer_with_nonzero_low_bits(self):
+        """Only the top two bits mark a pointer (RFC 1035 §4.1.4) — a
+        length byte with a nonzero low bit alongside them, like 0xC1,
+        is still a pointer, not a reserved-bits label length."""
+        assert _read_name(b"\xc1\x00", 0) == 2
+
+    def test_read_name_pointer_truncated_at_one_byte_raises(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _read_name(b"\xc0", 0)
+        assert str(excinfo.value) == "truncated DNS compression pointer"
+
+    def test_read_name_pointer_with_exactly_two_bytes_available(self):
+        assert _read_name(b"\xc0\x0c", 0) == 2
+
+    def test_labels_recognizes_pointer_with_nonzero_low_bits(self):
+        """Same pointer-detection guard as ``_read_name`` above, and
+        the same shift-and-mask arithmetic that turns it into a target
+        offset (``((length & 0x3F) << 8) | next_byte``): a length byte
+        of 0xC1 with a following byte of 0x00 must resolve to message
+        offset 256 exactly, not some other value a broken shift would
+        produce."""
+        sections = b"\xc1\x00" + bytes(243)  # -> offset 256 (sections[244])
+        assert _labels(sections, 0) == "."
+
+    def test_labels_pointer_with_exactly_two_bytes_available(self):
+        sections = b"\x00\xc0\x0c"  # pointer at offset 1 -> offset 12 (root)
+        assert _labels(sections, 1) == "."
+
+    def test_labels_exactly_at_the_pointer_limit_still_resolves(self):
+        """Exactly ``_MAX_NAME_POINTERS`` hops must still resolve —
+        pins the boundary from below against an off-by-one (starting
+        the counter at 1 instead of 0, incrementing by 2 instead of 1,
+        or comparing with ``>=`` instead of ``>``) that would reject a
+        chain the RFC allows."""
+        assert _labels(pointer_chain(_MAX_NAME_POINTERS), 0) == "."
+
+    def test_labels_one_more_than_the_pointer_limit_raises(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _labels(pointer_chain(_MAX_NAME_POINTERS + 1), 0)
+        err = excinfo.value
+        assert err.expected == f"<={_MAX_NAME_POINTERS} pointers"
+        assert err.actual == _MAX_NAME_POINTERS + 1
+
+    def test_labels_declared_length_longer_than_available_data(self):
+        """A label whose declared length overruns the buffer is caught
+        right there (``DNS label runs past the message``, offset at
+        the length byte) — not silently truncated by a Python slice
+        and only caught a loop later, with a different message and
+        offset, by a bounds check shifted by one or two bytes."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _labels(bytes([5]) + b"abcd", 0)
+        err = excinfo.value
+        assert err.offset == 0
+        assert str(err) == "DNS label runs past the message"
+
+    def test_labels_label_exactly_reaches_buffer_end_no_terminator(self):
+        """A label whose data exactly fills the rest of the buffer
+        must *not* be rejected by the label-overrun check itself
+        (that would be one byte too strict) — the next loop
+        iteration's top-of-loop bounds check is what catches the
+        missing terminator, with its own message and offset."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _labels(bytes([4]) + b"abcd", 0)  # length 4, no root after
+        err = excinfo.value
+        assert err.offset == 5
+        assert str(err) == "DNS name runs past the message"
+
+    def test_labels_decodes_non_ascii_bytes_with_replacement_char(self):
+        """A label byte outside ASCII decodes via the ``replace``
+        error handler rather than raising — regression against
+        dropping or misspelling that handler, which is invisible on a
+        plain-ASCII label because the error-handling path is never
+        reached at all without a genuine decode error."""
+        assert _labels(bytes([1, 0xFF]) + b"\x00", 0) == "�"
+
+    def test_labels_of_an_empty_name_is_the_root_dot(self):
+        assert _labels(b"\x00", 0) == "."
 
 
 class TestDNSDispatch:
@@ -632,5 +788,10 @@ class TestSectionParsingIsShared:
         """Offsets are section-relative now; a pointer below the header
         length cannot address anything real."""
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0\x02"
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = DNS.decode(raw).question_name
+        err = excinfo.value
+        assert err.protocol is DNS
+        assert err.field == "sections"
+        assert err.offset == -10
+        assert str(err) == "DNS name runs past the message"
