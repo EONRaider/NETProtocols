@@ -34,6 +34,7 @@ bench = [
 ]
 dev = [
     "hypothesis>=6.100",
+    "mutmut>=3.7.0",
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-cov>=6.0",
@@ -62,12 +63,29 @@ select = [
     "C4",        # flake8-comprehensions
     "SIM",       # flake8-simplify
     "RUF",       # ruff-specific
+    "D100", "D101", "D103", # pydocstyle: missing docstring on a
+                             # public module/class/function -- the
+                             # narrow slice of pydocstyle that already
+                             # holds repo-wide (see per-file-ignores)
+                             # without adopting its prose-style rules
+                             # (D2xx/D4xx) or its "public" definition's
+                             # blind spot for underscore-prefixed
+                             # helpers, which this can't catch.
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests rely on descriptive names, not docstrings, by established
+# convention (95 classes / 42 functions currently undocumented), and
+# scripts/ is maintainer-only benchmark/fixture tooling, not the
+# shipped package -- scoping the new pydocstyle rules to src/ avoids
+# mandating a sweep unrelated to what they exist to catch.
+"tests/*" = ["D100", "D101", "D103"]
+"scripts/*" = ["D100", "D101", "D103"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src"]
+files = ["src", "tests/conftest.py", "tests/strategies.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -78,8 +96,60 @@ source = ["netprotocols"]
 
 [tool.coverage.report]
 show_missing = true
-# The suite covers 99% of 2091 statements; the only miss is Packet's
-# __eq__ NotImplemented branch. Gate at 98 rather than at the current
-# figure so a legitimately unreachable branch does not fail CI, and
-# well above it so the bar is actually held.
+# The suite covers 99.95% of 2052 statements (2051 hit, 1 miss); the
+# only miss is Packet's __eq__ NotImplemented branch. Gate at 98 rather
+# than at the current figure so a legitimately unreachable branch does
+# not fail CI, and well above it so the bar is actually held.
 fail_under = 98
+
+[tool.mutmut]
+# Scoped mutation-testing audit (backlog: mutmut-audit), not a
+# full-codebase run: only the checksum module (every protocol's
+# checksum handling routes through it), the shared TLV walker, and
+# DNS's name-compression byte walk carry real correctness stakes dense
+# enough to justify the runtime. `source_paths` still lists the whole
+# `src` tree because mutmut mirrors it under `mutants/` to keep the
+# package importable; `only_mutate` is what actually narrows which
+# files get mutated (everything else is copied through unmodified).
+source_paths = ["src"]
+only_mutate = [
+    "src/netprotocols/checksum.py",
+    "src/netprotocols/_tlv.py",
+    "src/netprotocols/layer7/dns.py",
+]
+pytest_add_cli_args_test_selection = [
+    "tests/test_checksum.py",
+    "tests/test_tlv.py",
+    "tests/test_dns.py",
+]
+# dns.py's in-scope surface is narrower still: only the low-level
+# name-compression byte walk (_read_name/_labels and any private
+# helpers they call), not the record/question parsing built on top of
+# it. mutmut has no config-level way to scope below a whole file, so
+# reproduce the audited DNS slice with a `mutant_names` filter on top
+# of the file-level scope above:
+#   uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
+#       'netprotocols.layer7.dns.x__read_name*' \
+#       'netprotocols.layer7.dns.x__labels*'
+# Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
+# the DNS/DNSOverTCP dataclasses, ...) are out of scope for this audit
+# and were not triaged.
+#
+# Triage note — accepted-equivalent survivors (two, both true no-op
+# mutations rather than gaps in coverage):
+#
+# 1. `_pseudo_header`'s IPv6 arm packs its 32-bit length field with
+#    `struct.pack("!IBBBB", ...)`; a mutant swapping "I" for the
+#    signed "i" only diverges from the original for a payload
+#    >= 2**31 bytes (2 GiB), which no test in this suite can construct
+#    or run in reasonable time/memory. The same mutation on the IPv4
+#    arm's 16-bit length field *is* killed — see
+#    test_ipv4_pseudo_header_length_field_is_unsigned in
+#    test_checksum.py, which exercises the exact signed/unsigned
+#    boundary at a testable (40 KB) scale.
+#
+# 2. `_labels`' final label decode, `.decode("ascii", "replace")`, has
+#    a mutant that upper-cases the codec name to "ASCII". Python's
+#    codec lookup normalizes case, so "ascii" and "ASCII" name the
+#    exact same codec — every input decodes identically either way,
+#    with no observable difference for any test to catch.

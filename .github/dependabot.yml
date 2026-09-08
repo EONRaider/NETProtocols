@@ -1,0 +1,49 @@
+version: 2
+
+updates:
+  # --- Python tooling, managed by uv --------------------------------
+  #
+  # This project's dependencies are declared exclusively via PEP 735
+  # [dependency-groups] in pyproject.toml (see uv.lock), not the older
+  # [project.optional-dependencies] table. Dependabot's "pip" ecosystem
+  # does not parse [dependency-groups]; only the native "uv" ecosystem
+  # does (GA since March 2025, with dependency-groups parsing landing
+  # in dependabot/dependabot-core#11796), so "uv" is used here rather
+  # than "pip".
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # netprotocols ships zero runtime dependencies today, so every
+      # update currently comes from the "dev" dependency-group (pytest,
+      # mypy, ruff, etc.) -- kept current here as its own group rather
+      # than left to open one PR per package. Matched by explicit
+      # package name instead of `dependency-type: development`: as of
+      # this writing Dependabot's dependency-type classifier does not
+      # work correctly for the uv ecosystem and reports every
+      # dependency as "production" regardless of where it's declared
+      # (see dependabot/dependabot-core#13202), which would leave a
+      # `dependency-type: development` group empty -- or, used the
+      # other way around, wrongly sweep this same dev tooling into a
+      # "runtime" group. A future runtime dependency added under
+      # [project.dependencies] is intentionally left out of this list,
+      # so it keeps updating on its own outside this group rather than
+      # being bundled in with dev tooling.
+      dev-dependencies:
+        patterns:
+          - "hypothesis"
+          - "mypy"
+          - "pytest"
+          - "pytest-cov"
+          - "ruff"
+
+  # --- GitHub Actions -------------------------------------------------
+  #
+  # Keeps the SHA-pinned `uses:` references in .github/workflows current
+  # (Dependabot updates both the pinned SHA and its trailing `# vX.Y.Z`
+  # comment).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

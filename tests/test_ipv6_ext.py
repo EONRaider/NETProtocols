@@ -8,7 +8,6 @@ import pytest
 from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     Ethernet,
-    EtherType,
     ICMPv6,
     InvalidFieldError,
     IPProtocol,
@@ -426,17 +425,3 @@ class TestRegistryGating:
             next_header=60, hdr_ext_len=0, options=b"\x01\x04\x00\x00\x00\x00"
         )
         assert dst_opts.next_protocol() is IPv6DestinationOptions
-
-
-class TestEnumCompleteness:
-    def test_every_ip_protocol_member_has_a_display_name(self):
-        for member in IPProtocol:
-            assert member.display_name
-
-    def test_every_ethertype_member_has_a_display_name(self):
-        for member in EtherType:
-            assert member.display_name
-
-    def test_extension_header_display_names(self):
-        assert IPProtocol.HOPOPT.display_name == "IPv6 Hop-by-Hop Options"
-        assert IPProtocol.IPV6_FRAG.display_name == "IPv6 Fragment"

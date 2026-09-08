@@ -155,3 +155,7 @@ benchmark.out
 # CI installs it fresh from package-lock.json, same as any other
 # lockfile-pinned dependency.
 scripts/pyodide/node_modules/
+
+# mutmut's mutation-testing workspace/cache
+mutants/
+.mutmut-cache

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, bytes_to_ipv6, bytes_to_mac
+from netprotocols._base import Protocol, bytes_to_ipv6, bytes_to_mac, hex_str
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.packet import Packet
 from netprotocols.utils.exceptions import InvalidFieldError
@@ -163,7 +163,7 @@ class _ICMP(Protocol):
     @property
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x83f7"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)
 
     # -- message-specific fields (read on demand, never re-encoded) --
 

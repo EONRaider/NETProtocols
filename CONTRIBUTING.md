@@ -88,7 +88,7 @@ Two enforcement points that are easy to miss:
   [`tests/test_fuzz.py`](tests/test_fuzz.py) so the "decode never
   escapes `ProtocolError`" property covers it.
 - **Enum lockstep.** The display-name completeness tests live in
-  `tests/test_ipv6_ext.py`; new enum members must have display names.
+  `tests/test_enums.py`; new enum members must have display names.
 
 ## Tests and the fixture corpus
 
@@ -138,6 +138,13 @@ file. Add an entry under `## [Unreleased]` in
   that's expected, not a failure on your end.
 - Commits and PRs describe the change and the reasoning; the diff shows
   the *what*, the message explains the *why*.
+- PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/)
+  shape — a `type:` prefix such as `feat:`, `fix:`, `docs:`, or `chore:`
+  (optionally scoped, e.g. `feat(layer4):`) — checked automatically by
+  `.github/workflows/pr-title-lint.yml`. This governs only the PR title
+  itself; it says nothing about the shape of commit messages within the
+  PR — the *what*/*why* guidance just above is unaffected and still
+  applies to those.
 
 By contributing, you agree that your contributions are licensed under
 the project's [MIT license](LICENSE).

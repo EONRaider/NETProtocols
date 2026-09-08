@@ -1,0 +1,61 @@
+name: OSSF Scorecard
+
+# Separate from ci.yml, same reasoning as fuzz.yml and mutation.yml: ci.yml
+# is reused via workflow_call by release.yml, so folding a schedule trigger
+# into it would run this analysis on every release too, not just weekly.
+on:
+  push:
+    branches: [master]
+  schedule:
+    # Arbitrary; weekly on Sundays, clear of fuzz.yml's and mutation.yml's
+    # daily 03:00/04:00 UTC slots.
+    - cron: "0 5 * * 0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed for Code scanning upload
+      security-events: write
+      # Needed for GitHub OIDC token if publish_results is true
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # The Scorecard team runs a weekly scan of public GitHub repos
+          # (https://github.com/ossf/scorecard#public-data). Setting
+          # publish_results: true feeds this workflow's own run into that
+          # dataset, which is what the README's api.securityscorecards.dev
+          # badge displays.
+          publish_results: true
+
+      # Upload the SARIF results as a workflow artifact, per the action's
+      # standard setup.
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SARIF file
+          path: results.sarif
+          retention-days: 5
+
+      # Upload the results to GitHub's code scanning dashboard.
+      - name: Upload to code-scanning
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          sarif_file: results.sarif

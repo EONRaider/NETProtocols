@@ -20,10 +20,12 @@ from netprotocols._base import (
     Protocol,
     bytes_to_ipv4,
     bytes_to_ipv6,
+    hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
 )
 from netprotocols._enums import IPProtocol
+from netprotocols._tlv import walk_kind_length_value
 from netprotocols.registry import (
     DEFAULT,
     TABLE_IP_PROTO,
@@ -80,11 +82,23 @@ def _ip_protocol_name(number: int) -> str:
         return f"unknown ({number})"
 
 
+def _ip_protocol_enum(number: int) -> IPProtocol | None:
+    """The ``IPProtocol`` member for a numeric value, or ``None`` if it
+    isn't one this library recognizes."""
+    try:
+        return IPProtocol(number)
+    except ValueError:
+        return None
+
+
 #: Single-byte IPv4 option kinds that carry no length or value
 #: (RFC 791 §3.1): End of Option List terminates the parse,
 #: No-Operation pads.
 _OPT_EOL = 0
 _OPT_NOP = 1
+
+#: The lone-byte kinds, precomputed once for :func:`.walk_kind_length_value`.
+_LONE_BYTE_KINDS = frozenset({_OPT_EOL, _OPT_NOP})
 
 #: Option kinds this library decodes a typed :attr:`IPv4Option.value`
 #: for, beyond naming (RFC 791 §3.1; RFC 2113 for Router Alert).
@@ -380,10 +394,7 @@ class IPv4(Protocol):
         library does not enumerate; :attr:`protocol` stays the
         canonical ``int`` (see :attr:`protocol_name` for the display
         form)."""
-        try:
-            return IPProtocol(self.protocol)
-        except ValueError:
-            return None
+        return _ip_protocol_enum(self.protocol)
 
     @property
     def flags_name(self) -> str:
@@ -394,7 +405,7 @@ class IPv4(Protocol):
     @property
     def checksum_hex_str(self) -> str:
         """The header checksum as a hexadecimal string, e.g. ``"0xf24e"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)
 
     @property
     def src_address(self) -> IPv4Address:
@@ -424,46 +435,17 @@ class IPv4(Protocol):
             below the 2-byte minimum or runs past the options bytes
             (bounded — never hangs or over-reads).
         """
-        raw = self.options
-        parsed: list[IPv4Option] = []
-        cursor = 0
-        while cursor < len(raw):
-            kind = raw[cursor]
-            if kind in (_OPT_EOL, _OPT_NOP):
-                parsed.append(IPv4Option(kind=kind))
-                if kind == _OPT_EOL:
-                    break
-                cursor += 1
-                continue
-            if cursor + 1 >= len(raw):
-                raise InvalidFieldError(
-                    "IPv4 option missing its length byte",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            length = raw[cursor + 1]
-            if length < 2:
-                raise InvalidFieldError(
-                    f"IPv4 option length must be at least 2, got {length}",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                    expected=">=2",
-                    actual=length,
-                )
-            if cursor + length > len(raw):
-                raise InvalidFieldError(
-                    "IPv4 option value runs past the options bytes",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            parsed.append(
-                IPv4Option(kind=kind, data=raw[cursor + 2 : cursor + length])
+        return tuple(
+            IPv4Option(kind=kind, data=data)
+            for kind, data in walk_kind_length_value(
+                self.options,
+                lone_byte_kinds=_LONE_BYTE_KINDS,
+                terminator_kind=_OPT_EOL,
+                min_option_length=2,
+                length_includes_header=True,
+                protocol=type(self),
             )
-            cursor += length
-        return tuple(parsed)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,20 +524,17 @@ class IPv6(Protocol):
         :class:`~netprotocols.IPProtocol` (see
         :attr:`IPv4.protocol_enum`); ``None`` for a value this library
         does not enumerate."""
-        try:
-            return IPProtocol(self.next_header)
-        except ValueError:
-            return None
+        return _ip_protocol_enum(self.next_header)
 
     @property
     def traffic_class_hex_str(self) -> str:
         """The traffic class as a hexadecimal string, e.g. ``"0x00"``."""
-        return f"{self.traffic_class:#04x}"
+        return hex_str(self.traffic_class, 4)
 
     @property
     def flow_label_hex_str(self) -> str:
         """The flow label as a hexadecimal string, e.g. ``"0x9f8c3"``."""
-        return f"{self.flow_label:#07x}"
+        return hex_str(self.flow_label, 7)
 
     @property
     def src_address(self) -> IPv6Address:

@@ -11,10 +11,12 @@ from netprotocols._base import (
     Protocol,
     bytes_to_ipv4,
     bytes_to_mac,
+    hex_str,
     ipv4_to_bytes,
     mac_to_bytes,
 )
 from netprotocols._enums import ARPHardwareType, ARPOperation, EtherType
+from netprotocols.layer2.ethernet import _ethertype_enum, _ethertype_name
 from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import validate_mac_addr
 
@@ -115,25 +117,19 @@ class ARP(Protocol):
     @property
     def ptype_name(self) -> str:
         """Display name of the protocol type, e.g. ``"IPv4"``."""
-        try:
-            return EtherType(self.ptype).display_name
-        except ValueError:
-            return f"{self.ptype:#06x}"
+        return _ethertype_name(self.ptype)
 
     @property
     def ptype_enum(self) -> EtherType | None:
         """The protocol type as an :class:`~netprotocols.EtherType` (see
         :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
         value this library does not enumerate."""
-        try:
-            return EtherType(self.ptype)
-        except ValueError:
-            return None
+        return _ethertype_enum(self.ptype)
 
     @property
     def ptype_hex_str(self) -> str:
         """The protocol type as a hexadecimal string, e.g. ``"0x0800"``."""
-        return f"{self.ptype:#06x}"
+        return hex_str(self.ptype, 6)
 
     @property
     def htype_name(self) -> str:

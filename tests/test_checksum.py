@@ -8,6 +8,7 @@ from conftest import corpus_frames
 from netprotocols import (
     ARP,
     GRE,
+    IGMP,
     TCP,
     UDP,
     Ethernet,
@@ -110,6 +111,22 @@ class TestCorpusChecksums:
             assert compute(header) == header.checksum
             assert verify(header)
 
+    def test_igmp_checksums_recompute_to_wire_values(self):
+        """IGMP has no pseudo-header and ignores ``payload`` (its body
+        is already part of ``bytes(layer)``) — the one arm of
+        :func:`compute`/:func:`verify` the transport-checksum cases
+        above never exercise."""
+        igmp_layers = [
+            layer
+            for _, _, frame in CORPUS
+            for layer in walk(frame)[0]
+            if isinstance(layer, IGMP)
+        ]
+        assert igmp_layers
+        for igmp in igmp_layers:
+            assert compute(igmp) == igmp.checksum
+            assert verify(igmp)
+
     def test_corrupted_byte_is_detected(self):
         _, transport, ip, payload = CASES[0]
         corrupted = (
@@ -155,8 +172,15 @@ class TestGREChecksum:
 
     def test_computing_without_the_checksum_bit_is_rejected(self):
         plain = GRE(flags=0, protocol_type=0x0800)
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             compute(plain, payload=b"x")
+        err = excinfo.value
+        assert err.protocol is GRE
+        assert err.field == "checksum"
+        assert str(err) == (
+            "Computing a GRE checksum requires the Checksum-Present "
+            "bit and its field (RFC 2784 §2.5)"
+        )
 
     def test_checksum_bit_without_its_field_is_rejected(self):
         broken = GRE(flags=0x8000, protocol_type=0x0800)  # no fields
@@ -266,10 +290,41 @@ class TestChecksumRules:
                 return
         pytest.fail("no payload drove the TCP checksum to 0x0000")
 
-    def test_pseudo_header_layers_require_ip(self):
-        udp, _ = self.make_udp(0)
-        with pytest.raises(InvalidFieldError):
-            compute(udp)
+    @pytest.mark.parametrize(
+        "layer",
+        [
+            UDP(src_port=53, dst_port=4242, length=12, checksum=0),
+            TCP(
+                src_port=1,
+                dst_port=2,
+                seq=0,
+                ack=0,
+                data_offset=5,
+                reserved=0,
+                flags=0,
+                window=0,
+                checksum=0,
+                urgent_pointer=0,
+            ),
+            ICMPv6(type=128, code=0, checksum=0, rest=b"\x00" * 4),
+        ],
+        ids=["udp", "tcp", "icmpv6"],
+    )
+    def test_pseudo_header_layers_require_ip(self, layer):
+        """Every pseudo-header layer's missing-``ip`` error names its
+        own class — regression against `compute`'s ICMPv6/TCP/UDP arms
+        losing track of which layer asked (each passes `layer` through
+        to `_require_ip`, which only uses it to build this message)."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(layer)
+        err = excinfo.value
+        assert err.protocol is type(layer)
+        assert err.field == "checksum"
+        assert str(err) == (
+            f"Computing a {type(layer).__name__} checksum requires the "
+            f"enclosing IPv4/IPv6 layer (its pseudo-header covers the "
+            f"addresses)"
+        )
 
     def test_layers_without_checksums_are_rejected(self):
         eth = Ethernet(
@@ -277,8 +332,55 @@ class TestChecksumRules:
             src="00:07:0d:af:f4:54",
             ethertype=0x0800,
         )
-        with pytest.raises(InvalidFieldError):
+        with pytest.raises(InvalidFieldError) as excinfo:
             compute(eth)
+        err = excinfo.value
+        assert err.protocol is Ethernet
+        assert err.field == "checksum"
+        assert str(err) == "Ethernet has no checksum field to compute"
+
+    def test_compute_payload_defaults_to_empty_bytes(self):
+        """`compute`'s ``payload`` parameter defaults to ``b""`` —
+        regression against a corrupted default silently changing every
+        checksum computed without an explicit payload."""
+        icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00" * 4)
+        assert compute(icmp) == compute(icmp, payload=b"")
+
+    def test_verify_payload_defaults_to_empty_bytes(self):
+        from dataclasses import replace
+
+        icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00" * 4)
+        filled = replace(icmp, checksum=compute(icmp))
+        assert verify(filled)
+        assert verify(filled) == verify(filled, payload=b"")
+
+    def test_ipv4_pseudo_header_length_field_is_unsigned(self):
+        """The IPv4 pseudo-header's length field is a 16-bit *unsigned*
+        value (RFC 793 §3.1; RFC 768) — a segment length above 32767
+        (representable unsigned, not signed) must still pack without
+        overflowing. The IPv6 pseudo-header's analogous 32-bit length
+        field has the same signed/unsigned distinction but only at
+        payload sizes (>2 GiB) no realistic test can reach; see the
+        note by ``[tool.mutmut]`` in pyproject.toml."""
+        payload = b"\x00" * 40000
+        udp = UDP(src_port=1, dst_port=2, length=8 + len(payload), checksum=0)
+        ip = IPv4(
+            version=4,
+            ihl=5,
+            dscp=0,
+            ecn=0,
+            total_length=20 + 8 + len(payload),
+            identification=1,
+            flags=2,
+            fragment_offset=0,
+            ttl=64,
+            protocol=17,
+            checksum=0,
+            src="192.0.2.1",
+            dst="192.0.2.2",
+        )
+        checksum = compute(udp, ip=ip, payload=payload)
+        assert 0 <= checksum <= 0xFFFF
 
 
 class TestPacketWithChecksums:

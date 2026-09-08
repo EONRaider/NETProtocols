@@ -24,6 +24,7 @@ reproduces a nightly run locally.
 
 import contextlib
 import os
+import sys
 
 import pytest
 from hypothesis import given, settings
@@ -39,6 +40,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    DNSOverTCP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -50,6 +52,7 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Packet,
+    Protocol,
     ProtocolError,
     TCPOption,
 )
@@ -80,9 +83,75 @@ ALL_PROTOCOLS = (
     TCP,
     UDP,
     DNS,
+    DNSOverTCP,
     DHCP,
     GRE,
 )
+
+
+def _shipped_protocol_classes() -> set[type[Protocol]]:
+    """Every concrete protocol class netprotocols ships, discovered by
+    walking Protocol.__subclasses__() to every depth rather than a second
+    hand list that could drift the same way ALL_PROTOCOLS can.
+
+    Two artifacts of live-class introspection need filtering:
+    * @dataclass(slots=True) rebuilds a class after `class Foo(Protocol):`
+      already registered the pre-slots object as a Protocol subclass, so
+      both the rebuilt class and an orphaned duplicate stay reachable from
+      __subclasses__() forever. Keep only the object actually bound under
+      its own name in its defining module.
+    * Other test modules (test_registry.py's Fake/OtherFake,
+      test_walk.py's NonAdvancing) define their own throwaway Protocol
+      subclasses; once those modules are imported (any full-suite run)
+      they show up here too. Restrict to classes whose __module__ starts
+      with 'netprotocols'.
+    * Private intermediate bases (_ICMP, _IPv6OptionsHeader) share a shape
+      but are never registered/decoded standalone — excluded by the
+      leading-underscore convention the codebase already uses for exactly
+      that.
+    """
+    found: set[type[Protocol]] = set()
+    stack = list(Protocol.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if cls in found:
+            continue
+        found.add(cls)
+        stack.extend(cls.__subclasses__())
+
+    def is_shipped(cls: type[Protocol]) -> bool:
+        if not cls.__module__.startswith("netprotocols"):
+            return False
+        if cls.__name__.startswith("_"):
+            return False
+        module = sys.modules.get(cls.__module__)
+        return module is not None and getattr(module, cls.__name__, None) is cls
+
+    return {cls for cls in found if is_shipped(cls)}
+
+
+def test_all_protocols_covers_every_shipped_protocol() -> None:
+    """ALL_PROTOCOLS must name exactly the concrete protocols this library
+    ships: nothing missing (a new protocol silently skipping the
+    decode-never-escapes-ProtocolError fuzz property) and nothing stale
+    (a renamed/removed class left behind)."""
+    shipped = _shipped_protocol_classes()
+    assert len(shipped) >= len(ALL_PROTOCOLS), (
+        f"protocol discovery found only {len(shipped)} classes, fewer "
+        f"than ALL_PROTOCOLS already lists ({len(ALL_PROTOCOLS)}) -- "
+        "the introspection is broken, not the list"
+    )
+    missing = shipped - set(ALL_PROTOCOLS)
+    stale = set(ALL_PROTOCOLS) - shipped
+    assert not missing, (
+        f"not fuzzed -- add to ALL_PROTOCOLS: "
+        f"{sorted(c.__name__ for c in missing)}"
+    )
+    assert not stale, (
+        f"ALL_PROTOCOLS lists class(es) no longer shipped: "
+        f"{sorted(c.__name__ for c in stale)}"
+    )
+
 
 CORPUS_FRAMES = [frame for _, _, frame in corpus_frames()]
 

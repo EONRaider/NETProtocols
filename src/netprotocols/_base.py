@@ -56,6 +56,7 @@ __all__ = [
     "bytes_to_ipv4",
     "bytes_to_ipv6",
     "bytes_to_mac",
+    "hex_str",
     "ipv4_to_bytes",
     "ipv6_to_bytes",
     "mac_to_bytes",
@@ -186,6 +187,13 @@ def bytes_to_ipv6(data: bytes) -> str:
     head = ":".join(parts[:best_start])
     tail = ":".join(parts[best_start + best_len :])
     return f"{head}::{tail}"
+
+
+def hex_str(value: int, width: int) -> str:
+    """Render `value` as a hexadecimal string zero-padded to `width`
+    total characters including the '0x' prefix, e.g.
+    ``hex_str(0x1c2a, 6) == "0x1c2a"``."""
+    return f"{value:#0{width}x}"
 
 
 class Protocol(ABC):

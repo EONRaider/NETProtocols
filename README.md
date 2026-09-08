@@ -2,6 +2,7 @@
 
 [![CodeFactor](https://www.codefactor.io/repository/github/eonraider/netprotocols/badge/master)](https://www.codefactor.io/repository/github/eonraider/netprotocols/overview/master)
 [![CI](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml/badge.svg)](https://github.com/EONRaider/NETProtocols/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/EONRaider/NETProtocols/badge)](https://securityscorecards.dev/viewer/?uri=github.com/EONRaider/NETProtocols)
 ![Python Version](https://img.shields.io/badge/python-3.12%2B-blue?logo=python)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![Typed](https://img.shields.io/badge/typing-strict-informational)
@@ -71,7 +72,7 @@ below, its reproduction command, and its caveats):
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **An 88.3 KB wheel against scapy's 2.47 MB** — about 29× smaller.
+- **A 90.4 KiB wheel against scapy's 2.47 MiB** — 28.0× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,

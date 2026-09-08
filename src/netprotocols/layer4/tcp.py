@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol
+from netprotocols._base import Protocol, hex_str
+from netprotocols._tlv import walk_kind_length_value
 from netprotocols.layer4._ports import tcp_app_class
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
@@ -29,6 +30,9 @@ __all__ = ["TCP", "TCPOption"]
 #: §3.2): End of Option List terminates the parse, No-Operation pads.
 _OPT_EOL = 0
 _OPT_NOP = 1
+
+#: The lone-byte kinds, precomputed once for :func:`.walk_kind_length_value`.
+_LONE_BYTE_KINDS = frozenset({_OPT_EOL, _OPT_NOP})
 
 #: Kind/length/value option kinds this library decodes.
 _OPT_MSS = 2
@@ -270,12 +274,12 @@ class TCP(Protocol):
     @property
     def flags_hex_str(self) -> str:
         """The flag bits as a hexadecimal string, e.g. ``"0x012"``."""
-        return f"{self.flags:#05x}"
+        return hex_str(self.flags, 5)
 
     @property
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x2e5b"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)
 
     # -- options TLV list (parsed on demand, never re-encoded) --
 
@@ -291,43 +295,14 @@ class TCP(Protocol):
             below the 2-byte TLV minimum or runs past the options bytes
             (bounded — never hangs or over-reads).
         """
-        raw = self.options
-        parsed: list[TCPOption] = []
-        cursor = 0
-        while cursor < len(raw):
-            kind = raw[cursor]
-            if kind in (_OPT_EOL, _OPT_NOP):
-                parsed.append(TCPOption(kind=kind))
-                if kind == _OPT_EOL:
-                    break
-                cursor += 1
-                continue
-            if cursor + 1 >= len(raw):
-                raise InvalidFieldError(
-                    "TCP option missing its length byte",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            length = raw[cursor + 1]
-            if length < 2:
-                raise InvalidFieldError(
-                    f"TCP option length must be at least 2, got {length}",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                    expected=">=2",
-                    actual=length,
-                )
-            if cursor + length > len(raw):
-                raise InvalidFieldError(
-                    "TCP option value runs past the options bytes",
-                    protocol=type(self),
-                    field="options",
-                    offset=cursor,
-                )
-            parsed.append(
-                TCPOption(kind=kind, data=raw[cursor + 2 : cursor + length])
+        return tuple(
+            TCPOption(kind=kind, data=data)
+            for kind, data in walk_kind_length_value(
+                self.options,
+                lone_byte_kinds=_LONE_BYTE_KINDS,
+                terminator_kind=_OPT_EOL,
+                min_option_length=2,
+                length_includes_header=True,
+                protocol=type(self),
             )
-            cursor += length
-        return tuple(parsed)
+        )

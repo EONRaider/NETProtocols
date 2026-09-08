@@ -19,7 +19,7 @@ from ipaddress import IPv4Address, IPv6Address
 from struct import Struct
 from typing import ClassVar, NamedTuple, Self
 
-from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
+from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6, hex_str
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
 
@@ -603,7 +603,7 @@ class DNS(Protocol):
     @property
     def flags_hex_str(self) -> str:
         """The flags word as a hexadecimal string, e.g. ``"0x8180"``."""
-        return f"{self.flags:#06x}"
+        return hex_str(self.flags, 6)
 
     # -- first question (parsed on demand, never re-encoded) --
 

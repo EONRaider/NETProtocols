@@ -10,12 +10,22 @@ on:
   # definition means the release gate cannot drift from the PR gate.
   workflow_call:
 
+# Cancel a stale run the moment a newer one starts for the same branch
+# or pull request, so a quick follow-up push doesn't leave two ladders
+# racing for runners. Keyed on the PR number when this is a pull_request
+# run and on the ref otherwise, so push/workflow_call runs on distinct
+# refs (e.g. master vs. a release tag) never share a group and cancel
+# each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       - run: uv run ruff check
@@ -24,8 +34,8 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       - run: uv run mypy
@@ -36,19 +46,60 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
 
+  # Scans the dev dependency group (the only third-party code CI itself
+  # pulls in) for known vulnerabilities. Exported with --no-emit-project
+  # so the audit sees pinned, hashed third-party requirements only --
+  # not an unhashable `-e .` reference to this repo's own in-tree
+  # package, which pip-audit cannot install under --require-hashes
+  # (implied automatically once any requirement carries a hash).
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+      - name: Export dev dependencies
+        run: >-
+          uv export --group dev --format requirements-txt --no-emit-project
+          -o requirements-dev.txt
+      - name: Audit dev dependencies for known vulnerabilities
+        run: >-
+          uv run --with pip-audit --no-project
+          pip-audit -r requirements-dev.txt
+
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import netprotocols; print(netprotocols.__version__)"
+      # Builds are supposed to be a pure function of the source tree, so
+      # two runs back-to-back must emit byte-identical wheels. Diffing
+      # their sha256 (rather than the files directly) catches drift
+      # from things like embedded timestamps or non-deterministic
+      # archive member ordering without needing a full binary diff.
+      - name: Verify the wheel build is reproducible
+        run: |
+          set -euo pipefail
+          uv build -o dist-repro-1
+          uv build -o dist-repro-2
+          hash1=$(sha256sum dist-repro-1/*.whl | cut -d ' ' -f1)
+          hash2=$(sha256sum dist-repro-2/*.whl | cut -d ' ' -f1)
+          echo "Build 1 sha256: $hash1"
+          echo "Build 2 sha256: $hash2"
+          if [ "$hash1" != "$hash2" ]; then
+            echo "::error::Wheel build is not reproducible: sha256 differs between two successive 'uv build' runs."
+            exit 1
+          fi
+          echo "Wheel build is reproducible."
 
   # Proves the README's browser/WASM claim (#99) against the real
   # thing, not a simulation of it: boots an actual Pyodide runtime
@@ -59,12 +110,12 @@ jobs:
   pyodide:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       - run: uv build
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
       - run: npm ci
@@ -91,8 +142,8 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           python-version: "3.12"
       - name: Corpus decode throughput

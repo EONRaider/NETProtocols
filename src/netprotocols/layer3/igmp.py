@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, bytes_to_ipv4
+from netprotocols._base import Protocol, bytes_to_ipv4, hex_str
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["IGMP", "IGMPv3GroupRecord"]
@@ -289,4 +289,4 @@ class IGMP(Protocol):
     @property
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x0b3a"``."""
-        return f"{self.checksum:#06x}"
+        return hex_str(self.checksum, 6)

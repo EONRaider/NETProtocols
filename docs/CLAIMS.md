@@ -357,7 +357,7 @@ netprotocols **54.0 ms**, scapy.all **458.3 ms** — netprotocols imports
 **8.5× faster**, down from the implied ~14-21× at v1.3.0's "40 ms vs
 570-870 ms." netprotocols' own import cost grew (40 ms → 54 ms) as
 Tiers 2-4 added the registry, walker, diagnostics and new protocol
-modules; scapy's did not move enough to change the picture. Also: 92
+modules; scapy's did not move enough to change the picture. Also: 93
 modules loaded against `scapy.all`'s 259 (dpkt, not part of this claim:
 117 modules, 41.0 ms).
 
@@ -375,11 +375,11 @@ the prior figure here was built from `netprotocols-2.0.0`, two releases
 behind the tree every other number in this file now describes — this
 was stale, not a real regression.*
 
-88.3 KB wheel (`uv build`, `netprotocols-2.2.0-py3-none-any.whl`,
-90,390 bytes, deterministic across repeated builds) against scapy
-2.7.0's 2.47 MB (2,590,982 bytes, current PyPI `bdist_wheel`) —
-**28.7× smaller**, down from the ~46× recorded at v1.3.0 and the 29.6×
-this section previously quoted from the 2.0.0-era build. 6,413 lines
+90.4 KiB wheel (`uv build`, `netprotocols-2.2.1-py3-none-any.whl`,
+92,553 bytes, deterministic across repeated builds) against scapy
+2.7.0's 2.47 MiB (2,590,982 bytes, current PyPI `bdist_wheel`) —
+**28.0× smaller**, down from the ~46× recorded at v1.3.0 and the 29.6×
+this section previously quoted from the 2.0.0-era build. 6,466 lines
 (`wc -l` over `src/`) against scapy's unchanged 246,813 — netprotocols
 grew from 3,732 lines as Tiers 2-4 added the registry, walker,
 structured diagnostics and new protocol coverage, plus smaller
@@ -712,7 +712,7 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,091 statements, 1 missed (99.95%). Enforced, not merely reported:
+2,052 statements, 1 missed (99.95%). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
 regression below the gate fails the build (#79).
@@ -908,7 +908,7 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 62 raise sites in the library
+`protocol` is set at every one of the 60 raise sites in the library
 (verified by an AST sweep during development, not just by eye); `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
 a single attribute to name. `offset` is honestly scoped: relative to
