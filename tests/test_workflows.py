@@ -289,8 +289,12 @@ class TestCIWorkflow:
         # branch inside the real mismatch block -- e.g. `if false; then
         # exit 1; fi` sitting inside the outer `if [ "$hash1" !=
         # "$hash2" ]; then ... fi` -- would still read as "exit 1 is in
-        # body" without being reachable. Closing that would mean
-        # tracking `if`/`fi` nesting depth instead of matching to the
+        # body" without being reachable. The same blind spot covers an
+        # `elif` arm: `if [ "$hash1" != "$hash2" ]; then echo ...; elif
+        # false; then exit 1; fi` textually places "exit 1" inside the
+        # captured body even though it can only run when the mismatch
+        # branch does NOT. Closing either case would mean tracking
+        # `if`/`elif`/`fi` control flow instead of matching to the
         # first `fi`, which is more machinery than a YAML/bash text
         # heuristic like this one is worth carrying for a case the real
         # ci.yml step doesn't (and has no reason to) construct.
@@ -358,6 +362,39 @@ class TestCIWorkflow:
         with pytest.raises(
             AssertionError, match="sha256sum of the dist-repro-1 wheel"
         ):
+            self._assert_diffs_two_independent_builds(script)
+
+    def test_build_reproducibility_check_rejects_a_non_failing_mismatch(
+        self,
+    ) -> None:
+        """Regression test for the other gap in the previous version of
+        :meth:`test_build_verifies_reproducibility`: the cosmetic-stand-in
+        fixture above trips the ``hash1=`` assertion, so it never reaches
+        -- and never proves correct -- the two strongest checks after it,
+        the reachable ``if [ "$hash1" != "$hash2" ]; then ... fi`` block
+        match and the "exit 1 inside that block" requirement.
+
+        This fixture's step performs the real `sha256sum` assignments and
+        has a real, reachable hash-mismatch `if`/`fi` block -- so it must
+        clear the `hash1`/`hash2` and `if`/`fi`-match checks -- but that
+        block only echoes an error instead of exiting non-zero. A step
+        like this would report a hash difference without ever failing
+        CI, so it must still be rejected, by the `exit 1`-in-body check
+        specifically.
+        """
+        non_failing_step = (
+            f"      - name: {self.REPRODUCIBILITY_STEP_NAME}\n"
+            "        run: |\n"
+            "          uv build -o dist-repro-1\n"
+            "          uv build -o dist-repro-2\n"
+            "          hash1=$(sha256sum dist-repro-1/*.whl | cut -d ' ' -f1)\n"
+            "          hash2=$(sha256sum dist-repro-2/*.whl | cut -d ' ' -f1)\n"
+            '          if [ "$hash1" != "$hash2" ]; then\n'
+            '            echo "::error::not reproducible"\n'
+            "          fi\n"
+        )
+        script = self._reproducibility_step_script(non_failing_step)
+        with pytest.raises(AssertionError, match="exit 1"):
             self._assert_diffs_two_independent_builds(script)
 
 
