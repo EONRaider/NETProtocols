@@ -210,6 +210,8 @@ class TestActionPinning:
 class TestCIWorkflow:
     """Structural checks on jobs added to ci.yml's own QA ladder."""
 
+    REPRODUCIBILITY_STEP_NAME = "Verify the wheel build is reproducible"
+
     def test_has_a_dependency_scan_job(self, ci_jobs: dict[str, str]) -> None:
         """Third-party CI dependencies must be audited for known CVEs."""
         block = ci_jobs.get("dependency-scan")
@@ -218,36 +220,145 @@ class TestCIWorkflow:
             "dependency-scan job no longer runs pip-audit"
         )
 
+    @classmethod
+    def _reproducibility_step_script(cls, build_job: str) -> str:
+        """The literal ``run:`` script of the build job's "Verify the
+        wheel build is reproducible" step, isolated from the rest of
+        the job.
+
+        ``job_blocks`` returns a job's *entire* raw text -- every other
+        step's name, ``run:`` script, and echoed strings besides this
+        one. Checking for tokens against that whole blob cannot tell
+        the difference between this step's own executed commands and a
+        lookalike word occurring anywhere else in the job (another
+        step's log message, an unrelated comment, or a step that only
+        describes a check in a string it echoes). Isolating this step's
+        own script is what lets the checks below tie the hashing and
+        the comparison to commands this step actually runs.
+        """
+        match = re.search(
+            rf"(?m)^ {{6}}- name: {re.escape(cls.REPRODUCIBILITY_STEP_NAME)}\n"
+            rf" {{8}}run: \|\n"
+            rf"(?P<script>(?: {{10}}.*\n)+)",
+            build_job,
+        )
+        assert match is not None, (
+            f"build job has no {cls.REPRODUCIBILITY_STEP_NAME!r} step "
+            f"with an inline 'run: |' script"
+        )
+        return match.group("script")
+
+    @staticmethod
+    def _assert_diffs_two_independent_builds(script: str) -> None:
+        """Verify the reproducibility step's script actually hashes two
+        independently built wheels and fails on a reachable mismatch,
+        rather than merely containing words that describe doing so.
+
+        A bare substring/regex search over raw text is satisfied by an
+        ``echo`` string that narrates "would hash dist-repro-1 and
+        dist-repro-2, compare $hash1 != $hash2, and exit 1 on
+        mismatch" without ever running a `sha256sum`, or by a real
+        `sha256sum`/`if`/`exit 1` that IS present in the script but not
+        wired together -- e.g. `exit 1` sitting in an unrelated,
+        permanently-false branch while the real `if [ "$hash1" !=
+        "$hash2" ]; then` block does nothing. Each check here ties a
+        token to the specific, executable bash construct it must
+        appear in, and the last one requires `exit 1` to be inside the
+        *body* of the actual hash-mismatch `if` block, not merely
+        present somewhere in the script.
+        """
+        assert "uv build -o dist-repro-1" in script, (
+            "reproducibility step no longer builds a first independent "
+            "wheel into dist-repro-1"
+        )
+        assert "uv build -o dist-repro-2" in script, (
+            "reproducibility step no longer builds a second independent "
+            "wheel into dist-repro-2"
+        )
+        assert re.search(r"hash1=\$\(sha256sum\s+\S*dist-repro-1\S*", script), (
+            "reproducibility step no longer assigns hash1 from an "
+            "actual sha256sum of the dist-repro-1 wheel"
+        )
+        assert re.search(r"hash2=\$\(sha256sum\s+\S*dist-repro-2\S*", script), (
+            "reproducibility step no longer assigns hash2 from an "
+            "actual sha256sum of the dist-repro-2 wheel"
+        )
+        # Known accepted limitation: `body` is captured non-greedily up
+        # to the first line that is just `fi`, not necessarily the one
+        # that actually balances this `if`. A deliberately nested dead
+        # branch inside the real mismatch block -- e.g. `if false; then
+        # exit 1; fi` sitting inside the outer `if [ "$hash1" !=
+        # "$hash2" ]; then ... fi` -- would still read as "exit 1 is in
+        # body" without being reachable. Closing that would mean
+        # tracking `if`/`fi` nesting depth instead of matching to the
+        # first `fi`, which is more machinery than a YAML/bash text
+        # heuristic like this one is worth carrying for a case the real
+        # ci.yml step doesn't (and has no reason to) construct.
+        mismatch = re.search(
+            r'if \[ "?\$hash1"?\s*!=\s*"?\$hash2"?\s*\];?\s*then\n'
+            r"(?P<body>(?:.*\n)*?)"
+            r"^ *fi *$",
+            script,
+            re.M,
+        )
+        assert mismatch is not None, (
+            "reproducibility step no longer has a reachable "
+            '\'if [ "$hash1" != "$hash2" ]; then ... fi\' block '
+            "comparing the two builds' hashes"
+        )
+        assert "exit 1" in mismatch.group("body"), (
+            "the hash-mismatch branch no longer fails the job with "
+            "exit 1 -- a differing hash would be reported without "
+            "ever failing CI"
+        )
+
     def test_build_verifies_reproducibility(
         self, ci_jobs: dict[str, str]
     ) -> None:
         """The build job must actually compare two independent builds'
-        artifacts, not merely claim to and build the wheel some number
-        of times -- a block containing the word "reproducible" and
-        three "uv build" calls would previously pass this test without
-        ever diffing anything."""
+        artifacts, not merely claim to and mention the right words --
+        a block containing the word "reproducible" plus echoed
+        mentions of "sha256sum", "$hash1 != $hash2", and "exit 1"
+        would previously pass this test without ever hashing anything
+        or failing on a real mismatch, because every assertion here
+        used to search the whole raw `build` job block rather than
+        this step's own, actually-executed script."""
         block = ci_jobs.get("build")
         assert block is not None, "ci.yml has no build job"
-        assert "reproducible" in block.lower(), (
-            "build job no longer verifies that the wheel build is reproducible"
+        script = self._reproducibility_step_script(block)
+        self._assert_diffs_two_independent_builds(script)
+
+    def test_build_reproducibility_check_rejects_a_cosmetic_stand_in(
+        self,
+    ) -> None:
+        """Regression test for the gap in the previous version of
+        :meth:`test_build_verifies_reproducibility`.
+
+        The old test only checked that "reproducible", "sha256sum",
+        a "$hash1 ... != ... $hash2" pattern, and "exit 1" each
+        occurred *somewhere* in the raw `build` job block. This
+        fixture's step builds both wheels, but its "hashing" and
+        "comparison" are just words inside one echoed string -- no
+        `sha256sum` call, no `hash1`/`hash2` assignment, and no real
+        `if`/`exit 1` ever run. Every old assertion (verified by hand
+        against the pre-fix logic) is satisfied by this text, so this
+        case would have slipped past it silently; it must fail the
+        tightened checks instead.
+        """
+        cosmetic_step = (
+            f"      - name: {self.REPRODUCIBILITY_STEP_NAME}\n"
+            "        run: |\n"
+            "          uv build -o dist-repro-1\n"
+            "          uv build -o dist-repro-2\n"
+            '          echo "sha256sum check: would compare "$hash1" '
+            '!= "$hash2" and exit 1 on mismatch"\n'
+            '          echo "Wheel build is reproducible."\n'
         )
-        assert block.count("uv build") >= 3, (
-            "reproducible-build-diff step must build the wheel twice, in "
-            "addition to the job's own initial build, to have anything "
-            "to diff"
-        )
-        assert "sha256sum" in block, (
-            "reproducible-build-diff step no longer hashes the built "
-            "artifacts to compare them"
-        )
-        assert re.search(r'\$hash1"?\s*!=\s*"?\$hash2', block), (
-            "reproducible-build-diff step no longer compares the two "
-            "builds' hashes against each other"
-        )
-        assert "exit 1" in block, (
-            "reproducible-build-diff step no longer fails the job when "
-            "the compared hashes differ"
-        )
+        script = self._reproducibility_step_script(cosmetic_step)
+        with pytest.raises(
+            AssertionError, match="sha256sum of the dist-repro-1 wheel"
+        ):
+            self._assert_diffs_two_independent_builds(script)
 
 
 class TestReleaseWorkflow:
