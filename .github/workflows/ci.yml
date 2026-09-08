@@ -20,6 +20,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# No job here needs to write anything -- lint/typecheck/test/build/pyodide/
+# benchmark all read the checked-out tree and call out to local tools.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest

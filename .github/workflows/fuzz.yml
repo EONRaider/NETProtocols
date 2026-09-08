@@ -66,3 +66,30 @@ jobs:
           name: hypothesis-nightly-failure-${{ github.run_id }}
           path: .hypothesis
           retention-days: 30
+
+  # Coverage-guided fuzzing of the same target, via Atheris rather than
+  # Hypothesis's example strategies above -- it drives decode_frame with
+  # libFuzzer's mutation engine instead of Hypothesis's, so it explores
+  # a different part of the input space. Pinned to Python 3.12 only,
+  # like the "fuzz" job above: Atheris hooks CPython internals directly
+  # and tends to lag new interpreter releases, so it isn't given the
+  # full 3.12/3.13/3.14 matrix the compatibility-gate "test" job in
+  # ci.yml runs.
+  atheris:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+      - name: Run Atheris against decode_frame
+        run: |
+          uv run --frozen --with atheris \
+            python tests/fuzz/fuzz_decode_frame.py -max_total_time=300
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atheris-crash-${{ github.run_id }}
+          path: crash-*
+          retention-days: 30

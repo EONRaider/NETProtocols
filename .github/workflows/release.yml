@@ -72,12 +72,48 @@ jobs:
       # exact commit -- run before the artifacts are published so a
       # failed attestation blocks the release instead of trailing it.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/*.whl
             dist/*.tar.gz
-      - run: uv publish --trusted-publishing always
+      # attest-build-provenance stores the attestation server-side via
+      # GitHub's API but doesn't attach anything to the release itself --
+      # copy its bundle to a name the github-release job can upload as a
+      # downloadable asset. The default bundle-path filename carries no
+      # recognizable suffix, so it must be renamed rather than uploaded
+      # as-is.
+      - name: Rename provenance bundle for release upload
+        run: |
+          cp "${{ steps.attest.outputs.bundle-path }}" \
+            "netprotocols-${GITHUB_REF_NAME#v}.sigstore.json"
+      # Zero runtime dependencies makes this a straightforward inventory
+      # of exactly one component (netprotocols itself) built from the
+      # wheel that is about to be published, not the dev/build toolchain.
+      - name: Generate SBOM
+        run: |
+          uv venv .sbom-venv
+          uv pip install --python .sbom-venv/bin/python dist/*.whl
+          uvx --from cyclonedx-bom cyclonedx-py environment .sbom-venv \
+            --pyproject pyproject.toml --mc-type library \
+            -o "netprotocols-${GITHUB_REF_NAME#v}.cdx.json"
+      - name: Upload release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: |
+            netprotocols-*.sigstore.json
+            netprotocols-*.cdx.json
+          retention-days: 5
+      # Scorecard's Packaging check looks for this action's `uses:` line
+      # specifically -- `uv publish` builds and uploads to PyPI just as
+      # well, but isn't one of the publishing mechanisms it recognizes.
+      # PyPI's trusted-publisher binding is keyed on repo + workflow
+      # filename + environment, not which step calls it, so this needs
+      # no reconfiguration on PyPI's side. `id-token: write` above is
+      # what it uses to authenticate.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (v1.14.2)
 
   github-release:
     needs: publish
@@ -86,6 +122,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Download release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
       # CHANGELOG.md is the single source of truth for release notes, so
       # extract this tag's own section rather than maintaining a second
       # copy anywhere. A missing section fails loudly instead of
@@ -110,4 +150,5 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" \
             --title "netprotocols ${GITHUB_REF_NAME#v}" \
             --notes-file release-notes.md \
-            --latest
+            --latest \
+            netprotocols-*.sigstore.json netprotocols-*.cdx.json
