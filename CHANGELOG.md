@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Development
+- **Tightened three DNS corpus assertions in `tests/test_dns.py` from substring/`endswith` checks to exact equality, closing 3 open CodeQL `py/incomplete-url-substring-sanitization` alerts (#166).** `test_names_decompress_to_real_domains` asserted `"example.com" in names` / `"accounts.youtube.com" in names` against a `set` decoded from a fixed pcap corpus, and `test_answers_parse_to_real_records` asserted `cname.rdata_text.endswith("google.com")` against the same corpus — not security-relevant trust checks, but exactly the substring/suffix pattern the rule flags regardless of what the value's actually validating. Both now compare against the known exact decoded values instead (`names == {"example.com", "accounts.youtube.com"}`, `rdata_text == "www3.l.google.com"`), which removes the pattern CodeQL keys on and is strictly more precise than the checks it replaces.
+
 ## [2.2.1] - 2026-09-07
 
 ### Fixed
