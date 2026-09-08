@@ -61,7 +61,7 @@ jobs:
       # repo write access to re-run the job locally.
       - name: Upload the failing example database
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hypothesis-nightly-failure-${{ github.run_id }}
           path: .hypothesis
@@ -88,7 +88,7 @@ jobs:
             python tests/fuzz/fuzz_decode_frame.py -max_total_time=300
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: atheris-crash-${{ github.run_id }}
           path: crash-*
