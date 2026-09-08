@@ -134,8 +134,7 @@ class TestCorpusDNS:
 
     def test_names_decompress_to_real_domains(self):
         names = {walk(frame)[0][-1].question_name for frame in CORPUS_DNS}
-        assert "example.com" in names
-        assert "accounts.youtube.com" in names
+        assert names == {"example.com", "accounts.youtube.com"}
 
     def test_answers_parse_to_real_records(self):
         records = [
@@ -148,9 +147,9 @@ class TestCorpusDNS:
         # An A record's RDATA decodes to the dotted IPv4 in rdata_text.
         a = next(r for r in records if r.rtype_name == "A")
         assert a.rdata == socket.inet_aton(a.rdata_text)
-        # A CNAME's RDATA decompresses to a real target domain.
+        # A CNAME's RDATA decompresses to the real target domain.
         cname = next(r for r in records if r.rtype_name == "CNAME")
-        assert cname.rdata_text.endswith("google.com")
+        assert cname.rdata_text == "www3.l.google.com"
 
     def test_authority_soa_and_additional_opt(self):
         stacks = [walk(frame)[0][-1] for frame in CORPUS_DNS]
