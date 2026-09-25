@@ -51,3 +51,15 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+    groups:
+      # github/codeql-action ships init, analyze, and upload-sarif as
+      # subdirectories of one repository, but Dependabot tracks each
+      # `uses:` path as its own dependency and opens one PR per path.
+      # init and analyze must run the same release -- analyze refuses a
+      # config file written by a different init version ("Loaded a
+      # configuration file for version '4.37.9', but running version
+      # '4.38.1'") -- so every split PR fails CodeQL on its own and
+      # none can merge. Grouping them bumps all three together.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
