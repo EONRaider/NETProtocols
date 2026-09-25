@@ -207,6 +207,69 @@ class TestActionPinning:
             )
 
 
+CODEQL_ACTION = "github/codeql-action/"
+
+
+def codeql_action_pins(workflows: dict[str, str]) -> dict[str, list[str]]:
+    """Map each commit a ``github/codeql-action/*`` step is pinned to
+    onto the ``file: sub-action`` steps pinned there, across every
+    workflow text in ``workflows`` (keyed by file name)."""
+    pins: dict[str, list[str]] = {}
+    for name, text in workflows.items():
+        for line in text.splitlines():
+            ref = uses_ref(line)
+            if ref is None or not ref.startswith(CODEQL_ACTION):
+                continue
+            action, _, pin = ref.rpartition("@")
+            sub_action = action.removeprefix(CODEQL_ACTION)
+            pins.setdefault(pin, []).append(f"{name}: {sub_action}")
+    return pins
+
+
+class TestCodeQLActionVersionLockstep:
+    """Every ``github/codeql-action/*`` step must run the same release.
+
+    ``init`` writes a config file that ``analyze`` refuses to load when
+    their versions differ ("Loaded a configuration file for version
+    '4.37.9', but running version '4.38.1'"), and Dependabot bumps each
+    sub-action path in its own PR, so a half-applied bump is the
+    default outcome rather than a hypothetical one. Checking it here
+    fails the ordinary test job with the offending steps named, instead
+    of surfacing only as a CodeQL "configuration error".
+    """
+
+    def test_all_workflows_pin_a_single_codeql_action_commit(self) -> None:
+        pins = codeql_action_pins(
+            {path.name: path.read_text() for path in ALL_WORKFLOWS}
+        )
+        steps = {step for group in pins.values() for step in group}
+        # Guard against passing vacuously: codeql.yml's init/analyze
+        # pair is the reason this check exists, so it must be seen.
+        assert {"codeql.yml: init", "codeql.yml: analyze"} <= steps, (
+            f"expected codeql.yml's init and analyze steps, found "
+            f"{sorted(steps)}"
+        )
+        assert len(pins) == 1, (
+            f"github/codeql-action steps are pinned to {len(pins)} "
+            f"different commits: {pins}"
+        )
+
+    def test_a_split_bump_is_detected(self) -> None:
+        """The exact shape Dependabot produced: analyze bumped, init
+        left behind. Proves the check above can actually fail."""
+        old, new = "a" * 40, "b" * 40
+        split = {
+            "codeql.yml": (
+                f"      - uses: github/codeql-action/init@{old} # v1\n"
+                f"      - uses: github/codeql-action/analyze@{new} # v2\n"
+            )
+        }
+        assert codeql_action_pins(split) == {
+            old: ["codeql.yml: init"],
+            new: ["codeql.yml: analyze"],
+        }
+
+
 class TestCIWorkflow:
     """Structural checks on jobs added to ci.yml's own QA ladder."""
 
