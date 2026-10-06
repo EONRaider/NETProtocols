@@ -5,7 +5,7 @@ description = "Low-level implementations of common networking protocols"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "EONRaider", email = "livewire_voodoo@protonmail.com" }]
+authors = [{ name = "EONRaider", email = "eonraider@protonmail.com" }]
 requires-python = ">=3.12"
 keywords = ["networking", "protocols", "packet", "ethernet", "tcp", "ip", "arp", "icmp", "udp"]
 classifiers = [

@@ -13,7 +13,7 @@ public issue.
 - Preferred: use GitHub's [private vulnerability
   reporting](https://github.com/EONRaider/NETProtocols/security/advisories/new)
   for this repository.
-- Alternative: email livewire_voodoo@protonmail.com with a description
+- Alternative: email eonraider@protonmail.com with a description
   of the vulnerability, the affected version, and steps to reproduce
   it.
 
