@@ -131,14 +131,13 @@ pytest_add_cli_args_test_selection = [
 #   uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
 #       'netprotocols.layer7.dns.x__read_name*' \
 #       'netprotocols.layer7.dns.x__labels*'
-# Mutants mutmut generates elsewhere in dns.py (the record/RDATA
-# parsing helpers, ...) are out of scope for this audit and were not
-# triaged. mutmut 3.7.0 generates none at all for a decorated function
-# other than a lone @staticmethod/@classmethod, or for anything inside
-# a decorated class -- so the @lru_cache section parsers and the
-# @dataclass DNS/DNSOverTCP classes are never mutated, whatever the
-# filters say. Code meant to be audited has to live in undecorated
-# module-level functions.
+# Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
+# the DNS/DNSOverTCP dataclass methods, ...) are out of scope for this
+# audit and were not triaged. mutmut (3.8.0) generates none at all for
+# a decorated function other than a lone @staticmethod/@classmethod, so
+# the @lru_cache section parsers are never mutated, whatever the
+# filters say; logic meant to be audited belongs in undecorated
+# functions.
 #
 # Triage record: scripts/mutmut_survivors.txt lists each accepted
 # survivor with the reason it is equivalent, and

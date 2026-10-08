@@ -146,10 +146,11 @@ A survivor a test *could* kill gets that test. Only a true no-op, or one
 out of any test's reach, goes in the triage record, under a comment
 saying why. Two properties of the setup are easy to trip over:
 
-- mutmut 3.7.0 never mutates a decorated function (other than a lone
-  `@staticmethod`/`@classmethod`) or anything inside a decorated class,
-  so logic meant to be audited belongs in undecorated module-level
-  functions.
+- mutmut never mutates a decorated function (other than a lone
+  `@staticmethod`/`@classmethod`) — an `@lru_cache`'d parser, say — so
+  logic meant to be audited belongs in undecorated functions. (Methods
+  of a decorated class such as a `@dataclass` are mutated, as of
+  mutmut 3.8.0.)
 - `tests/conftest.py` clears every package-level `functools` cache
   before each test, so a result cached by the original code can't hide
   a mutant.

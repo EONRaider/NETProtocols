@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail a mutmut run that left an unaccepted mutant undetected.
 
-``mutmut run`` (3.7.0, pinned in uv.lock) exits 0 however many mutants
+``mutmut run`` (3.8.0, pinned in uv.lock) exits 0 however many mutants
 survive: it only exits non-zero when the stats or clean run itself
 fails. Without this check the nightly mutation workflow is green no
 matter what it finds. This script reads the full status listing and
