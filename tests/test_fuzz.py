@@ -19,15 +19,17 @@ Two Hypothesis profiles are registered:
 
 Select a profile with ``HYPOTHESIS_PROFILE`` (read once, at import
 time) — e.g. ``HYPOTHESIS_PROFILE=nightly pytest tests/test_fuzz.py``
-reproduces a nightly run locally.
+reproduces a nightly run locally. The profiles are registered and
+loaded in conftest.py rather than here, so every property test in the
+suite gets them, including under a test selection that never imports
+this file (mutmut's, for one).
 """
 
 import contextlib
-import os
 import sys
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from conftest import corpus_frames
@@ -58,14 +60,6 @@ from netprotocols import (
 )
 from strategies import ROUND_TRIP_STRATEGIES
 from test_corpus import walk
-
-settings.register_profile(
-    "netprotocols", max_examples=200, deadline=None, derandomize=True
-)
-settings.register_profile(
-    "nightly", max_examples=10_000, deadline=None, derandomize=False
-)
-settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "netprotocols"))
 
 ALL_PROTOCOLS = (
     Ethernet,

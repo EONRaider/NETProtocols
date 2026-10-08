@@ -474,6 +474,11 @@ class TestReleaseWorkflow:
         )
 
 
+FUZZ_HARNESSES = sorted(
+    (WORKFLOWS.parent.parent / "tests" / "fuzz").glob("*.py")
+)
+
+
 class TestFuzzWorkflow:
     def test_has_a_concurrency_group(self) -> None:
         """Without one, an overlapping nightly run could waste a runner
@@ -481,6 +486,37 @@ class TestFuzzWorkflow:
         assert re.search(r"^concurrency:", FUZZ.read_text(), re.M), (
             "fuzz.yml no longer declares a top-level concurrency group"
         )
+
+    def test_harness_glob_is_not_vacuous(self) -> None:
+        assert FUZZ_HARNESSES, "tests/fuzz/ holds no harness at all"
+
+    @pytest.mark.parametrize(
+        "harness", FUZZ_HARNESSES, ids=lambda path: path.name
+    )
+    def test_every_harness_is_run(self, harness: Path) -> None:
+        """A harness under tests/fuzz/ that no job invokes is dead code
+        that looks like coverage. Globbed, not listed, so a new harness
+        fails here until fuzz.yml runs it."""
+        atheris = job_blocks(FUZZ).get("atheris")
+        assert atheris is not None, "fuzz.yml has no atheris job"
+        assert f"tests/fuzz/{harness.name}" in atheris, (
+            f"fuzz.yml's atheris job never runs tests/fuzz/{harness.name}"
+        )
+
+
+@pytest.mark.parametrize("workflow", [FUZZ, MUTATION], ids=lambda p: p.name)
+def test_nightly_concurrency_is_keyed_on_the_event(workflow: Path) -> None:
+    """The release checklist relies on manually dispatched fuzz and
+    mutation runs; keyed on workflow and ref alone, the nightly cron
+    would cancel a dispatched run in progress on the same branch."""
+    match = re.search(
+        r"^concurrency:\n  group: (?P<group>.+)$", workflow.read_text(), re.M
+    )
+    assert match, f"{workflow.name} declares no concurrency group"
+    assert "github.event_name" in match["group"], (
+        f"{workflow.name}'s concurrency group would let the nightly run "
+        f"cancel a manually dispatched one"
+    )
 
 
 class TestMutationWorkflow:
@@ -490,7 +526,7 @@ class TestMutationWorkflow:
     # way to scope below a whole file, so pyproject.toml's own comment
     # documents these positional filters as the way to reproduce that
     # narrower scope. If the workflow step doesn't pass them, it mutates
-    # (and reports on) all of dns.py's untriaged record/RDATA/dataclass
+    # (and reports on) all of dns.py's untriaged record/RDATA parsing
     # code every night, silently wider than what was ever audited.
     EXPECTED_FILTERS = (
         "netprotocols.checksum.*",
@@ -584,6 +620,28 @@ class TestMutationWorkflow:
             f"filters documented next to only_mutate in pyproject.toml, "
             f"{sorted(self.EXPECTED_FILTERS)} -- it would mutate either "
             f"more or less of dns.py than was ever audited"
+        )
+
+    def test_survivors_are_gated_after_the_run(self) -> None:
+        """`mutmut run` exits 0 however many mutants survive, so without
+        the gate step after it the nightly job is green regardless of
+        what it finds."""
+        block = job_blocks(MUTATION).get("mutation")
+        assert block is not None, "mutation.yml has no mutation job"
+        run_at = block.find("mutmut run")
+        gate_at = block.find("scripts/check_mutmut_survivors.py")
+        assert gate_at != -1, (
+            "mutation.yml never runs scripts/check_mutmut_survivors.py, "
+            "so surviving mutants can no longer fail the job"
+        )
+        assert run_at < gate_at, (
+            "the survivor gate runs before `mutmut run`, so it checks "
+            "a stale result set"
+        )
+        assert "mutmut results --all true" in block[run_at:gate_at], (
+            "the gate needs the full status listing (--all true): the "
+            "default listing omits killed mutants, so a run that checked "
+            "nothing would look the same as one that killed everything"
         )
 
     def test_run_rejects_an_unquoted_argument_on_a_continued_line(

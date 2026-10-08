@@ -4,15 +4,78 @@ Sources include the Wireshark sample captures at
 https://wiki.wireshark.org/SampleCaptures (arp-storm.pcap, among
 others), locally captured frames, and the real-capture corpus under
 ``tests/fixtures/`` (see its MANIFEST.md).
+
+Two pieces of suite-wide setup also live here, because conftest.py is
+the one module pytest loads for *every* selection of test files —
+including the narrow selection mutmut runs (pyproject.toml's
+``pytest_add_cli_args_test_selection``), which never imports
+test_fuzz.py:
+
+- The Hypothesis profiles (see test_fuzz.py's module docstring), so a
+  property test anywhere runs under the same derandomized, deadline-free
+  settings whether or not test_fuzz.py was collected.
+- Clearing every module-level ``functools`` cache in the package before
+  each test. mutmut 3 runs the clean suite in-process and then forks
+  once per mutant, so without this a cache warmed by the original code
+  answers in the child and hides the mutant (a false survivor), and a
+  test whose input was already cached is never associated with the
+  cached function at all.
 """
 
+import importlib
+import os
+import pkgutil
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from hypothesis import settings
 
+import netprotocols
 from netprotocols.pcap import read_pcap
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+settings.register_profile(
+    "netprotocols", max_examples=200, deadline=None, derandomize=True
+)
+settings.register_profile(
+    "nightly", max_examples=10_000, deadline=None, derandomize=False
+)
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "netprotocols"))
+
+
+def _package_caches() -> tuple[Callable[[], None], ...]:
+    """The ``cache_clear`` of every ``functools`` cache defined at module
+    level anywhere in the package.
+
+    Discovered rather than listed, so a cache added to any module later
+    is cleared without anyone remembering to register it here. The
+    ``__module__`` check skips a cached function re-exported from some
+    other module, so each cache is collected once.
+    """
+    clears: list[Callable[[], None]] = []
+    for info in pkgutil.walk_packages(
+        netprotocols.__path__, f"{netprotocols.__name__}."
+    ):
+        module = importlib.import_module(info.name)
+        for value in vars(module).values():
+            clear = getattr(value, "cache_clear", None)
+            owner = getattr(value, "__module__", None)
+            if callable(clear) and owner == module.__name__:
+                clears.append(clear)
+    return tuple(clears)
+
+
+PACKAGE_CACHES = _package_caches()
+
+
+@pytest.fixture(autouse=True)
+def _clear_package_caches() -> Iterator[None]:
+    """Start every test with every package-level cache empty."""
+    for clear in PACKAGE_CACHES:
+        clear()
+    yield
 
 
 def pcap_frames(path: Path) -> list[bytes]:
