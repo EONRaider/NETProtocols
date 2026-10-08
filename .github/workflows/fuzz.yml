@@ -12,8 +12,12 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+# Keyed on the triggering event too, so the nightly cron can never
+# cancel a manually dispatched run on the same ref (the release
+# checklist in CONTRIBUTING.md relies on one) -- runs of the same kind
+# still supersede each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:

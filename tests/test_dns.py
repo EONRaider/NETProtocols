@@ -733,6 +733,20 @@ class TestDNSOverTCP:
         assert b"".join(bytes(layer) for layer in layers) == frame
 
 
+class TestCachesStartEmpty:
+    """conftest.py clears every package-level cache before each test, so
+    a mutant can't hide behind a result the original code cached (see
+    its module docstring). The other tests in this file warm both
+    caches, so finding them empty here proves the discovery reaches
+    them and the clearing actually runs."""
+
+    @pytest.mark.parametrize("name", ["_parse_questions", "_parse_records"])
+    def test_cache_is_empty_when_a_test_starts(self, name: str) -> None:
+        from netprotocols.layer7 import dns as dns_module
+
+        assert getattr(dns_module, name).cache_info().currsize == 0
+
+
 class TestSectionParsingIsShared:
     """#85: the three section accessors share one parse, and nothing
     round-trips through `bytes(self)` to get at the message."""

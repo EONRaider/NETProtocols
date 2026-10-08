@@ -122,6 +122,48 @@ only if the derivation is byte-faithful to the wire and the provenance
 is recorded in the MANIFEST; that script's synthesis fallback (splicing
 tag shims over a real untagged capture) is the worked example.
 
+## Mutation testing
+
+`.github/workflows/mutation.yml` runs a scoped
+[mutmut](https://github.com/boxed/mutmut) audit every night; the scope
+and its reasoning live in `pyproject.toml`'s `[tool.mutmut]` table.
+`mutmut run` itself exits 0 however many mutants survive, so the job's
+final step,
+[`scripts/check_mutmut_survivors.py`](scripts/check_mutmut_survivors.py),
+is what fails it — on any undetected mutant not accepted in
+[`scripts/mutmut_survivors.txt`](scripts/mutmut_survivors.txt). To
+reproduce locally:
+
+```bash
+uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
+    'netprotocols.layer7.dns.x__read_name*' \
+    'netprotocols.layer7.dns.x__labels*'
+uv run mutmut results --all true > mutmut-results.txt
+python3 scripts/check_mutmut_survivors.py mutmut-results.txt
+```
+
+A survivor a test *could* kill gets that test. Only a true no-op, or one
+out of any test's reach, goes in the triage record, under a comment
+saying why. Two properties of the setup are easy to trip over:
+
+- mutmut never mutates a decorated function (other than a lone
+  `@staticmethod`/`@classmethod`) — an `@lru_cache`'d parser, say — so
+  logic meant to be audited belongs in undecorated functions. (Methods
+  of a decorated class such as a `@dataclass` are mutated, as of
+  mutmut 3.8.0.)
+- `tests/conftest.py` clears every package-level `functools` cache
+  before each test, so a result cached by the original code can't hide
+  a mutant.
+
+## Releasing
+
+`release.yml` gates publishing on the CI ladder only; the nightly fuzz
+and mutation jobs never run on a pull request. Before pushing a release
+tag, dispatch both by hand (Actions → the workflow → *Run workflow*,
+on `master` at the commit to be tagged) and tag only once both are
+green. Their concurrency groups are keyed on the triggering event, so a
+nightly run can't cancel a manual one.
+
 ## Changelog
 
 This project keeps a [Keep a Changelog](https://keepachangelog.com/)

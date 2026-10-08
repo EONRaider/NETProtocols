@@ -124,6 +124,34 @@ class TestMinOptionLength:
         assert err.expected == ">=2"
         assert err.actual == declared_length
 
+    def test_a_floor_stronger_than_two_wins_when_length_includes_header(
+        self,
+    ):
+        """The structural floor of 2 is a minimum, not a replacement: a
+        caller's stricter min_option_length still applies on top of it.
+        No current call site passes more than 2, so only a direct test
+        pins this (it kills the mutant that drops the caller's floor)."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            walk(b"\x05\x02", min_option_length=3)
+        err = excinfo.value
+        assert err.expected == ">=3"
+        assert err.actual == 2
+
+    def test_a_floor_applies_when_length_excludes_header(self):
+        """Without the structural floor, a caller's min_option_length is
+        the only floor there is, so it must still be enforced."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            walk(
+                b"\x05\x00",
+                lone_byte_kinds=frozenset(),
+                terminator_kind=None,
+                min_option_length=1,
+                length_includes_header=False,
+            )
+        err = excinfo.value
+        assert err.expected == ">=1"
+        assert err.actual == 0
+
 
 class TestLengthIncludesHeaderTrue:
     """TCP/IPv4 shape: the length byte counts the kind and length bytes
