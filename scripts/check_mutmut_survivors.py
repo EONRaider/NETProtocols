@@ -9,7 +9,9 @@ fails on any of:
 
 - a mutant that went undetected (survived, had no covering tests, or
   ended in a status this script does not recognize, so a mutmut
-  upgrade that adds one fails closed) and is not in the allowlist;
+  upgrade that adds one fails closed), unless it is in the allowlist
+  and its status is exactly ``survived``: the allowlist accepts
+  equivalent survivors and nothing else;
 - an allowlist entry that is no longer undetected, so the list cannot
   quietly accumulate entries for mutants a later test kills, or whose
   number shifted because the function's source changed (mutant numbers
@@ -48,6 +50,9 @@ DEFAULT_PYPROJECT = ROOT / "pyproject.toml"
 DETECTED = frozenset({"killed", "timeout", "segfault", "caught by type check"})
 #: Outside this run's filters, or skipped by mutmut itself.
 UNCHECKED = frozenset({"not checked", "skipped"})
+
+#: The one undetected status an allowlist entry may accept.
+SURVIVED = "survived"
 
 _LINE = re.compile(r"^\s*(?P<name>\S+): (?P<status>.+?)\s*$")
 
@@ -94,9 +99,13 @@ def check(
         for name, status in statuses.items()
         if status not in DETECTED and status not in UNCHECKED
     }
+    # The allowlist accepts equivalent survivors only: an allowlisted
+    # mutant in any other undetected status is still reported (once,
+    # here, not as stale too).
+    accepted = {name for name in allowlist if statuses.get(name) == SURVIVED}
     problems = [
         f"undetected mutant: {name} ({statuses[name]})"
-        for name in sorted(undetected - allowlist)
+        for name in sorted(undetected - accepted)
     ]
     problems += [
         f"allowlisted mutant is no longer undetected: {name} "

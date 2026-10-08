@@ -94,6 +94,18 @@ class TestCheck:
         allowlist = {"netprotocols._tlv.x_g__mutmut_2"}
         assert gate.check(results, allowlist, MODULES) == []
 
+    @pytest.mark.parametrize(
+        "status", ["no tests", "suspicious", "a status from v4"]
+    )
+    def test_the_allowlist_accepts_only_survivors(self, status: str) -> None:
+        """An allowlisted mutant that is undetected for any reason but
+        `survived` is reported once, as undetected, not as stale."""
+        results = statuses()
+        name = "netprotocols._tlv.x_g__mutmut_2"
+        results[name] = status
+        (problem,) = gate.check(results, {name}, MODULES)
+        assert f"undetected mutant: {name}" in problem
+
     @pytest.mark.parametrize("status", ["killed", None])
     def test_a_stale_allowlist_entry_fails(self, status: str | None) -> None:
         """An entry whose mutant is now killed, or no longer exists
