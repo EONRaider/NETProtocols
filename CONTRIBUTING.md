@@ -137,7 +137,8 @@ reproduce locally:
 ```bash
 uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
     'netprotocols.layer7.dns.x__read_name*' \
-    'netprotocols.layer7.dns.x__labels*'
+    'netprotocols.layer7.dns.x__labels*' \
+    'netprotocols.layer7.http.x__*'
 uv run mutmut results --all true > mutmut-results.txt
 python3 scripts/check_mutmut_survivors.py mutmut-results.txt
 ```

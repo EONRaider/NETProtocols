@@ -521,7 +521,7 @@ def test_nightly_concurrency_is_keyed_on_the_event(workflow: Path) -> None:
 
 class TestMutationWorkflow:
     # pyproject.toml's [tool.mutmut] only_mutate covers the whole of
-    # checksum.py, _tlv.py, and dns.py, but the audited DNS surface is
+    # checksum.py, _tlv.py, dns.py and http.py, but the audited DNS surface is
     # only its name-compression byte walk -- mutmut has no config-level
     # way to scope below a whole file, so pyproject.toml's own comment
     # documents these positional filters as the way to reproduce that
@@ -533,6 +533,7 @@ class TestMutationWorkflow:
         "netprotocols._tlv.*",
         "netprotocols.layer7.dns.x__read_name*",
         "netprotocols.layer7.dns.x__labels*",
+        "netprotocols.layer7.http.x__*",
     )
 
     @staticmethod
@@ -606,8 +607,8 @@ class TestMutationWorkflow:
 
         Presence-only checking cannot notice an *extra* filter tacked
         onto the command -- pyproject.toml's only_mutate comment
-        documents exactly four filters, and a fifth would silently
-        widen the audited DNS scope without failing anything.
+        documents exactly five filters, and a sixth would silently
+        widen the audited scope without failing anything.
         Comparing the complete parsed filter set against
         EXPECTED_FILTERS, rather than checking each expected pattern's
         presence, catches both a missing filter and an extra one.
@@ -650,15 +651,15 @@ class TestMutationWorkflow:
         """Regression test: a continued line that is not a quoted
         filter must fail loudly, not be silently dropped.
 
-        All four real filters are present and correctly continued,
+        All five real filters are present and correctly continued,
         followed by one more continued line that is an unquoted
         wildcard rather than a quoted filter. Bash would still pass
-        that word to mutmut as a fifth positional argument -- it is
+        that word to mutmut as a sixth positional argument -- it is
         not a shell syntax error, just an argument this parse must not
         let slide by unnoticed. Before the fix that replaced a bare
         `break` with this assertion, the loop stopped as soon as the
         unquoted line failed to match, leaving `filters` holding
-        exactly the four expected entries and the equality check in
+        exactly the five expected entries and the equality check in
         `test_run_applies_the_documented_dns_scope_filters` passing
         despite the extra argument -- this proves that gap is closed.
         """
@@ -668,6 +669,7 @@ class TestMutationWorkflow:
             "            'netprotocols._tlv.*' \\\n"
             "            'netprotocols.layer7.dns.x__read_name*' \\\n"
             "            'netprotocols.layer7.dns.x__labels*' \\\n"
+            "            'netprotocols.layer7.http.x__*' \\\n"
             "            some_extra_target\n"
         )
 
