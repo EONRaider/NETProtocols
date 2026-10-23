@@ -40,6 +40,14 @@ from netprotocols.layer7.dns import (
     MXRecord,
     SOARecord,
 )
+from netprotocols.layer7.http import (
+    HTTP,
+    HTTPAnomaly,
+    HTTPAnomalyKind,
+    HTTPDisposition,
+    HTTPFraming,
+    HTTPHeaderField,
+)
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
     CapturedFrame,
@@ -82,6 +90,7 @@ __all__ = [
     "DHCP",
     "DNS",
     "GRE",
+    "HTTP",
     "IGMP",
     "MAX_DEPTH",
     "TCP",
@@ -97,6 +106,11 @@ __all__ = [
     "EtherType",
     "Ethernet",
     "FlowKey",
+    "HTTPAnomaly",
+    "HTTPAnomalyKind",
+    "HTTPDisposition",
+    "HTTPFraming",
+    "HTTPHeaderField",
     "ICMPv4",
     "ICMPv6",
     "IGMPv3GroupRecord",

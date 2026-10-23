@@ -6,18 +6,30 @@ ABNF they encode (module constants are outside mutation testing's
 reach, so these are their only guard).
 """
 
+import dataclasses
 import string
+from collections.abc import Callable
 
 import pytest
 
-from netprotocols import InvalidFieldError, TruncatedHeaderError
+from conftest import FIXTURES
+from netprotocols import (
+    TCP,
+    InvalidFieldError,
+    IPv6,
+    TruncatedHeaderError,
+    decode_frame,
+    read_pcap,
+)
 from netprotocols.layer7 import http
 from netprotocols.layer7.http import (
+    HTTP,
     MAX_HEAD_BYTES,
     HTTPAnomaly,
     HTTPAnomalyKind,
     HTTPDisposition,
     HTTPFraming,
+    HTTPHeaderField,
 )
 
 K = HTTPAnomalyKind
@@ -40,9 +52,16 @@ def kinds(raw: bytes, **context: object) -> set[HTTPAnomalyKind]:
 
 
 def request(*fields: bytes, body: bytes = b"", line: bytes = b"") -> bytes:
+    """A request with ``fields``, then ``Host: a``: every HTTP/1.1
+    request needs a Host (RFC 9112 §3.2), and appending it leaves the
+    given fields' offsets where they were."""
     start = line or b"POST /submit HTTP/1.1"
     return (
-        start + b"\r\n" + b"".join(f + b"\r\n" for f in fields) + b"\r\n" + body
+        start
+        + b"\r\n"
+        + b"".join(f + b"\r\n" for f in fields)
+        + b"Host: a\r\n\r\n"
+        + body
     )
 
 
@@ -264,6 +283,7 @@ class TestFieldLines:
             (b"B", b"2"),
             (b"a", b"3"),
             (b"Content-Length", b"0"),
+            (b"Host", b"a"),
         ]
 
     def test_obs_fold_is_unfolded_and_flagged(self) -> None:
@@ -285,7 +305,7 @@ class TestFieldLines:
 
     def test_whitespace_preceded_lines_are_ignored(self) -> None:
         """§2.2: consume each such line without further processing."""
-        message = parse(request(b" Content-Length: 5", b"Host: a"))
+        message = parse(request(b" Content-Length: 5"))
         assert [f.name for f in message.fields] == [b"Host"]
         assert message.framing.kind is HTTPFraming.NONE
         assert {a.kind for a in message.anomalies} == {
@@ -1120,7 +1140,7 @@ class TestExactAnomalies:
             A(K.START_LINE_WHITESPACE, None, 2),
             A(K.REQUEST_TARGET_FORM, None, 6),
         )
-        raw = b"\r\nGET /a b HTTP/1.1\r\n\r\n"
+        raw = b"\r\nGET /a b HTTP/1.1\r\nHost: a\r\n\r\n"
         assert anomalies(raw)[1] == A(K.REQUEST_TARGET_INVALID_OCTET, None, 6)
 
     def test_status_line_anomalies_carry_their_offsets(self) -> None:
@@ -1144,7 +1164,7 @@ class TestExactAnomalies:
             A(K.CTL_IN_FIELD_VALUE, "x", _at(raw, b"X:"), 2),
             A(K.OBS_FOLD, "x", _at(raw, b" b\r")),
         )
-        assert parse(raw).fields[-1] == http._Field(
+        assert parse(raw).fields[-2] == http._Field(
             b"X", b"a b c", _at(raw, b"X:"), True
         )
 
@@ -1264,8 +1284,11 @@ class TestBehaviourVectors:
 
     def test_a_vt_before_the_colon_is_not_trimmed(self) -> None:
         """Only SP and HTAB are optional whitespace (RFC 9110 §5.6.3)."""
-        message = parse(b"GET / HTTP/1.1\r\na\x0b: b\r\n\r\n")
-        assert message.fields == (http._Field(b"a\x0b", b"b", 16, False),)
+        message = parse(b"GET / HTTP/1.1\r\na\x0b: b\r\nHost: a\r\n\r\n")
+        assert message.fields == (
+            http._Field(b"a\x0b", b"b", 16, False),
+            http._Field(b"Host", b"a", 23, True),
+        )
         assert message.anomalies == (A(K.INVALID_FIELD_NAME, None, 16),)
 
     def test_a_leading_lf_then_a_partial_line(self) -> None:
@@ -1282,7 +1305,7 @@ class TestBehaviourVectors:
     def test_pri_alone_is_an_ordinary_method(
         self, line: bytes, target: bytes, anomaly: tuple[HTTPAnomaly, ...]
     ) -> None:
-        message = parse(line + b"\r\n\r\n")
+        message = parse(line + b"\r\nHost: a\r\n\r\n")
         assert message.start == http._StartLine(
             False, (1, 1), method=b"PRI", target=target
         )
@@ -1426,11 +1449,7 @@ class TestFieldLabelsAndPositions:
         )
 
     def test_repeated_chunked_is_located_on_the_field(self) -> None:
-        raw = request(
-            b"Host: a",
-            b"Transfer-Encoding: chunked, chunked",
-            body=b"0\r\n\r\n",
-        )
+        raw = request(b"Transfer-Encoding: chunked, chunked", body=b"0\r\n\r\n")
         assert anomalies(raw) == (
             A(
                 K.TE_CHUNKED_REPEATED,
@@ -1438,3 +1457,473 @@ class TestFieldLabelsAndPositions:
                 _at(raw, b"Transfer-Encoding"),
             ),
         )
+
+
+def _ids(rows: list[object]) -> list[str]:
+    """Plain parametrize IDs: mutmut re-runs tests by node ID, and one
+    holding brackets, quotes or escapes does not round-trip."""
+    return [f"v{i:02d}" for i in range(len(rows))]
+
+
+def req(*lines: bytes, target: bytes = b"/", version: bytes = b"1.1") -> bytes:
+    """A bodyless request with exactly ``lines`` as its field lines."""
+    start = b"GET " + target + b" HTTP/" + version + b"\r\n"
+    return start + b"".join(line + b"\r\n" for line in lines) + b"\r\n"
+
+
+#: RFC 3986 §3.2.2 hosts with an optional port: valid ...
+_VALID_HOSTS: list[object] = [
+    b"",
+    b"a",
+    b"a:",
+    b"a:80",
+    b"EXAMPLE.com",
+    b"192.0.2.1:8080",
+    b"a-b.c_d~e",
+    b"!$&'()*+;=",
+    b"[::1]",
+    b"[::1]:443",
+    b"[2001:db8::a:b]",
+    b"[::ffff:192.0.2.1]",
+    b"[v7.a:b]",
+    b"[V1F.x~]",
+]
+#: ... and not.
+_INVALID_HOSTS: list[object] = [
+    b"a b",
+    b"a:b",
+    b"a:80:80",
+    b"a@b",
+    b"a/b",
+    b"a?b",
+    b"%zz",
+    b"%4",
+    b"\xff",
+    b"[::1",
+    b"::1]",
+    b"[::g]",
+    b"[1::2::3]",
+    b"[fe80::1%eth0]",
+    b"[192.0.2.1]",
+    b"[]",
+    b"[v.x]",
+    b"[v1.]",
+    b"[v1x]",
+    b"[::1]x",
+    b"[::1]:a",
+]
+_AMBIGUOUS_HOSTS: list[object] = [b"a,b", b"a%41", b"%2C"]
+#: (absolute-form target, Host) pairs that RFC 9112 §3.2 calls identical.
+_MATCHING_AUTHORITIES: list[object] = [
+    (b"http://a/x", b"a"),
+    (b"http://a", b"A"),
+    (b"HTTPS://Ex.Com:443/", b"ex.com:443"),
+    (b"http://u:p@a:80/", b"a:80"),
+    (b"http://@a/", b"a"),
+    (b"http://a?q", b"a"),
+    (b"http://a#f", b"a"),
+    (b"http://[::1]:8/", b"[::1]:8"),
+    (b"http:///x", b""),
+    (b"a+b-c.d://a/", b"a"),
+]
+#: Pairs that differ: no default port, no percent-decoding.
+_MISMATCHING_AUTHORITIES: list[object] = [
+    (b"http://a/", b"b"),
+    (b"http://a:80/", b"a"),
+    (b"http://a/", b"a:80"),
+    (b"http://a/", b"u@a"),
+    (b"http://%61/", b"a"),
+    (b"http://a/", b""),
+]
+#: Targets with no authority to compare.
+_NOT_ABSOLUTE_FORM: list[object] = [
+    b"/x?u=http://b/",
+    b"*",
+    b"1http://b/",
+    b"-://b/",
+    b"http:/b",
+]
+
+
+class TestHost:
+    """RFC 9112 §3.2 and RFC 9110 §7.2: the Host field of a request."""
+
+    def test_missing_in_http11(self) -> None:
+        assert anomalies(req()) == (A(K.HOST_MISSING, "host", 0),)
+
+    def test_missing_is_fine_in_http10(self) -> None:
+        assert anomalies(req(version=b"1.0")) == ()
+
+    def test_responses_are_not_checked(self) -> None:
+        assert anomalies(response(b"Content-Length: 0", b"Host: a b")) == ()
+
+    def test_a_non_token_name_does_not_count_as_host(self) -> None:
+        raw = req(b"Host : a")
+        assert anomalies(raw) == (
+            A(K.WHITESPACE_BEFORE_COLON, "host", _at(raw, b"Host")),
+        )
+        raw = req(b"Ho st: a")
+        assert anomalies(raw) == (
+            A(K.HOST_MISSING, "host", 0),
+            A(K.INVALID_FIELD_NAME, None, _at(raw, b"Ho st")),
+        )
+
+    def test_duplicates_are_counted_from_the_second(self) -> None:
+        raw = req(b"Host: a", b"host: a", b"HOST: a")
+        assert anomalies(raw) == (
+            A(K.HOST_DUPLICATE, "host", _at(raw, b"host"), 2),
+        )
+
+    @pytest.mark.parametrize("value", _VALID_HOSTS, ids=_ids(_VALID_HOSTS))
+    def test_valid_values(self, value: bytes) -> None:
+        assert http._valid_host(value)
+        assert anomalies(req(b"Host: " + value)) == ()
+
+    @pytest.mark.parametrize("value", _INVALID_HOSTS, ids=_ids(_INVALID_HOSTS))
+    def test_invalid_values(self, value: bytes) -> None:
+        assert not http._valid_host(value)
+        raw = req(b"Host: " + value)
+        assert anomalies(raw) == (A(K.HOST_INVALID, "host", _at(raw, b"Host")),)
+
+    @pytest.mark.parametrize(
+        "value", _AMBIGUOUS_HOSTS, ids=_ids(_AMBIGUOUS_HOSTS)
+    )
+    def test_a_comma_or_percent_encoding_is_ambiguous(
+        self, value: bytes
+    ) -> None:
+        raw = req(b"Host: " + value)
+        assert anomalies(raw) == (
+            A(K.HOST_AMBIGUOUS, "host", _at(raw, b"Host")),
+        )
+
+    def test_an_invalid_value_is_not_also_ambiguous(self) -> None:
+        raw = req(b"Host: a, b")
+        assert anomalies(raw) == (A(K.HOST_INVALID, "host", _at(raw, b"Host")),)
+
+    @pytest.mark.parametrize(
+        "target,host", _MATCHING_AUTHORITIES, ids=_ids(_MATCHING_AUTHORITIES)
+    )
+    def test_absolute_form_authority_matches(
+        self, target: bytes, host: bytes
+    ) -> None:
+        assert anomalies(req(b"Host: " + host, target=target)) == ()
+
+    @pytest.mark.parametrize(
+        "target,host",
+        _MISMATCHING_AUTHORITIES,
+        ids=_ids(_MISMATCHING_AUTHORITIES),
+    )
+    def test_absolute_form_authority_mismatches(
+        self, target: bytes, host: bytes
+    ) -> None:
+        raw = req(b"Host: " + host, target=target)
+        found = {(a.kind, a.field, a.offset) for a in anomalies(raw)}
+        assert (K.HOST_TARGET_MISMATCH, "host", _at(raw, b"Host")) in found
+
+    def test_every_host_line_is_compared(self) -> None:
+        raw = req(b"Host: a", b"Host: b", target=b"http://a/")
+        second = raw.index(b"Host: b")
+        assert anomalies(raw) == (
+            A(K.HOST_DUPLICATE, "host", second),
+            A(K.HOST_TARGET_MISMATCH, "host", second),
+        )
+
+    @pytest.mark.parametrize(
+        "target", _NOT_ABSOLUTE_FORM, ids=_ids(_NOT_ABSOLUTE_FORM)
+    )
+    def test_only_an_absolute_form_target_is_compared(
+        self, target: bytes
+    ) -> None:
+        assert http._target_authority(target) is None
+
+    def test_the_authority_is_read_without_userinfo(self) -> None:
+        assert http._target_authority(b"http://u@v@a:1/p") == b"a:1"
+        assert http._target_authority(b"x://a") == b"a"
+
+
+#: A request every accessor test reads: leading empty line, latin-1
+#: target, duplicate and non-token fields, chunked body with trailers.
+_REQUEST = (
+    b"\r\nPOST /p?\xff HTTP/1.1\r\nHost: a\r\nX-A: 1\r\nx-a: 2\r\n"
+    b"No colon here\r\nBad Name: 3\r\nTransfer-Encoding: chunked\r\n\r\n"
+)
+_REQUEST_BODY = b"3\r\nabc\r\n2;e=1\r\nde\r\n0\r\nT: v\r\nt: w\r\n\r\n"
+_BUFFERS: list[Callable[[bytes], bytes | memoryview]] = [
+    bytes,
+    memoryview,
+    lambda raw: memoryview(bytearray(raw)),
+]
+
+
+class TestHTTPClass:
+    def test_decode_splits_head_and_body(self) -> None:
+        msg = HTTP.decode(_REQUEST + _REQUEST_BODY + b"GET next")
+        assert msg.head == _REQUEST
+        assert msg.raw_body == _REQUEST_BODY
+        assert msg.request_method is None
+        assert msg.header_len == len(_REQUEST) + len(_REQUEST_BODY)
+        assert bytes(msg) == _REQUEST + _REQUEST_BODY
+
+    def test_request_accessors(self) -> None:
+        msg = HTTP.decode(_REQUEST + _REQUEST_BODY)
+        assert not msg.is_response
+        assert msg.method == "POST"
+        assert msg.target == "/p?\xff"
+        assert msg.http_version == "HTTP/1.1"
+        assert msg.status_code is None
+        assert msg.reason_phrase is None
+        assert msg.framing is HTTPFraming.CHUNKED
+        assert msg.connection_disposition is HTTPDisposition.CONTINUE
+        assert msg.content == b"abcde"
+        assert msg.trailers == (
+            HTTPHeaderField("T", "v"),
+            HTTPHeaderField("t", "w"),
+        )
+
+    def test_fields_keep_every_line(self) -> None:
+        msg = HTTP.decode(_REQUEST + _REQUEST_BODY)
+        assert msg.fields == (
+            HTTPHeaderField("Host", "a"),
+            HTTPHeaderField("X-A", "1"),
+            HTTPHeaderField("x-a", "2"),
+            HTTPHeaderField("No colon here", ""),
+            HTTPHeaderField("Bad Name", "3"),
+            HTTPHeaderField("Transfer-Encoding", "chunked"),
+        )
+
+    def test_header_lookup_is_ascii_case_insensitive(self) -> None:
+        msg = HTTP.decode(_REQUEST + _REQUEST_BODY)
+        assert msg.header_values("x-A") == ("1", "2")
+        assert msg.header("X-a") == "1, 2"
+        assert msg.header("host") == "a"
+        assert msg.header_values("absent") == ()
+        assert msg.header("absent") is None
+
+    def test_header_lookup_skips_non_token_names(self) -> None:
+        msg = HTTP.decode(_REQUEST + _REQUEST_BODY)
+        assert msg.header_values("Bad Name") == ()
+        assert msg.header_values("No colon here") == ()
+
+    @pytest.mark.parametrize(
+        "name",
+        ["\u212a-a", "\u2603", "x-\u0130"],
+        ids=["kelvin", "snowman", "dotted-i"],
+    )
+    def test_header_lookup_never_folds_unicode(self, name: str) -> None:
+        """U+212A KELVIN SIGN lowercases to "k" under str.lower(); ASCII
+        folding leaves it alone, and a name outside latin-1 cannot
+        match at all."""
+        msg = HTTP.decode(req(b"Host: a", b"K-a: 1", b"x-i: 2"))
+        assert msg.header_values(name) == ()
+
+    def test_header_lookup_reads_latin_1_names(self) -> None:
+        msg = HTTP.decode(req(b"Host: a", b"\xe9: 1"))
+        assert msg.fields[1] == HTTPHeaderField("\xe9", "1")
+        assert msg.header_values("\xe9") == ()  # not a token
+
+    def test_response_accessors(self) -> None:
+        raw = b"HTTP/1.0 404 Not \xffound\r\nContent-Length: 2\r\n\r\nhi"
+        msg = HTTP.decode(raw)
+        assert msg.is_response
+        assert msg.method is None
+        assert msg.target is None
+        assert msg.http_version == "HTTP/1.0"
+        assert msg.status_code == 404
+        assert msg.reason_phrase == "Not \xffound"
+        assert msg.framing is HTTPFraming.CONTENT_LENGTH
+        assert msg.connection_disposition is HTTPDisposition.CLOSE
+        assert msg.content == b"hi"
+        assert msg.trailers == ()
+        assert msg.anomalies == ()
+
+    def test_anomalies_are_the_grammars(self) -> None:
+        raw = _REQUEST + _REQUEST_BODY
+        assert HTTP.decode(raw).anomalies == parse(raw).anomalies
+
+    def test_a_bodyless_message_has_no_content(self) -> None:
+        msg = HTTP.decode(req(b"Host: a"))
+        assert msg.raw_body == b""
+        assert msg.content == b""
+        assert msg.framing is HTTPFraming.NONE
+
+    def test_until_close_needs_closed(self) -> None:
+        raw = b"HTTP/1.1 200 OK\r\n\r\nall of it"
+        with pytest.raises(TruncatedHeaderError):
+            HTTP.decode(raw)
+        msg = HTTP.decode(raw, closed=True)
+        assert msg.raw_body == msg.content == b"all of it"
+        assert msg.connection_disposition is HTTPDisposition.CLOSE
+
+    def test_errors_name_the_class(self) -> None:
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP.decode(b"\x16\x03\x01")
+        assert excinfo.value.protocol is HTTP
+
+    @pytest.mark.parametrize(
+        "make", _BUFFERS, ids=["bytes", "memoryview", "writable-memoryview"]
+    )
+    def test_decode_accepts_buffers_and_keeps_bytes(
+        self, make: Callable[[bytes], bytes | memoryview]
+    ) -> None:
+        raw = _REQUEST + _REQUEST_BODY
+        msg = HTTP.decode(make(raw))
+        assert type(msg.head) is bytes
+        assert type(msg.raw_body) is bytes
+        assert msg == HTTP.decode(raw)
+        assert hash(msg) == hash(HTTP.decode(raw))
+
+    def test_pattern_matching(self) -> None:
+        match HTTP.decode(req(b"Host: a", target=b"/x")):
+            case HTTP("GET", "/x", None):
+                pass
+            case _:
+                pytest.fail("request did not match")
+        match HTTP.decode(b"HTTP/1.1 204 No Content\r\n\r\n"):
+            case HTTP(None, None, 204):
+                pass
+            case _:
+                pytest.fail("response did not match")
+
+    def test_repr_shows_the_head(self) -> None:
+        msg = HTTP.decode(req(b"Host: a"))
+        assert repr(msg) == f"HTTP(head={msg.head!r}, request_method=None)"
+
+
+class TestRequestMethod:
+    def test_head_and_connect_2xx_are_kept(self) -> None:
+        raw = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n"
+        head = HTTP.decode(raw, request_method="HEAD")
+        assert head.request_method == "HEAD"
+        assert head.framing is HTTPFraming.NONE
+        tunnel = HTTP.decode(raw, request_method="CONNECT")
+        assert tunnel.request_method == "CONNECT"
+        assert tunnel.connection_disposition is HTTPDisposition.TUNNEL
+
+    def test_any_other_method_is_dropped(self) -> None:
+        raw = b"HTTP/1.1 404 Nope\r\nContent-Length: 0\r\n\r\n"
+        for method in ("GET", "CONNECT", "head"):
+            msg = HTTP.decode(raw, request_method=method)
+            assert msg.request_method is None
+            assert msg == HTTP.decode(raw)
+            assert msg == HTTP(head=raw, request_method=method)
+
+    def test_misuse_raises(self) -> None:
+        with pytest.raises(InvalidFieldError, match="only applies"):
+            HTTP(head=req(b"Host: a"), request_method="HEAD")
+        with pytest.raises(InvalidFieldError, match="not a token"):
+            HTTP.decode(b"HTTP/1.1 200 OK\r\n\r\n", request_method="")
+
+
+_CL1 = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n"
+
+
+class TestConstruction:
+    def test_construction_round_trips(self) -> None:
+        msg = HTTP(head=_REQUEST, raw_body=_REQUEST_BODY)
+        assert msg == HTTP.decode(bytes(msg))
+        assert msg.content == b"abcde"
+        assert msg.anomalies == HTTP.decode(bytes(msg)).anomalies
+
+    def test_until_close_takes_any_body(self) -> None:
+        msg = HTTP(head=b"HTTP/1.1 200 OK\r\n\r\n", raw_body=b"xxx")
+        assert msg.content == b"xxx"
+        assert HTTP.decode(bytes(msg), closed=True) == msg
+
+    def test_head_with_bytes_past_its_end(self) -> None:
+        head = req(b"Host: a")
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=head + b"GET")
+        err = excinfo.value
+        assert str(err) == (
+            "head is not exactly one HTTP head, ending at its empty line"
+        )
+        assert (err.protocol, err.field, err.offset) == (
+            HTTP,
+            "head",
+            len(head),
+        )
+        assert (err.expected, err.actual) == (len(head), len(head) + 3)
+
+    def test_head_that_ends_inside_raw_body(self) -> None:
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=b"GET / HTTP/1.1\r\n", raw_body=b"Host: a\r\n\r\n")
+        err = excinfo.value
+        assert (err.field, err.offset, err.expected, err.actual) == (
+            "head",
+            16,
+            27,
+            16,
+        )
+
+    def test_raw_body_past_the_framed_end(self) -> None:
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=_CL1, raw_body=b"ab")
+        err = excinfo.value
+        assert str(err) == (
+            "raw_body holds bytes past the end of the framed body"
+        )
+        assert (err.protocol, err.field, err.offset) == (
+            HTTP,
+            "raw_body",
+            len(_CL1) + 1,
+        )
+        assert (err.expected, err.actual) == (1, 2)
+
+    def test_a_bodyless_request_takes_no_body(self) -> None:
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=req(b"Host: a"), raw_body=b"x")
+        assert (excinfo.value.expected, excinfo.value.actual) == (0, 1)
+
+    def test_a_short_body_is_incomplete(self) -> None:
+        head = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n"
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=head, raw_body=b"ab")
+        assert str(excinfo.value) == (
+            "HTTP body is shorter than its Content-Length at connection close"
+        )
+        assert excinfo.value.offset == len(head)
+        assert excinfo.value.protocol is HTTP
+
+    def test_replace_revalidates(self) -> None:
+        msg = HTTP(head=_CL1, raw_body=b"a")
+        assert dataclasses.replace(msg, raw_body=b"b").content == b"b"
+        with pytest.raises(InvalidFieldError):
+            dataclasses.replace(msg, raw_body=b"bc")
+
+
+@pytest.fixture(scope="module")
+def segments() -> list[bytes]:
+    """The TCP payloads of tests/fixtures/tcp_http.pcap: one chunked
+    response split across two segments (see tests/fixtures/MANIFEST.md)."""
+    payloads = []
+    for frame in read_pcap((FIXTURES / "tcp_http.pcap").read_bytes()):
+        packet = decode_frame(frame.data)
+        tcp, ip = packet[TCP], packet[IPv6]
+        assert isinstance(tcp, TCP)
+        assert isinstance(ip, IPv6)
+        end = len(frame.data)
+        payloads.append(frame.data[end - ip.payload_length + tcp.header_len :])
+    return [payload for payload in payloads if payload]
+
+
+class TestTCPFixture:
+    """Real traffic: the response tcp_http.pcap carries."""
+
+    def test_the_two_segments_are_one_chunked_response(
+        self, segments: list[bytes]
+    ) -> None:
+        first, second = segments
+        msg = HTTP.decode(first + second)
+        assert msg.status_code == 200
+        assert msg.framing is HTTPFraming.CHUNKED
+        assert len(msg.content) == 559
+        assert bytes(msg) == first + second
+        assert msg.anomalies == ()
+
+    def test_the_first_segment_alone_is_incomplete(
+        self, segments: list[bytes]
+    ) -> None:
+        with pytest.raises(TruncatedHeaderError):
+            HTTP.decode(segments[0])
+        with pytest.raises(InvalidFieldError, match="at connection close"):
+            HTTP.decode(segments[0], closed=True)

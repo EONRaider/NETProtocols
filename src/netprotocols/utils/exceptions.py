@@ -46,7 +46,12 @@ class ProtocolError(Exception):
         names when it names one (see above). ``None`` when there is no
         buffer to be positioned in — most notably a validation error
         raised from ``__post_init__``, which sees only field *values*,
-        never the bytes they came from.
+        never the bytes they came from. :class:`~netprotocols.HTTP`, the
+        one text-framed protocol, differs: its ``field`` names a grammar
+        element (``"chunk-size"``, ``"raw_body"``, ``"start_line"``) and
+        its ``offset`` is always relative to the start of the message,
+        i.e. the ``decode()`` buffer, or ``head + raw_body`` for an error
+        raised while constructing one.
     :ivar frame_offset: ``offset`` rebased to the whole captured frame.
         ``None`` unless the error passed through
         :func:`~netprotocols.decode_frame`, which is the only code

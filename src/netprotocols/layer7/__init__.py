@@ -7,14 +7,28 @@ from netprotocols.layer7.dns import (
     MXRecord,
     SOARecord,
 )
+from netprotocols.layer7.http import (
+    HTTP,
+    HTTPAnomaly,
+    HTTPAnomalyKind,
+    HTTPDisposition,
+    HTTPFraming,
+    HTTPHeaderField,
+)
 
 __all__ = [
     "DHCP",
     "DNS",
+    "HTTP",
     "DHCPOption",
     "DNSOverTCP",
     "DNSQuestion",
     "DNSResourceRecord",
+    "HTTPAnomaly",
+    "HTTPAnomalyKind",
+    "HTTPDisposition",
+    "HTTPFraming",
+    "HTTPHeaderField",
     "MXRecord",
     "SOARecord",
 ]
