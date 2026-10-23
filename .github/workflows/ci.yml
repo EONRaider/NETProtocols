@@ -13,11 +13,14 @@ on:
 # Cancel a stale run the moment a newer one starts for the same branch
 # or pull request, so a quick follow-up push doesn't leave two ladders
 # racing for runners. Keyed on the PR number when this is a pull_request
-# run and on the ref otherwise, so push/workflow_call runs on distinct
-# refs (e.g. master vs. a release tag) never share a group and cancel
-# each other.
+# run and on the ref otherwise. The group name is the literal "ci"
+# prefix, not ${{ github.workflow }}: inside a workflow_call, that
+# expression is the CALLER's workflow name, not this one's. Using it
+# here made this group collide with release.yml's own top-level
+# "Release-<ref>" group on a tag push, and GitHub cancelled the whole
+# run as a self-deadlock.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 # No job here needs to write anything -- lint/typecheck/test/build/pyodide/
