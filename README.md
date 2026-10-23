@@ -448,7 +448,19 @@ monitor built on it (formerly Packet-Sniffer).
 
 ## Roadmap
 
-The post-1.3.0 roadmap,
+The current roadmap,
+[#170](https://github.com/EONRaider/NETProtocols/issues/170), closes the
+protocol gap against dpkt, scapy and pypacker in five tiers: transport
+and tunneling, routing, L2 discovery, AAA and infrastructure services,
+and TLS record framing with SNI. That issue tracks each tier's
+protocols and target version, so they are not restated here. The
+HTTP/1.1 codec
+([#214](https://github.com/EONRaider/NETProtocols/pull/214),
+[#223](https://github.com/EONRaider/NETProtocols/pull/223),
+[#226](https://github.com/EONRaider/NETProtocols/pull/226)) shipped as
+2.3.0 outside those tiers.
+
+The roadmap before it, the post-1.3.0
 [#107](https://github.com/EONRaider/NETProtocols/issues/107), is
 complete — five tiers plus a competitor CI audit
 ([#124](https://github.com/EONRaider/NETProtocols/issues/124)) and the
@@ -468,19 +480,12 @@ decode-throughput fix
 CodeFactor tooling cleanup
 ([#156](https://github.com/EONRaider/NETProtocols/issues/156)) are now
 released as
-[2.2.1](https://github.com/EONRaider/NETProtocols/releases/tag/v2.2.1),
-and the HTTP/1.1 codec
-([#214](https://github.com/EONRaider/NETProtocols/pull/214),
-[#223](https://github.com/EONRaider/NETProtocols/pull/223),
-[#226](https://github.com/EONRaider/NETProtocols/pull/226)) as 2.3.0
-(see [CHANGELOG.md](CHANGELOG.md)).
+[2.2.1](https://github.com/EONRaider/NETProtocols/releases/tag/v2.2.1).
 2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0 and 2.2.0
 rather than as their own versions, but the roadmap's original "only at
 a major version bump" release policy wasn't actually held to: 2.0.0,
 2.2.0, 2.2.1 and now 2.3.0 are all on PyPI, and the comparative claims above
-draw on the finished tree. New planned work
-will open fresh issues rather than restating a list here, so this
-section stays accurate without upkeep. The wave before this one — TCP
+draw on the finished tree. The wave before that one — TCP
 and IPv4 option parsing, ICMP message bodies, NDP, IPv6
 extension-header TLV options, the GRE checksum arm, a DNS-over-TCP
 corpus fixture and `ipaddress` accessors — shipped in 1.3.0; see

@@ -102,10 +102,28 @@ class TestReadmeRoadmap:
         )
 
     def test_points_at_the_current_roadmap(self) -> None:
-        assert "issues/107" in README.read_text(), (
-            "README's Roadmap section should point at the tracker (#107) "
-            "rather than restating planned work"
+        """#170 is the open roadmap; #107, the one before it, is closed
+        and may only appear as history."""
+        roadmap = _readme_section("Roadmap")
+        assert "issues/170" in roadmap, (
+            "README's Roadmap section should point at the current tracker "
+            "(#170) rather than restating planned work"
         )
+        assert roadmap.index("issues/170") < roadmap.index("issues/107"), (
+            "README's Roadmap section should lead with the current roadmap "
+            "(#170), not the completed #107"
+        )
+
+    def test_does_not_restate_the_current_tiers(self) -> None:
+        """#170's tiers and their target versions live in the issue; a
+        copy here drifts the moment a tier moves, as they all did when
+        2.3.0 shipped HTTP outside them."""
+        roadmap = _readme_section("Roadmap")
+        for tier in range(171, 176):
+            assert f"issues/{tier}" not in roadmap, (
+                f"README's Roadmap section links tier epic #{tier}; point "
+                f"at #170 instead of restating its tiers"
+            )
 
     def test_does_not_relist_shipped_work_as_planned(self) -> None:
         """The 1.3.0 items must not reappear as upcoming."""
