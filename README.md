@@ -51,8 +51,8 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.7.0` on a 97-frame corpus of
-real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
+Measured against `dpkt 1.9.8` and `scapy 2.7.0` on the 97 frames of
+real captured traffic the corpus then held (CPython 3.12.3, x86-64 Linux; re-measured for
 2.3.0 on 2026-10-23 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
 number below, its reproduction command, and its caveats):
 
@@ -61,7 +61,7 @@ number below, its reproduction command, and its caveats):
   the faster of the two comparators on this corpus; the gap moves both
   ways as this library and dpkt each change, and this file's job is to
   say so honestly rather than only when it's flattering.
-- **Decodes further into the stack than dpkt on 27 of 97 corpus
+- **Decodes further into the stack than dpkt on 27 of those 97
   frames** — DNS and DHCP payloads that dpkt leaves as raw bytes,
   netprotocols continues decoding. A throughput number means little
   without knowing how much work it bought.
@@ -147,6 +147,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | ICMPv6 | `ICMPv6` | RFC 4443, 8-byte header |
 | 3 | IGMP | `IGMP` | RFC 1112/2236/3376, IPv4 multicast management; IGMPv3 report group records + query fields |
 | 3 | GRE | `GRE` | RFC 2784/2890, IP protocol 47; payload chains onward by EtherType |
+| 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
@@ -491,7 +492,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-97-frame corpus of real captured traffic across 17 scenarios
+101-frame corpus of real captured traffic across 18 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and

@@ -45,8 +45,10 @@ class IPProtocol(IntEnum):
     HOPOPT = 0x00
     ICMP = 0x01
     IGMP = 0x02
+    IPIP = 0x04
     TCP = 0x06
     UDP = 0x11
+    IPV6 = 0x29
     IPV6_ROUTE = 0x2B
     IPV6_FRAG = 0x2C
     GRE = 0x2F
@@ -62,8 +64,10 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.HOPOPT: "IPv6 Hop-by-Hop Options",
     IPProtocol.ICMP: "ICMP",
     IPProtocol.IGMP: "IGMP",
+    IPProtocol.IPIP: "IPv4 encapsulation",
     IPProtocol.TCP: "TCP",
     IPProtocol.UDP: "UDP",
+    IPProtocol.IPV6: "IPv6 encapsulation",
     IPProtocol.IPV6_ROUTE: "IPv6 Routing",
     IPProtocol.IPV6_FRAG: "IPv6 Fragment",
     IPProtocol.GRE: "GRE",

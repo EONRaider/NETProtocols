@@ -157,6 +157,29 @@ class TestPacketFlowKey:
         packet = Packet(eth, ip, tcp)
         assert packet.flow_key() == flow_key(tcp, ip=ip)
 
+    @pytest.mark.parametrize(
+        "protocol", [4, 41, 47], ids=["ipip", "6in4", "gre"]
+    )
+    def test_a_tunnel_keys_on_the_inner_ip_header(self, protocol):
+        """The outer header of a tunnel carries the endpoints' addresses
+        and the tunnel's protocol number; the flow is the inner one's."""
+        outer = make_ipv4("192.0.2.1", "192.0.2.2", protocol=protocol)
+        inner = make_ipv4("10.0.0.1", "10.0.0.2")
+        tcp = make_tcp(12345, 80)
+        key = Packet(outer, inner, tcp).flow_key()
+        assert key == flow_key(tcp, ip=inner)
+        assert key is not None and key.protocol == 6
+
+    def test_an_ipv6_inner_header_is_found_too(self):
+        outer = make_ipv4("192.0.2.1", "192.0.2.2", protocol=41)
+        inner = make_ipv6("2001:db8::1", "2001:db8::2")
+        tcp = make_tcp(12345, 80)
+        assert Packet(outer, inner, tcp).flow_key() == flow_key(tcp, ip=inner)
+
+    def test_an_ip_header_after_the_transport_does_not_enclose_it(self):
+        packet = Packet(make_tcp(1, 2), make_ipv4("10.0.0.1", "10.0.0.2"))
+        assert packet.flow_key() is None
+
     def test_missing_transport_layer_returns_none(self):
         packet = Packet(make_ipv4("10.0.0.1", "10.0.0.2"))
         assert packet.flow_key() is None

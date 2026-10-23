@@ -159,6 +159,8 @@ def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
         failures += _check_udp(src, dst, upper, stats)
     elif proto == 47 and upper_len >= 4:
         failures += _check_gre(src, dst, upper, stats, depth)
+    elif proto in _IP_IN_IP:
+        failures += _check_ip_in_ip(proto, upper, stats, depth)
     return failures
 
 
@@ -204,7 +206,22 @@ def _check_udp6(
     return []
 
 
-def _check_ipv6(payload: bytes, stats: Counter) -> list[str]:
+#: IP protocol numbers whose payload is a whole IP packet: 4 carries
+#: IPv4 (RFC 2003, and RFC 2473 inside IPv6), 41 carries IPv6 (RFC
+#: 4213, RFC 2473), mapped to the EtherType that names the inner header.
+_IP_IN_IP = {4: 0x0800, 41: 0x86DD}
+
+
+def _check_ip_in_ip(
+    proto: int, upper: bytes, stats: Counter, depth: int
+) -> list[str]:
+    # No header of its own: the payload is the tunnelled packet,
+    # validated in turn.
+    stats["ip-in-ip"] += 1
+    return _check_l3(_IP_IN_IP[proto], upper, stats, depth + 1)
+
+
+def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
     failures: list[str] = []
     stats["ipv6"] += 1
     payload_length, next_header = struct.unpack_from("!HB", payload, 4)
@@ -230,6 +247,8 @@ def _check_ipv6(payload: bytes, stats: Counter) -> list[str]:
         failures += _check_tcp6(src, dst, upper, stats)
     elif next_header == 17 and upper_len >= 8:
         failures += _check_udp6(src, dst, upper, stats)
+    elif next_header in _IP_IN_IP:
+        failures += _check_ip_in_ip(next_header, upper, stats, depth)
     return failures
 
 
@@ -238,7 +257,8 @@ def _check_l3(
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
-    is itself an EtherType. Returns a list of failure strings."""
+    is itself an EtherType, and through IP-in-IP (IP protocols 4 and
+    41). Returns a list of failure strings."""
     if depth > 8:
         return []  # bound pathological tunnel nesting
 
@@ -250,7 +270,7 @@ def _check_l3(
         return _check_ipv4(payload, stats, depth)
 
     if ethertype == 0x86DD and len(payload) >= 40:
-        return _check_ipv6(payload, stats)
+        return _check_ipv6(payload, stats, depth)
 
     stats[f"other-0x{ethertype:04x}"] += 1
     return []

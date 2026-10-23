@@ -37,34 +37,33 @@ def transport_cases():
         layers, _ = walk(frame)
         if any(isinstance(layer, IPv6Fragment) for layer in layers):
             continue
-        ip = next(
-            (layer for layer in layers if isinstance(layer, (IPv4, IPv6))),
-            None,
-        )
-        if ip is None:
-            continue
-        if isinstance(ip, IPv4) and (
-            ip.fragment_offset > 0 or ip.flags & 0b001
+        if any(
+            isinstance(layer, IPv4)
+            and (layer.fragment_offset > 0 or layer.flags & 0b001)
+            for layer in layers
         ):
             continue  # any fragment: the checksum spans the reassembly
         # Find the transport by type and the offset just past its
         # header: an application layer (e.g. DNS) may now sit below it,
-        # so the transport's payload ends before the chain does. Track
-        # the IP datagram's own start offset while walking, so a VLAN
-        # shim between Ethernet and IP shifts the datagram bounds too.
+        # so the transport's payload ends before the chain does. The
+        # enclosing IP is the last one before it, not the first: IP-in-IP
+        # stacks two, and the pseudo-header is the inner one's. Track
+        # that datagram's own start offset while walking, so a VLAN shim
+        # or an outer IP header shifts its bounds too.
+        ip = None
         transport = None
         after_transport = 0
         ip_start = 0
         offset = 0
         for layer in layers:
-            if layer is ip:
-                ip_start = offset
+            if isinstance(layer, (IPv4, IPv6)):
+                ip, ip_start = layer, offset
             offset += layer.header_len
             if isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
                 transport = layer
                 after_transport = offset
                 break
-        if transport is None:
+        if ip is None or transport is None:
             continue
         # The wire payload ends at the IP datagram's declared length.
         if isinstance(ip, IPv4):

@@ -324,6 +324,14 @@ costs nothing on the hot path — an IPv4 packet with `protocol=0`
 cannot conjure a Hop-by-Hop layer because the table it reads has no
 entry for `0`.
 
+A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
+has no header between the outer IP header and the inner one, so its
+rows in `ip.proto` point straight at `IPv4` and `IPv6`, and a tunneled
+packet walks `IPv4 → IPv4 → …` with no marker layer, as in scapy and
+dpkt. Anything that needs "the" IP header of a transport layer must
+therefore take the nearest one before it, as `Packet.with_checksums()`
+and `Packet.flow_key()` do, not the first.
+
 **Extending the walk without forking.** The tables are public. A
 protocol this library does not implement — MPLS, VXLAN, a proprietary
 telemetry header — is one registration away from participating in
