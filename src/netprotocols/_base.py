@@ -35,6 +35,19 @@ path whose inputs are known-good, not a relaxation of the contract:
 every public constructor still validates, and any ``__post_init__``
 check bypassed this way is one ``decode()`` has already established
 itself (documented at each site).
+
+``HTTP`` takes the same path for a different reason: its
+``__post_init__`` re-parses ``head + raw_body`` to check that the two
+are one complete, exactly framed message, which ``decode()`` has just
+established by parsing the buffer they were cut from.
+
+Text-framed protocols
+---------------------
+``HTTP`` has no fixed portion: ``decode()`` scans for the empty line
+ending the head and for the end the head's framing gives the body, and
+``header_len`` covers the whole message rather than a ``_struct``
+size, so it must be overridden (step 1 above is a scan, not an
+unpack).
 """
 
 from __future__ import annotations

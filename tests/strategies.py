@@ -20,6 +20,7 @@ from netprotocols import (
     DHCP,
     DNS,
     GRE,
+    HTTP,
     IGMP,
     VLAN,
     DNSOverTCP,
@@ -254,6 +255,105 @@ def gre_headers(draw: st.DrawFn) -> GRE:
     )
 
 
+_HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
+_HTTP_TARGETS = st.sampled_from(
+    [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
+)
+#: Field lines, including the odd ones the grammar resolves rather than
+#: rejects: obs-fold, whitespace before the colon, a missing colon,
+#: CR/NUL in a value, list fields and Host variants.
+_HTTP_FIELDS = st.sampled_from(
+    [
+        b"Host: h",
+        b"Host: h:8",
+        b"Host: [::1]",
+        b"Host: a b",
+        b"X: y",
+        b"x: z\r\n folded",
+        b"Accept : */*",
+        b"No-Colon",
+        b"Bad Name: v",
+        b"V: a\x00b",
+        b"Connection: close",
+        b"Connection: keep-alive, , x",
+        b"Content-Type: text/plain; charset=latin-1",
+        b"\xe9: obs-text",
+    ]
+)
+
+
+@st.composite
+def _chunked_body(draw: st.DrawFn) -> bytes:
+    chunks = draw(st.lists(st.binary(min_size=1, max_size=16), max_size=4))
+    body = b""
+    for chunk in chunks:
+        extension = draw(st.sampled_from([b"", b";a", b";a=b", b';a="q"']))
+        body += b"%x%s\r\n%s\r\n" % (len(chunk), extension, chunk)
+    trailers = draw(st.lists(st.sampled_from([b"T: v", b"t:w"]), max_size=2))
+    return body + b"0\r\n" + b"".join(t + b"\r\n" for t in trailers) + b"\r\n"
+
+
+@st.composite
+def http_messages(draw: st.DrawFn) -> HTTP:
+    """A message decodable without context: no ``request_method``, and
+    never framed by connection close (``decode(raw)`` would need
+    ``closed=True``). Every response therefore carries a length, or is
+    a status that never has a body."""
+    version = draw(st.sampled_from([b"HTTP/1.1", b"HTTP/1.0"]))
+    is_response = draw(st.booleans())
+    if is_response:
+        status = draw(st.sampled_from([b"200", b"204", b"304", b"404", b"500"]))
+        start = (
+            version + b" " + status + b" " + draw(st.sampled_from([b"OK", b""]))
+        )
+        bodyless = status in (b"204", b"304")
+    else:
+        start = draw(_HTTP_TOKENS) + b" " + draw(_HTTP_TARGETS) + b" " + version
+        bodyless = False
+    fields = draw(st.lists(_HTTP_FIELDS, max_size=6))
+    framing = (
+        "none"
+        if bodyless
+        else draw(
+            st.sampled_from(
+                ["none", "length", "chunked"]
+                if not is_response
+                else ["length", "chunked"]
+            )
+        )
+    )
+    body = b""
+    if framing == "length":
+        body = draw(st.binary(max_size=32))
+        fields.append(b"Content-Length: %d" % len(body))
+    elif framing == "chunked":
+        body = draw(_chunked_body())
+        fields.append(b"Transfer-Encoding: chunked")
+    fields = draw(st.permutations(fields))
+    leading = draw(st.sampled_from([b"", b"\r\n"]))
+    head = (
+        leading
+        + start
+        + b"\r\n"
+        + b"".join(f + b"\r\n" for f in fields)
+        + b"\r\n"
+    )
+    return HTTP(head=head, raw_body=body)
+
+
+@st.composite
+def http_wire(draw: st.DrawFn) -> bytes:
+    """The bytes of a valid message, then a few byte-level mutations and
+    possibly a truncation: input near the grammar's edges, which random
+    bytes almost never reach."""
+    raw = bytearray(bytes(draw(http_messages())))
+    for _ in range(draw(st.integers(min_value=0, max_value=4))):
+        position = draw(st.integers(min_value=0, max_value=len(raw) - 1))
+        raw[position] = draw(st.sampled_from(b"\r\n :;,0aZ\x00\t\xff"))
+    cut = draw(st.integers(min_value=0, max_value=len(raw)))
+    return bytes(raw[:cut]) if draw(st.booleans()) else bytes(raw)
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -273,4 +373,5 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DNSOverTCP": dns_over_tcp_headers(),
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
+    "HTTP": http_messages(),
 }

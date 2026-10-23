@@ -5,6 +5,7 @@ import pytest
 
 from netprotocols import (
     ARP,
+    HTTP,
     TCP,
     UDP,
     Ethernet,
@@ -176,6 +177,25 @@ class TestDecodePathValidation:
                 src="999.1.1.1",
                 dst="192.0.2.2",
             )
+
+    def test_http_decode_runs_no_construction_check(self):
+        """decode() parses once and builds the instance from that parse;
+        the construction check re-parsing head + raw_body would double
+        the cost of every decode."""
+        from unittest import mock
+
+        from netprotocols.layer7 import http
+
+        raw = b"GET / HTTP/1.1\r\nHost: a\r\n\r\n"
+        spy = mock.patch.object(
+            http,
+            "_check_consistency",
+            side_effect=AssertionError("re-validated on the decode path"),
+        )
+        with spy:
+            msg = HTTP.decode(raw)
+        assert msg == HTTP(head=raw)
+        assert bytes(msg) == raw
 
     def test_decoded_instances_equal_constructed_ones(
         self, raw_eth_header, raw_arp_header, raw_ipv4_header

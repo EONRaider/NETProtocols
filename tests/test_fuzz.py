@@ -59,7 +59,7 @@ from netprotocols import (
     ProtocolError,
     TCPOption,
 )
-from strategies import ROUND_TRIP_STRATEGIES
+from strategies import ROUND_TRIP_STRATEGIES, http_messages, http_wire
 from test_corpus import walk
 
 ALL_PROTOCOLS = (
@@ -462,3 +462,90 @@ class TestTCPOptionAccessorSafety:
                 for option in tcp.parsed_options:
                     assert option.kind_name
                     _ = option.value
+
+
+def _read_every_accessor(msg: HTTP) -> None:
+    for name in (
+        "is_response",
+        "method",
+        "target",
+        "http_version",
+        "status_code",
+        "reason_phrase",
+        "fields",
+        "framing",
+        "connection_disposition",
+        "content",
+        "trailers",
+        "anomalies",
+    ):
+        getattr(msg, name)
+    for field in msg.fields:
+        msg.header_values(field.name)
+        msg.header(field.name)
+
+
+http_input = st.one_of(http_wire(), random_bytes)
+request_methods = st.sampled_from([None, "HEAD", "CONNECT", "GET", "head"])
+
+
+class TestHTTPAccessorSafety:
+    """Every accessor is a read of the parse decode() already did, so
+    none may raise on any instance -- stricter than the TLV accessors
+    above, which may raise InvalidFieldError on demand."""
+
+    @given(
+        data=http_input, request_method=request_methods, closed=st.booleans()
+    )
+    def test_decoded_messages(
+        self, data: bytes, request_method: str | None, closed: bool
+    ) -> None:
+        try:
+            msg = HTTP.decode(
+                data, request_method=request_method, closed=closed
+            )
+        except ProtocolError:
+            return
+        _read_every_accessor(msg)
+        assert bytes(msg) == data[: msg.header_len]
+        again = HTTP.decode(
+            bytes(msg), request_method=msg.request_method, closed=True
+        )
+        assert again == msg
+        assert again.anomalies == msg.anomalies
+
+
+class TestHTTPConstruction:
+    @given(msg=http_messages())
+    def test_the_context_round_trip(self, msg: HTTP) -> None:
+        assert (
+            HTTP.decode(
+                bytes(msg), request_method=msg.request_method, closed=True
+            )
+            == msg
+        )
+
+    @given(
+        head=http_input,
+        raw_body=st.one_of(http_input, st.binary(max_size=16)),
+        request_method=request_methods,
+    )
+    def test_arbitrary_parts_construct_or_raise(
+        self, head: bytes, raw_body: bytes, request_method: str | None
+    ) -> None:
+        """Any (head, raw_body, request_method) either fails to
+        construct with a ProtocolError or round-trips exactly."""
+        try:
+            msg = HTTP(
+                head=head, raw_body=raw_body, request_method=request_method
+            )
+        except ProtocolError:
+            return
+        _read_every_accessor(msg)
+        assert (msg.head, msg.raw_body) == (head, raw_body)
+        assert (
+            HTTP.decode(
+                head + raw_body, request_method=request_method, closed=True
+            )
+            == msg
+        )

@@ -7,7 +7,9 @@ checks representative raise sites across the three shapes that exist:
 a ``decode()``-time raise (offset relative to the ``data`` argument), a
 ``__post_init__`` raise (no buffer, so no offset), and an on-demand
 property parsing an already-materialized ``bytes`` attribute (offset
-relative to that attribute, named by ``field``).
+relative to that attribute, named by ``field``). HTTP, the one
+text-framed protocol, is the exception pinned in
+``TestTextFramedOffsets``.
 """
 
 from dataclasses import replace
@@ -19,6 +21,7 @@ from netprotocols import (
     DHCP,
     DNS,
     GRE,
+    HTTP,
     IGMP,
     TCP,
     UDP,
@@ -413,6 +416,34 @@ def _every_protocol_error_raise() -> list[tuple[str, set[str]]]:
             site = f"{rel}:{node.lineno}"
             sites.append((site, {kw.arg for kw in node.exc.keywords}))
     return sites
+
+
+class TestTextFramedOffsets:
+    """An HTTP error's offset is always relative to the start of the
+    message -- the decode() buffer, or ``head + raw_body`` when
+    constructing -- and ``field`` names a grammar element: an HTTP
+    ``__post_init__`` has the bytes to point into, and splitting one
+    message's offsets across two attributes would make the same broken
+    chunk report two different positions."""
+
+    HEAD = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    BODY = b"3\r\nabcX\r\n0\r\n\r\n"
+
+    def test_decode_offsets_are_message_relative(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP.decode(self.HEAD + self.BODY)
+        err = excinfo.value
+        assert err.protocol is HTTP
+        assert err.field == "raw_body"
+        assert err.offset == len(self.HEAD) + self.BODY.index(b"X")
+
+    def test_construction_offsets_are_message_relative_too(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            HTTP(head=self.HEAD, raw_body=self.BODY)
+        err = excinfo.value
+        assert err.protocol is HTTP
+        assert err.field == "raw_body"
+        assert err.offset == len(self.HEAD) + self.BODY.index(b"X")
 
 
 class TestEveryRaiseSiteIsInstrumented:
