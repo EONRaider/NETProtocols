@@ -728,3 +728,667 @@ class TestDisposition:
         """RFC 9110 §7.6.1: an intermediary strips the named field."""
         raw = request(b"Connection: close, Transfer-Encoding")
         assert kinds(raw) == {K.CONNECTION_LISTS_FRAMING_FIELD}
+
+
+# ---------------------------------------------------------------------------
+# Exact diagnostics. Every raise site in the grammar, with the precise
+# exception type, message, and structured fields it must carry. Offsets
+# are derived from the input bytes; messages mirror the source (they are
+# literals there), so these tables pin them against silent edits.
+# ---------------------------------------------------------------------------
+
+M = MAX_HEAD_BYTES
+CHUNKED_HEAD = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+H = len(CHUNKED_HEAD)
+
+
+def _row(
+    raw: bytes,
+    exc: type[Exception],
+    message: str,
+    field: str | None,
+    offset: int | None,
+    expected: object = None,
+    actual: object = None,
+    **context: object,
+) -> tuple[object, ...]:
+    return (raw, context, exc, message, field, offset, expected, actual)
+
+
+_INCOMPLETE_ROWS = [
+    # (raw, base message, field, offset, expected)
+    (
+        b"\r\nGET / HTTP/1.1\r\nHost",
+        "HTTP head is incomplete",
+        "head",
+        18,
+        None,
+    ),
+    (b"", "HTTP head is incomplete", "head", 0, None),
+    (
+        CHUNKED_HEAD + b"5",
+        "chunk-size line is incomplete",
+        "chunk-size",
+        H,
+        None,
+    ),
+    (
+        CHUNKED_HEAD + b"10000\r\n" + b"x" * 0x10000 + b"\r\n5",
+        "chunk-size line is incomplete",
+        "chunk-size",
+        H + 7 + 0x10000 + 2,
+        None,
+    ),
+    (
+        CHUNKED_HEAD + b"5\r\nhel",
+        "chunk-data is incomplete",
+        "raw_body",
+        H + 3,
+        H + 3 + 5 + 2,
+    ),
+    (
+        CHUNKED_HEAD + b"5\r\nhello\r\n",
+        "chunk-size line is incomplete",
+        "chunk-size",
+        H + 10,
+        None,
+    ),
+    (
+        CHUNKED_HEAD + b"0\r\nX: y",
+        "trailer section is incomplete",
+        "raw_body",
+        H + 3,
+        None,
+    ),
+    (
+        b"POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc",
+        "HTTP body is shorter than its Content-Length",
+        "raw_body",
+        39,
+        49,
+    ),
+]
+
+_RAISE_ROWS = [
+    _row(
+        b"\x16\x03\x01\x02\x00",
+        InvalidFieldError,
+        "input does not begin an HTTP/1.x start line",
+        "start_line",
+        0,
+    ),
+    _row(
+        b"\r\n\x16\x03\x01",
+        InvalidFieldError,
+        "input does not begin an HTTP/1.x start line",
+        "start_line",
+        2,
+    ),
+    _row(
+        b"G@T / HTTP/1.1\r\n\r\n",
+        InvalidFieldError,
+        "input does not begin an HTTP/1.x start line",
+        "start_line",
+        0,
+    ),
+    _row(
+        b"\r\n G / HTTP/1.1\r\n\r\n",
+        InvalidFieldError,
+        "input does not begin an HTTP/1.x start line",
+        "start_line",
+        2,
+    ),
+    _row(
+        b"GET / HTTP/1.1\r\nX: " + b"a" * M,
+        InvalidFieldError,
+        f"HTTP head exceeds {M} bytes",
+        "head",
+        0,
+        M,
+    ),
+    _row(
+        b"G" * M,
+        InvalidFieldError,
+        f"HTTP head exceeds {M} bytes",
+        "head",
+        0,
+        M,
+    ),
+    _row(
+        b"GET / HTTP/1.x\r\n\r\n",
+        InvalidFieldError,
+        "malformed HTTP-version b'HTTP/1.x'",
+        "start_line",
+        6,
+        actual=b"HTTP/1.x",
+    ),
+    _row(
+        b"\r\nGET / HTTP/1.x\r\n\r\n",
+        InvalidFieldError,
+        "malformed HTTP-version b'HTTP/1.x'",
+        "start_line",
+        8,
+        actual=b"HTTP/1.x",
+    ),
+    _row(
+        b"\r\nHTTP/1.x 200 OK\r\n\r\n",
+        InvalidFieldError,
+        "malformed HTTP-version b'HTTP/1.x'",
+        "start_line",
+        2,
+        actual=b"HTTP/1.x",
+    ),
+    _row(
+        b"GET / HTTP/3.1\r\n\r\n",
+        InvalidFieldError,
+        "HTTP/3.1 is not HTTP/1.x",
+        "start_line",
+        6,
+        "HTTP/1.x",
+        b"HTTP/3.1",
+    ),
+    _row(
+        b"\r\nGET /\r\n\r\n",
+        InvalidFieldError,
+        "request-line needs a method, a target and a version",
+        "start_line",
+        2,
+    ),
+    _row(
+        b"\r\nG/T / HTTP/1.1\r\n\r\n",
+        InvalidFieldError,
+        "method b'G/T' is not a token",
+        "start_line",
+        2,
+        actual=b"G/T",
+    ),
+    _row(
+        b"\r\nPRI * HTTP/2.0\r\n\r\nSM\r\n\r\n",
+        InvalidFieldError,
+        "the HTTP/2 connection preface is not an HTTP/1.x message",
+        "start_line",
+        2,
+    ),
+    _row(
+        b"\r\nHTTP/1.1 20\r\n\r\n",
+        InvalidFieldError,
+        "status-line needs a version, SP and a 3-digit status code",
+        "start_line",
+        2,
+    ),
+    _row(
+        b"POST / HTTP/1.1\r\nContent-Length: 1" + b"0" * 18 + b"\r\n\r\n",
+        InvalidFieldError,
+        "Content-Length exceeds 18 digits",
+        "content-length",
+        17,
+        18,
+        19,
+    ),
+    _row(
+        CHUNKED_HEAD + b"x\r\n",
+        InvalidFieldError,
+        "chunk-size line is not 1*HEXDIG [ chunk-ext ]",
+        "chunk-size",
+        H,
+    ),
+    _row(
+        CHUNKED_HEAD + b"5\x0b\r\nhello\r\n0\r\n\r\n",
+        InvalidFieldError,
+        "chunk-size line is not 1*HEXDIG [ chunk-ext ]",
+        "chunk-size",
+        H,
+    ),
+    _row(
+        CHUNKED_HEAD + b"5\x0b;a\r\nhello\r\n0\r\n\r\n",
+        InvalidFieldError,
+        "chunk-size line is not 1*HEXDIG [ chunk-ext ]",
+        "chunk-size",
+        H,
+    ),
+    _row(
+        CHUNKED_HEAD + b"1" + b"0" * 16 + b"\r\n",
+        InvalidFieldError,
+        "chunk-size exceeds 16 hex digits",
+        "chunk-size",
+        H,
+        16,
+        17,
+    ),
+    _row(
+        CHUNKED_HEAD + (b"1;" + b"a" * 1000 + b"\r\nx\r\n") * 70,
+        InvalidFieldError,
+        f"chunk extensions exceed {M} bytes",
+        "chunk-ext",
+        H + 65 * 1007,
+        M,
+    ),
+    _row(
+        CHUNKED_HEAD + b"0" * 70000 + b"\r\n\r\n",
+        InvalidFieldError,
+        f"chunk-size line exceeds {M} bytes",
+        "chunk-size",
+        H,
+        M,
+    ),
+    _row(
+        CHUNKED_HEAD + b"0" * M,
+        InvalidFieldError,
+        f"chunk-size line exceeds {M} bytes",
+        "chunk-size",
+        H,
+        M,
+    ),
+    _row(
+        CHUNKED_HEAD + b"5\r\nhelloXX\r\n0\r\n\r\n",
+        InvalidFieldError,
+        "chunk-data is not followed by CRLF",
+        "raw_body",
+        H + 8,
+    ),
+    _row(
+        CHUNKED_HEAD + b"0\r\nX: " + b"a" * M + b"\r\n\r\n",
+        InvalidFieldError,
+        f"trailer section exceeds {M} bytes",
+        "raw_body",
+        H + 3,
+        M,
+    ),
+    _row(
+        CHUNKED_HEAD + b"0\r\n" + b"X" * M,
+        InvalidFieldError,
+        f"trailer section exceeds {M} bytes",
+        "raw_body",
+        H + 3,
+        M,
+    ),
+    _row(
+        b"HTTP/1.1 200 OK\r\n\r\n<html>",
+        TruncatedHeaderError,
+        "HTTP body runs until the connection closes",
+        "raw_body",
+        19,
+        actual=25,
+    ),
+    _row(
+        b"HTTP/1.1 200 OK\r\n\r\n",
+        InvalidFieldError,
+        "request_method 'G T' is not a token",
+        "request_method",
+        None,
+        actual="G T",
+        request_method="G T",
+    ),
+    _row(
+        b"GET / HTTP/1.1\r\n\r\n",
+        InvalidFieldError,
+        "request_method only applies when decoding a response",
+        "request_method",
+        None,
+        actual="GET",
+        request_method="GET",
+    ),
+]
+for _raw, _message, _field, _offset, _expected in _INCOMPLETE_ROWS:
+    _RAISE_ROWS.append(
+        _row(
+            _raw,
+            TruncatedHeaderError,
+            _message,
+            _field,
+            _offset,
+            _expected,
+            len(_raw),
+        )
+    )
+    _RAISE_ROWS.append(
+        _row(
+            _raw,
+            InvalidFieldError,
+            f"{_message} at connection close",
+            _field,
+            _offset,
+            _expected,
+            len(_raw),
+            closed=True,
+        )
+    )
+
+
+class TestExactDiagnostics:
+    @pytest.mark.parametrize(
+        "raw,context,exc,message,field,offset,expected,actual",
+        _RAISE_ROWS,
+        ids=lambda v: repr(v)[:40] if isinstance(v, (bytes, str)) else None,
+    )
+    def test_raise_site(
+        self,
+        raw: bytes,
+        context: dict[str, object],
+        exc: type[Exception],
+        message: str,
+        field: str | None,
+        offset: int | None,
+        expected: object,
+        actual: object,
+    ) -> None:
+        with pytest.raises(Exception) as excinfo:
+            parse(raw, **context)  # type: ignore[arg-type]
+        err = excinfo.value
+        assert type(err) is exc
+        assert str(err) == message
+        assert err.protocol is _Protocol  # type: ignore[attr-defined]
+        assert err.field == field  # type: ignore[attr-defined]
+        assert err.offset == offset  # type: ignore[attr-defined]
+        assert err.expected == expected  # type: ignore[attr-defined]
+        assert err.actual == actual  # type: ignore[attr-defined]
+
+
+def A(
+    kind: HTTPAnomalyKind, field: str | None, offset: int, occurrences: int = 1
+) -> HTTPAnomaly:
+    return HTTPAnomaly(kind, field, offset, occurrences)
+
+
+def anomalies(raw: bytes, **context: object) -> tuple[HTTPAnomaly, ...]:
+    return parse(raw, **context).anomalies  # type: ignore[arg-type]
+
+
+def _at(raw: bytes, needle: bytes) -> int:
+    return raw.index(needle)
+
+
+class TestExactAnomalies:
+    """Full anomaly records -- kind, field, offset and count -- so a
+    flag raised with the wrong field or position is caught."""
+
+    def test_start_line_anomalies_carry_their_offsets(self) -> None:
+        raw = b"\r\nGET\t* HTTP/1.1\r\nHost: a\r\n\r\n"
+        assert anomalies(raw) == (
+            A(K.LEADING_EMPTY_LINE, None, 0),
+            A(K.START_LINE_WHITESPACE, None, 2),
+            A(K.REQUEST_TARGET_FORM, None, 6),
+        )
+        raw = b"\r\nGET /a b HTTP/1.1\r\n\r\n"
+        assert anomalies(raw)[1] == A(K.REQUEST_TARGET_INVALID_OCTET, None, 6)
+
+    def test_status_line_anomalies_carry_their_offsets(self) -> None:
+        raw = b"\r\nHTTP/1.1\t600\r\nContent-Length: 0\r\n\r\n"
+        assert anomalies(raw) == (
+            A(K.LEADING_EMPTY_LINE, None, 0),
+            A(K.START_LINE_WHITESPACE, None, 2),
+            A(K.STATUS_LINE_NO_REASON_SP, None, 2),
+            A(K.STATUS_CODE_OUT_OF_RANGE, None, 11),
+        )
+
+    def test_field_line_anomalies(self) -> None:
+        raw = request(
+            b" lead", b"A : 1", b"B\x00: 2", b"C 3", b"X: a\x00", b" b\rc"
+        )
+        assert anomalies(raw) == (
+            A(K.WHITESPACE_PRECEDED_LINE, None, _at(raw, b" lead")),
+            A(K.WHITESPACE_BEFORE_COLON, "a", _at(raw, b"A :")),
+            A(K.INVALID_FIELD_NAME, None, _at(raw, b"B\x00")),
+            A(K.FIELD_LINE_NO_COLON, None, _at(raw, b"C 3")),
+            A(K.CTL_IN_FIELD_VALUE, "x", _at(raw, b"X:"), 2),
+            A(K.OBS_FOLD, "x", _at(raw, b" b\r")),
+        )
+        assert parse(raw).fields[-1] == http._Field(
+            b"X", b"a b c", _at(raw, b"X:"), True
+        )
+
+    def test_list_and_number_anomalies(self) -> None:
+        raw = request(
+            b"Content-Length: 05, ,5", b"Connection: close, ,", body=b"hello"
+        )
+        cl, conn = _at(raw, b"Content-Length"), _at(raw, b"Connection")
+        assert anomalies(raw) == (
+            A(K.CONTENT_LENGTH_REPEATED, "content-length", cl),
+            A(K.LIST_EMPTY_ELEMENT, "content-length", cl),
+            A(K.NUMBER_LEADING_ZEROS, "content-length", cl),
+            A(K.LIST_EMPTY_ELEMENT, "connection", conn, 2),
+        )
+
+    def test_framing_conflict_anomalies(self) -> None:
+        raw = request(
+            b"Content-Length: 4, x",
+            b"Transfer-Encoding: chunked, gzip;q=1, ,chunked\x0b",
+            line=b"POST / HTTP/1.0",
+        )
+        cl, te = _at(raw, b"Content-Length"), _at(raw, b"Transfer-Encoding")
+        assert anomalies(raw) == (
+            A(K.REQUEST_FRAMING_UNDETERMINABLE, None, 0),
+            A(K.CL_AND_TE, "content-length", cl),
+            A(K.INVALID_CONTENT_LENGTH, "content-length", cl),
+            A(K.LIST_EMPTY_ELEMENT, "transfer-encoding", te),
+            A(K.TE_IN_HTTP10, "transfer-encoding", te),
+            A(K.TE_INVALID_OCTET, "transfer-encoding", te),
+            A(K.TE_PARAMETERS, "transfer-encoding", te),
+        )
+
+    def test_unrecoverable_content_length(self) -> None:
+        raw = request(b"Content-Length: 5, x", body=b"hello")
+        message = parse(raw)
+        assert message.framing == http._Framing(HTTPFraming.INVALID)
+        assert message.anomalies == (
+            A(
+                K.CONTENT_LENGTH_UNRECOVERABLE,
+                "content-length",
+                _at(raw, b"Content-Length"),
+            ),
+        )
+
+    def test_response_te_not_chunked_is_at_offset_zero(self) -> None:
+        raw = b"\r\n" + response(b"Transfer-Encoding: gzip", body=b"x")
+        assert anomalies(raw, closed=True) == (
+            A(K.LEADING_EMPTY_LINE, None, 0),
+            A(K.RESPONSE_TE_NOT_CHUNKED, None, 0),
+        )
+
+    def test_misplaced_and_connection_anomalies(self) -> None:
+        raw = response(
+            b"Transfer-Encoding: chunked",
+            b"Connection: host",
+            status=b"204 No Content",
+        )
+        assert anomalies(raw) == (
+            A(
+                K.FRAMING_FIELD_MISPLACED,
+                "transfer-encoding",
+                _at(raw, b"Transfer-Encoding"),
+            ),
+            A(
+                K.CONNECTION_LISTS_FRAMING_FIELD,
+                "connection",
+                _at(raw, b"Connection"),
+            ),
+        )
+
+    def test_chunk_line_anomalies(self) -> None:
+        body = (
+            b"05\r\nhello\r\n"
+            b"5 \r\nhello\r\n"
+            b"5;a\nb\r\nhello\r\n"
+            b"5\n\r\nhello\r\n"
+            b"0\r\nT y\nContent-Length: 1\r\n\r\n"
+        )
+        raw = CHUNKED_HEAD + body
+        message = parse(raw)
+        assert message.end == len(raw)
+        assert message.anomalies == (
+            A(K.NUMBER_LEADING_ZEROS, "chunk-size", H),
+            A(K.CHUNK_SIZE_TRAILING_WHITESPACE, None, _at(raw, b"5 \r")),
+            A(K.CHUNK_EXTENSION, None, _at(raw, b"5;a"), 2),
+            A(K.CHUNK_EXTENSION_INVALID, None, _at(raw, b"5;a"), 2),
+            A(K.CHUNK_LINE_BARE_LF, None, _at(raw, b"5;a"), 2),
+            A(K.FIELD_LINE_NO_COLON, None, _at(raw, b"T y")),
+            A(K.BARE_LF, None, _at(raw, b"T y") + 3),
+            A(
+                K.FRAMING_FIELD_MISPLACED,
+                "content-length",
+                _at(raw, b"Content-Length: 1"),
+            ),
+        )
+        assert message.content_spans == tuple(
+            (start, start + 5)
+            for start in (
+                _at(raw, b"hello"),
+                _at(raw, b"5 \r") + 4,
+                _at(raw, b"5;a") + 7,
+                _at(raw, b"5\n\r") + 4,
+            )
+        )
+
+
+class TestBehaviourVectors:
+    """Inputs chosen to separate the grammar from near-miss variants of
+    it (each would decode differently under a one-token code change)."""
+
+    def test_a_field_value_may_contain_a_colon(self) -> None:
+        message = parse(b"GET / HTTP/1.1\r\nHost: a:80\r\nA:b\r\n\r\n")
+        assert message.fields == (
+            http._Field(b"Host", b"a:80", 16, True),
+            http._Field(b"A", b"b", 28, True),
+        )
+
+    def test_a_vt_before_the_colon_is_not_trimmed(self) -> None:
+        """Only SP and HTAB are optional whitespace (RFC 9110 §5.6.3)."""
+        message = parse(b"GET / HTTP/1.1\r\na\x0b: b\r\n\r\n")
+        assert message.fields == (http._Field(b"a\x0b", b"b", 16, False),)
+        assert message.anomalies == (A(K.INVALID_FIELD_NAME, None, 16),)
+
+    def test_a_leading_lf_then_a_partial_line(self) -> None:
+        err = raises(TruncatedHeaderError, b"\nGET / HTTP/1.1\r")
+        assert err.value.offset == 1  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize(
+        "line,target,anomaly",
+        [
+            (b"PRI * HTTP/1.1", b"*", (A(K.REQUEST_TARGET_FORM, None, 4),)),
+            (b"PRI / HTTP/1.1", b"/", ()),
+        ],
+    )
+    def test_pri_alone_is_an_ordinary_method(
+        self, line: bytes, target: bytes, anomaly: tuple[HTTPAnomaly, ...]
+    ) -> None:
+        message = parse(line + b"\r\n\r\n")
+        assert message.start == http._StartLine(
+            False, (1, 1), method=b"PRI", target=target
+        )
+        assert message.anomalies == anomaly
+
+    def test_a_status_line_without_a_reason(self) -> None:
+        message = parse(b"HTTP/1.1 200\r\nContent-Length: 0\r\n\r\n")
+        assert message.start == http._StartLine(
+            True, (1, 1), status=200, reason=b""
+        )
+
+    @pytest.mark.parametrize("code,flagged", [(599, False), (600, True)])
+    def test_status_code_range_edge(self, code: int, flagged: bool) -> None:
+        raw = b"HTTP/1.1 %d X\r\nContent-Length: 0\r\n\r\n" % code
+        expected = (A(K.STATUS_CODE_OUT_OF_RANGE, None, 9),) if flagged else ()
+        assert anomalies(raw) == expected
+
+    def test_a_bare_lf_alone_does_not_close(self) -> None:
+        message = parse(b"GET / HTTP/1.1\nHost: a\r\n\r\n")
+        assert message.disposition is HTTPDisposition.CONTINUE
+        assert message.anomalies == (A(K.BARE_LF, None, 14),)
+
+    def test_chunk_size_is_hexadecimal(self) -> None:
+        raw = CHUNKED_HEAD + b"a\r\n" + b"x" * 10 + b"\r\n10\r\n" + b"y" * 16
+        raw += b"\r\n0\r\n\r\n"
+        spans = parse(raw).content_spans
+        assert [end - start for start, end in spans] == [10, 16]
+
+    def test_limits_are_inclusive(self) -> None:
+        cl = b"POST / HTTP/1.1\r\nContent-Length: 1" + b"0" * 17 + b"\r\n\r\n"
+        err = raises(TruncatedHeaderError, cl)
+        assert err.value.expected == len(cl) + 10**17  # type: ignore[attr-defined]
+        size = CHUNKED_HEAD + b"1" + b"0" * 15 + b"\r\n"
+        err = raises(TruncatedHeaderError, size)
+        assert err.value.expected == len(size) + 16**15 + 2  # type: ignore[attr-defined]
+        chunks = (b"1;" + b"a" * 1000 + b"\r\nx\r\n") * 65
+        last = b"1;" + b"a" * (M - 65 * 1001 - 1) + b"\r\nx\r\n"
+        assert (len(last) - 6) + 65 * 1001 == M
+        raw = CHUNKED_HEAD + chunks + last + b"0\r\n\r\n"
+        assert parse(raw).end == len(raw)
+        trailer = b"X: " + b"a" * (M - 7) + b"\r\n\r\n"
+        assert len(trailer) == M
+        raw = CHUNKED_HEAD + b"0\r\n" + trailer
+        assert parse(raw).end == len(raw)
+
+    @pytest.mark.parametrize(
+        "status,method,kept,disposition",
+        [
+            (b"199 Early", None, None, HTTPDisposition.CONTINUE),
+            (b"200 OK", b"CONNECT", b"CONNECT", HTTPDisposition.TUNNEL),
+            (b"299 X", b"CONNECT", b"CONNECT", HTTPDisposition.TUNNEL),
+            (b"300 X", None, None, HTTPDisposition.CONTINUE),
+        ],
+    )
+    def test_connect_tunnels_only_on_2xx(
+        self,
+        status: bytes,
+        method: bytes | None,
+        kept: bytes | None,
+        disposition: HTTPDisposition,
+    ) -> None:
+        raw = response(b"Content-Length: 0", status=status)
+        message = parse(raw, request_method="CONNECT")
+        assert message.request_method == kept
+        assert message.disposition is disposition
+        framing = (
+            HTTPFraming.NONE
+            if kept or status < b"2"
+            else (HTTPFraming.CONTENT_LENGTH)
+        )
+        assert message.framing.kind is framing
+
+
+_TOKEN = "!#$%&'*+-.^_`|~" + string.ascii_letters + string.digits
+
+
+class TestModuleRegexes:
+    """The two regexes sit outside mutation testing, so these tables are
+    their only guard."""
+
+    @pytest.mark.parametrize("byte", range(256))
+    def test_first_word_byte_classes(self, byte: int) -> None:
+        one = bytes([byte])
+        ok = chr(byte) in _TOKEN or byte == 0x2F
+        assert (http._FIRST_WORD.match(one) is not None) is ok
+        ends = byte in (0x20, 0x09, 0x0B, 0x0C, 0x0D)
+        assert (http._FIRST_WORD.match(b"G" + one) is not None) is (ok or ends)
+
+    @pytest.mark.parametrize(
+        "ext,valid",
+        [
+            (b"", True),
+            (b";a", True),
+            (b" ;a", True),
+            (b"\t; a", True),
+            (b";a=b", True),
+            (b";a = b", True),
+            (b";a=b;c", True),
+            (b';a="b c"', True),
+            (b';a="\\"x"', True),
+            (b';a=""', True),
+            (b';a="\x80"', True),
+            (b";a ", False),
+            (b";a=b ", False),
+            (b";", False),
+            (b";;a", False),
+            (b"; =b", False),
+            (b";a=", False),
+            (b';a="x', False),
+            (b';a="\\', False),
+            (b';a="\x01"', False),
+            (b';a="\\\x01"', False),
+            (b';a=b"', False),
+            (b"a", False),
+            (b";a\nb", False),
+        ],
+    )
+    def test_chunk_ext_abnf(self, ext: bytes, valid: bool) -> None:
+        """RFC 9112 §7.1.1, RFC 9110 §5.6.4."""
+        assert (http._CHUNK_EXT.fullmatch(ext) is not None) is valid
