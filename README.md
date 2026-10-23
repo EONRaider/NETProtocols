@@ -151,6 +151,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 4 | UDP | `UDP` | RFC 768 |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
+| 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
 
 ## Decoding a captured frame
 
@@ -284,6 +285,60 @@ enclosing IP layer, no TCP/UDP layer, or a transport layer without
 ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
 convention for message types that have none).
 
+## Decoding HTTP
+
+`HTTP.decode()` reads one HTTP/1.1 message (RFC 9112) from the start of
+a buffer and leaves whatever follows it alone; `header_len` says where
+the message ended. The buffer has to be the connection's bytes, which
+you reassemble: a TCP segment is rarely a whole message, so `HTTP` is
+not in the port tables and `decode_frame` stops at TCP. Reading the
+messages pipelined on one side of a connection is a loop:
+
+```python
+from netprotocols import HTTP, HTTPDisposition
+
+
+def messages(stream, request_methods=()):
+    """Each message on one side of a connection, in order. For the
+    server's side, pass the methods of the requests it answered."""
+    methods = iter(request_methods)
+    while stream:
+        msg = HTTP.decode(stream, request_method=next(methods, None))
+        yield msg
+        stream = stream[msg.header_len :]
+        if msg.connection_disposition is not HTTPDisposition.CONTINUE:
+            break  # closed, or no longer HTTP (an upgrade or a tunnel)
+```
+
+`TruncatedHeaderError` means the message is not all there yet; once the
+connection has closed, pass `closed=True`, which a response delimited by
+the close needs and which turns a short message into `InvalidFieldError`.
+A response's framing can depend on the request it answers, which the
+bytes do not say: a response to `HEAD`, or a 2xx to `CONNECT`, has no
+body whatever its `Content-Length` claims, so pass `request_method`.
+
+```pycon
+>>> msg = HTTP.decode(response, request_method="HEAD")
+>>> msg.status_code, msg.framing, msg.header("content-length"), msg.raw_body
+(200, <HTTPFraming.NONE: 'none'>, '42', b'')
+```
+
+The message is held verbatim (`bytes(msg) == msg.head + msg.raw_body`),
+and anything implementations read differently is decoded the way RFC
+9112 resolves it and reported, not rejected, so a smuggling attempt
+shows up instead of hiding behind an exception:
+
+```pycon
+>>> msg = HTTP.decode(
+...     b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\n"
+...     b"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+... )
+>>> msg.framing, msg.connection_disposition
+(<HTTPFraming.CHUNKED: 'chunked'>, <HTTPDisposition.CLOSE: 'close'>)
+>>> [(a.kind.name, a.field, a.offset) for a in msg.anomalies]
+[('CL_AND_TE', 'content-length', 26)]
+```
+
 ## Structural pattern matching
 
 Every decoded header works with `match`/`case` today, with no code
@@ -306,6 +361,9 @@ match ip:
 
 Keyword patterns (`case IPv4(protocol=IPProtocol.TCP)`) work on every
 field regardless, curated or not, and stay the documented default.
+`HTTP`'s fields are raw bytes, so its `__match_args__` names properties
+instead: `case HTTP("GET", target)` for a request, `case HTTP(None,
+None, 404)` for a response.
 
 ```python
 from netprotocols import IPv4, IPProtocol, TCP

@@ -10,12 +10,14 @@ MANIFEST's own, and the README's — against the fixtures themselves.
 cannot catch is prose drifting away from it.
 """
 
+import doctest
 import re
 from pathlib import Path
 
 import pytest
 
 from conftest import FIXTURES, corpus_frames
+from netprotocols import HTTP, HTTPDisposition, HTTPFraming
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = FIXTURES / "MANIFEST.md"
@@ -77,7 +79,8 @@ class TestCorpusFiguresInDocs:
         )
 
     @pytest.mark.parametrize(
-        "module", ["vlan.py", "gre.py", "dhcp.py", "ipv6_ext.py", "_tlv.py"]
+        "module",
+        ["vlan.py", "gre.py", "dhcp.py", "http.py", "ipv6_ext.py", "_tlv.py"],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:
         """The layout map went stale by omission, not by wrong values."""
@@ -113,3 +116,54 @@ class TestReadmeRoadmap:
                 f"README's Roadmap section links {shipped}, work that "
                 f"shipped in 1.3.0"
             )
+
+
+def _readme_section(title: str) -> str:
+    text = README.read_text()
+    start = text.index(f"## {title}\n")
+    return text[start : text.index("\n## ", start + 1)]
+
+
+class TestReadmeHTTPExamples:
+    """The README's Decoding HTTP examples, run as written against the
+    captured connections in tests/fixtures/http/, so neither the
+    pipelining loop nor a shown output can drift from the code."""
+
+    SECTION = _readme_section("Decoding HTTP")
+    STREAMS = FIXTURES / "http"
+
+    def test_the_pipelining_loop_splits_a_captured_connection(self) -> None:
+        (code,) = re.findall(r"```python\n(.*?)```", self.SECTION, re.S)
+        namespace: dict[str, object] = {}
+        exec(code, namespace)
+        messages = namespace["messages"]
+        assert callable(messages)
+        requests = list(messages((self.STREAMS / "07.request").read_bytes()))
+        assert [r.method for r in requests] == ["GET", "HEAD", "GET"]
+        responses = list(
+            messages(
+                (self.STREAMS / "07.response").read_bytes(),
+                [r.method for r in requests],
+            )
+        )
+        assert [r.framing for r in responses] == [
+            HTTPFraming.CONTENT_LENGTH,
+            HTTPFraming.NONE,
+            HTTPFraming.CHUNKED,
+        ]
+        assert requests[-1].connection_disposition is HTTPDisposition.CLOSE
+
+    def test_the_shown_outputs_are_what_the_code_prints(self) -> None:
+        blocks = re.findall(r"```pycon\n(.*?)```", self.SECTION, re.S)
+        assert len(blocks) == 2
+        for number, block in enumerate(blocks):
+            globs = {
+                "HTTP": HTTP,
+                "response": (self.STREAMS / "02.response").read_bytes(),
+            }
+            test = doctest.DocTestParser().get_doctest(
+                block, globs, f"README Decoding HTTP #{number}", None, 0
+            )
+            runner = doctest.DocTestRunner()
+            runner.run(test)
+            assert runner.summarize().failed == 0, block

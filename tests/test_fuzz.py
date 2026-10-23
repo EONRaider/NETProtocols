@@ -59,7 +59,12 @@ from netprotocols import (
     ProtocolError,
     TCPOption,
 )
-from strategies import ROUND_TRIP_STRATEGIES, http_messages, http_wire
+from strategies import (
+    ROUND_TRIP_STRATEGIES,
+    http_context_responses,
+    http_messages,
+    http_wire,
+)
 from test_corpus import walk
 
 ALL_PROTOCOLS = (
@@ -524,6 +529,14 @@ class TestHTTPConstruction:
             )
             == msg
         )
+
+    @given(msg=http_context_responses())
+    def test_context_bearing_responses_round_trip(self, msg: HTTP) -> None:
+        """http_messages() never carries a request_method, so the
+        HEAD / CONNECT 2xx contexts get a strategy of their own."""
+        assert msg.request_method in ("HEAD", "CONNECT")
+        assert msg.raw_body == b""
+        assert HTTP.decode(bytes(msg), request_method=msg.request_method) == msg
 
     @given(
         head=http_input,

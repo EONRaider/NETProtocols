@@ -1,5 +1,6 @@
 """Minimal classic-pcap reader shared by the standalone verification
-scripts under ``scripts/`` (``benchmark.py``, ``pyodide/check_in_pyodide.py``).
+scripts under ``scripts/`` (``benchmark.py``, ``pyodide/check_in_pyodide.py``,
+``extract_http_streams.py``).
 
 Stdlib only, and never imports netprotocols — each caller's own
 docstring explains why *that* independence matters (a benchmark or a

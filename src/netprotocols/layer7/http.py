@@ -1346,6 +1346,7 @@ class HTTP(Protocol):
 
     @property
     def is_response(self) -> bool:
+        """Whether this is a response (a status line) or a request."""
         return self._message.start.is_response
 
     @property
