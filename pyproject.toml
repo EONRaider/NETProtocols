@@ -116,11 +116,13 @@ only_mutate = [
     "src/netprotocols/checksum.py",
     "src/netprotocols/_tlv.py",
     "src/netprotocols/layer7/dns.py",
+    "src/netprotocols/layer7/http.py",
 ]
 pytest_add_cli_args_test_selection = [
     "tests/test_checksum.py",
     "tests/test_tlv.py",
     "tests/test_dns.py",
+    "tests/test_http.py",
 ]
 # dns.py's in-scope surface is narrower still: only the low-level
 # name-compression byte walk (_read_name/_labels and any private
@@ -130,7 +132,10 @@ pytest_add_cli_args_test_selection = [
 # of the file-level scope above:
 #   uv run mutmut run 'netprotocols.checksum.*' 'netprotocols._tlv.*' \
 #       'netprotocols.layer7.dns.x__read_name*' \
-#       'netprotocols.layer7.dns.x__labels*'
+#       'netprotocols.layer7.dns.x__labels*' \
+#       'netprotocols.layer7.http.x__*'
+# http.py (the HTTP/1.1 grammar) is audited whole: every rule is a
+# private module-level function, matched by 'x__*'.
 # Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
 # the DNS/DNSOverTCP dataclass methods, ...) are out of scope for this
 # audit and were not triaged. mutmut (3.8.0) generates none at all for

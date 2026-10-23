@@ -51,8 +51,8 @@ jobs:
             mutmut-nightly-
       - name: Install the project with dev dependencies
         run: uv sync --group dev --frozen
-      # File-level scope (src/netprotocols/checksum.py, _tlv.py, and
-      # dns.py) comes from the project's mutmut config (pyproject.toml's
+      # File-level scope (src/netprotocols/checksum.py, _tlv.py,
+      # layer7/dns.py and layer7/http.py) comes from the project's mutmut config (pyproject.toml's
       # [tool.mutmut] table) via only_mutate, not hardcoded here.
       # dns.py's in-scope surface is narrower still -- only the
       # name-compression byte walk, not the record/RDATA/dataclass code
@@ -68,7 +68,8 @@ jobs:
             'netprotocols.checksum.*' \
             'netprotocols._tlv.*' \
             'netprotocols.layer7.dns.x__read_name*' \
-            'netprotocols.layer7.dns.x__labels*'
+            'netprotocols.layer7.dns.x__labels*' \
+            'netprotocols.layer7.http.x__*'
       # `mutmut run` exits 0 however many mutants survive, so it can
       # never turn this job red on its own. This step is what does: it
       # fails on any undetected mutant not in the triage record
