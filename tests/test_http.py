@@ -1059,7 +1059,7 @@ class TestExactDiagnostics:
     @pytest.mark.parametrize(
         "raw,context,exc,message,field,offset,expected,actual",
         _RAISE_ROWS,
-        ids=lambda v: repr(v)[:40] if isinstance(v, (bytes, str)) else None,
+        ids=[f"row{i:02d}" for i in range(len(_RAISE_ROWS))],
     )
     def test_raise_site(
         self,
@@ -1392,3 +1392,38 @@ class TestModuleRegexes:
     def test_chunk_ext_abnf(self, ext: bytes, valid: bool) -> None:
         """RFC 9112 §7.1.1, RFC 9110 §5.6.4."""
         assert (http._CHUNK_EXT.fullmatch(ext) is not None) is valid
+
+
+class TestFieldLabelsAndPositions:
+    """An obs-fold continuation is flagged with the field it continues --
+    or no field at all when that field's name is not a token -- and a
+    control byte in a continuation is located on the continuation."""
+
+    def test_folded_non_token_name_has_no_label(self) -> None:
+        raw = request(b"B\x00: 1", b" 2", b"C 3", b" 4")
+        assert anomalies(raw) == (
+            A(K.INVALID_FIELD_NAME, None, _at(raw, b"B\x00")),
+            A(K.OBS_FOLD, None, _at(raw, b" 2"), 2),
+            A(K.FIELD_LINE_NO_COLON, None, _at(raw, b"C 3")),
+        )
+
+    def test_ctl_in_a_continuation_is_located_there(self) -> None:
+        raw = request(b"X: a", b" b\x00c")
+        assert anomalies(raw) == (
+            A(K.CTL_IN_FIELD_VALUE, "x", _at(raw, b" b")),
+            A(K.OBS_FOLD, "x", _at(raw, b" b")),
+        )
+
+    def test_repeated_chunked_is_located_on_the_field(self) -> None:
+        raw = request(
+            b"Host: a",
+            b"Transfer-Encoding: chunked, chunked",
+            body=b"0\r\n\r\n",
+        )
+        assert anomalies(raw) == (
+            A(
+                K.TE_CHUNKED_REPEATED,
+                "transfer-encoding",
+                _at(raw, b"Transfer-Encoding"),
+            ),
+        )

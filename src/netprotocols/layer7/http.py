@@ -693,12 +693,12 @@ def _parse_content_length(
     te_present: bool,
     found: _Found,
     protocol: type[object],
-) -> tuple[bool, int | None]:
-    """``(present, value)``; ``value`` is ``None`` when Transfer-Encoding
-    overrides it or it cannot frame the message (§6.3 rules 3 and 5)."""
+) -> _Framing | None:
+    """The framing Content-Length gives the message (§6.3 rules 3 and 5):
+    ``None`` when there is none or Transfer-Encoding overrides it."""
     cl_fields = _values(fields, b"content-length")
     if not cl_fields:
-        return False, None
+        return None
     label = "content-length"
     elements = _parse_list(cl_fields, label, found)
     numeric = [
@@ -727,15 +727,15 @@ def _parse_content_length(
         _flag(found, HTTPAnomalyKind.CL_AND_TE, label, offset)
         if not valid:
             _flag(found, HTTPAnomalyKind.INVALID_CONTENT_LENGTH, label, offset)
-        return True, None
+        return None
     if not valid:
         _flag(
             found, HTTPAnomalyKind.CONTENT_LENGTH_UNRECOVERABLE, label, offset
         )
-        return True, None
+        return _Framing(HTTPFraming.INVALID)
     if len(elements) > 1:
         _flag(found, HTTPAnomalyKind.CONTENT_LENGTH_REPEATED, label, offset)
-    return True, int(values.pop())
+    return _Framing(HTTPFraming.CONTENT_LENGTH, int(values.pop()))
 
 
 def _flag_present(
@@ -768,7 +768,7 @@ def _frame_message(
         if start.status == 304 or request_method == b"HEAD":
             return _Framing(HTTPFraming.NONE)
     chunked = _parse_transfer_encoding(fields, start.version, found)
-    cl_present, length = _parse_content_length(
+    by_length = _parse_content_length(
         fields, chunked is not None, found, protocol
     )
     if chunked is not None:
@@ -779,10 +779,8 @@ def _frame_message(
             return _Framing(HTTPFraming.UNTIL_CLOSE)
         _flag(found, HTTPAnomalyKind.REQUEST_FRAMING_UNDETERMINABLE, None, 0)
         return _Framing(HTTPFraming.INVALID)
-    if cl_present:
-        if length is None:
-            return _Framing(HTTPFraming.INVALID)
-        return _Framing(HTTPFraming.CONTENT_LENGTH, length)
+    if by_length is not None:
+        return by_length
     if start.is_response:
         return _Framing(HTTPFraming.UNTIL_CLOSE)
     return _Framing(HTTPFraming.NONE)
