@@ -136,6 +136,34 @@ class TestReleaseGate:
                 )
 
 
+REUSABLE_WORKFLOWS = [
+    w
+    for w in ALL_WORKFLOWS
+    if re.search(r"^  workflow_call:", w.read_text(), re.M)
+]
+
+
+@pytest.mark.parametrize("workflow", REUSABLE_WORKFLOWS, ids=lambda p: p.name)
+def test_reusable_workflow_concurrency_is_not_keyed_on_its_own_name(
+    workflow: Path,
+) -> None:
+    """Inside a workflow_call, ``github.workflow`` is the CALLER's name,
+    not this workflow's own -- a concurrency group built from it can
+    collide with the caller's own top-level group on the same ref and
+    get the whole run cancelled as a self-deadlock, as release.yml
+    calling ci.yml on a tag push once did."""
+    match = re.search(
+        r"^concurrency:\n  group: (?P<group>.+)$", workflow.read_text(), re.M
+    )
+    if match is None:
+        return  # no concurrency group to key wrong
+    assert "github.workflow" not in match["group"], (
+        f"{workflow.name}'s concurrency group uses github.workflow, which "
+        f"resolves to the CALLING workflow's name when this file runs via "
+        f"workflow_call -- it can collide with the caller's own group"
+    )
+
+
 def uses_ref(line: str) -> str | None:
     """The action reference on a ``uses:`` step line, or ``None`` if the
     line isn't one. Matches both the standard YAML list form
