@@ -1,0 +1,3 @@
+# The HTTP fixture streams are wire bytes: their CRLFs are the grammar
+# under test, so no checkout may convert them.
+tests/fixtures/http/* -text

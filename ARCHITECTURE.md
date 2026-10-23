@@ -385,10 +385,11 @@ a wrong answer.
 datagram protocol decodes is the payload; HTTP's is a message, which
 TCP delivers as a byte stream cut wherever it likes. Registering it
 (`decode_as={"tcp.port": {80: HTTP}}` works) only decodes the messages
-that happen to fit in one segment: in `tests/fixtures/http/http.pcap`
-that is 8 of 98 frames, while every bare ACK raises
-`TruncatedHeaderError` and every mid-message segment raises
-`InvalidFieldError`, so it needs `lax=True` and is still not
+that happen to fit in one segment. Of the 98 frames in
+`tests/fixtures/http/http.pcap`, 8 decode; the 70 with no payload
+(handshake, ACKs, FINs) and the 8 holding only the start of a message
+raise `TruncatedHeaderError`, and the 12 that begin mid-message raise
+`InvalidFieldError`. So it needs `lax=True`, and it is still not
 reassembly. Reassemble the connection and call `HTTP.decode()` on its
 bytes instead.
 
