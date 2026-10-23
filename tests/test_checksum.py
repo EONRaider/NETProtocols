@@ -29,9 +29,11 @@ CORPUS = corpus_frames()
 
 
 def transport_cases():
-    """Every corpus frame whose transport checksum is verifiable:
-    (ids, layer, enclosing ip, wire payload). Fragmented traffic is
-    excluded — those checksums span the reassembled datagram."""
+    """Every verifiable transport checksum in the corpus: (ids, layer,
+    enclosing ip, wire payload), one case per transport layer — a VXLAN
+    frame carries two, the outer UDP and the inner frame's own.
+    Fragmented traffic is excluded — those checksums span the
+    reassembled datagram."""
     cases = []
     for name, index, frame in CORPUS:
         layers, _ = walk(frame)
@@ -43,52 +45,71 @@ def transport_cases():
             for layer in layers
         ):
             continue  # any fragment: the checksum spans the reassembly
-        # Find the transport by type and the offset just past its
-        # header: an application layer (e.g. DNS) may now sit below it,
-        # so the transport's payload ends before the chain does. The
+        # Find each transport by type and the offset just past its
+        # header: an application layer (e.g. DNS) may sit below it, so
+        # the transport's payload ends before the chain does. The
         # enclosing IP is the last one before it, not the first: IP-in-IP
         # stacks two, and the pseudo-header is the inner one's. Track
         # that datagram's own start offset while walking, so a VLAN shim
         # or an outer IP header shifts its bounds too.
         ip = None
-        transport = None
-        after_transport = 0
         ip_start = 0
         offset = 0
+        found = 0
         for layer in layers:
             if isinstance(layer, (IPv4, IPv6)):
                 ip, ip_start = layer, offset
             offset += layer.header_len
-            if isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
-                transport = layer
-                after_transport = offset
-                break
-        if ip is None or transport is None:
-            continue
-        # The wire payload ends at the IP datagram's declared length.
-        if isinstance(ip, IPv4):
-            end = ip_start + ip.total_length
-        else:
-            end = ip_start + ip.header_len + ip.payload_length
-        payload = frame[after_transport:end]
-        cases.append((f"{name}#{index}", transport, ip, payload))
+            if ip is None or not isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
+                continue
+            # The wire payload ends at the IP datagram's declared length.
+            if isinstance(ip, IPv4):
+                end = ip_start + ip.total_length
+            else:
+                end = ip_start + ip.header_len + ip.payload_length
+            case_id = f"{name}#{index}" + (f"/{found}" if found else "")
+            cases.append((case_id, layer, ip, frame[offset:end]))
+            found += 1
     return cases
 
 
 CASES = transport_cases()
 
+#: UDP over IPv4 may send a zero checksum, "none computed" (RFC 768),
+#: as Linux's VXLAN does by default: verify() accepts it, but there is
+#: no value for compute() to reproduce, so those cases are held apart.
+UNCHECKSUMMED = [
+    case
+    for case in CASES
+    if isinstance(case[1], UDP)
+    and isinstance(case[2], IPv4)
+    and case[1].checksum == 0
+]
+CHECKSUMMED = [case for case in CASES if case not in UNCHECKSUMMED]
+
 
 class TestCorpusChecksums:
     def test_corpus_offers_all_five_checksum_cases(self):
-        kinds = {type(transport) for _, transport, _, _ in CASES}
+        kinds = {type(transport) for _, transport, _, _ in CHECKSUMMED}
         assert {TCP, UDP, ICMPv4, ICMPv6} <= kinds
-        assert any(isinstance(ip, IPv4) for _, _, ip, _ in CASES)
-        assert any(isinstance(ip, IPv6) for _, _, ip, _ in CASES)
+        assert any(isinstance(ip, IPv4) for _, _, ip, _ in CHECKSUMMED)
+        assert any(isinstance(ip, IPv6) for _, _, ip, _ in CHECKSUMMED)
+
+    def test_tunnelled_transports_are_cases_of_their_own(self):
+        """A VXLAN frame's inner transport is checked too, against the
+        inner IP header: the outer UDP is not the only case it yields."""
+        inner = [
+            (transport, ip)
+            for case_id, transport, ip, _ in CHECKSUMMED
+            if case_id.startswith("vxlan.pcap#") and "/" in case_id
+        ]
+        assert {type(transport) for transport, _ in inner} == {ICMPv4, UDP}
+        assert all(ip.src.startswith("10.9.13.") for _, ip in inner)
 
     @pytest.mark.parametrize(
         "transport,ip,payload",
-        [case[1:] for case in CASES],
-        ids=[case[0] for case in CASES],
+        [case[1:] for case in CHECKSUMMED],
+        ids=[case[0] for case in CHECKSUMMED],
     )
     def test_transport_checksums_recompute_to_wire_values(
         self, transport, ip, payload
@@ -97,6 +118,14 @@ class TestCorpusChecksums:
             transport.checksum
         )
         assert verify(transport, ip=ip, payload=payload)
+
+    def test_zero_udp_checksums_over_ipv4_verify_as_absent(self):
+        """The corpus's zero UDP checksums are VXLAN's outer datagrams
+        from a device left at the kernel default (noudpcsum)."""
+        assert UNCHECKSUMMED
+        for _, udp, ip, payload in UNCHECKSUMMED:
+            assert udp.dst_port == 4789
+            assert verify(udp, ip=ip, payload=payload)
 
     def test_ipv4_header_checksums_recompute_to_wire_values(self):
         headers = [
@@ -127,7 +156,7 @@ class TestCorpusChecksums:
             assert verify(igmp)
 
     def test_corrupted_byte_is_detected(self):
-        _, transport, ip, payload = CASES[0]
+        _, transport, ip, payload = CHECKSUMMED[0]
         corrupted = (
             payload[:-1] + bytes([payload[-1] ^ 0xFF]) if payload else b"\x01"
         )

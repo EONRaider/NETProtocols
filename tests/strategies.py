@@ -23,6 +23,7 @@ from netprotocols import (
     HTTP,
     IGMP,
     VLAN,
+    VXLAN,
     DNSOverTCP,
     ICMPv4,
     ICMPv6,
@@ -89,6 +90,19 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
         dei=draw(st.integers(0, 1)),
         vid=draw(st.integers(0, 0xFFF)),
         ethertype=draw(st.integers(0, 0xFFFF)),
+    )
+
+
+@st.composite
+def vxlan_headers(draw: st.DrawFn) -> VXLAN:
+    # The I flag is the one bit the constructor insists on; the other
+    # seven flag bits and both reserved fields are carried verbatim, so
+    # they are drawn freely.
+    return VXLAN(
+        flags=draw(st.integers(0, 0xFF)) | VXLAN.I_FLAG,
+        reserved1=draw(st.integers(0, 0xFFFFFF)),
+        vni=draw(st.integers(0, 0xFFFFFF)),
+        reserved2=draw(st.integers(0, 0xFF)),
     )
 
 
@@ -402,4 +416,5 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
     "HTTP": http_messages(),
+    "VXLAN": vxlan_headers(),
 }

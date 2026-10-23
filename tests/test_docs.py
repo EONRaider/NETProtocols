@@ -80,7 +80,15 @@ class TestCorpusFiguresInDocs:
 
     @pytest.mark.parametrize(
         "module",
-        ["vlan.py", "gre.py", "dhcp.py", "http.py", "ipv6_ext.py", "_tlv.py"],
+        [
+            "vlan.py",
+            "gre.py",
+            "dhcp.py",
+            "http.py",
+            "vxlan.py",
+            "ipv6_ext.py",
+            "_tlv.py",
+        ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:
         """The layout map went stale by omission, not by wrong values."""

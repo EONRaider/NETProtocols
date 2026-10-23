@@ -728,9 +728,9 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:66-71` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 101
-frames**, across 18 scenarios captured with tcpdump over real kernel
-VLAN, GRE, IP-in-IP and DHCP topologies. Every frame's checksums verify
+frame[cursor:cursor+layer.header_len]` for **every layer of all 112
+frames**, across 19 scenarios captured with tcpdump over real kernel
+VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies. Every frame's checksums verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
@@ -897,7 +897,8 @@ eight lines:
   `MaxDepthExceededError`. Chains already terminated — every header
   validates its own declared length — so this bounds *cost*, not
   correctness: a crafted frame cannot turn one walk into thousands of
-  decodes. Corpus maximum is 5 layers.
+  decodes. Corpus maximum is 7 layers (an ICMP echo tunnelled
+  through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make
   you name the class and hand-roll the rest.

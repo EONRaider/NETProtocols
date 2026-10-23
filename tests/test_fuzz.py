@@ -43,6 +43,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    VXLAN,
     DNSOverTCP,
     Ethernet,
     ICMPv4,
@@ -87,6 +88,7 @@ ALL_PROTOCOLS = (
     DHCP,
     GRE,
     HTTP,
+    VXLAN,
 )
 
 

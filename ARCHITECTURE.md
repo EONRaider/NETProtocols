@@ -247,6 +247,8 @@ flowchart LR
   X -->|58| IC6
   X -->|6| T
   X -->|17| U
+  U -->|4789| VX[VXLAN]
+  VX -->|always| E
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -337,7 +339,7 @@ therefore take the nearest one before it, as `Packet.with_checksums()`
 and `Packet.flow_key()` do, not the first.
 
 **Extending the walk without forking.** The tables are public. A
-protocol this library does not implement — MPLS, VXLAN, a proprietary
+protocol this library does not implement — MPLS, a proprietary
 telemetry header — is one registration away from participating in
 frame walks like any built-in:
 
@@ -367,8 +369,11 @@ registrations live together in
 [`_defaults.py`](src/netprotocols/_defaults.py), whose imports sit
 inside `install()` and run once from `__init__.py` after every
 protocol class exists. Shared enums stay in the dependency-free
-`_enums.py`. The layer modules bind their table at import and never
-import each other's classes at all.
+`_enums.py`. The layer modules bind their table at import and do not
+import each other's classes, with one exception that is not dispatch:
+a VXLAN payload is always an Ethernet frame, so `layer7/vxlan.py`
+names `Ethernet` directly. No cycle can form, because `ethernet.py`
+imports nothing from the layers above it.
 
 ## Port-based dispatch is best-effort
 
@@ -384,14 +389,36 @@ fourth layer; on TCP, port 53 names `DNSOverTCP`, a shim that consumes
 the 2-byte length prefix (RFC 1035 §4.2.2) and chains onward, so the
 walk stays uniform.
 
+VXLAN on UDP 4789 (RFC 7348) is the one port entry whose payload is a
+whole Ethernet frame. `VXLAN.next_protocol()` always answers
+`Ethernet`, and the walk carries on from there exactly as it does at
+the start of a frame — the inner frame's VLAN tags, ARP, IPv4 or IPv6
+dispatch through the same `ethertype` table, and the registry a caller
+passed reaches them too. The walker needed no change for this:
+`start=` only chooses the first class, and every later one comes from
+the previous header's `next_protocol()`, whatever its layer. An
+encapsulating endpoint always sends to 4789 from a source port hashed
+from the inner flow, so the destination-first lookup finds VXLAN even
+when that hash lands on another registered port. A VXLAN frame walks
+seven layers deep (`Ethernet → IPv4 → UDP → VXLAN → Ethernet → IPv4 →
+ICMPv4`), and a hostile one nested in itself gains four per level until
+`max_depth` stops it.
+
 Because the guess can be wrong, the application class validates
 strictly on decode: a non-DNS datagram that happens to use port 53
 raises a `ProtocolError`, which the ordinary decode-error path absorbs
 (the chain keeps the layers it did decode and records the failure). So
-a mis-dispatch degrades to a diagnosed frame, never to garbage. This
-is why the port tables can be opened to third parties as safely as the
-authoritative ones: a wrong registration costs a diagnosed frame, not
-a wrong answer.
+a mis-dispatch degrades to a diagnosed frame rather than to garbage, as
+far as the class's validation reaches. VXLAN is the weak case: its
+header defines a single flag bit, which it requires, and the inner
+Ethernet header accepts any 14 bytes, so a datagram that merely uses
+port 4789 is caught only about half the time and otherwise decodes as
+a tunnel around a garbage inner frame. RFC 7348 says to ignore the
+reserved bits, so rejecting those would refuse real traffic, such as
+the Group Based Policy extension's, to catch more of it. This is why
+the port tables can be opened to third parties as safely as the
+authoritative ones: a wrong registration costs what a wrong guess
+does, a diagnosed frame wherever the class's own validation can tell.
 
 `HTTP` is deliberately absent from the `tcp.port` table. The unit a
 datagram protocol decodes is the payload; HTTP's is a message, which
@@ -457,7 +484,7 @@ src/netprotocols/
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
-│                   and the HTTP codec class)
+│                   and the HTTP codec class), vxlan.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

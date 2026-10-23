@@ -48,6 +48,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
     CapturedFrame,
@@ -96,6 +97,7 @@ __all__ = [
     "TCP",
     "UDP",
     "VLAN",
+    "VXLAN",
     "ARPHardwareType",
     "ARPOperation",
     "CapturedFrame",

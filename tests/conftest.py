@@ -164,3 +164,10 @@ def raw_tcp_header_with_options() -> bytes:
 def raw_udp_header() -> bytes:
     """UDP header of a DNS query (destination port 53)."""
     return b"\x09\x5e\x00\x35\x00\x29\x36\x49"
+
+
+@pytest.fixture
+def raw_vxlan_header() -> bytes:
+    """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
+    1193046 (0x123456), reserved bits zero."""
+    return b"\x08\x00\x00\x00\x12\x34\x56\x00"
