@@ -1,0 +1,5 @@
+HTTP/1.1 304 Not Modified
+Server: NETProtocols-fixture
+Date: Fri, 23 Oct 2026 14:19:07 GMT
+ETag: "v1"
+

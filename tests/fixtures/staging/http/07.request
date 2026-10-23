@@ -1,0 +1,10 @@
+GET /hello HTTP/1.1
+Host: 10.9.8.1
+
+HEAD /hello HTTP/1.1
+Host: 10.9.8.1
+
+GET /chunked HTTP/1.1
+Host: 10.9.8.1
+Connection: close
+

@@ -342,6 +342,34 @@ def http_messages(draw: st.DrawFn) -> HTTP:
 
 
 @st.composite
+def http_context_responses(draw: st.DrawFn) -> HTTP:
+    """A response whose framing depends on the request it answers: a
+    HEAD response, or a 2xx to CONNECT. Either has no body whatever its
+    Content-Length or Transfer-Encoding says, so it only round-trips
+    when decoded with the same ``request_method``."""
+    method = draw(st.sampled_from(["HEAD", "CONNECT"]))
+    statuses = (
+        [b"200", b"301", b"404"] if method == "HEAD" else [b"200", b"201"]
+    )
+    start = b"HTTP/1.1 " + draw(st.sampled_from(statuses)) + b" X"
+    fields = draw(
+        st.lists(
+            st.sampled_from(
+                [
+                    b"Content-Length: 42",
+                    b"Transfer-Encoding: chunked",
+                    b"Connection: keep-alive",
+                    b"X: y",
+                ]
+            ),
+            max_size=3,
+        )
+    )
+    head = start + b"\r\n" + b"".join(f + b"\r\n" for f in fields) + b"\r\n"
+    return HTTP(head=head, request_method=method)
+
+
+@st.composite
 def http_wire(draw: st.DrawFn) -> bytes:
     """The bytes of a valid message, then a few byte-level mutations and
     possibly a truncation: input near the grammar's edges, which random

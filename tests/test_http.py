@@ -16,6 +16,7 @@ from conftest import FIXTURES
 from netprotocols import (
     TCP,
     InvalidFieldError,
+    IPv4,
     IPv6,
     TruncatedHeaderError,
     decode_frame,
@@ -1927,3 +1928,132 @@ class TestTCPFixture:
             HTTP.decode(segments[0])
         with pytest.raises(InvalidFieldError, match="at connection close"):
             HTTP.decode(segments[0], closed=True)
+
+
+HTTP_FIXTURES = FIXTURES / "http"
+
+#: What each captured connection in tests/fixtures/http/ carried, in the
+#: order the capture script opened them: the request methods and, per
+#: response, (status, framing, content length, trailer fields).
+_CONNECTIONS: list[object] = [
+    (["GET"], [(200, HTTPFraming.CONTENT_LENGTH, 42, ())]),
+    (["HEAD"], [(200, HTTPFraming.NONE, 0, ())]),
+    (["GET"], [(304, HTTPFraming.NONE, 0, ())]),
+    (["POST"], [(201, HTTPFraming.CONTENT_LENGTH, 17, ())]),
+    (
+        ["GET"],
+        [
+            (
+                200,
+                HTTPFraming.CHUNKED,
+                24,
+                (HTTPHeaderField("X-Fixture", "trailer"),),
+            )
+        ],
+    ),
+    (["GET"], [(404, HTTPFraming.CONTENT_LENGTH, 330, ())]),
+    (
+        ["GET", "HEAD", "GET"],
+        [
+            (200, HTTPFraming.CONTENT_LENGTH, 42, ()),
+            (200, HTTPFraming.NONE, 0, ()),
+            (
+                200,
+                HTTPFraming.CHUNKED,
+                24,
+                (HTTPHeaderField("X-Fixture", "trailer"),),
+            ),
+        ],
+    ),
+]
+
+
+def _stream(number: int, side: str) -> bytes:
+    return (HTTP_FIXTURES / f"{number:02d}.{side}").read_bytes()
+
+
+def _pipeline(stream: bytes, request_methods: list[str | None]) -> list[HTTP]:
+    """The documented way to read pipelined messages: decode, advance by
+    header_len, stop at CLOSE or TUNNEL (README, "Decoding HTTP")."""
+    messages: list[HTTP] = []
+    for method in request_methods:
+        msg = HTTP.decode(stream, request_method=method)
+        messages.append(msg)
+        stream = stream[msg.header_len :]
+        if msg.connection_disposition is not HTTPDisposition.CONTINUE:
+            break
+    assert stream == b"", "bytes left after the last expected message"
+    return messages
+
+
+class TestCapturedHTTP:
+    """tests/fixtures/http/: curl and a pipelined socket client against
+    Python's http.server over a veth pair (scripts/capture_fixtures_http.sh);
+    the per-connection byte streams come from
+    scripts/extract_http_streams.py."""
+
+    def test_the_streams_are_the_captured_bytes(self) -> None:
+        """Reassembled again here through netprotocols' own frame
+        decoding, so the stdlib extractor and the codec under test have
+        to agree on what was on the wire."""
+        sides: dict[tuple[int, str], dict[int, bytes]] = {}
+        order: list[int] = []
+        for frame in read_pcap((HTTP_FIXTURES / "http.pcap").read_bytes()):
+            packet = decode_frame(frame.data)
+            ip, tcp = packet[IPv4], packet[TCP]
+            assert isinstance(ip, IPv4)
+            assert isinstance(tcp, TCP)
+            client, side = (
+                (tcp.src_port, "request")
+                if tcp.dst_port == 80
+                else (tcp.dst_port, "response")
+            )
+            if client not in order:
+                order.append(client)
+            # Cut by the IP length, not the frame's: Ethernet may pad.
+            payload = frame.data[packet.consumed : 14 + ip.total_length]
+            if payload:
+                sides.setdefault((client, side), {})[tcp.seq] = payload
+        assert len(order) == len(_CONNECTIONS)
+        for number, client in enumerate(order, start=1):
+            for side in ("request", "response"):
+                segments = sides[(client, side)]
+                joined = b"".join(segments[seq] for seq in sorted(segments))
+                assert joined == _stream(number, side)
+
+    @pytest.mark.parametrize(
+        "number,connection",
+        list(enumerate(_CONNECTIONS, start=1)),
+        ids=_ids(_CONNECTIONS),
+    )
+    def test_every_message_decodes_cleanly(
+        self, number: int, connection: tuple[list[str], list[object]]
+    ) -> None:
+        methods, expected = connection
+        requests = _pipeline(_stream(number, "request"), [None] * len(methods))
+        assert [r.method for r in requests] == methods
+        responses = _pipeline(_stream(number, "response"), list(methods))
+        assert [
+            (r.status_code, r.framing, len(r.content), r.trailers)
+            for r in responses
+        ] == expected
+        for msg in (*requests, *responses):
+            assert msg.anomalies == ()
+        assert b"".join(map(bytes, requests)) == _stream(number, "request")
+        assert b"".join(map(bytes, responses)) == _stream(number, "response")
+
+    def test_a_head_response_keeps_its_length_but_has_no_body(self) -> None:
+        msg = HTTP.decode(_stream(2, "response"), request_method="HEAD")
+        assert msg.header("content-length") == "42"
+        assert msg.raw_body == b""
+        assert msg.request_method == "HEAD"
+        with pytest.raises(TruncatedHeaderError):
+            HTTP.decode(_stream(2, "response"))  # read as a GET's: 42 short
+
+    def test_the_last_pipelined_request_asks_to_close(self) -> None:
+        requests = _pipeline(_stream(7, "request"), [None, None, None])
+        assert [r.connection_disposition for r in requests] == [
+            HTTPDisposition.CONTINUE,
+            HTTPDisposition.CONTINUE,
+            HTTPDisposition.CLOSE,
+        ]
