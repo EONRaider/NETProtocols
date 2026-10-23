@@ -150,6 +150,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
+| 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
@@ -425,7 +426,8 @@ raw = bytes(frame)  # ready for a raw socket
 ```
 
 Checksums are computed and verified on request — never silently:
-`compute()`/`verify()` in `netprotocols.checksum`, and
+`compute()`/`verify()` in `netprotocols.checksum` (the internet
+checksum, and SCTP's CRC32c via `crc32c()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 
 ## Display helpers
@@ -497,7 +499,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-101-frame corpus of real captured traffic across 18 scenarios
+117-frame corpus of real captured traffic across 19 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and

@@ -54,6 +54,7 @@ class IPProtocol(IntEnum):
     GRE = 0x2F
     IPV6_ICMP = 0x3A
     IPV6_DSTOPTS = 0x3C
+    SCTP = 0x84
 
     @property
     def display_name(self) -> str:
@@ -73,6 +74,7 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.GRE: "GRE",
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
     IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
+    IPProtocol.SCTP: "SCTP",
 }
 
 

@@ -39,11 +39,12 @@ is 80; Markdown is excluded from linting.
 src/netprotocols/
   _base.py        the Protocol base class and the decode contract
   _enums.py       EtherType / IPProtocol / ARP* registries + display names
-  checksum.py     RFC 1071 internet checksum, compute()/verify()
+  checksum.py     RFC 1071 internet checksum, SCTP's CRC32c,
+                  compute()/verify()
   packet.py       Packet: an ordered stack of headers, with_checksums()
   layer2/         Ethernet, VLAN, ARP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP
-  layer4/         TCP, UDP (+ port-based dispatch)
+  layer4/         TCP, UDP, SCTP (+ port-based dispatch)
   layer7/         DNS, DHCP, HTTP
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
@@ -56,8 +57,9 @@ Every protocol is a frozen, slotted dataclass whose fields mirror the
 on-wire header. `decode(data)` receives the entire remaining buffer and
 must parse its fixed portion, tolerate trailing bytes, and raise a
 subclass of `ProtocolError` (never a bare `struct.error` or
-`ValueError`) on malformed input. The authoritative description lives in
-the module docstring of
+`ValueError`) on malformed input. (SCTP, which has no length field,
+finds its own extent instead and tolerates only zero padding after
+it.) The authoritative description lives in the module docstring of
 [`src/netprotocols/_base.py`](src/netprotocols/_base.py) — read it
 before adding a protocol.
 

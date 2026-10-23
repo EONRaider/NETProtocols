@@ -14,6 +14,7 @@ from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     ARP,
     DNS,
+    SCTP,
     TCP,
     UDP,
     VLAN,
@@ -95,6 +96,7 @@ class TestCorpusCoverage:
             ICMPv6,
             TCP,
             UDP,
+            SCTP,
             DNSOverTCP,
             DNS,
         } <= seen

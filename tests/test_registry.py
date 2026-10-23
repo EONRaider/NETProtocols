@@ -3,7 +3,16 @@ inheritance, and isolation from the process-wide default."""
 
 import pytest
 
-from netprotocols import DNS, TCP, UDP, Ethernet, IPv4, IPv6, Protocol
+from netprotocols import (
+    DNS,
+    SCTP,
+    TCP,
+    UDP,
+    Ethernet,
+    IPv4,
+    IPv6,
+    Protocol,
+)
 from netprotocols._defaults import IPV6_ONLY_NUMBERS, install
 from netprotocols.registry import (
     DEFAULT,
@@ -82,8 +91,8 @@ class TestRegistration:
 
     def test_register_as_a_direct_call_returns_none(self):
         isolated = Registry()
-        assert register(TABLE_IP_PROTO, 132, Fake, registry=isolated) is None
-        assert isolated.get(TABLE_IP_PROTO, 132) is Fake
+        assert register(TABLE_IP_PROTO, 253, Fake, registry=isolated) is None
+        assert isolated.get(TABLE_IP_PROTO, 253) is Fake
 
     def test_register_all_covers_several_keys(self):
         isolated = Registry()
@@ -132,9 +141,9 @@ class TestConflicts:
 
 class TestTableInheritance:
     def test_a_shared_registration_reaches_the_v6_table(self, registry):
-        registry.register(TABLE_IP_PROTO, 132, Fake)
-        assert registry.get(TABLE_IP_PROTO, 132) is Fake
-        assert registry.get(TABLE_IP_PROTO_V6, 132) is Fake
+        registry.register(TABLE_IP_PROTO, 253, Fake)
+        assert registry.get(TABLE_IP_PROTO, 253) is Fake
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is Fake
 
     def test_a_v6_registration_stays_out_of_the_base_table(self, registry):
         registry.register(TABLE_IP_PROTO_V6, 139, Fake)
@@ -146,10 +155,10 @@ class TestTableInheritance:
     ):
         """Inheritance must not overwrite a deliberate child entry,
         whichever order the two registrations arrive in."""
-        registry.register(TABLE_IP_PROTO_V6, 132, OtherFake)
-        registry.register(TABLE_IP_PROTO, 132, Fake)
-        assert registry.get(TABLE_IP_PROTO, 132) is Fake
-        assert registry.get(TABLE_IP_PROTO_V6, 132) is OtherFake
+        registry.register(TABLE_IP_PROTO_V6, 253, OtherFake)
+        registry.register(TABLE_IP_PROTO, 253, Fake)
+        assert registry.get(TABLE_IP_PROTO, 253) is Fake
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is OtherFake
 
     def test_the_built_in_extension_headers_are_v6_only(self, registry):
         for number in IPV6_ONLY_NUMBERS:
@@ -213,8 +222,8 @@ class TestIsolation:
         assert DEFAULT.get_port(TABLE_UDP_PORT, 40000, 6969) is None
 
     def test_a_derived_registry_inherits_across_tables(self, registry):
-        child = registry.derive({TABLE_IP_PROTO: {132: Fake}})
-        assert child.get(TABLE_IP_PROTO_V6, 132) is Fake
+        child = registry.derive({TABLE_IP_PROTO: {253: Fake}})
+        assert child.get(TABLE_IP_PROTO_V6, 253) is Fake
 
     def test_derive_without_overrides_is_a_plain_copy(self, registry):
         child = registry.derive()
@@ -282,6 +291,8 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 2).__name__ == "IGMP"
         assert DEFAULT.get(TABLE_IP_PROTO, 4) is IPv4
         assert DEFAULT.get(TABLE_IP_PROTO, 41) is IPv6
+        assert DEFAULT.get(TABLE_IP_PROTO, 132) is SCTP
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 132) is SCTP
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS

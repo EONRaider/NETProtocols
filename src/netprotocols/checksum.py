@@ -1,4 +1,5 @@
-"""Internet checksum computation and verification (RFC 1071).
+"""Checksum computation and verification: the internet checksum (RFC
+1071) and SCTP's CRC32c (RFC 9260 Appendix A).
 
 The primitive, :func:`internet_checksum`, returns the raw ones'-
 complement result — ``0x0000`` is a legal return value, and TCP, ICMP,
@@ -6,6 +7,10 @@ and the IPv4 header checksum legitimately transmit it. The famous
 ``0x0000 → 0xFFFF`` substitution is a **UDP-only transmit rule**
 (RFC 768; RFC 8200 §8.1) and lives solely in the UDP arm of
 :func:`compute`.
+
+SCTP alone does not use the internet checksum: its packets carry a
+CRC32c (the Castagnoli CRC, also iSCSI's), computed by :func:`crc32c`
+over the whole packet with no pseudo-header.
 
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
@@ -16,6 +21,7 @@ Feed these helpers the payload exactly as it appears on the wire.
 from __future__ import annotations
 
 import struct
+from functools import reduce
 
 from netprotocols._base import (
     Protocol,
@@ -27,11 +33,12 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["compute", "internet_checksum", "verify"]
+__all__ = ["compute", "crc32c", "internet_checksum", "verify"]
 
 
 def internet_checksum(data: bytes | memoryview) -> int:
@@ -49,6 +56,45 @@ def internet_checksum(data: bytes | memoryview) -> int:
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
+
+
+#: The Castagnoli polynomial 0x1EDC6F41, bit-reflected (RFC 3720 §12.1,
+#: RFC 9260 Appendix A).
+_CRC32C_POLY = 0x82F63B78
+
+#: The CRC of each byte value, for the byte-at-a-time loop in
+#: :func:`crc32c`: eight shift-and-conditionally-xor steps, one per bit.
+#: Built by a module-level expression rather than a helper function so
+#: the mutation audit (see pyproject.toml's [tool.mutmut]) never sees an
+#: import-time call it cannot attribute to a test; the table is pinned
+#: through :func:`crc32c`'s test vectors instead.
+_CRC32C_TABLE: tuple[int, ...] = tuple(
+    reduce(
+        lambda crc, _: (crc >> 1) ^ (_CRC32C_POLY if crc & 1 else 0),
+        range(8),
+        byte,
+    )
+    for byte in range(256)
+)
+
+
+def crc32c(data: bytes | memoryview) -> int:
+    """The CRC32c (Castagnoli) of ``data``: reflected, initial value and
+    final xor ``0xFFFFFFFF`` (RFC 3720 §12.1, RFC 9260 Appendix A), e.g.
+    ``crc32c(b"123456789") == 0xE3069283``.
+
+    Not :func:`zlib.crc32`, which is the IEEE 802.3 CRC-32 — a
+    different polynomial — and the standard library has no CRC32c.
+
+    This is the CRC as a number. SCTP transmits it least significant
+    byte first, so the packet's checksum field, read big-endian, is
+    this value byte-swapped; :func:`compute` applies that for an
+    :class:`~netprotocols.SCTP` layer.
+    """
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc = _CRC32C_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+    return crc ^ 0xFFFFFFFF
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
@@ -105,12 +151,16 @@ def compute(
         ``GRE`` covers header plus ``payload`` with no pseudo-header
         (RFC 2784 §2.5) and requires the Checksum-Present bit;
         ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
-        built from ``ip``.
+        built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
+        its chunks included, with no pseudo-header (``ip`` ignored),
+        returned as the field's big-endian reading of the CRC's
+        little-endian wire bytes (RFC 9260 Appendix A).
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
     :param payload: The bytes following ``layer`` on the wire. A decoded
-        ``ICMPv4``/``ICMPv6``/``IGMP`` message already carries its whole
-        body in ``bytes(layer)``, so pass a ``payload`` only for bytes
-        the layer object does not itself hold.
+        ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
+        packet, already carries its whole body in ``bytes(layer)``, so
+        pass a ``payload`` only for bytes the layer object does not
+        itself hold.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -134,6 +184,14 @@ def compute(
                 field="checksum",
             )
         return internet_checksum(_zeroed(bytes(layer), 4) + payload)
+    if isinstance(layer, SCTP):
+        # Whole packet, checksum field (bytes 8-11) zeroed, no
+        # pseudo-header. The CRC goes on the wire least significant
+        # byte first, and the field reads its four bytes big-endian.
+        packet = bytes(layer)
+        crc = crc32c(packet[:8] + b"\x00\x00\x00\x00" + packet[12:] + payload)
+        field: int = struct.unpack("!I", crc.to_bytes(4, "little"))[0]
+        return field
     if isinstance(layer, ICMPv6):
         enclosing = _require_ip(layer, ip)
         segment = _zeroed(bytes(layer), 2) + payload

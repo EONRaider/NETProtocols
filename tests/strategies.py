@@ -22,6 +22,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    SCTP,
     VLAN,
     DNSOverTCP,
     ICMPv4,
@@ -32,6 +33,7 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Protocol,
+    SCTPChunk,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
 
@@ -255,6 +257,29 @@ def gre_headers(draw: st.DrawFn) -> GRE:
     )
 
 
+@st.composite
+def sctp_chunks(draw: st.DrawFn) -> SCTPChunk:
+    return SCTPChunk(
+        type=draw(st.integers(0, 0xFF)),
+        flags=draw(st.integers(0, 0xFF)),
+        value=draw(st.binary(max_size=_MAX_BLOB)),
+    )
+
+
+@st.composite
+def sctp_headers(draw: st.DrawFn) -> SCTP:
+    # chunks is raw bytes that decode() must be able to walk, so it is
+    # built from whole, padded chunks rather than drawn as free bytes.
+    chunks = draw(st.lists(sctp_chunks(), max_size=4))
+    return SCTP(
+        src_port=draw(st.integers(0, 0xFFFF)),
+        dst_port=draw(st.integers(0, 0xFFFF)),
+        verification_tag=draw(st.integers(0, 0xFFFFFFFF)),
+        checksum=draw(st.integers(0, 0xFFFFFFFF)),
+        chunks=b"".join(bytes(chunk) for chunk in chunks),
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -401,5 +426,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DNSOverTCP": dns_over_tcp_headers(),
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
+    "SCTP": sctp_headers(),
     "HTTP": http_messages(),
 }

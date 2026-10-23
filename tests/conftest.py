@@ -164,3 +164,10 @@ def raw_tcp_header_with_options() -> bytes:
 def raw_udp_header() -> bytes:
     """UDP header of a DNS query (destination port 53)."""
     return b"\x09\x5e\x00\x35\x00\x29\x36\x49"
+
+
+@pytest.fixture
+def raw_sctp_packet() -> bytes:
+    """SCTP COOKIE ACK, from tests/fixtures/sctp.pcap: the common header
+    and one 4-byte chunk."""
+    return b"\x00\x07\xd5\xf2\xff\x09\xba\x55\xb2\x83\xdb\xc1\x0b\x00\x00\x04"

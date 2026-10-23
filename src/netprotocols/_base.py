@@ -48,6 +48,16 @@ ending the head and for the end the head's framing gives the body, and
 ``header_len`` covers the whole message rather than a ``_struct``
 size, so it must be overridden (step 1 above is a scan, not an
 unpack).
+
+Self-bounding protocols
+-----------------------
+``SCTP`` has no length field: the packet is the whole IP payload, and
+the chain walk does not trim a frame to the IP header's declared
+length. Its ``decode()`` therefore walks the chunk headers to find
+where the packet ends, so step 3 holds only in part: a trailing run of
+zero bytes (link-layer padding) is left undecoded, but a nonzero
+trailer cannot be told from a broken chunk and raises. See
+:mod:`netprotocols.layer4.sctp`.
 """
 
 from __future__ import annotations

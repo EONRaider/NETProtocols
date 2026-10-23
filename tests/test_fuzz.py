@@ -40,6 +40,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    SCTP,
     TCP,
     UDP,
     VLAN,
@@ -57,6 +58,7 @@ from netprotocols import (
     Packet,
     Protocol,
     ProtocolError,
+    SCTPChunk,
     TCPOption,
 )
 from strategies import (
@@ -64,6 +66,7 @@ from strategies import (
     http_context_responses,
     http_messages,
     http_wire,
+    sctp_chunks,
 )
 from test_corpus import walk
 
@@ -82,6 +85,7 @@ ALL_PROTOCOLS = (
     IGMP,
     TCP,
     UDP,
+    SCTP,
     DNS,
     DNSOverTCP,
     DHCP,
@@ -467,6 +471,28 @@ class TestTCPOptionAccessorSafety:
                 for option in tcp.parsed_options:
                     assert option.kind_name
                     _ = option.value
+
+
+class TestSCTPChunkAccessorSafety:
+    @given(data=fuzz_input)
+    def test_decoded_chunks_never_raise(self, data: bytes) -> None:
+        """decode() walks the chunks to bound the packet, so on a
+        decoded instance the accessor and every display helper must not
+        raise at all, and the walk must stay inside the buffer."""
+        with contextlib.suppress(ProtocolError):
+            sctp = SCTP.decode(data)
+            assert sctp.header_len <= len(data)
+            for chunk in sctp.parsed_chunks:
+                assert chunk.type_name
+                _ = chunk.flags_str
+                assert 0 <= chunk.unrecognized_action <= 3
+
+    @given(chunks=st.lists(sctp_chunks(), max_size=6))
+    def test_built_chunks_parse_back(self, chunks: list[SCTPChunk]) -> None:
+        raw = b"".join(bytes(chunk) for chunk in chunks)
+        sctp = SCTP.decode(bytes(12) + raw)
+        assert sctp.chunks == raw
+        assert list(sctp.parsed_chunks) == chunks
 
 
 def _read_every_accessor(msg: HTTP) -> None:

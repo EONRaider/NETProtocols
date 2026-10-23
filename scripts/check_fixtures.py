@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Validate the internal checksum consistency of captured fixture pcaps.
 
-Deliberately standalone (stdlib only, its own RFC 1071 implementation,
-its own minimal parsers): it must be able to disqualify a capture even
-if netprotocols itself has a bug, and later it cross-validates the
-library's checksum module (plan item L-2) with an independent
-implementation.
+Deliberately standalone (stdlib only, its own RFC 1071 and CRC32c
+implementations, its own minimal parsers): it must be able to
+disqualify a capture even if netprotocols itself has a bug, and later
+it cross-validates the library's checksum module (plan item L-2) with
+an independent implementation.
 
 Usage: python3 scripts/check_fixtures.py tests/fixtures/staging
 """
@@ -25,6 +25,21 @@ def internet_checksum(data: bytes) -> int:
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
+
+
+#: CRC32c's Castagnoli polynomial, bit-reflected (RFC 9260 Appendix A).
+_CRC32C_POLY = 0x82F63B78
+
+
+def crc32c(data: bytes) -> int:
+    """SCTP's CRC32c, bit by bit: slow, and deliberately not the
+    library's table-driven loop."""
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (_CRC32C_POLY if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFF
 
 
 def read_pcap(path: Path):
@@ -110,6 +125,17 @@ def _check_udp(
     return []
 
 
+def _check_sctp(upper: bytes, stats: Counter) -> list[str]:
+    # SCTP: CRC32c over the whole packet with the checksum field (bytes
+    # 8-11) zeroed and no pseudo-header, sent least significant byte
+    # first (RFC 9260 Appendix A). The packet is the whole IP payload.
+    stats["sctp"] += 1
+    crc = crc32c(upper[:8] + b"\x00" * 4 + upper[12:])
+    if crc.to_bytes(4, "little") != upper[8:12]:
+        return ["sctp-checksum"]
+    return []
+
+
 def _check_gre(
     src: bytes, dst: bytes, upper: bytes, stats: Counter, depth: int
 ) -> list[str]:
@@ -159,6 +185,8 @@ def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
         failures += _check_udp(src, dst, upper, stats)
     elif proto == 47 and upper_len >= 4:
         failures += _check_gre(src, dst, upper, stats, depth)
+    elif proto == 132 and upper_len >= 12:
+        failures += _check_sctp(upper, stats)
     elif proto in _IP_IN_IP:
         failures += _check_ip_in_ip(proto, upper, stats, depth)
     return failures
@@ -247,6 +275,8 @@ def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
         failures += _check_tcp6(src, dst, upper, stats)
     elif next_header == 17 and upper_len >= 8:
         failures += _check_udp6(src, dst, upper, stats)
+    elif next_header == 132 and upper_len >= 12:
+        failures += _check_sctp(upper, stats)
     elif next_header in _IP_IN_IP:
         failures += _check_ip_in_ip(next_header, upper, stats, depth)
     return failures

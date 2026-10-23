@@ -13,7 +13,7 @@ from netprotocols._enums import (
     EtherType,
     IPProtocol,
 )
-from netprotocols.checksum import compute, internet_checksum, verify
+from netprotocols.checksum import compute, crc32c, internet_checksum, verify
 from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
@@ -29,6 +29,7 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.dhcp import DHCP, DHCPOption
@@ -93,6 +94,7 @@ __all__ = [
     "HTTP",
     "IGMP",
     "MAX_DEPTH",
+    "SCTP",
     "TCP",
     "UDP",
     "VLAN",
@@ -136,12 +138,14 @@ __all__ = [
     "ProtocolError",
     "Registry",
     "RegistryConflictError",
+    "SCTPChunk",
     "SOARecord",
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",
     "__version__",
     "compute",
+    "crc32c",
     "decode_frame",
     "flow_key",
     "internet_checksum",

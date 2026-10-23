@@ -22,8 +22,9 @@ library source::
     class MPLS(Protocol):
         ...
 
-    # or, for a class you did not write
-    register("ip.proto", 132, SCTP)
+    # or, for a class you did not write (253 is reserved for
+    # experimentation, RFC 3692, so no built-in decoder holds it)
+    register("ip.proto", 253, Experiment)
 
 The decorator returns the class unchanged, so it stacks with
 ``@dataclass`` and never interferes with the type.
@@ -349,7 +350,7 @@ def register(
 
     Used directly, ``protocol`` names a class you did not write::
 
-        register("ip.proto", 132, SCTP)
+        register("ip.proto", 253, Experiment)
 
     Registrations land in :data:`DEFAULT` — process-wide — unless
     ``registry`` names another. See :meth:`Registry.register` for the
