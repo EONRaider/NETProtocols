@@ -6,9 +6,10 @@ identified by *port*, which is a heuristic: any service may run on any
 port, and the discriminator is split across two fields (source and
 destination). Dispatch therefore checks the destination port first (a
 request targets the server's well-known port) and then the source port
-(a response comes from it), and the resulting class is expected to
-validate strictly on decode so that a wrong guess degrades to the
-library's ordinary malformed-frame path rather than yielding garbage.
+(a response comes from it). The resulting class validates on decode,
+which turns a wrong guess into the library's ordinary malformed-frame
+path only where its format can tell: one it accepts decodes as a wrong
+layer (see :mod:`netprotocols.registry`).
 
 DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so the
 TCP table names a small length-prefix shim (``DNSOverTCP``) rather than

@@ -62,7 +62,11 @@ def vxlan(vni: int = 0x123456) -> VXLAN:
 
 
 def encapsulate(
-    inner: bytes, *, vni: int = 0x123456, src_port: int = 51361
+    inner: bytes,
+    *,
+    vni: int = 0x123456,
+    src_port: int = 51361,
+    dst_port: int = 4789,
 ) -> bytes:
     """``Ethernet -> IPv4 -> UDP (dst 4789) -> VXLAN`` around ``inner``,
     a whole Ethernet frame, with every outer checksum computed."""
@@ -78,7 +82,10 @@ def encapsulate(
                     dst="10.9.12.2",
                 ),
                 UDP(
-                    src_port=src_port, dst_port=4789, length=udp_len, checksum=0
+                    src_port=src_port,
+                    dst_port=dst_port,
+                    length=udp_len,
+                    checksum=0,
                 ),
                 vxlan(vni),
             ).with_checksums(inner)
@@ -209,12 +216,27 @@ class TestConstruction:
         assert (err.field, err.expected, err.actual) == (field, expected, value)
         assert err.offset is None
 
-    def test_the_i_flag_is_required(self):
+    def test_a_clear_i_flag_builds_but_does_not_decode(self):
+        """Construction does not enforce the RFC's I-flag MUST, so a
+        header without it can be sent to test another stack; decode
+        does, because it is the guard against a mis-dispatched port."""
+        header = VXLAN(flags=0, reserved1=0, vni=7, reserved2=0)
+        raw = bytes(header)
+        assert raw == b"\x00\x00\x00\x00\x00\x00\x07\x00"
         with pytest.raises(InvalidFieldError) as caught:
-            VXLAN(flags=0, reserved1=0, vni=7, reserved2=0)
-        err = caught.value
-        assert err.field == "flags"
-        assert err.offset is None  # a value, not a position in bytes
+            VXLAN.decode(raw)
+        assert (caught.value.field, caught.value.offset) == ("flags", 0)
+
+    @pytest.mark.parametrize("flags", range(256))
+    def test_every_flags_byte_builds_and_decodes_iff_i_is_set(self, flags):
+        header = VXLAN(flags=flags, reserved1=0, vni=42, reserved2=0)
+        raw = bytes(header)
+        assert raw == bytes([flags]) + b"\x00\x00\x00\x00\x00\x2a\x00"
+        if flags & VXLAN.I_FLAG:
+            assert VXLAN.decode(raw) == header
+        else:
+            with pytest.raises(InvalidFieldError):
+                VXLAN.decode(raw)
 
     def test_the_widest_values_are_accepted(self):
         header = VXLAN(
@@ -327,6 +349,16 @@ class TestWalk:
         packet = decode_frame(frame, decode_as={"udp.port": {6969: DNS}})
         assert kinds(packet)[-2:] == [UDP, DNS]
 
+    def test_decode_as_adds_linuxs_pre_iana_port(self):
+        """Linux gives a vxlan device dstport 8472 when none is named,
+        and 8472 is not registered; naming it for one walk decodes the
+        tunnel."""
+        frame = encapsulate(inner_echo(), dst_port=8472)
+        assert kinds(decode_frame(frame)) == [Ethernet, IPv4, UDP]
+        packet = decode_frame(frame, decode_as={"udp.port": {8472: VXLAN}})
+        assert kinds(packet) == ECHO_CHAIN
+        assert packet.consumed == len(frame)
+
     def test_an_override_can_take_the_port_away(self):
         """Best-effort like every port entry: a caller who knows port
         4789 carries something else can say so for one walk."""
@@ -392,6 +424,18 @@ class TestTruncatedAndMalformed:
         assert caught.value.frame_offset == VXLAN_AT
         packet = decode_frame(bytes(frame), lax=True)
         assert kinds(packet) == [Ethernet, IPv4, UDP]
+        assert isinstance(packet.stopped_by, InvalidFieldError)
+
+    def test_the_inner_frame_of_a_clear_i_flag_decodes_on_its_own(self):
+        """The documented workaround for a capture with the I flag
+        clear: the inner frame starts 8 bytes past the error's offset."""
+        frame = bytearray(self.FRAME)
+        frame[VXLAN_AT] = 0x00
+        with pytest.raises(InvalidFieldError) as caught:
+            decode_frame(bytes(frame))
+        inner = bytes(frame[caught.value.frame_offset + 8 :])
+        assert kinds(decode_frame(inner)) == [Ethernet, IPv4, ICMPv4]
+        assert decode_frame(inner) == decode_frame(inner_echo())
 
 
 class TestHostileNesting:
@@ -459,8 +503,10 @@ class TestCorpusVXLAN:
 
     def test_the_kernel_sends_to_4789_from_a_hashed_port(self):
         """Linux picks the outer source port from a hash of the inner
-        flow and always targets 4789, which is why dispatch reaches
-        VXLAN through the destination port."""
+        flow and sends to the device's dstport, which the capture set
+        to 4789 (Linux's default is 8472). The source port is never
+        a registered one here, but dispatch would reach VXLAN through
+        the destination port even if it were."""
         for packet in self.packets():
             udp = packet[UDP]
             assert udp.dst_port == 4789

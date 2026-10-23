@@ -370,10 +370,13 @@ registrations live together in
 inside `install()` and run once from `__init__.py` after every
 protocol class exists. Shared enums stay in the dependency-free
 `_enums.py`. The layer modules bind their table at import and do not
-import each other's classes, with one exception that is not dispatch:
-a VXLAN payload is always an Ethernet frame, so `layer7/vxlan.py`
-names `Ethernet` directly. No cycle can form, because `ethernet.py`
-imports nothing from the layers above it.
+import each other's classes to dispatch: every class a header names as
+its payload comes out of a table. Two modules import another's class
+where no table applies. `layer3/icmp.py` names `IPv4` and `IPv6` to
+start the walk of the packet an ICMP error quotes, and `layer7/vxlan.py`
+names `Ethernet`, because a VXLAN payload is always an Ethernet frame.
+Neither can form a cycle: `ip.py` and `ethernet.py` import no other
+layer module.
 
 ## Port-based dispatch is best-effort
 
@@ -397,28 +400,42 @@ dispatch through the same `ethertype` table, and the registry a caller
 passed reaches them too. The walker needed no change for this:
 `start=` only chooses the first class, and every later one comes from
 the previous header's `next_protocol()`, whatever its layer. An
-encapsulating endpoint always sends to 4789 from a source port hashed
-from the inner flow, so the destination-first lookup finds VXLAN even
-when that hash lands on another registered port. A VXLAN frame walks
-seven layers deep (`Ethernet → IPv4 → UDP → VXLAN → Ethernet → IPv4 →
-ICMPv4`), and a hostile one nested in itself gains four per level until
-`max_depth` stops it.
+encapsulating endpoint normally sends to 4789, the IANA port (RFC 7348
+§5), from a source port hashed from the inner flow, so the
+destination-first lookup finds VXLAN even when that hash lands on
+another registered port. The same precedence means a DNS or DHCP reply
+to a client whose ephemeral port happens to be 4789 decodes as VXLAN.
+Only 4789 is registered, and Linux still gives a vxlan device `dstport`
+8472, the port it used before IANA assigned one, when `ip link add`
+names none, so a capture from such a device needs
+`decode_as={"udp.port": {8472: VXLAN}}`. An ICMP echo tunnelled through
+VXLAN walks seven layers (`Ethernet → IPv4 → UDP → VXLAN → Ethernet →
+IPv4 → ICMPv4`), and a hostile frame nested in itself gains four per
+level until `max_depth` stops it.
 
-Because the guess can be wrong, the application class validates
-strictly on decode: a non-DNS datagram that happens to use port 53
-raises a `ProtocolError`, which the ordinary decode-error path absorbs
-(the chain keeps the layers it did decode and records the failure). So
-a mis-dispatch degrades to a diagnosed frame rather than to garbage, as
-far as the class's validation reaches. VXLAN is the weak case: its
-header defines a single flag bit, which it requires, and the inner
-Ethernet header accepts any 14 bytes, so a datagram that merely uses
-port 4789 is caught only about half the time and otherwise decodes as
-a tunnel around a garbage inner frame. RFC 7348 says to ignore the
-reserved bits, so rejecting those would refuse real traffic, such as
-the Group Based Policy extension's, to catch more of it. This is why
-the port tables can be opened to third parties as safely as the
-authoritative ones: a wrong registration costs what a wrong guess
-does, a diagnosed frame wherever the class's own validation can tell.
+Because the guess can be wrong, each application class validates on
+decode, but it can only reject what its format lets it tell apart from
+noise, and for most formats that is little. DNS needs only its 12-byte
+header and DHCP its 236-byte fixed part; past that, almost any bytes
+decode cleanly as either, and even a datagram to port 53 with no
+payload at all, padded to Ethernet's 60-byte minimum, decodes the
+padding as a DNS header. VXLAN can reject more, because its header has
+one bit it requires: the I flag, which random bytes leave clear half the
+time. Over 10,000 random 300-byte UDP payloads per port, decoded with
+`decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
+50.1% of those sent to 4789 and for none of those sent to 53 or 67.
+VXLAN cannot reject more than that: RFC 7348 says to ignore its reserved
+bits, so rejecting those would refuse real traffic, such as the Group
+Based Policy extension's.
+
+A rejected guess takes the ordinary decode-error path: the chain keeps
+the layers it did decode and records the failure. An accepted one
+yields a layer that decoded cleanly and is wrong, and nothing in the
+`Packet` says so. A caller who needs certainty does not leave it to the
+port: `decode_as` or a derived `Registry` names the class for a port
+the caller knows, overriding the default for that walk. Third-party
+entries in the port tables carry the same risk and no more: a wrong
+registration costs what a wrong guess does.
 
 `HTTP` is deliberately absent from the `tcp.port` table. The unit a
 datagram protocol decodes is the payload; HTTP's is a message, which

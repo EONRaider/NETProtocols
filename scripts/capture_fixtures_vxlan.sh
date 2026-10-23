@@ -23,13 +23,19 @@
 #   outer UDP checksum is zero, "not used" under RFC 768, which RFC 7348
 #   §5 permits. One echo.
 #
-# dstport 4789 is passed explicitly: iproute2's default is Linux's
+# dstport 4789 is passed explicitly: without it, Linux uses its
 # pre-IANA 8472. The underlay and vxlan MAC addresses are fixed; a
 # re-capture still differs in IPv4 identification, the echo identifier
 # and timestamps, and the outer UDP source ports, which the kernel
 # hashes from each inner flow (RFC 7348 §5). Offload is off
 # on both the veth and the vxlan devices, or the inner and outer
 # checksums are left to "offload" and never computed.
+#
+# The kernel must be able to create a vxlan device (CONFIG_VXLAN); the
+# script checks first and stops if it cannot. Every exchange must
+# succeed, and the capture must hold exactly the frames above (2 ARP,
+# 4 ICMP and 1 UDP on VNI 1193046; 2 ARP and 2 ICMP on VNI 100), or the
+# script fails rather than stage a partial fixture.
 
 set -euo pipefail
 
@@ -48,13 +54,26 @@ NSB=npvxb
 A=npvxva
 B=npvxvb
 VX=npvx0
+pid=""
+listener=""
 cleanup() {
+    # Stop the capture and the listener first: both run inside the
+    # netns that are deleted next.
+    if [[ -n $pid ]]; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    if [[ -n $listener ]]; then
+        kill "$listener" 2>/dev/null || true
+        wait "$listener" 2>/dev/null || true
+    fi
     ip netns del "$NSA" 2>/dev/null || true
     ip netns del "$NSB" 2>/dev/null || true
     ip link del "$A" 2>/dev/null || true
 }
 trap cleanup EXIT
 cleanup
+fail() { echo "[!] $*" >&2; exit 1; }
 
 no6() {
     $1 sysctl -qw net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
@@ -68,6 +87,12 @@ offload_off() {  # netns device
 echo "[*] underlay veth + two netns (10.9.12.1 <-> 10.9.12.2)"
 ip netns add "$NSA"; ip netns add "$NSB"
 no6 "ip netns exec $NSA"; no6 "ip netns exec $NSB"
+if ! ip -n "$NSA" link add "$VX" type vxlan id 1 dstport 4789 2>/dev/null; then
+    echo "This kernel cannot create a vxlan device (CONFIG_VXLAN, or" >&2
+    echo "'modprobe vxlan'); a VXLAN capture needs one." >&2
+    exit 1
+fi
+ip -n "$NSA" link del "$VX"
 ip link add "$A" address 02:00:0a:09:0c:01 type veth \
     peer name "$B" address 02:00:0a:09:0c:02
 ip link set "$A" netns "$NSA"
@@ -102,7 +127,8 @@ sleep 1
 
 # Segment 1: VNI 0x123456, outer UDP checksum computed.
 segment 1193046 udpcsum
-ip netns exec "$NSA" ping -c 2 -i 0.3 -I 10.9.13.1 10.9.13.2 >/dev/null || true
+ip netns exec "$NSA" ping -c 2 -i 0.3 -I 10.9.13.1 10.9.13.2 >/dev/null ||
+    fail "VNI 1193046: the echoes across the tunnel went unanswered."
 ip netns exec "$NSB" python3 -c '
 import socket
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -118,16 +144,61 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.bind(("10.9.13.1", 40000))
 s.sendto(b"NETProtocols VXLAN test", ("10.9.13.2", 9999))
 '
-wait "$listener" || true
+wait "$listener" ||
+    fail "VNI 1193046: the UDP datagram did not reach the listener."
+listener=""
 
 # Segment 2: VNI 100, the default zero outer UDP checksum. Recreating
 # the devices empties the overlay neighbour tables, so ARP recurs.
 segment 100 noudpcsum
-ip netns exec "$NSA" ping -c 1 -I 10.9.13.1 10.9.13.2 >/dev/null || true
+ip netns exec "$NSA" ping -c 1 -I 10.9.13.1 10.9.13.2 >/dev/null ||
+    fail "VNI 100: the echo across the tunnel went unanswered."
 
 sleep 1
 kill -INT "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
+pid=""
+
+echo "[*] Checking the capture holds exactly the expected frames..."
+python3 - "$OUT/vxlan.pcap" <<'PY'
+import struct
+import sys
+from collections import Counter
+
+data = open(sys.argv[1], "rb").read()
+endian = "<" if data[:4] in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1") else ">"
+seen = Counter()
+cursor = 24
+while cursor + 16 <= len(data):
+    incl = struct.unpack_from(endian + "I", data, cursor + 8)[0]
+    frame = data[cursor + 16 : cursor + 16 + incl]
+    cursor += 16 + incl
+    if len(frame) < 14 + 20 + 8 + 8 + 14 + 20:
+        seen["runt"] += 1  # too short for the shortest frame expected
+        continue
+    udp = frame[14 + (frame[14] & 0x0F) * 4 :]
+    dst_port, _, checksum = struct.unpack_from("!HHH", udp, 2)
+    inner = udp[16:]
+    kind = {0x0806: "arp", 0x0800: "ipv4"}.get(
+        struct.unpack_from("!H", inner, 12)[0], "other"
+    )
+    if kind == "ipv4":
+        kind = {1: "icmp", 17: "udp"}.get(inner[14 + 9], "other")
+    if dst_port != 4789 or udp[8] != 0x08:
+        kind = "not-vxlan"
+    vni = int.from_bytes(udp[12:15], "big")
+    seen[(vni, "csum" if checksum else "no-csum", kind)] += 1
+expected = Counter({
+    (1193046, "csum", "arp"): 2,
+    (1193046, "csum", "icmp"): 4,
+    (1193046, "csum", "udp"): 1,
+    (100, "no-csum", "arp"): 2,
+    (100, "no-csum", "icmp"): 2,
+})
+if seen != expected:
+    sys.exit(f"[!] Unexpected capture: {dict(seen)}, expected {dict(expected)}")
+print(f"[+] {sum(seen.values())} frames, as expected.")
+PY
 
 echo
 echo "[*] Validating..."

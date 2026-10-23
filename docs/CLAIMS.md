@@ -727,7 +727,7 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:66-71` asserts `bytes(layer) ==
+`tests/test_corpus.py:67-72` asserts `bytes(layer) ==
 frame[cursor:cursor+layer.header_len]` for **every layer of all 112
 frames**, across 19 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies. Every frame's checksums verify

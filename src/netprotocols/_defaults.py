@@ -106,9 +106,10 @@ def install(registry: Registry) -> None:
 
     add(TABLE_UDP_PORT, 53, DNS)
     register_all(TABLE_UDP_PORT, (67, 68), DHCP, registry=registry)
-    # VXLAN's IANA port (RFC 7348 §5). An encapsulating endpoint always
+    # VXLAN's IANA port (RFC 7348 §5). An encapsulating endpoint normally
     # sends to it and hashes the source port from the inner flow, so the
     # destination-first lookup finds it whatever that source port is.
+    # Linux's pre-IANA 8472 is not registered: decode_as adds it per walk.
     add(TABLE_UDP_PORT, 4789, VXLAN)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so

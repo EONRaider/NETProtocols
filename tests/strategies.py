@@ -95,9 +95,11 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
 
 @st.composite
 def vxlan_headers(draw: st.DrawFn) -> VXLAN:
-    # The I flag is the one bit the constructor insists on; the other
-    # seven flag bits and both reserved fields are carried verbatim, so
-    # they are drawn freely.
+    # The round-trip property decodes what it builds, and decode rejects
+    # a clear I flag (the constructor does not; test_vxlan.py covers
+    # those headers), so the flag is forced on. The other seven flag
+    # bits and both reserved fields are carried verbatim, so they are
+    # drawn freely.
     return VXLAN(
         flags=draw(st.integers(0, 0xFF)) | VXLAN.I_FLAG,
         reserved1=draw(st.integers(0, 0xFFFFFF)),

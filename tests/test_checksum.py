@@ -2,6 +2,8 @@
 real-capture corpus: every checksummed inbound frame must recompute to
 its captured value."""
 
+from dataclasses import replace
+
 import pytest
 
 from conftest import corpus_frames
@@ -120,12 +122,26 @@ class TestCorpusChecksums:
         assert verify(transport, ip=ip, payload=payload)
 
     def test_zero_udp_checksums_over_ipv4_verify_as_absent(self):
-        """The corpus's zero UDP checksums are VXLAN's outer datagrams
-        from a device left at the kernel default (noudpcsum)."""
-        assert UNCHECKSUMMED
-        for _, udp, ip, payload in UNCHECKSUMMED:
+        """The corpus's zero UDP checksums are the four outer datagrams
+        of vxlan.pcap's VNI 100 segment, sent by a device left at the
+        kernel default (noudpcsum). A zero verifies because it means
+        "none computed", not because these datagrams would pass any
+        checksum: a wrong nonzero one fails, and the right one is not
+        zero, so zero is not what compute() happens to produce."""
+        assert len(UNCHECKSUMMED) == 4
+        for case_id, udp, ip, payload in UNCHECKSUMMED:
+            assert case_id.startswith("vxlan.pcap#")
             assert udp.dst_port == 4789
             assert verify(udp, ip=ip, payload=payload)
+            correct = compute(udp, ip=ip, payload=payload)
+            assert correct != 0
+            assert verify(
+                replace(udp, checksum=correct), ip=ip, payload=payload
+            )
+            wrong = 1 if correct != 1 else 2
+            assert not verify(
+                replace(udp, checksum=wrong), ip=ip, payload=payload
+            )
 
     def test_ipv4_header_checksums_recompute_to_wire_values(self):
         headers = [
