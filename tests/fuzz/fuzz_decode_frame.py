@@ -13,8 +13,10 @@ import sys
 
 import atheris
 
-from netprotocols.utils.exceptions import ProtocolError
-from netprotocols.walk import decode_frame
+# Instrumented so libFuzzer gets coverage feedback; otherwise it fuzzes blind.
+with atheris.instrument_imports():
+    from netprotocols.utils.exceptions import ProtocolError
+    from netprotocols.walk import decode_frame
 
 
 def TestOneInput(data: bytes) -> None:
