@@ -44,7 +44,7 @@ src/netprotocols/
   layer2/         Ethernet, VLAN, ARP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP
   layer4/         TCP, UDP (+ port-based dispatch)
-  layer7/         DNS
+  layer7/         DNS, DHCP, HTTP
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
 scripts/          fixture capture + validation

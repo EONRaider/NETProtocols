@@ -94,7 +94,9 @@ match ip:
    `tests/test_pattern_matching.py`, so it cannot drift the way an
    *accidental* override would; keyword patterns
    (`case IPv4(protocol=6)`) are unaffected by any of this and stay
-   the documented default (#94).
+   the documented default (#94). `HTTP` curates one too, of
+   properties rather than fields — `('method', 'target',
+   'status_code')` — because its two fields are the raw head and body.
 2. **Every field with a fixed vocabulary of wire values is an
    `IntEnum`**, defined in [`_enums.py`](src/netprotocols/_enums.py),
    and `IntEnum` subclasses `int`. A *value* pattern therefore matches
@@ -149,6 +151,17 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
+**Text framing is the one variation.** `HTTP` has no fixed portion to
+unpack: `decode()` scans for the empty line that ends the head, then
+for the end the head's framing gives the body, so rule 1 is a scan
+rather than an unpack and `header_len` covers the whole message, not a
+`_struct` size. Its `decode()` also takes keyword-only context the
+bytes cannot carry — `request_method` (a response to `HEAD`, or a 2xx
+to `CONNECT`, has no body whatever its headers say) and `closed` (the
+buffer ends where the connection did) — and `request_method` is stored,
+but normalized: kept only when it changes the framing, so two messages
+with equal bytes and equal framing compare equal.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -190,7 +203,12 @@ rebase a layer's own offset to the whole frame, so it does — the
 result lands in `frame_offset`, left `None` by a bare
 `SomeClass.decode()` call with no frame to rebase against. A
 `__post_init__` validation error (values, not bytes) leaves `offset`
-`None` too; there is nothing to be positioned in.
+`None` too; there is nothing to be positioned in. `HTTP` is the
+exception on both counts: its `field` names a grammar element
+(`"chunk-size"`, `"start_line"`, `"raw_body"`), and its `offset` is
+relative to the start of the message — the `decode()` buffer, or
+`head + raw_body` for an error raised while constructing one, which
+does have bytes to point into.
 
 All five fields default to `None` and adding them never changes a
 message string — every existing `str(err)` and `match=` assertion
@@ -363,6 +381,17 @@ is why the port tables can be opened to third parties as safely as the
 authoritative ones: a wrong registration costs a diagnosed frame, not
 a wrong answer.
 
+`HTTP` is deliberately absent from the `tcp.port` table. The unit a
+datagram protocol decodes is the payload; HTTP's is a message, which
+TCP delivers as a byte stream cut wherever it likes. Registering it
+(`decode_as={"tcp.port": {80: HTTP}}` works) only decodes the messages
+that happen to fit in one segment: in `tests/fixtures/http/http.pcap`
+that is 8 of 98 frames, while every bare ACK raises
+`TruncatedHeaderError` and every mid-message segment raises
+`InvalidFieldError`, so it needs `lax=True` and is still not
+reassembly. Reassemble the connection and call `HTTP.decode()` on its
+bytes instead.
+
 ## The encode side, and the round-trip guarantee
 
 Every class also works in reverse. Constructors take the friendly
@@ -414,7 +443,8 @@ src/netprotocols/
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
-├── layer7/         dns.py, dhcp.py
+├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
+│                   and the HTTP codec class)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
@@ -478,7 +508,9 @@ the same:
 
 Steps 1–3, 5 and 6 are the same whether the protocol ships here or in
 your own package; only step 4 differs, and only in *where* the
-registration lives.
+registration lives. A protocol carried as a byte stream, as HTTP is
+over TCP, skips step 4 altogether (see "Port-based dispatch is
+best-effort" above) and replaces step 1's struct with a scan.
 
 If you follow the six steps, your protocol automatically composes with
 `Packet`, participates in frame walks, and inherits the library's

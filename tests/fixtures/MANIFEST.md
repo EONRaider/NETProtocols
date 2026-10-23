@@ -28,7 +28,7 @@ server queried over TCP — see their rows and the notes below.
 | `ipv6_fragments.pcap` | 5 | Fragmented 2048-byte ICMPv6 echo replies: first fragments (offset 0) + non-first fragments behind fragment headers (next_header 44) |
 | `ipv6_mld.pcap` | 4 | MLD reports behind hop-by-hop extension headers (next_header 0) — provoked by multicast group join/leave |
 | `ipv6_ndp_mld.pcap` | 10 | NDP Neighbor Solicitation/Advertisement (135/136) + echo 128/129 |
-| `tcp_http.pcap` | 4 | Inbound HTTP-port segments over IPv6: ACK, PSH-ACK ×2, FIN-ACK — all carrying options |
+| `tcp_http.pcap` | 4 | Inbound HTTP-port segments over IPv6: ACK, PSH-ACK ×2, FIN-ACK — all carrying options; the two PSH-ACK payloads together are one chunked response, which `tests/test_http.py` decodes as `HTTP` |
 | `tcp_https.pcap` | 12 | Inbound HTTPS segments over IPv4 (7) and IPv6 (5): ACK/PSH-ACK with options |
 | `udp_dns.pcap` | 4 | DNS responses (src port 53) over IPv4 (1) and IPv6 (3), with payloads |
 | `vlan_icmp.pcap` | 12 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **direct capture** of real kernel-tagged traffic (see VLAN note) |
@@ -86,6 +86,38 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   bare handshake/teardown segments carry no DNS message — walking one
   sends an empty payload into the length shim, the documented
   malformed-frame path of port-based dispatch.
+
+## HTTP captures (`tests/fixtures/http/`)
+
+Outside the corpus on purpose: the corpus globs are non-recursive, and
+none of the counts above include these. HTTP is not port-dispatched —
+a TCP segment is not an HTTP message — so these frames would add
+nothing to the per-frame invariants; what they are for is the byte
+streams.
+
+`http.pcap` (98 frames, every TCP checksum verified by
+`check_fixtures`) was produced by `scripts/capture_fixtures_http.sh`:
+Python's `http.server` (`protocol_version = "HTTP/1.1"`) on one end of
+a veth pair, curl and a raw socket client on the other, offload
+disabled, every segment kept. `scripts/extract_http_streams.py`
+(stdlib only, no netprotocols import) wrote each connection's byte
+streams, `NN.request` and `NN.response`, in the order the connections
+opened; `tests/test_http.py` reassembles them again through
+`decode_frame` and checks they match before decoding them.
+
+| Connection | Client | Requests | Responses |
+|---|---|---|---|
+| 01 | curl | `GET /hello` | 200, Content-Length |
+| 02 | curl | `HEAD /hello` | 200, Content-Length 42 and no body |
+| 03 | curl | `GET /hello`, `If-None-Match` | 304 |
+| 04 | curl | `POST /echo` | 201, the body echoed |
+| 05 | curl | `GET /chunked` | 200, chunked, one trailer field |
+| 06 | curl | `GET /missing` | 404, `Connection: close` |
+| 07 | socket | `GET /hello`, `HEAD /hello`, `GET /chunked` with `Connection: close`, pipelined in one write | the three responses, in order |
+
+curl cannot pipeline (libcurl's `CURLMOPT_PIPELINING` has no effect for
+HTTP/1.1 since 7.62.0), hence the socket client for 07. The streams
+also seed `tests/fuzz/fuzz_http_decode.py`.
 
 ## Provenance note
 

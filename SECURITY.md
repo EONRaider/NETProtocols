@@ -38,6 +38,21 @@ headers. Of particular interest are:
   `decode_frame`).
 - Any deviation from documented behavior that could mislead a caller
   about the contents of a decoded packet.
+- For `HTTP`: a message whose boundary differs from the one RFC 9112
+  defines, or a framing ambiguity (Content-Length against
+  Transfer-Encoding, bare LF, obs-fold, chunk-line oddities, Host
+  disagreements) that decodes without the `HTTPAnomaly` documenting
+  it. Anomalies are evidence, not verdicts: they say where an
+  implementation could read the message differently, not that one
+  did.
+
+What `HTTP` cannot see, by design, is not a vulnerability in it: it
+decodes one message from bytes the caller reassembled, so TCP
+reassembly and segment-overlap tricks are the caller's; a response's
+framing depends on the `request_method` and `closed` the caller passes;
+and it never pairs a request with its response, so desyncs that need
+both — an early response, or `Expect: 100-continue` — are out of reach
+until request/response pairing exists.
 
 Vulnerabilities in third-party tooling used only in CI (linters, type
 checkers, the build backend) are out of scope for this policy --
