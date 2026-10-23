@@ -351,10 +351,10 @@ def _scan_head(
     while True:
         line = _read_line(data, cursor, MAX_HEAD_BYTES)
         if line is None:
-            if start is None:
-                _check_first_line_prefix(
-                    data[cursor:MAX_HEAD_BYTES], cursor, protocol
-                )
+            pending = data[cursor:MAX_HEAD_BYTES]
+            # A lone CR may be half of a leading CRLF: let _incomplete report.
+            if start is None and pending != b"\r":
+                _check_first_line_prefix(pending, cursor, protocol)
             if len(data) < MAX_HEAD_BYTES:
                 _incomplete(
                     "HTTP head is incomplete",

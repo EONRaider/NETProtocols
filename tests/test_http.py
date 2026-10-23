@@ -765,6 +765,10 @@ _INCOMPLETE_ROWS = [
         None,
     ),
     (b"", "HTTP head is incomplete", "head", 0, None),
+    (b"\r", "HTTP head is incomplete", "head", 0, None),
+    (b"\r\n\r", "HTTP head is incomplete", "head", 2, None),
+    # Once a start line exists the prefix check must not run.
+    (b"GET / HTTP/1.1\r\n x", "HTTP head is incomplete", "head", 16, None),
     (
         CHUNKED_HEAD + b"5",
         "chunk-size line is incomplete",
@@ -823,6 +827,13 @@ _RAISE_ROWS = [
         "input does not begin an HTTP/1.x start line",
         "start_line",
         2,
+    ),
+    _row(
+        b"\r\x16",
+        InvalidFieldError,
+        "input does not begin an HTTP/1.x start line",
+        "start_line",
+        0,
     ),
     _row(
         b"G@T / HTTP/1.1\r\n\r\n",
