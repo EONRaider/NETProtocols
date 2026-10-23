@@ -90,6 +90,13 @@ def install(registry: Registry) -> None:
     add(TABLE_IP_PROTO, IPProtocol.GRE, GRE)
     add(TABLE_IP_PROTO, IPProtocol.IPV6_ICMP, ICMPv6)
 
+    # IP-in-IP has no header of its own: protocol 4 (RFC 2003, RFC 2473)
+    # or 41 (RFC 4213, RFC 2473) says the payload is a whole IPv4 or
+    # IPv6 packet, so the outer header dispatches straight to it. Shared
+    # like the rest, because IPv6 can carry either.
+    add(TABLE_IP_PROTO, IPProtocol.IPIP, IPv4)
+    add(TABLE_IP_PROTO, IPProtocol.IPV6, IPv6)
+
     # IPv6 chain only — see IPV6_ONLY_NUMBERS.
     add(TABLE_IP_PROTO_V6, IPProtocol.HOPOPT, IPv6HopByHopOptions)
     add(TABLE_IP_PROTO_V6, IPProtocol.IPV6_ROUTE, IPv6Routing)

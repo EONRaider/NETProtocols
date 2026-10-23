@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **IP-in-IP decodes through (#177).** IP protocol 4 (IPv4 in IPv4, RFC 2003; IPv4 in IPv6, RFC 2473) and 41 (6in4, RFC 4213; IPv6 in IPv6, RFC 2473) now dispatch from the outer IP header straight to the inner `IPv4` or `IPv6`, from either outer family, so `decode_frame` walks a tunneled packet to its inner transport instead of stopping at the outer header. The encapsulation has no header of its own, so there is no new class, only two `ip.proto` rows and two `IPProtocol` members, `IPIP` and `IPV6` ("IPv4 encapsulation", "IPv6 encapsulation"). A hostile run of nested protocol-4 headers is stopped by `max_depth`, like any other long chain.
+
+### Fixed
+
+- **`Packet.flow_key()` keys a tunneled flow on the inner IP header.** It used the first IPv4/IPv6 layer in the packet, which in a tunnel is the outer one: the key carried the tunnel endpoints' addresses and the tunnel's protocol number (4, 41, or 47 for GRE, which already reached this) instead of the conversation's. It now uses the IP header nearest before the transport layer, as `Packet.with_checksums()` already did, and returns `None` when no IP header precedes the transport.
+
 ### Development
 
+- **A real IP-in-IP capture joins the corpus: `ipip.pcap`, 4 frames (101 across 18 scenarios).** `scripts/capture_fixtures_ipip.sh` sends ICMP echoes through raw IP sockets opened for protocols 4 and 41 over a veth pair, so the kernel builds the outer header as a tunnel endpoint would; this works where the `ipip`/`sit` drivers are not built. The capture host had no IPv6, so the corpus holds IPv4 in IPv4 and IPv6 in IPv4; the script also captures the two IPv6-outer combinations on a kernel with IPv6, and `tests/test_ipip.py` covers them with constructed frames. `scripts/check_fixtures.py` peels IP-in-IP and verifies the inner checksums. `tests/test_checksum.py` now pairs each transport with its nearest enclosing IP header rather than the first. README's comparative figures stay stated for the 97 frames they were measured on; the coverage figure in `docs/CLAIMS.md` §5.3 and `pyproject.toml` is re-measured (2,682 statements, 1 missed).
 - **README's Roadmap section now leads with the current roadmap, #170**, instead of describing the completed #107 as if nothing had replaced it and promising that "new planned work will open fresh issues" — #170 had been open since 2026-09-09. It names #170's five tier themes without restating its tiers or target versions, which moved up one minor version when 2.3.0 shipped the HTTP codec outside them; `tests/test_docs.py` now checks the section leads with #170 and links none of the tier epics.
 - **Fixed a concurrency-group deadlock that cancelled the 2.3.0 release run before any job could start.** `ci.yml`'s concurrency group was keyed on `${{ github.workflow }}`, which inside a `workflow_call` resolves to the *caller's* name ("Release"), not "CI" — so release.yml calling ci.yml on a tag push made both the top-level run and the nested `ci` job claim the identical group `Release-refs/tags/<tag>`, and GitHub cancelled the run as a self-deadlock. The group now uses a literal `ci` prefix instead. `tests/test_workflows.py` gains a guard: no workflow declaring `workflow_call` may key its own concurrency group on `github.workflow`.
 
