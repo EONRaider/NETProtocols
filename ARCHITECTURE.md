@@ -238,6 +238,10 @@ flowchart LR
   I6 -->|58| IC6[ICMPv6]
   I6 -->|6| T
   I6 -->|17| U
+  I4 -->|4| I4
+  I4 -->|41| I6
+  I6 -->|4| I4
+  I6 -->|41| I6
   I6 -->|0, 43, 44, 60| X[IPv6 extension headers]
   X --> X
   X -->|58| IC6
