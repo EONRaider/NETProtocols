@@ -149,6 +149,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | GRE | `GRE` | RFC 2784/2890, IP protocol 47; payload chains onward by EtherType |
 | 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 3 | IPsec ESP | `ESP` | RFC 4303, IP protocol 50; SPI and sequence number decoded, the encrypted remainder kept as opaque `ciphertext` — the chain ends here by design, since no key means no next header |
+| 3 | IPsec AH | `AH`, `AHv6` | RFC 4302, IP protocol 51; fixed fields decoded and the ICV kept raw (never verified), then the payload chains onward by `next_header` through the outer IP family's table — `AHv6`, an `AH` subclass, is what IPv6 dispatches to |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
@@ -498,7 +499,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-107-frame corpus of real captured traffic across 19 scenarios
+113-frame corpus of real captured traffic across 20 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md)) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and

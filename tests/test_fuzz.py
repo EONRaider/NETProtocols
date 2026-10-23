@@ -34,6 +34,7 @@ from hypothesis import strategies as st
 
 from conftest import corpus_frames
 from netprotocols import (
+    AH,
     ARP,
     DHCP,
     DNS,
@@ -44,6 +45,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    AHv6,
     DNSOverTCP,
     Ethernet,
     ICMPv4,
@@ -88,6 +90,8 @@ ALL_PROTOCOLS = (
     DHCP,
     GRE,
     ESP,
+    AH,
+    AHv6,
     HTTP,
 )
 
@@ -274,9 +278,10 @@ class TestConstrainedRoundTrips:
 
 # TCP option kinds a real SYN carries (RFC 9293 §3.2; RFC 7323 for
 # Window Scale and Timestamps; RFC 2018 for SACK). The real-capture
-# corpus never caught a SYN (tests/fixtures/MANIFEST.md), so unlike
-# NOP/Timestamps (kinds 1, 8 — exercised via other captured traffic),
-# MSS/window-scale/SACK are otherwise fuzzed only as arbitrary bytes
+# corpus never caught a SYN of a live connection; its only SYNs are the
+# script-built ones behind AH, carrying just MSS (tests/fixtures/
+# MANIFEST.md). So unlike NOP/Timestamps (kinds 1, 8) and MSS (2),
+# window-scale/SACK are otherwise fuzzed only as arbitrary bytes
 # inside ``fuzz_input`` above, which essentially never lands on a
 # well-formed TLV by chance. This strategy builds one on purpose.
 _KIND_NOP = 1

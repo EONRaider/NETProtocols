@@ -19,3 +19,4 @@ class TestEnumCompleteness:
 
     def test_ipsec_display_names(self):
         assert IPProtocol.ESP.display_name == "ESP"
+        assert IPProtocol.AH.display_name == "AH"

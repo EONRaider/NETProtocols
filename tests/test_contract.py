@@ -4,6 +4,7 @@ lying length fields, memoryview transients, and chain walking."""
 import pytest
 
 from netprotocols import (
+    AH,
     ARP,
     ESP,
     HTTP,
@@ -33,6 +34,7 @@ class TestTruncation:
             (UDP, "raw_udp_header"),
             (ICMPv4, "raw_icmpv4_echo_request"),
             (ESP, "raw_esp_packet"),
+            (AH, "raw_ah_header"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
@@ -53,6 +55,13 @@ class TestTruncation:
         lying = raw[:12] + b"\xf8" + raw[13:]
         with pytest.raises(TruncatedHeaderError):
             TCP.decode(lying)
+
+    def test_lying_ah_payload_len_raises(self, raw_ah_header):
+        """A Payload Len of 255 claims a 1028-byte header on a 52-byte
+        buffer."""
+        lying = raw_ah_header[:1] + b"\xff" + raw_ah_header[2:]
+        with pytest.raises(TruncatedHeaderError):
+            AH.decode(lying)
 
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):

@@ -4,7 +4,11 @@ inheritance, and isolation from the process-wide default."""
 import pytest
 
 from netprotocols import DNS, TCP, UDP, Ethernet, IPv4, IPv6, Protocol
-from netprotocols._defaults import IPV6_ONLY_NUMBERS, install
+from netprotocols._defaults import (
+    FAMILY_SPECIFIC_NUMBERS,
+    IPV6_ONLY_NUMBERS,
+    install,
+)
 from netprotocols.registry import (
     DEFAULT,
     TABLE_ETHERTYPE,
@@ -163,6 +167,18 @@ class TestTableInheritance:
         v6 = registry.table(TABLE_IP_PROTO_V6)
         assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
 
+    def test_shared_numbers_differ_only_where_the_family_matters(self):
+        """Every number both tables hold names the same class, except
+        the family-specific ones, whose v6 entry is the table's own."""
+        registry = Registry()
+        install(registry)
+        base = registry.table(TABLE_IP_PROTO)
+        v6 = registry.table(TABLE_IP_PROTO_V6)
+        differing = {n for n in base if v6[n] is not base[n]}
+        assert differing == set(FAMILY_SPECIFIC_NUMBERS)
+        for number in FAMILY_SPECIFIC_NUMBERS:
+            assert issubclass(v6[number], base[number])
+
 
 class TestPortDispatch:
     def test_the_destination_port_is_tried_first(self, registry):
@@ -284,6 +300,8 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 41) is IPv6
         assert DEFAULT.get(TABLE_IP_PROTO, 50).__name__ == "ESP"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 50).__name__ == "ESP"
+        assert DEFAULT.get(TABLE_IP_PROTO, 51).__name__ == "AH"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 51).__name__ == "AHv6"
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS

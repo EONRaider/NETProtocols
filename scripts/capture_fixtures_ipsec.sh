@@ -1,26 +1,38 @@
 #!/usr/bin/env bash
-# Capture IPsec fixtures for the corpus: ESP (RFC 4303).
+# Capture IPsec fixtures for the corpus: ESP (RFC 4303) and AH
+# (RFC 4302).
 #
 #     sudo scripts/capture_fixtures_ipsec.sh
 #
-# The packets are genuine, verifiable IPsec: ESP with NULL encryption
-# (RFC 2410) and HMAC-SHA-256-128 integrity (RFC 4868), in transport
-# mode (ICMP and UDP riding ESP directly) and tunnel mode (a whole
-# inner IPv4 packet), with the RFC 4303 padding / Pad Length / Next
-# Header trailer and an ICV over every packet. NULL encryption keeps the
-# payload readable, so check_fixtures.py can verify each ICV with the
-# test keys published in tests/fixtures/MANIFEST.md and then the inner
-# packet's own checksums.
+# The packets are genuine, verifiable IPsec, with HMAC-SHA-256-128
+# integrity (RFC 4868) throughout:
+#
+#   esp.pcap  ESP with NULL encryption (RFC 2410), in transport mode
+#             (ICMP and UDP riding ESP directly) and tunnel mode (a
+#             whole inner IPv4 packet), with the RFC 4303 padding / Pad
+#             Length / Next Header trailer and an ICV over every packet.
+#   ah.pcap   AH in transport mode (TCP SYN, ICMP, UDP), tunnel mode
+#             (inner IPv4 carrying ICMP and TCP), and an AH-over-ESP
+#             bundle, each ICV computed over the IPv4 header's
+#             immutable fields, the AH header and the payload
+#             (RFC 4302 §3.3.3).
+#
+# Nothing is encrypted, so check_fixtures.py can verify each ICV with
+# the test keys published in tests/fixtures/MANIFEST.md and then the
+# protected packet's own checksums.
 #
 # Many kernels -- minimal and VM builds in particular -- ship without
-# the xfrm ESP transform (`ip xfrm state add ... proto esp` fails with
-# "Requested type not found"), so the kernel cannot do the IPsec
-# processing itself. scripts/ipsec_fixture_packets.py builds the ESP
-# packets in stdlib Python instead and sends them through a raw socket
-# opened for protocol 50, so the kernel still builds and checksums the
-# outer IPv4 header exactly as an IPsec endpoint's stack would. After
-# the capture the same script reads the pcap back and checks, frame by
-# frame, that every byte it built arrived unchanged.
+# the xfrm ESP/AH transforms (`ip xfrm state add ... proto esp` fails
+# with "Requested type not found"), so the kernel cannot do the IPsec
+# processing itself. scripts/ipsec_fixture_packets.py builds the
+# packets in stdlib Python instead. ESP goes out through a raw socket
+# opened for protocol 50, so the kernel builds and checksums the outer
+# IPv4 header exactly as an IPsec endpoint's stack would. AH cannot:
+# its ICV covers the outer IPv4 header, so the script builds that
+# header itself (with an explicit identification) and sends the whole
+# datagram with IP_HDRINCL. After each capture the same script reads
+# the pcap back and checks, frame by frame, that every byte it built
+# arrived unchanged.
 #
 # veth is a purely local link, so tx/rx offload is disabled first
 # (ethtool -K) to keep every checksum computed in software.
@@ -83,6 +95,7 @@ capture() {
 }
 
 capture esp 'ip proto 50'
+capture ah 'ip proto 51'
 
 echo
 echo "[*] Validating..."
@@ -95,7 +108,8 @@ else
 fi
 
 echo
-echo "[i] Expect zero checksum or ICV failures and 6 ESP frames: three"
-echo "    transport-mode (ICMP x2, UDP) and three tunnel-mode (inner IPv4"
-echo "    carrying ICMP x2, UDP). Fold tests/fixtures/staging/esp.pcap into"
-echo "    tests/fixtures/."
+echo "[i] Expect zero checksum or ICV failures, 6 ESP frames (transport:"
+echo "    ICMP x2, UDP; tunnel: inner IPv4 carrying ICMP x2, UDP) and 6 AH"
+echo "    frames (transport: TCP SYN, ICMP, UDP; tunnel: inner IPv4 carrying"
+echo "    ICMP, TCP SYN; one AH-over-ESP bundle). Fold"
+echo "    tests/fixtures/staging/{esp,ah}.pcap into tests/fixtures/."

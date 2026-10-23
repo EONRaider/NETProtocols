@@ -12,6 +12,7 @@ import pytest
 
 from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
+    AH,
     ARP,
     DNS,
     ESP,
@@ -99,6 +100,7 @@ class TestCorpusCoverage:
             DNSOverTCP,
             DNS,
             ESP,
+            AH,
         } <= seen
 
     def test_arp_covers_both_operations(self):
@@ -119,10 +121,12 @@ class TestCorpusCoverage:
         )
 
     def test_tcp_options_parse_across_the_corpus(self):
-        """Every options-bearing captured segment parses; the corpus
-        rides established connections, so the options are the classic
-        NOP, NOP, Timestamps layout (no SYN was captured — see the
-        MANIFEST — so MSS and friends are exercised by crafted tests)."""
+        """Every options-bearing captured segment parses. The captured
+        connections were all established, so their options are the
+        classic NOP, NOP, Timestamps layout; the only SYNs are the
+        script-built ones behind AH in ``ah.pcap``, each carrying a
+        lone MSS option (window scale, SACK and friends are exercised
+        by crafted tests)."""
         options = [
             option
             for _, _, frame in CORPUS
@@ -131,8 +135,10 @@ class TestCorpusCoverage:
             for option in layer.parsed_options
         ]
         kinds = {option.kind for option in options}
-        assert kinds == {1, 8}  # No-Operation + Timestamps
+        assert kinds == {1, 2, 8}  # No-Operation, MSS, Timestamps
         for option in options:
+            if option.kind == 2:
+                assert option.value == 1460
             if option.kind == 8:
                 assert option.kind_name == "Timestamps"
                 tsval_tsecr = option.value

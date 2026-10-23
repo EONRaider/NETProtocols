@@ -66,7 +66,9 @@ def _ip_protocol_class(
     ``next_header`` (the values are disjoint), so the two dispatch
     through tables that share their entries — but the IPv6 extension
     headers live in the v6 table alone and are handed out only when the
-    caller is part of an IPv6 chain (``ipv6=True``).
+    caller is part of an IPv6 chain (``ipv6=True``), and protocol 51
+    names a different class in each (``AH``/``AHv6``), so that AH keeps
+    dispatching in its own family's chain.
     """
     if registry is None:
         table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES

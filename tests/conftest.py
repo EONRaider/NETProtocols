@@ -177,3 +177,14 @@ def raw_esp_packet() -> bytes:
         "6c084e5000014e455450726f746f636f6c7320455350206669787475726501"
         "020201ae4c50f31eb8912ffc460ec5e194475e"
     )
+
+
+@pytest.fixture
+def raw_ah_header() -> bytes:
+    """AH header (SPI 0x20000001, sequence 1) from ``ah.pcap``:
+    Payload Len 5 (28 bytes), Next Header 6, then the 16-byte
+    HMAC-SHA-256-128 ICV, followed by the TCP SYN it protects."""
+    return bytes.fromhex(
+        "060500002000000100000001e91ff0893d37de87e576dc91a70ddbe2"
+        "9c4100504e500001000000006002faf0883e0000020405b4"
+    )

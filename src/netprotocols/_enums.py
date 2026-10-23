@@ -53,6 +53,7 @@ class IPProtocol(IntEnum):
     IPV6_FRAG = 0x2C
     GRE = 0x2F
     ESP = 0x32
+    AH = 0x33
     IPV6_ICMP = 0x3A
     IPV6_DSTOPTS = 0x3C
 
@@ -73,6 +74,7 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.IPV6_FRAG: "IPv6 Fragment",
     IPProtocol.GRE: "GRE",
     IPProtocol.ESP: "ESP",
+    IPProtocol.AH: "AH",
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
     IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
 }
