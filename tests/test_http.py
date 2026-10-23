@@ -40,9 +40,16 @@ def kinds(raw: bytes, **context: object) -> set[HTTPAnomalyKind]:
 
 
 def request(*fields: bytes, body: bytes = b"", line: bytes = b"") -> bytes:
+    """A request with ``fields``, then ``Host: a``: every HTTP/1.1
+    request needs a Host (RFC 9112 §3.2), and appending it leaves the
+    given fields' offsets where they were."""
     start = line or b"POST /submit HTTP/1.1"
     return (
-        start + b"\r\n" + b"".join(f + b"\r\n" for f in fields) + b"\r\n" + body
+        start
+        + b"\r\n"
+        + b"".join(f + b"\r\n" for f in fields)
+        + b"Host: a\r\n\r\n"
+        + body
     )
 
 
@@ -264,6 +271,7 @@ class TestFieldLines:
             (b"B", b"2"),
             (b"a", b"3"),
             (b"Content-Length", b"0"),
+            (b"Host", b"a"),
         ]
 
     def test_obs_fold_is_unfolded_and_flagged(self) -> None:
@@ -285,7 +293,7 @@ class TestFieldLines:
 
     def test_whitespace_preceded_lines_are_ignored(self) -> None:
         """§2.2: consume each such line without further processing."""
-        message = parse(request(b" Content-Length: 5", b"Host: a"))
+        message = parse(request(b" Content-Length: 5"))
         assert [f.name for f in message.fields] == [b"Host"]
         assert message.framing.kind is HTTPFraming.NONE
         assert {a.kind for a in message.anomalies} == {
@@ -1120,7 +1128,7 @@ class TestExactAnomalies:
             A(K.START_LINE_WHITESPACE, None, 2),
             A(K.REQUEST_TARGET_FORM, None, 6),
         )
-        raw = b"\r\nGET /a b HTTP/1.1\r\n\r\n"
+        raw = b"\r\nGET /a b HTTP/1.1\r\nHost: a\r\n\r\n"
         assert anomalies(raw)[1] == A(K.REQUEST_TARGET_INVALID_OCTET, None, 6)
 
     def test_status_line_anomalies_carry_their_offsets(self) -> None:
@@ -1144,7 +1152,7 @@ class TestExactAnomalies:
             A(K.CTL_IN_FIELD_VALUE, "x", _at(raw, b"X:"), 2),
             A(K.OBS_FOLD, "x", _at(raw, b" b\r")),
         )
-        assert parse(raw).fields[-1] == http._Field(
+        assert parse(raw).fields[-2] == http._Field(
             b"X", b"a b c", _at(raw, b"X:"), True
         )
 
@@ -1264,8 +1272,11 @@ class TestBehaviourVectors:
 
     def test_a_vt_before_the_colon_is_not_trimmed(self) -> None:
         """Only SP and HTAB are optional whitespace (RFC 9110 §5.6.3)."""
-        message = parse(b"GET / HTTP/1.1\r\na\x0b: b\r\n\r\n")
-        assert message.fields == (http._Field(b"a\x0b", b"b", 16, False),)
+        message = parse(b"GET / HTTP/1.1\r\na\x0b: b\r\nHost: a\r\n\r\n")
+        assert message.fields == (
+            http._Field(b"a\x0b", b"b", 16, False),
+            http._Field(b"Host", b"a", 23, True),
+        )
         assert message.anomalies == (A(K.INVALID_FIELD_NAME, None, 16),)
 
     def test_a_leading_lf_then_a_partial_line(self) -> None:
@@ -1282,7 +1293,7 @@ class TestBehaviourVectors:
     def test_pri_alone_is_an_ordinary_method(
         self, line: bytes, target: bytes, anomaly: tuple[HTTPAnomaly, ...]
     ) -> None:
-        message = parse(line + b"\r\n\r\n")
+        message = parse(line + b"\r\nHost: a\r\n\r\n")
         assert message.start == http._StartLine(
             False, (1, 1), method=b"PRI", target=target
         )
@@ -1426,11 +1437,7 @@ class TestFieldLabelsAndPositions:
         )
 
     def test_repeated_chunked_is_located_on_the_field(self) -> None:
-        raw = request(
-            b"Host: a",
-            b"Transfer-Encoding: chunked, chunked",
-            body=b"0\r\n\r\n",
-        )
+        raw = request(b"Transfer-Encoding: chunked, chunked", body=b"0\r\n\r\n")
         assert anomalies(raw) == (
             A(
                 K.TE_CHUNKED_REPEATED,

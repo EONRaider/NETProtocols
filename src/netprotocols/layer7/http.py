@@ -1,10 +1,11 @@
-"""HTTP/1.1 message grammar (RFC 9112 framing, RFC 9110 fields).
+"""HTTP/1.1 messages (RFC 9112 framing, RFC 9110 fields).
 
-This module holds the byte-level grammar the HTTP codec is built on:
-it finds where one message ends within a buffer and reports every way
-the message departs from the RFCs, without choosing silently between
-readings that real implementations disagree on. It decodes a single,
-already-reassembled buffer; TCP stream reassembly is the caller's.
+:class:`HTTP` decodes one complete message from a buffer and encodes it
+back byte-exactly. Underneath it, this module's byte-level grammar
+finds where the message ends and reports every way it departs from the
+RFCs, without choosing silently between readings that real
+implementations disagree on. It decodes a single, already-reassembled
+buffer; TCP stream reassembly is the caller's.
 
 Three rules shape it:
 
@@ -27,26 +28,32 @@ Three rules shape it:
   function).
 
 Byte offsets in anomalies and in raised errors are relative to the
-start of the message, i.e. to the buffer passed in.
+start of the message: the buffer passed to :meth:`HTTP.decode`, or
+``head + raw_body`` for a constructed :class:`HTTP`.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import re
-from typing import NamedTuple, NoReturn
+from ipaddress import IPv6Address
+from typing import ClassVar, NamedTuple, NoReturn, Self
 
+from netprotocols._base import Protocol
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
 )
 
 __all__ = [
+    "HTTP",
     "MAX_HEAD_BYTES",
     "HTTPAnomaly",
     "HTTPAnomalyKind",
     "HTTPDisposition",
     "HTTPFraming",
+    "HTTPHeaderField",
 ]
 
 #: Upper bound on the head (start line through the empty line), on the
@@ -105,6 +112,22 @@ _CHUNK_EXT = re.compile(
 
 _FRAMING_FIELDS = (b"content-length", b"transfer-encoding")
 _ROUTING_FIELDS = (*_FRAMING_FIELDS, b"host")
+
+# RFC 3986 §3.2.2 host, for the Host field (RFC 9110 §7.2): an
+# IP-literal (checked further by _valid_ip_literal), or a reg-name,
+# which also covers IPv4address; then an optional port.
+_URI_CHARS = rb"A-Za-z0-9\-._~!$&'()*+,;="
+_HOST_FIELD = re.compile(
+    rb"(?:\[(?P<literal>[^\]]*)\]|(?:[" + _URI_CHARS + rb"]|%[0-9A-Fa-f]{2})*)"
+    rb"(?::[0-9]*)?"
+)
+_IP_FUTURE = re.compile(rb"[vV][0-9A-Fa-f]+\.[" + _URI_CHARS + rb":]+")
+#: ipaddress also accepts a zone ID ("%eth0"), which RFC 3986 does not.
+_IPV6_CHARS = _HEXDIG | frozenset(b":.")
+#: The authority of an absolute-form request-target (RFC 3986 §3).
+_ABSOLUTE_AUTHORITY = re.compile(
+    rb"[A-Za-z][A-Za-z0-9+\-.]*://(?P<authority>[^/?#]*)"
+)
 
 
 class HTTPAnomalyKind(enum.Enum):
@@ -175,6 +198,18 @@ class HTTPAnomalyKind(enum.Enum):
     CHUNK_LINE_BARE_LF = "chunk_line_bare_lf"
     #: Whitespace after a chunk-size with no extension following it.
     CHUNK_SIZE_TRAILING_WHITESPACE = "chunk_size_trailing_whitespace"
+    #: An HTTP/1.1 request with no Host field (§3.2).
+    HOST_MISSING = "host_missing"
+    #: More than one Host field line (§3.2).
+    HOST_DUPLICATE = "host_duplicate"
+    #: A Host value that is not ``uri-host [ ":" port ]`` (§3.2).
+    HOST_INVALID = "host_invalid"
+    #: A valid Host holding a comma or a percent-encoding, which
+    #: implementations split or decode differently.
+    HOST_AMBIGUOUS = "host_ambiguous"
+    #: A Host that differs from an absolute-form target's authority
+    #: (§3.2.2); the target wins, but a front end may route on Host.
+    HOST_TARGET_MISMATCH = "host_target_mismatch"
 
 
 class HTTPFraming(enum.Enum):
@@ -195,6 +230,15 @@ class HTTPDisposition(enum.Enum):
     CLOSE = "close"
     #: Not HTTP any more: a 101 upgrade or an established CONNECT tunnel.
     TUNNEL = "tunnel"
+
+
+class HTTPHeaderField(NamedTuple):
+    """One field line, as latin-1 text (lossless for any byte): the
+    value is unfolded, CR/NUL-replaced and trimmed as the grammar read
+    it. A line with no colon is all name, with an empty value."""
+
+    name: str
+    value: str
 
 
 class HTTPAnomaly(NamedTuple):
@@ -1023,6 +1067,66 @@ def _disposition(
     return HTTPDisposition.CONTINUE
 
 
+def _valid_ip_literal(literal: bytes) -> bool:
+    """``IP-literal = "[" ( IPv6address / IPvFuture ) "]"``, brackets
+    removed (RFC 3986 §3.2.2)."""
+    if _IP_FUTURE.fullmatch(literal):
+        return True
+    if any(b not in _IPV6_CHARS for b in literal):
+        return False
+    try:
+        IPv6Address(literal.decode())
+    except ValueError:
+        return False
+    return True
+
+
+def _valid_host(value: bytes) -> bool:
+    """``Host = uri-host [ ":" port ]`` (RFC 9110 §7.2)."""
+    match = _HOST_FIELD.fullmatch(value)
+    if match is None:
+        return False
+    literal = match["literal"]
+    return literal is None or _valid_ip_literal(literal)
+
+
+def _target_authority(target: bytes) -> bytes | None:
+    """An absolute-form target's authority without its userinfo (§3.2),
+    or ``None`` for any other form."""
+    match = _ABSOLUTE_AUTHORITY.match(target)
+    if match is None:
+        return None
+    return match["authority"].rpartition(b"@")[2]
+
+
+def _check_host(start: _StartLine, fields: list[_Field], found: _Found) -> None:
+    """A request's Host (§3.2): present in HTTP/1.1, sent once, a valid
+    ``uri-host [ ":" port ]``, and identical to an absolute-form
+    target's authority. The comparison folds case (the host is case-
+    insensitive and the port is digits) but neither percent-decodes nor
+    fills in a default port."""
+    if start.is_response:
+        return
+    label = "host"
+    hosts = _values(fields, b"host")
+    if not hosts:
+        if start.version >= (1, 1):
+            _flag(found, HTTPAnomalyKind.HOST_MISSING, label, 0)
+        return
+    for duplicate in hosts[1:]:
+        _flag(found, HTTPAnomalyKind.HOST_DUPLICATE, label, duplicate.offset)
+    authority = _target_authority(start.target)
+    for host in hosts:
+        if not _valid_host(host.value):
+            _flag(found, HTTPAnomalyKind.HOST_INVALID, label, host.offset)
+        elif b"," in host.value or b"%" in host.value:
+            _flag(found, HTTPAnomalyKind.HOST_AMBIGUOUS, label, host.offset)
+        if authority is not None and host.value.lower() != authority.lower():
+            _flag(
+                found, HTTPAnomalyKind.HOST_TARGET_MISMATCH, label, host.offset
+            )
+
+
 def _check_request_method(
     method: str | None, start: _StartLine, protocol: type[object]
 ) -> bytes | None:
@@ -1060,6 +1164,7 @@ def _parse_message(
     head_len, start, lines = _scan_head(data, closed, found, protocol)
     method = _check_request_method(request_method, start, protocol)
     fields = _parse_field_lines(lines, found)
+    _check_host(start, fields, found)
     framing = _frame_message(start, fields, method, found, protocol)
     end, spans, trailers = _message_end(
         data, head_len, framing, closed, found, protocol
@@ -1077,3 +1182,244 @@ def _parse_message(
         trailers=tuple(trailers),
         anomalies=_collect(found),
     )
+
+
+def _check_consistency(
+    head: bytes,
+    raw_body: bytes,
+    request_method: str | None,
+    protocol: type[object],
+) -> _Message:
+    """Parse a constructed message: ``head`` must be exactly one complete
+    head and ``raw_body`` exactly the body its framing delimits. A
+    constructed message is complete by definition, so it is parsed as
+    ``closed``: an ``UNTIL_CLOSE`` body is whatever ``raw_body`` holds."""
+    message = _parse_message(head + raw_body, request_method, True, protocol)
+    if message.head_len != len(head):
+        raise InvalidFieldError(
+            "head is not exactly one HTTP head, ending at its empty line",
+            protocol=protocol,
+            field="head",
+            offset=min(message.head_len, len(head)),
+            expected=message.head_len,
+            actual=len(head),
+        )
+    if message.end != len(head) + len(raw_body):
+        raise InvalidFieldError(
+            "raw_body holds bytes past the end of the framed body",
+            protocol=protocol,
+            field="raw_body",
+            offset=message.end,
+            expected=message.end - len(head),
+            actual=len(raw_body),
+        )
+    return message
+
+
+def _text(value: bytes) -> str:
+    return value.decode(_LATIN_1)
+
+
+def _text_or_none(value: bytes | None) -> str | None:
+    return None if value is None else _text(value)
+
+
+def _header_fields(fields: tuple[_Field, ...]) -> tuple[HTTPHeaderField, ...]:
+    return tuple(HTTPHeaderField(_text(f.name), _text(f.value)) for f in fields)
+
+
+def _field_values(fields: tuple[_Field, ...], name: str) -> tuple[str, ...]:
+    """Every value of the token-named field ``name``, compared ASCII
+    case-insensitively: ``str.lower()`` would fold the Kelvin sign
+    into ``k``, which no HTTP implementation does."""
+    try:
+        wanted = name.encode(_LATIN_1).lower()
+    except UnicodeEncodeError:
+        return ()
+    return tuple(_text(f.value) for f in _values(list(fields), wanted))
+
+
+def _content(message: _Message, raw_body: bytes) -> bytes:
+    """The body with any chunked framing removed (RFC 9110 §6.4)."""
+    return b"".join(
+        raw_body[begin - message.head_len : end - message.head_len]
+        for begin, end in message.content_spans
+    )
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class HTTP(Protocol):
+    """One HTTP/1.1 request or response, held verbatim.
+
+    Everything else is derived from the two byte strings, so encoding
+    is exact: ``bytes(msg) == head + raw_body``, whatever odd bytes the
+    sender used. Anything the grammar resolved rather than rejected is
+    listed in :attr:`anomalies`.
+
+    :param head: The start line through the empty line ending the head,
+        leading empty lines included, exactly as on the wire.
+    :param raw_body: The message body as framed on the wire (chunk
+        lines and trailers included); :attr:`content` strips the
+        framing.
+    :param request_method: The method of the request this response
+        answers, when known. It is decode context, not wire data: only
+        ``"HEAD"``, and ``"CONNECT"`` answered with a 2xx, change how a
+        response is framed, so any other method is stored as ``None``,
+        and two messages with equal bytes and equal framing compare
+        equal. Supplying it for a request raises.
+    :raises InvalidFieldError: if ``head`` is not one complete head, if
+        ``raw_body`` is not exactly the body its framing delimits, or on
+        any error :meth:`decode` would raise for ``head + raw_body``.
+    """
+
+    head: bytes
+    raw_body: bytes = dataclasses.field(default=b"", repr=False)
+    request_method: str | None = None
+    _message: _Message = dataclasses.field(
+        init=False, repr=False, compare=False
+    )
+
+    #: Upper bound on the head, on the trailer section, on each chunk
+    #: line and on the total chunk-extension bytes of one body.
+    MAX_HEAD_BYTES: ClassVar[int] = MAX_HEAD_BYTES
+
+    #: Positional form for ``match``/``case``: a request matches on its
+    #: method and target, a response on its status code.
+    __match_args__ = ("method", "target", "status_code")
+
+    def __post_init__(self) -> None:
+        message = _check_consistency(
+            self.head, self.raw_body, self.request_method, type(self)
+        )
+        object.__setattr__(
+            self, "request_method", _text_or_none(message.request_method)
+        )
+        object.__setattr__(self, "_message", message)
+
+    @classmethod
+    def decode(
+        cls,
+        data: bytes | memoryview,
+        *,
+        request_method: str | None = None,
+        closed: bool = False,
+    ) -> Self:
+        """Decode the HTTP message at the start of ``data``.
+
+        Trailing bytes (a pipelined next message) are left alone; the
+        message ends at :attr:`header_len`.
+
+        :param request_method: For a response, the method of the request
+            it answers (see the class docstring).
+        :param closed: ``True`` when ``data`` ends where the connection
+            closed. A response framed by connection close needs it, and
+            input that ends early then raises :class:`InvalidFieldError`
+            instead of :class:`TruncatedHeaderError`.
+        :raises TruncatedHeaderError: (only when ``closed`` is false)
+            ``data`` ends before the message does; retry with more.
+        :raises InvalidFieldError: the input is not HTTP/1.x, exceeds a
+            hard limit, loses its body boundary, misuses
+            ``request_method``, or (when ``closed``) is incomplete.
+        """
+        buffer = bytes(data)
+        message = _parse_message(buffer, request_method, closed, cls)
+        # The parse above establishes everything __post_init__ checks,
+        # so the instance is built directly (see _base.py).
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "head", buffer[: message.head_len])
+        object.__setattr__(
+            instance, "raw_body", buffer[message.head_len : message.end]
+        )
+        object.__setattr__(
+            instance, "request_method", _text_or_none(message.request_method)
+        )
+        object.__setattr__(instance, "_message", message)
+        return instance
+
+    def __bytes__(self) -> bytes:
+        return self.head + self.raw_body
+
+    @property
+    def header_len(self) -> int:
+        """Length of the whole message, head and body."""
+        return len(self.head) + len(self.raw_body)
+
+    @property
+    def is_response(self) -> bool:
+        return self._message.start.is_response
+
+    @property
+    def method(self) -> str | None:
+        """The request method, e.g. ``"GET"``; ``None`` for a response."""
+        start = self._message.start
+        return None if start.is_response else _text(start.method)
+
+    @property
+    def target(self) -> str | None:
+        """The request-target as sent; ``None`` for a response."""
+        start = self._message.start
+        return None if start.is_response else _text(start.target)
+
+    @property
+    def http_version(self) -> str:
+        """The version from the start line, e.g. ``"HTTP/1.1"``."""
+        major, minor = self._message.start.version
+        return f"HTTP/{major}.{minor}"
+
+    @property
+    def status_code(self) -> int | None:
+        """The status code; ``None`` for a request."""
+        start = self._message.start
+        return start.status if start.is_response else None
+
+    @property
+    def reason_phrase(self) -> str | None:
+        """The reason phrase (possibly empty); ``None`` for a request."""
+        start = self._message.start
+        return _text(start.reason) if start.is_response else None
+
+    @property
+    def fields(self) -> tuple[HTTPHeaderField, ...]:
+        """Every field line of the head, in order, duplicates kept."""
+        return _header_fields(self._message.fields)
+
+    def header_values(self, name: str) -> tuple[str, ...]:
+        """Every value of the field ``name`` (case-insensitive), in
+        order. Fields whose name is not a valid token never match."""
+        return _field_values(self._message.fields, name)
+
+    def header(self, name: str) -> str | None:
+        """The values of ``name`` combined with ``", "`` (RFC 9110
+        §5.3), or ``None`` when absent. ``Set-Cookie`` cannot be
+        combined this way (RFC 6265 §3); read it with
+        :meth:`header_values`."""
+        values = self.header_values(name)
+        return ", ".join(values) if values else None
+
+    @property
+    def framing(self) -> HTTPFraming:
+        """How the body length was determined (RFC 9112 §6.3)."""
+        return self._message.framing.kind
+
+    @property
+    def connection_disposition(self) -> HTTPDisposition:
+        """What the connection carries after this message. A caller
+        reading pipelined messages stops at ``CLOSE`` or ``TUNNEL``."""
+        return self._message.disposition
+
+    @property
+    def content(self) -> bytes:
+        """The body with chunked framing removed; content codings such
+        as gzip are not decoded."""
+        return _content(self._message, self.raw_body)
+
+    @property
+    def trailers(self) -> tuple[HTTPHeaderField, ...]:
+        """The trailer fields of a chunked body, in order."""
+        return _header_fields(self._message.trailers)
+
+    @property
+    def anomalies(self) -> tuple[HTTPAnomaly, ...]:
+        """Every deviation the grammar resolved, aggregated by kind and
+        field, ordered by first offset."""
+        return self._message.anomalies
