@@ -265,6 +265,38 @@ matching methodology).
 
 ---
 
+### Re-measured for 2.3.0 (2026-10-23)
+
+Every number the README quotes, re-measured before tagging 2.3.0 (the
+HTTP/1.1 codec, #214/#223/#226), on **a different machine from every
+figure above**: a cloud container, Intel Xeon @ 2.10 GHz, 4 vCPUs,
+CPython 3.12.3, x86-64 Linux; `dpkt 1.9.8`, `scapy 2.7.0`. Ratios carry
+across machines far better than absolute rates, so compare the ratios.
+
+| Claim | Command | Result |
+|---|---|---|
+| 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9` | netprotocols 99,814 f/s, dpkt 106,497 (we are 6.3% slower), scapy 21,826 (we are 4.6× faster) |
+| 1.3 encode | `benchmark_encode.py` | netprotocols 1,324,381 ops/s, dpkt 292,408 (4.53×), scapy 658,403 |
+| 1.4 import | `benchmark_import.py`, best of three runs | netprotocols 56.8 ms (83 modules), scapy.all 487.0 ms (8.6×); at `657b65f`, the commit before #223 made the package import `http.py`, 55.6 ms (82 modules) |
+| 1.5 wheel | `uv build` | `netprotocols-2.3.0-py3-none-any.whl` 108,598 bytes (106.1 KiB), 23.9× smaller than scapy's 2,590,982; `src/` 7,953 lines |
+| 1.6 depth | `benchmark.py --depth` | deeper on 27 frames, same layer on 70: unchanged |
+
+What moved, and why:
+
+- **Decode is unaffected by HTTP**, which is not port-dispatched, so
+  `decode_frame()` never reaches it; the dpkt gap (6.3%, from ~9%) and
+  the scapy ratio (4.6×, from 5.4×) moved with the machine. scapy runs
+  relatively faster here than on the machine above; the 1.1 headline,
+  "2.1×", stays a conservative floor.
+- **Import cost grew by about a millisecond** from the codec itself
+  (55.6 → 56.8 ms, one more module), inside run-to-run noise of a few
+  milliseconds on this machine.
+- **The wheel grew 16 KiB** with `layer7/http.py`, the largest module
+  in the package, so the ratio against scapy fell from 28.0× to 23.9×.
+- The module count reads 83 here where 1.4 recorded 93 for 2.0-era
+  code; the count depends on the interpreter's own startup imports, so
+  it is quoted with the time it came from, not on its own.
+
 ## 1. Performance
 
 ### 1.1 "2.1× faster than scapy at decoding"
@@ -283,6 +315,9 @@ figure within this file's own noise band. The headline "2.1×" claim
 was always a conservative floor and stays true by a wide margin.
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
+
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above):
+99,814 against 21,826, **4.6×**.*
 
 The wording is a positioning decision, not a measurement one: 5.4× is
 what the corpus shows on one machine today, and whoever writes the
@@ -308,6 +343,9 @@ call (the bounded-depth check and full `Packet` construction that the
 old hand-rolled benchmark loop never exercised).
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
+
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above):
+99,814 against dpkt's 106,497, **~6% slower**, inside the band.*
 
 Two caveats from the re-measurement section apply and are not optional:
 the two libraries do not parse to the same depth (netprotocols goes
@@ -338,6 +376,9 @@ Reproduce: `uv run --group bench python scripts/benchmark_encode.py`
 reproduction script, which Rule 1 does not actually permit — fixed
 along with the re-measurement).
 
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above):
+netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
+
 Nobody benchmarks this direction; it remains the half of "codec" this
 library already wins. The ratio against dpkt narrowed from the 5.3×
 recorded at v1.3.0 to 4.5× — netprotocols' own absolute rate dropped
@@ -346,8 +387,14 @@ never touched the registry/walker/error-context surface that grew
 decode's cost), while dpkt's own number held essentially flat. Still a
 wide, clean win.
 
-### 1.4 "Imports in 54 ms; scapy takes 458+ ms"
+### 1.4 "Imports in 57 ms; scapy takes 487+ ms"
 **Status: VERIFIED**
+
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above): best
+of three `benchmark_import.py` runs, netprotocols **56.8 ms** (83
+modules), `scapy.all` **487.0 ms**, **8.6×**. The HTTP codec costs
+about a millisecond of it. The figures below are the 2026-09-04
+measurement.*
 
 *Published 2026-09-04 (embargo lifted, #107).*
 
@@ -367,8 +414,13 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "~29× smaller wheel than scapy"
+### 1.5 "~24× smaller wheel than scapy"
 **Status: VERIFIED** — re-measure at each release (Rule 4)
+
+*Re-measured for 2.3.0 (2026-10-23): `netprotocols-2.3.0-py3-none-any.whl`
+is 108,598 bytes (106.1 KiB) against scapy 2.7.0's 2,590,982, **23.9×
+smaller**; `layer7/http.py` added 16 KiB. `src/` is 7,953 lines. The
+figures below are the 2.2.1 measurement.*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04:
 the prior figure here was built from `netprotocols-2.0.0`, two releases
@@ -391,8 +443,9 @@ quoting.
 **Status: VERIFIED**
 
 *Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
-against the Tiers-2-4 tree, and again after #147's `decode_frame()`
-methodology fix — same 27/70 split as originally measured; depth
+against the Tiers-2-4 tree, again after #147's `decode_frame()`
+methodology fix, and again for 2.3.0 (2026-10-23) — same 27/70 split as
+originally measured; depth
 comes from the decoders' own strictness, untouched by anything the
 throughput fix or the benchmark-methodology change did.*
 
