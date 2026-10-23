@@ -33,6 +33,7 @@ start of the message, i.e. to the buffer passed in.
 from __future__ import annotations
 
 import enum
+import re
 from typing import NamedTuple, NoReturn
 
 from netprotocols.utils.exceptions import (
@@ -75,6 +76,32 @@ _QDTEXT = (
     | _OBS_TEXT
 )
 _QUOTED_PAIR = frozenset(b"\t ") | _VCHAR | _OBS_TEXT
+
+#: Literals the grammar functions use, hoisted to module level so
+#: mutation testing (which never mutates module-level code) cannot
+#: produce equivalent mutants from them (a case-flipped codec name, a
+#: padded strip set).
+_LATIN_1 = "latin-1"
+_ZERO = b"0"
+
+_TCHAR_CLASS = re.escape(bytes(sorted(_TCHAR)))
+#: The first word of a start line: tchar or "/" (for "HTTP/"), then
+#: whitespace or the end of what has arrived so far.
+_FIRST_WORD = re.compile(rb"[" + _TCHAR_CLASS + rb"/]+(?:[ \t\x0b\x0c\r]|\Z)")
+_QUOTED_STRING = (
+    rb'"(?:[\t !\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t \x21-\x7e\x80-\xff])*"'
+)
+#: RFC 9112 §7.1.1 ``chunk-ext = *( BWS ";" BWS chunk-ext-name
+#: [ BWS "=" BWS chunk-ext-val ] )``, exactly: no trailing whitespace.
+_CHUNK_EXT = re.compile(
+    rb"(?:[ \t]*;[ \t]*["
+    + _TCHAR_CLASS
+    + rb"]+(?:[ \t]*=[ \t]*(?:["
+    + _TCHAR_CLASS
+    + rb"]+|"
+    + _QUOTED_STRING
+    + rb"))?)*"
+)
 
 _FRAMING_FIELDS = (b"content-length", b"transfer-encoding")
 _ROUTING_FIELDS = (*_FRAMING_FIELDS, b"host")
@@ -251,7 +278,7 @@ def _collect(found: _Found) -> tuple[HTTPAnomaly, ...]:
 
 
 def _label(name: bytes) -> str:
-    return name.lower().decode("latin-1")
+    return name.lower().decode(_LATIN_1)
 
 
 def _incomplete(
@@ -304,15 +331,7 @@ def _check_first_line_prefix(
 ) -> None:
     """Fail fast on input that cannot begin an HTTP/1.x message: its
     first word must be token characters (and ``/``, for ``HTTP/``)."""
-    word_end = len(content)
-    for index, byte in enumerate(content):
-        if byte in _START_LINE_WS:
-            word_end = index
-            break
-    word = content[:word_end]
-    if not content:
-        return
-    if not word or any(b not in _TCHAR and b != 0x2F for b in word):
+    if content and _FIRST_WORD.match(content) is None:
         raise InvalidFieldError(
             "input does not begin an HTTP/1.x start line",
             protocol=protocol,
@@ -388,12 +407,7 @@ def _split_words(content: bytes) -> list[tuple[int, bytes]]:
 def _single_sp_separated(
     content: bytes, words: list[tuple[int, bytes]]
 ) -> bool:
-    cursor = 0
-    for index, (at, word) in enumerate(words):
-        if content[cursor:at] != (b" " if index else b""):
-            return False
-        cursor = at + len(word)
-    return cursor == len(content)
+    return content == b" ".join(word for _, word in words)
 
 
 def _leading_ws(data: bytes) -> bytes:
@@ -558,37 +572,33 @@ def _clean_value(
 
 
 def _parse_field_lines(lines: list[_Line], found: _Found) -> list[_Field]:
-    """Field lines of a head or trailer section, in order (§5)."""
-    fields: list[_Field] = []
-    name = b""
-    parts: list[bytes] = []
-    field_offset = 0
-    is_token = False
-    current = False
+    """Field lines of a head or trailer section, in order (§5): each
+    line opening a field, with any obs-fold continuation lines after
+    it."""
+    groups: list[tuple[_Line, list[_Line]]] = []
     for line in lines:
-        content = line.content
-        if content[0] in _OWS_SET:
-            if not current:
-                _flag(
-                    found,
-                    HTTPAnomalyKind.WHITESPACE_PRECEDED_LINE,
-                    None,
-                    line.offset,
-                )
-                continue
-            label = _label(name) if is_token else None
-            _flag(found, HTTPAnomalyKind.OBS_FOLD, label, line.offset)
-            parts.append(_clean_value(content, line.offset, label, found))
-            continue
-        if current:
-            fields.append(_Field(name, _join(parts), field_offset, is_token))
-        current = True
-        field_offset = line.offset
-        colon = content.find(b":")
-        if colon == -1:
-            _flag(found, HTTPAnomalyKind.FIELD_LINE_NO_COLON, None, line.offset)
-            name, parts, is_token = content, [], False
-            continue
+        if line.content[0] not in _OWS_SET:
+            groups.append((line, []))
+        elif groups:
+            groups[-1][1].append(line)
+        else:
+            _flag(
+                found,
+                HTTPAnomalyKind.WHITESPACE_PRECEDED_LINE,
+                None,
+                line.offset,
+            )
+    return [_parse_field(line, folded, found) for line, folded in groups]
+
+
+def _parse_field(line: _Line, folded: list[_Line], found: _Found) -> _Field:
+    """One field line plus its obs-fold continuations (§5.1, §5.2)."""
+    content = line.content
+    colon = content.find(b":")
+    if colon == -1:
+        _flag(found, HTTPAnomalyKind.FIELD_LINE_NO_COLON, None, line.offset)
+        name, is_token = content, False
+    else:
         name = content[:colon].rstrip(_OWS)
         is_token = bool(name) and all(b in _TCHAR for b in name)
         if not is_token:
@@ -600,11 +610,20 @@ def _parse_field_lines(lines: list[_Line], found: _Found) -> list[_Field]:
                 _label(name),
                 line.offset,
             )
-        label = _label(name) if is_token else None
-        parts = [_clean_value(content[colon + 1 :], line.offset, label, found)]
-    if current:
-        fields.append(_Field(name, _join(parts), field_offset, is_token))
-    return fields
+    label = _label(name) if is_token else None
+    parts = (
+        []
+        if colon == -1
+        else [_clean_value(content[colon + 1 :], line.offset, label, found)]
+    )
+    for continuation in folded:
+        _flag(found, HTTPAnomalyKind.OBS_FOLD, label, continuation.offset)
+        parts.append(
+            _clean_value(
+                continuation.content, continuation.offset, label, found
+            )
+        )
+    return _Field(name, _join(parts), line.offset, is_token)
 
 
 def _join(parts: list[bytes]) -> bytes:
@@ -637,12 +656,12 @@ def _parse_list(
 
 def _parse_transfer_encoding(
     fields: list[_Field], version: tuple[int, int], found: _Found
-) -> tuple[bool, bool]:
-    """``(present, final coding is chunked)`` for the combined
-    Transfer-Encoding list (§6.1, §7)."""
+) -> bool | None:
+    """Whether the final transfer coding is chunked (§6.1, §7), or
+    ``None`` when the message has no Transfer-Encoding at all."""
     te_fields = _values(fields, b"transfer-encoding")
     if not te_fields:
-        return False, False
+        return None
     label = "transfer-encoding"
     if version == (1, 0):
         _flag(found, HTTPAnomalyKind.TE_IN_HTTP10, label, te_fields[0].offset)
@@ -666,7 +685,7 @@ def _parse_transfer_encoding(
             label,
             te_fields[0].offset,
         )
-    return True, final_is_chunked
+    return final_is_chunked
 
 
 def _parse_content_length(
@@ -682,13 +701,14 @@ def _parse_content_length(
         return False, None
     label = "content-length"
     elements = _parse_list(cl_fields, label, found)
-    valid = bool(elements)
+    numeric = [
+        (offset, element)
+        for offset, element in elements
+        if all(b in _DIGIT for b in element)
+    ]
     values: set[bytes] = set()
-    for offset, element in elements:
-        if any(b not in _DIGIT for b in element):
-            valid = False
-            continue
-        significant = element.lstrip(b"0") or b"0"
+    for offset, element in numeric:
+        significant = element.lstrip(_ZERO) or _ZERO
         if len(significant) != len(element):
             _flag(found, HTTPAnomalyKind.NUMBER_LEADING_ZEROS, label, offset)
         if len(significant) > _MAX_CONTENT_LENGTH_DIGITS and not te_present:
@@ -702,7 +722,7 @@ def _parse_content_length(
             )
         values.add(significant)
     offset = cl_fields[0].offset
-    valid = valid and len(values) == 1
+    valid = len(numeric) == len(elements) and len(values) == 1
     if te_present:
         _flag(found, HTTPAnomalyKind.CL_AND_TE, label, offset)
         if not valid:
@@ -741,17 +761,17 @@ def _frame_message(
     """The message body length, per RFC 9112 §6.3."""
     if start.is_response:
         empty = 100 <= start.status < 200 or start.status == 204
-        tunnel = request_method == b"CONNECT" and 200 <= start.status < 300
-        if empty or tunnel:
+        # _check_request_method keeps CONNECT only for a 2xx response.
+        if empty or request_method == b"CONNECT":
             _flag_present(fields, _FRAMING_FIELDS, found)
             return _Framing(HTTPFraming.NONE)
         if start.status == 304 or request_method == b"HEAD":
             return _Framing(HTTPFraming.NONE)
-    te_present, chunked = _parse_transfer_encoding(fields, start.version, found)
+    chunked = _parse_transfer_encoding(fields, start.version, found)
     cl_present, length = _parse_content_length(
-        fields, te_present, found, protocol
+        fields, chunked is not None, found, protocol
     )
-    if te_present:
+    if chunked is not None:
         if chunked:
             return _Framing(HTTPFraming.CHUNKED)
         if start.is_response:
@@ -772,51 +792,6 @@ def _skip(data: bytes, index: int, allowed: frozenset[int]) -> int:
     while index < len(data) and data[index] in allowed:
         index += 1
     return index
-
-
-def _quoted_string_end(data: bytes, start: int) -> int:
-    """Index just past the quoted-string opening at ``start``, or -1."""
-    index = start + 1
-    while index < len(data):
-        byte = data[index]
-        if byte == 0x22:
-            return index + 1
-        if byte == 0x5C:
-            if index + 1 >= len(data) or data[index + 1] not in _QUOTED_PAIR:
-                return -1
-            index += 2
-        elif byte in _QDTEXT:
-            index += 1
-        else:
-            return -1
-    return -1
-
-
-def _valid_chunk_ext(ext: bytes) -> bool:
-    """``*( BWS ";" BWS name [ BWS "=" BWS ( token / quoted-string ) ] )``
-    (§7.1.1)."""
-    index = 0
-    while index < len(ext):
-        index = _skip(ext, index, _OWS_SET)
-        if index >= len(ext) or ext[index] != 0x3B:
-            return False
-        index = _skip(ext, index + 1, _OWS_SET)
-        name_end = _skip(ext, index, _TCHAR)
-        if name_end == index:
-            return False
-        index = _skip(ext, name_end, _OWS_SET)
-        if index < len(ext) and ext[index] == 0x3D:
-            index = _skip(ext, index + 1, _OWS_SET)
-            if index < len(ext) and ext[index] == 0x22:
-                index = _quoted_string_end(ext, index)
-                if index == -1:
-                    return False
-            else:
-                value_end = _skip(ext, index, _TCHAR)
-                if value_end == index:
-                    return False
-                index = value_end
-    return True
 
 
 def _parse_chunk_line(
@@ -840,7 +815,7 @@ def _parse_chunk_line(
             field="chunk-size",
             offset=offset,
         )
-    significant = digits.lstrip(b"0") or b"0"
+    significant = digits.lstrip(_ZERO) or _ZERO
     if len(significant) != len(digits):
         _flag(found, HTTPAnomalyKind.NUMBER_LEADING_ZEROS, "chunk-size", offset)
     if len(significant) > _MAX_CHUNK_SIZE_DIGITS:
@@ -869,7 +844,7 @@ def _parse_chunk_line(
         _flag(found, HTTPAnomalyKind.CHUNK_EXTENSION, None, offset)
         if b"\n" in rest:
             _flag(found, HTTPAnomalyKind.CHUNK_LINE_BARE_LF, None, offset)
-        if not _valid_chunk_ext(rest):
+        if _CHUNK_EXT.fullmatch(rest) is None:
             _flag(found, HTTPAnomalyKind.CHUNK_EXTENSION_INVALID, None, offset)
     return int(significant, 16), extension_bytes
 
@@ -1024,8 +999,7 @@ def _disposition(
 ) -> HTTPDisposition:
     """What follows this message on the connection (§9.3, §6.1)."""
     if start.is_response and (
-        start.status == 101
-        or (request_method == b"CONNECT" and 200 <= start.status < 300)
+        start.status == 101 or request_method == b"CONNECT"
     ):
         return HTTPDisposition.TUNNEL
     connection = _values(fields, b"connection")
@@ -1058,7 +1032,7 @@ def _check_request_method(
     it changes framing: HEAD, or CONNECT answered with a 2xx."""
     if method is None:
         return None
-    if not method or any(c > "\x7f" or ord(c) not in _TCHAR for c in method):
+    if not method or any(ord(c) not in _TCHAR for c in method):
         raise InvalidFieldError(
             f"request_method {method!r} is not a token",
             protocol=protocol,
@@ -1072,9 +1046,8 @@ def _check_request_method(
             field="request_method",
             actual=method,
         )
-    raw = method.encode("ascii")
-    if raw == b"HEAD" or (raw == b"CONNECT" and 200 <= start.status < 300):
-        return raw
+    if method == "HEAD" or (method == "CONNECT" and 200 <= start.status < 300):
+        return method.encode()
     return None
 
 
