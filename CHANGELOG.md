@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Development
 
+- **README's Roadmap section now leads with the current roadmap, #170**, instead of describing the completed #107 as if nothing had replaced it and promising that "new planned work will open fresh issues" — #170 had been open since 2026-09-09. It names #170's five tier themes without restating its tiers or target versions, which moved up one minor version when 2.3.0 shipped the HTTP codec outside them; `tests/test_docs.py` now checks the section leads with #170 and links none of the tier epics.
 - **Fixed a concurrency-group deadlock that cancelled the 2.3.0 release run before any job could start.** `ci.yml`'s concurrency group was keyed on `${{ github.workflow }}`, which inside a `workflow_call` resolves to the *caller's* name ("Release"), not "CI" — so release.yml calling ci.yml on a tag push made both the top-level run and the nested `ci` job claim the identical group `Release-refs/tags/<tag>`, and GitHub cancelled the run as a self-deadlock. The group now uses a literal `ci` prefix instead. `tests/test_workflows.py` gains a guard: no workflow declaring `workflow_call` may key its own concurrency group on `github.workflow`.
 
 ## [2.3.0] - 2026-10-23
