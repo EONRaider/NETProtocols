@@ -5,17 +5,19 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
 pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
-upper-layer checksum — it spans the reassembled datagram). Frames used
+upper-layer checksum — it spans the reassembled datagram), as does
+every IPsec ICV, with the test keys published below. Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 101 frames across 18
+frames routinely leave checksums to NIC offload. 107 frames across 19
 scenarios. Addresses are as-captured from the capture host's network.
 
-Five scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`dns_tcp.pcap`, `ipip.pcap`) are captured separately by their own
-`scripts/capture_fixtures_*.sh` over purpose-built topologies — real
-kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
-queried over TCP, and kernel IP-in-IP encapsulation — see their rows
-and the notes below.
+Six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`dns_tcp.pcap`, `ipip.pcap`, `esp.pcap`) are captured separately by
+their own `scripts/capture_fixtures_*.sh` over purpose-built
+topologies — real kernel vlan devices, a DHCP server/client, a GRE
+tunnel, a DNS server queried over TCP, kernel IP-in-IP encapsulation,
+and IPsec ESP built by a script and sent through a raw socket — see
+their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -37,6 +39,7 @@ and the notes below.
 | `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
 | `dns_tcp.pcap` | 4 | DNS over TCP (RFC 1035 §4.2.2): A and TXT queries + responses from `dig +tcp` against `dnsmasq` — `Ethernet→IPv4→TCP→DNSOverTCP→DNS`; **direct capture** (see DNS-over-TCP note) |
 | `ipip.pcap` | 4 | IP-in-IP ICMP echo requests: IPv4 in IPv4 (protocol 4, RFC 2003) ×2 and IPv6 in IPv4 (protocol 41, 6in4, RFC 4213) ×2 — `Ethernet→IPv4→IPv4→ICMPv4` and `Ethernet→IPv4→IPv6→ICMPv6`; **direct capture** (see IP-in-IP note) |
+| `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -99,6 +102,41 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   IPv6 (RFC 2473) are covered by constructed frames in
   `tests/test_ipip.py`, and the script captures them too on a kernel
   with IPv6.
+- `esp.pcap` was produced by `scripts/capture_fixtures_ipsec.sh`. The
+  capture host's kernel has no xfrm ESP transform (`ip xfrm state add
+  … proto esp` fails with "Requested type not found"), so it cannot do
+  the IPsec processing itself; `scripts/ipsec_fixture_packets.py`
+  (stdlib only) builds each ESP packet instead — SPI, sequence number,
+  the NULL-encrypted (RFC 2410) payload, the RFC 4303 §2.4 default
+  padding (`01 02 …`) to a 4-byte boundary, Pad Length, Next Header,
+  and an HMAC-SHA-256-128 ICV (RFC 4868) over all of it — and sends it
+  through a raw socket opened for protocol 50 over a veth pair, captured
+  on the receiving side with offload disabled. **What the kernel built:
+  the outer IPv4 header** (identification, DF, TTL 64, checksum) and the
+  Ethernet header. **What the script built: every byte from the SPI
+  on**, which the script confirms after the capture by comparing each
+  captured datagram past its IPv4 header with what it sent, byte for
+  byte. In transport mode the payload is an ICMPv4 echo or UDP datagram
+  whose checksum covers the outer header's pseudo-header; in tunnel mode
+  it is a whole inner IPv4 packet (`192.0.2.1 → 192.0.2.2`, RFC 5737)
+  between the hosts behind the two gateways. `check_fixtures` verifies
+  each ICV with the keys below, then the padding, then the inner
+  packet's checksums. The kernel has no IPv6, so IPv6-outer ESP is
+  covered by constructed frames in `tests/test_esp.py`.
+
+### IPsec test keys
+
+Published so anyone can verify the captures: these keys protect
+nothing. Every SA uses HMAC-SHA-256-128 (RFC 4868: HMAC-SHA-256 with a
+256-bit key, the output truncated to its first 16 bytes) for integrity;
+every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
+32-bit (no ESN). The keys are also hard-coded, independently, in
+`scripts/check_fixtures.py` and `tests/test_esp.py`.
+
+| SPI | Protocol | Mode | Integrity key (hex) |
+|---|---|---|---|
+| `0x10000001` | ESP | transport | `e41126360fbc54a0e11a8747218b24d0cc4638f579c3985017b4d0ab1a30398b` |
+| `0x10000002` | ESP | tunnel | `4bc3ce948208049b2f5016e06616867773924d2ccb4dab8b3aff93e6d26f3834` |
 
 ## HTTP captures (`tests/fixtures/http/`)
 

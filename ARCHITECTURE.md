@@ -219,8 +219,9 @@ holds unchanged.
 A captured frame is a chain of headers, each one naming what it
 carries. In this library that fact is typed: every decoded header
 answers `next_protocol()` with the *class* that decodes its payload,
-or `None` when the chain ends (nothing encapsulated, or a protocol
-this library doesn't implement yet).
+or `None` when the chain ends (nothing encapsulated, a protocol this
+library doesn't implement yet, or a payload no header names in the
+clear — ESP's Next Header is encrypted along with what it describes).
 
 ```mermaid
 flowchart LR
@@ -242,11 +243,14 @@ flowchart LR
   I4 -->|41| I6
   I6 -->|4| I4
   I6 -->|41| I6
+  I4 -->|50| ESP[ESP]
+  I6 -->|50| ESP
   I6 -->|0, 43, 44, 60| X[IPv6 extension headers]
   X --> X
   X -->|58| IC6
   X -->|6| T
   X -->|17| U
+  X -->|50| ESP
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -452,7 +456,7 @@ src/netprotocols/
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
-│                   igmp.py, gre.py,
+│                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)

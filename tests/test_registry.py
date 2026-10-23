@@ -282,6 +282,8 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 2).__name__ == "IGMP"
         assert DEFAULT.get(TABLE_IP_PROTO, 4) is IPv4
         assert DEFAULT.get(TABLE_IP_PROTO, 41) is IPv6
+        assert DEFAULT.get(TABLE_IP_PROTO, 50).__name__ == "ESP"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 50).__name__ == "ESP"
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS

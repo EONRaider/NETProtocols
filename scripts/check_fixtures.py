@@ -12,6 +12,8 @@ Usage: python3 scripts/check_fixtures.py tests/fixtures/staging
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import struct
 import sys
 from collections import Counter
@@ -148,20 +150,36 @@ def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
         stats["ipv4-first-fragment"] += 1
         return failures  # first fragment: upper checksum spans all parts
     upper = payload[ihl:total_length]
+    return failures + _check_upper_v4(proto, src, dst, upper, stats, depth)
+
+
+def _check_upper_v4(
+    proto: int,
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+) -> list[str]:
+    """Validate what an IPv4 header (``src``/``dst``) carries as
+    protocol ``proto`` — directly, or behind IPsec in transport mode,
+    where the pseudo-header is still the IPv4 header's."""
     upper_len = len(upper)
     if proto == 1 and upper_len >= 8:
-        failures += _check_icmpv4(upper, stats)
-    elif proto == 2 and upper_len >= 8:
-        failures += _check_igmp(upper, stats)
-    elif proto == 6 and upper_len >= 20:
-        failures += _check_tcp(src, dst, upper, stats)
-    elif proto == 17 and upper_len >= 8:
-        failures += _check_udp(src, dst, upper, stats)
-    elif proto == 47 and upper_len >= 4:
-        failures += _check_gre(src, dst, upper, stats, depth)
-    elif proto in _IP_IN_IP:
-        failures += _check_ip_in_ip(proto, upper, stats, depth)
-    return failures
+        return _check_icmpv4(upper, stats)
+    if proto == 2 and upper_len >= 8:
+        return _check_igmp(upper, stats)
+    if proto == 6 and upper_len >= 20:
+        return _check_tcp(src, dst, upper, stats)
+    if proto == 17 and upper_len >= 8:
+        return _check_udp(src, dst, upper, stats)
+    if proto == 47 and upper_len >= 4:
+        return _check_gre(src, dst, upper, stats, depth)
+    if proto in _IP_IN_IP:
+        return _check_ip_in_ip(proto, upper, stats, depth)
+    if proto == 50 and upper_len >= 8:
+        return _check_esp(src, dst, upper, stats, depth, ipv6=False)
+    return []
 
 
 def _check_icmpv6(
@@ -221,6 +239,59 @@ def _check_ip_in_ip(
     return _check_l3(_IP_IN_IP[proto], upper, stats, depth + 1)
 
 
+#: The integrity keys of the corpus's IPsec Security Associations,
+#: keyed by SPI — the test keys published in tests/fixtures/MANIFEST.md.
+#: Every SA uses HMAC-SHA-256-128 (RFC 4868), and every ESP SA NULL
+#: encryption (RFC 2410), so the protected payload is readable once the
+#: ICV verifies. A packet on any other SPI is counted, not failed: a
+#: real capture of encrypted ESP is valid input this cannot verify.
+_ESP_NULL_SAS = {
+    0x10000001: bytes.fromhex(
+        "e41126360fbc54a0e11a8747218b24d0cc4638f579c3985017b4d0ab1a30398b"
+    ),
+    0x10000002: bytes.fromhex(
+        "4bc3ce948208049b2f5016e06616867773924d2ccb4dab8b3aff93e6d26f3834"
+    ),
+}
+_ICV_LEN = 16
+
+
+def _icv(key: bytes, data: bytes) -> bytes:
+    return hmac.new(key, data, hashlib.sha256).digest()[:_ICV_LEN]
+
+
+def _check_esp(
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    ipv6: bool,
+) -> list[str]:
+    # ESP (RFC 4303): SPI and sequence number, then (under NULL
+    # encryption) the payload, padding, Pad Length, Next Header, and the
+    # ICV over everything before it.
+    stats["esp"] += 1
+    key = _ESP_NULL_SAS.get(struct.unpack_from("!I", upper, 0)[0])
+    if key is None:
+        stats["esp-unknown-sa"] += 1
+        return []
+    if len(upper) < 8 + 2 + _ICV_LEN:
+        return ["esp-truncated"]
+    protected, wire_icv = upper[:-_ICV_LEN], upper[-_ICV_LEN:]
+    if not hmac.compare_digest(_icv(key, protected), wire_icv):
+        return ["esp-icv"]
+    pad_len, next_header = protected[-2], protected[-1]
+    end = len(protected) - 2 - pad_len
+    # RFC 4303 §2.4: the default padding is the bytes 1, 2, 3, ...
+    if end < 8 or protected[end:-2] != bytes(range(1, pad_len + 1)):
+        return ["esp-padding"]
+    inner = protected[8:end]
+    check = _check_upper_v6 if ipv6 else _check_upper_v4
+    return check(next_header, src, dst, inner, stats, depth + 1)
+
+
 def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
     failures: list[str] = []
     stats["ipv6"] += 1
@@ -240,16 +311,32 @@ def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
         # The upper-layer checksum spans the reassembled datagram, not
         # this fragment's slice: nothing verifiable here.
         return failures
+    return failures + _check_upper_v6(
+        next_header, src, dst, upper, stats, depth
+    )
+
+
+def _check_upper_v6(
+    next_header: int,
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+) -> list[str]:
+    """The IPv6 counterpart of :func:`_check_upper_v4`."""
     upper_len = len(upper)
     if next_header == 58 and upper_len >= 4:
-        failures += _check_icmpv6(src, dst, upper, stats)
-    elif next_header == 6 and upper_len >= 20:
-        failures += _check_tcp6(src, dst, upper, stats)
-    elif next_header == 17 and upper_len >= 8:
-        failures += _check_udp6(src, dst, upper, stats)
-    elif next_header in _IP_IN_IP:
-        failures += _check_ip_in_ip(next_header, upper, stats, depth)
-    return failures
+        return _check_icmpv6(src, dst, upper, stats)
+    if next_header == 6 and upper_len >= 20:
+        return _check_tcp6(src, dst, upper, stats)
+    if next_header == 17 and upper_len >= 8:
+        return _check_udp6(src, dst, upper, stats)
+    if next_header in _IP_IN_IP:
+        return _check_ip_in_ip(next_header, upper, stats, depth)
+    if next_header == 50 and upper_len >= 8:
+        return _check_esp(src, dst, upper, stats, depth, ipv6=True)
+    return []
 
 
 def _check_l3(
@@ -257,8 +344,9 @@ def _check_l3(
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
-    is itself an EtherType, and through IP-in-IP (IP protocols 4 and
-    41). Returns a list of failure strings."""
+    is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
+    and through NULL-encrypted ESP on a known Security Association
+    after verifying its ICV. Returns a list of failure strings."""
     if depth > 8:
         return []  # bound pathological tunnel nesting
 

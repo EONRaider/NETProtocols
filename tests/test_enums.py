@@ -16,3 +16,6 @@ class TestEnumCompleteness:
     def test_extension_header_display_names(self):
         assert IPProtocol.HOPOPT.display_name == "IPv6 Hop-by-Hop Options"
         assert IPProtocol.IPV6_FRAG.display_name == "IPv6 Fragment"
+
+    def test_ipsec_display_names(self):
+        assert IPProtocol.ESP.display_name == "ESP"
