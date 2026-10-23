@@ -52,11 +52,11 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 ## Why NETProtocols
 
 Measured against `dpkt 1.9.8` and `scapy 2.7.0` on a 97-frame corpus of
-real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured
-2026-09-04 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every number
-below, its reproduction command, and its caveats):
+real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
+2.3.0 on 2026-10-23 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
+number below, its reproduction command, and its caveats):
 
-- **Within 15% of dpkt on decode, 5.4× faster than scapy** —
+- **Within 15% of dpkt on decode, 4.6× faster than scapy** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
   the faster of the two comparators on this corpus; the gap moves both
   ways as this library and dpkt each change, and this file's job is to
@@ -68,11 +68,11 @@ below, its reproduction command, and its caveats):
 - **4.5× faster than dpkt at re-encoding** (`bytes(header)`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
-- **Imports in 54 ms; `scapy.all` takes 458+ ms** (`scripts/benchmark_import.py`),
+- **Imports in 57 ms; `scapy.all` takes 487+ ms** (`scripts/benchmark_import.py`),
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **A 90.4 KiB wheel against scapy's 2.47 MiB** — 28.0× smaller.
+- **A 106.1 KiB wheel against scapy's 2.47 MiB** — 23.9× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
@@ -467,11 +467,16 @@ decode-throughput fix
 CodeFactor tooling cleanup
 ([#156](https://github.com/EONRaider/NETProtocols/issues/156)) are now
 released as
-[2.2.1](https://github.com/EONRaider/NETProtocols/releases/tag/v2.2.1).
+[2.2.1](https://github.com/EONRaider/NETProtocols/releases/tag/v2.2.1),
+and the HTTP/1.1 codec
+([#214](https://github.com/EONRaider/NETProtocols/pull/214),
+[#223](https://github.com/EONRaider/NETProtocols/pull/223),
+[#226](https://github.com/EONRaider/NETProtocols/pull/226)) as 2.3.0
+(see [CHANGELOG.md](CHANGELOG.md)).
 2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0 and 2.2.0
 rather than as their own versions, but the roadmap's original "only at
 a major version bump" release policy wasn't actually held to: 2.0.0,
-2.2.0 and now 2.2.1 are all on PyPI, and the comparative claims above
+2.2.0, 2.2.1 and now 2.3.0 are all on PyPI, and the comparative claims above
 draw on the finished tree. New planned work
 will open fresh issues rather than restating a list here, so this
 section stays accurate without upkeep. The wave before this one — TCP
