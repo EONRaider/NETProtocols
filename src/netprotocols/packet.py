@@ -132,8 +132,9 @@ class Packet:
         stacks an outer IP header whose addresses are the tunnel's
         endpoints, not the conversation's. Layers between that IP header
         and the transport (IPv6 extension headers, AH) are skipped and
-        do not change the key, whose protocol number is the
-        transport's own.
+        do not change the key's protocol number, which is the
+        transport's own; see :func:`~netprotocols.flow.flow_key` for
+        what an IPv6 Routing header does to its addresses.
 
         ``None`` if either layer is missing — a packet with no
         transport layer, or a bare TCP/UDP segment built without an IP

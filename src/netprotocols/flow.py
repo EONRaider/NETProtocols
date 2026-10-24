@@ -103,7 +103,11 @@ def flow_key(
         when ``layer`` is TCP/UDP, since the addresses come from it.
         Only its addresses are read: the protocol number is
         ``layer``'s own, so headers between ``ip`` and ``layer`` (IPv6
-        extension headers, AH) do not change the key.
+        extension headers, AH) do not change it. They can change the
+        addresses' meaning: behind an IPv6 Routing header with segments
+        left, ``ip.dst`` is the next segment rather than the final
+        destination (RFC 8200 §8.1), so the two directions of a
+        source-routed flow may key differently.
     :raises InvalidFieldError: ``layer`` is TCP/UDP but ``ip`` is
         ``None``.
     """
