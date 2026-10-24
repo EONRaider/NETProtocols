@@ -122,8 +122,9 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   it is a whole inner IPv4 packet (`192.0.2.1 → 192.0.2.2`, RFC 5737)
   between the hosts behind the two gateways. `check_fixtures` verifies
   each ICV with the keys below, then the padding, then the inner
-  packet's checksums. The kernel has no IPv6, so IPv6-outer ESP is
-  covered by constructed frames in `tests/test_esp.py`.
+  packet's checksums; a frame on an SPI not listed below fails. The
+  kernel has no IPv6, so IPv6-outer ESP is covered by constructed
+  frames in `tests/test_esp.py`.
 - `ah.pcap` was produced by the same script. AH's ICV covers the outer
   IPv4 header (RFC 4302 §3.3.3: every field but TOS, flags, fragment
   offset, TTL and the header checksum, which are zeroed for the
@@ -147,9 +148,11 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   bundle (RFC 4301 §4.5). `check_fixtures` verifies each AH ICV with
   the keys below, then what it protects: the transport checksums
   against the outer header's pseudo-header, the inner IPv4 packet, or
-  the bundled ESP packet's own ICV, padding and payload. IPv6-outer AH,
-  with the 4 bytes of ICV padding HMAC-SHA-256-128 needs there, is
-  covered by constructed frames in `tests/test_ah.py`.
+  the bundled ESP packet's own ICV, padding and payload. A frame on an
+  SPI not listed below fails, as does AH behind IPv4 header options or
+  an IPv6 header, whose ICV `check_fixtures` does not compute.
+  IPv6-outer AH, with the 4 bytes of ICV padding HMAC-SHA-256-128 needs
+  there, is covered by constructed frames in `tests/test_ah.py`.
 
 ### IPsec test keys
 

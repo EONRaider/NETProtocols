@@ -221,7 +221,9 @@ carries. In this library that fact is typed: every decoded header
 answers `next_protocol()` with the *class* that decodes its payload,
 or `None` when the chain ends (nothing encapsulated, a protocol this
 library doesn't implement yet, or a payload no header names in the
-clear — ESP's Next Header is encrypted along with what it describes).
+clear — ESP's Next Header sits in its protected trailer, encrypted
+under every cipher but NULL and at an offset only the Security
+Association determines, so the decoder never reads it).
 
 ```mermaid
 flowchart LR
@@ -281,7 +283,7 @@ one header that comes as a pair for that reason: `AH` after IPv4 and
 family's table, so IPv4 → AH → `0` stops rather than conjuring a
 Hop-by-Hop layer, while IPv6 → AH → Destination Options — an order
 RFC 8200 §4.1 permits — keeps decoding. ESP, the other IPsec header,
-ends the walk: what it carries is named only inside the encrypted
+ends the walk: what it carries is named only inside its protected
 trailer.
 
 VLAN tags chain the same way: a tag's `next_protocol` dispatches the
