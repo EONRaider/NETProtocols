@@ -509,26 +509,30 @@ class TestSCTPChunkAccessorSafety:
             _ = chunk.flags_str
             assert 0 <= chunk.unrecognized_action <= 3
 
-    @given(header=sctp_headers(), padding=st.integers(0, 48))
+    @given(header=sctp_headers())
     def test_zero_padding_after_a_packet_is_left_undecoded(
-        self, header: SCTP, padding: int
+        self, header: SCTP
     ) -> None:
         """A well-formed packet followed by Ethernet's zero padding
         decodes to exactly the packet: the zero-tail trim, which the
-        free-byte property above rarely reaches."""
+        free-byte property above rarely reaches. Every padding length up
+        to Ethernet's 46-byte maximum is tried rather than drawn, so the
+        1-3 byte remainders (too short for a chunk header) are always
+        covered whatever the seed."""
         wire = bytes(header)
-        sctp = SCTP.decode(wire + bytes(padding))
-        assert sctp == header
-        assert sctp.header_len == len(wire)
+        for padding in range(47):
+            sctp = SCTP.decode(wire + bytes(padding))
+            assert sctp == header, padding
+            assert sctp.header_len == len(wire), padding
 
-    @given(header=sctp_headers(), padding=st.integers(0, 48))
-    def test_a_nonzero_trailer_is_kept(
-        self, header: SCTP, padding: int
-    ) -> None:
+    @given(header=sctp_headers())
+    def test_a_nonzero_trailer_is_kept(self, header: SCTP) -> None:
         """Anything but zeros after the packet (an FCS, say) cannot be
-        told from a broken chunk, so decode() keeps it all."""
-        data = bytes(header) + bytes(padding) + b"\x01"
-        assert SCTP.decode(data).header_len == len(data)
+        told from a broken chunk, so decode() keeps it all, after any
+        number of zeros."""
+        for padding in range(47):
+            data = bytes(header) + bytes(padding) + b"\x01"
+            assert SCTP.decode(data).header_len == len(data), padding
 
     @given(chunks=st.lists(sctp_chunks(), max_size=6))
     def test_built_chunks_parse_back(self, chunks: list[SCTPChunk]) -> None:
