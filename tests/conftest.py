@@ -177,3 +177,10 @@ def raw_esp_packet() -> bytes:
         "6c084e5000014e455450726f746f636f6c7320455350206669787475726501"
         "020201ae4c50f31eb8912ffc460ec5e194475e"
     )
+
+
+@pytest.fixture
+def raw_vxlan_header() -> bytes:
+    """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
+    1193046 (0x123456), reserved bits zero."""
+    return b"\x08\x00\x00\x00\x12\x34\x56\x00"

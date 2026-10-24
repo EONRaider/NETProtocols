@@ -96,7 +96,7 @@ source = ["netprotocols"]
 
 [tool.coverage.report]
 show_missing = true
-# The suite covers 99.96% of 2682 statements (2681 hit, 1 miss); the
+# The suite covers 99.96% of 2755 statements (2754 hit, 1 miss); the
 # only miss is Packet's __eq__ NotImplemented branch. Gate at 98 rather
 # than at the current figure so a legitimately unreachable branch does
 # not fail CI, and well above it so the bar is actually held.

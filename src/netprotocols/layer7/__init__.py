@@ -15,11 +15,13 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
     "DHCP",
     "DNS",
     "HTTP",
+    "VXLAN",
     "DHCPOption",
     "DNSOverTCP",
     "DNSQuestion",

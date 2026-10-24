@@ -8,16 +8,17 @@ pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
 upper-layer checksum — it spans the reassembled datagram), as does
 every IPsec ICV, with the test keys published below. Frames used
 as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 107 frames across 19
+frames routinely leave checksums to NIC offload. 118 frames across 20
 scenarios. Addresses are as-captured from the capture host's network.
 
-Six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`dns_tcp.pcap`, `ipip.pcap`, `esp.pcap`) are captured separately by
-their own `scripts/capture_fixtures_*.sh` over purpose-built
-topologies — real kernel vlan devices, a DHCP server/client, a GRE
-tunnel, a DNS server queried over TCP, kernel IP-in-IP encapsulation,
-and IPsec ESP built by a script and sent through a raw socket — see
-their rows and the notes below.
+Seven scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`) are captured
+separately by their own `scripts/capture_fixtures_*.sh` over
+purpose-built topologies — real kernel vlan devices, a DHCP
+server/client, a GRE tunnel, a DNS server queried over TCP, kernel
+IP-in-IP encapsulation, a kernel VXLAN tunnel, and IPsec ESP built by a
+script and sent through a raw socket — see their rows and the notes
+below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -39,6 +40,7 @@ their rows and the notes below.
 | `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
 | `dns_tcp.pcap` | 4 | DNS over TCP (RFC 1035 §4.2.2): A and TXT queries + responses from `dig +tcp` against `dnsmasq` — `Ethernet→IPv4→TCP→DNSOverTCP→DNS`; **direct capture** (see DNS-over-TCP note) |
 | `ipip.pcap` | 4 | IP-in-IP ICMP echo requests: IPv4 in IPv4 (protocol 4, RFC 2003) ×2 and IPv6 in IPv4 (protocol 41, 6in4, RFC 4213) ×2 — `Ethernet→IPv4→IPv4→ICMPv4` and `Ethernet→IPv4→IPv6→ICMPv6`; **direct capture** (see IP-in-IP note) |
+| `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -124,6 +126,22 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   packet's checksums; a frame on an SPI not listed below fails. The
   kernel has no IPv6, so IPv6-outer ESP is covered by constructed
   frames in `tests/test_esp.py`.
+
+- `vxlan.pcap` was produced by `scripts/capture_fixtures_vxlan.sh`: a
+  kernel VXLAN device (`dstport 4789`) in each of two netns over a veth
+  underlay, the overlay addressed and exercised with a fresh ARP
+  exchange, `ping`, and one UDP datagram between fixed ports (40000 →
+  9999), captured on the underlay with offload disabled on both the
+  veth and the vxlan devices. Both directions are kept: every frame was
+  built by the kernel, and every checksum computed in software. The
+  first segment ran with `udpcsum`, so the outer UDP checksum is real
+  and `check_fixtures` verifies it over the whole encapsulated frame;
+  the second with `noudpcsum`, so it is zero ("not used", RFC 768), as
+  RFC 7348 §5 says it SHOULD be sent. `check_fixtures`
+  peels the VXLAN header on destination port 4789 and verifies the
+  inner frame's checksums too. The outer source ports are the kernel's
+  hash of each inner flow; none is a registered port. This file's echo
+  and UDP frames are the corpus's deepest chains, at 7 layers.
 
 ### IPsec test keys
 

@@ -254,6 +254,8 @@ flowchart LR
   X -->|6| T
   X -->|17| U
   X -->|50| ESP
+  U -->|4789| VX[VXLAN]
+  VX -->|always| E
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -344,7 +346,7 @@ therefore take the nearest one before it, as `Packet.with_checksums()`
 and `Packet.flow_key()` do, not the first.
 
 **Extending the walk without forking.** The tables are public. A
-protocol this library does not implement — MPLS, VXLAN, a proprietary
+protocol this library does not implement — MPLS, a proprietary
 telemetry header — is one registration away from participating in
 frame walks like any built-in:
 
@@ -374,8 +376,15 @@ registrations live together in
 [`_defaults.py`](src/netprotocols/_defaults.py), whose imports sit
 inside `install()` and run once from `__init__.py` after every
 protocol class exists. Shared enums stay in the dependency-free
-`_enums.py`. The layer modules bind their table at import and never
-import each other's classes at all.
+`_enums.py`. The layer modules bind their table at import, and every
+class a header chooses by a field value (EtherType, IP protocol, port)
+comes out of a table, never from an import. Two modules do import
+another's class, where there is no field to look up. `layer3/icmp.py`
+names `IPv4` and `IPv6` to start the walk of the packet an ICMP error
+quotes, which is not dispatch, and `layer7/vxlan.py` names `Ethernet`
+directly, because a VXLAN payload is always an Ethernet frame. Neither
+can form a cycle: `ip.py` and `ethernet.py` import no other layer
+module.
 
 ## Port-based dispatch is best-effort
 
@@ -391,14 +400,56 @@ fourth layer; on TCP, port 53 names `DNSOverTCP`, a shim that consumes
 the 2-byte length prefix (RFC 1035 §4.2.2) and chains onward, so the
 walk stays uniform.
 
-Because the guess can be wrong, the application class validates
-strictly on decode: a non-DNS datagram that happens to use port 53
-raises a `ProtocolError`, which the ordinary decode-error path absorbs
-(the chain keeps the layers it did decode and records the failure). So
-a mis-dispatch degrades to a diagnosed frame, never to garbage. This
-is why the port tables can be opened to third parties as safely as the
-authoritative ones: a wrong registration costs a diagnosed frame, not
-a wrong answer.
+VXLAN on UDP 4789 (RFC 7348) is the one port entry whose payload is a
+whole Ethernet frame. `VXLAN.next_protocol()` always answers
+`Ethernet`, and the walk carries on from there exactly as it does at
+the start of a frame — the inner frame's VLAN tags, ARP, IPv4 or IPv6
+dispatch through the same `ethertype` table, and the registry a caller
+passed reaches them too. The walker needed no change for this:
+`start=` only chooses the first class, and every later one comes from
+the previous header's `next_protocol()`, whatever its layer. An
+encapsulating endpoint normally sends to 4789, the IANA port (RFC 7348
+§5), from a source port hashed from the inner flow, so the
+destination-first lookup finds VXLAN even when that hash lands on
+another registered port. The same precedence means a DNS reply to a
+client whose ephemeral port happens to be 4789 dispatches to VXLAN,
+never to DNS (and is then rejected at the I flag about half the time).
+Only 4789 is registered, and Linux still gives a vxlan device `dstport`
+8472, the port it used before IANA assigned one, when `ip link add`
+names none, so a capture from such a device needs
+`decode_as={"udp.port": {8472: VXLAN}}`. An ICMP echo tunnelled through
+VXLAN walks seven layers (`Ethernet → IPv4 → UDP → VXLAN → Ethernet →
+IPv4 → ICMPv4`), and a hostile frame nested in itself gains four per
+level until `max_depth` stops it.
+
+Because the guess can be wrong, each application class validates on
+decode, but it can only reject what its format lets it tell apart from
+noise, and for most formats that is little. DNS needs only its 12-byte
+header and DHCP its 236-byte fixed part; past that, almost any bytes
+decode cleanly as either, and even a datagram to port 53 with no
+payload at all, padded to Ethernet's 60-byte minimum, decodes the
+padding as a DNS header. VXLAN can reject more, because its header has
+one bit it requires: the I flag, which random bytes leave clear half the
+time. Over 10,000 random 300-byte UDP payloads per port, decoded with
+`decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
+50.1% of those sent to 4789 and for none of those sent to 53 or 67.
+With lengths drawn uniformly from 0-600 bytes instead, in frames not
+padded to Ethernet's minimum, the figures are about 52%, 2% and 39%,
+and every DNS and DHCP rejection is a payload too short for the fixed
+header; padded to the minimum, as on the wire, the DNS figure falls to
+0%, since the padding itself decodes as a DNS header. The VXLAN
+header cannot reject more than it does: RFC 7348 says to ignore its
+reserved bits, so rejecting those would refuse real traffic, such as
+the Group Based Policy extension's.
+
+A rejected guess takes the ordinary decode-error path: the chain keeps
+the layers it did decode and records the failure. An accepted one
+yields a layer that decoded cleanly and is wrong, and nothing in the
+`Packet` says so. A caller who needs certainty does not leave it to the
+port: `decode_as` or a derived `Registry` names the class for a port
+the caller knows, overriding the default for that walk. Third-party
+entries in the port tables carry the same risk and no more: a wrong
+registration costs what a wrong guess does.
 
 `HTTP` is deliberately absent from the `tcp.port` table. The unit a
 datagram protocol decodes is the payload; HTTP's is a message, which
@@ -415,10 +466,14 @@ bytes instead.
 ## The encode side, and the round-trip guarantee
 
 Every class also works in reverse. Constructors take the friendly
-forms (string addresses, integer fields), validate them in
-`__post_init__` (address formats; and IHL/data-offset must agree with
-`len(options)` — you cannot construct a self-contradictory header),
-and `bytes()` re-emits the exact on-wire form.
+forms (string addresses, integer fields) and validate some of them in
+`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6
+and DHCP do not, so a malformed address there fails only in
+`bytes()`), and IPv4's IHL and TCP's data offset must agree with
+`len(options)`. For a valid header, `bytes()` re-emits the exact
+on-wire form. Constructors do not check everything decode does, so
+some headers can be built that decode would never produce (see
+below).
 
 The test suite enforces the round trip in both directions for every
 protocol:
@@ -427,6 +482,21 @@ protocol:
 Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
+
+The first holds for canonical headers, the ones decode itself
+produces, when decode is given the context it produced them with
+(HTTP's `request_method` and `closed`). A constructor accepts more
+than that, and for those headers the first line can fail: spellings
+are normalised on the way back (a MAC written with dashes decodes with
+colons, an IPv6 address decodes compressed); GRE's optional `fields`
+must agree with its flag bits; and VXLAN accepts a clear I flag on
+purpose, so that a test of another stack can send one, though
+`VXLAN.decode()` rejects it as its guard against a wrong port guess
+(see *Port-based dispatch is best-effort*). The round-trip property
+tests generate canonical headers only: addresses spelled as decode
+spells them, GRE fields sized from its flags, VXLAN with the I flag
+set, and HTTP messages that either need no context or are decoded with
+the context they carry.
 
 One deliberate boundary: **decode and encode carry checksums
 verbatim** — exactly what you want when faithfully re-encoding
@@ -464,7 +534,7 @@ src/netprotocols/
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
-│                   and the HTTP codec class)
+│                   and the HTTP codec class), vxlan.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
