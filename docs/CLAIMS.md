@@ -727,10 +727,12 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:66-71` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 101
-frames**, across 18 scenarios captured with tcpdump over real kernel
-VLAN, GRE, IP-in-IP and DHCP topologies. Every frame's checksums verify
+`tests/test_corpus.py:70-75` asserts `bytes(layer) ==
+frame[cursor:cursor+layer.header_len]` for **every layer of all 140
+frames**, across 22 scenarios captured with tcpdump over real kernel
+VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
+association, and script-built IPsec ESP and AH. Every frame's
+checksums (SCTP's CRC32c included), and every ESP and AH ICV, verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
@@ -738,13 +740,14 @@ internally (`scripts/check_fixtures.py`).
 
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
-that five TLV/name accessors never hang, that `HTTP`'s accessors never
+that six TLV/name accessors never hang, that `HTTP`'s accessors never
 raise at all, and that `bytes(decode(x)) == x` is Hypothesis-generated
-for **all 19** protocols, up from 4. `tests/strategies.py` holds one
+for **all 24** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 15 without a hand-written one (#97 added the first
-14; `HTTP` is the 15th). Reproduce:
+property over the 20 without a hand-written one (#97 added the first
+14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
+`AHv6` the 18th and 19th, `SCTP` the 20th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -767,9 +770,9 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,682 statements, 1 missed (99.96%; re-measured 2026-10-23, after
-IP-in-IP dispatch, and the miss is still `Packet.__eq__`'s
-`NotImplemented` branch). Enforced, not merely reported:
+2,939 statements, 1 missed (99.96%; re-measured 2026-10-24, after
+SCTP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
 regression below the gate fails the build (#79).
@@ -817,7 +820,7 @@ functions: the built-in decoders go in through the same public
 `register()` a third party calls (`src/netprotocols/_defaults.py`), so
 there is no privileged path and nothing to fall out of sync.
 
-Reproduce: `uv run pytest tests/test_registry.py` — 39 tests covering
+Reproduce: `uv run pytest tests/test_registry.py` — 40 tests covering
 registration, conflict handling, table inheritance and isolation from
 the process-wide default.
 
@@ -897,7 +900,8 @@ eight lines:
   `MaxDepthExceededError`. Chains already terminated — every header
   validates its own declared length — so this bounds *cost*, not
   correctness: a crafted frame cannot turn one walk into thousands of
-  decodes. Corpus maximum is 5 layers.
+  decodes. Corpus maximum is 7 layers (an ICMP echo tunnelled
+  through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make
   you name the class and hand-roll the rest.
@@ -981,7 +985,7 @@ No message string changed to make this true — every existing `str(err)`
 and `match=` assertion in the suite holds unchanged; the diagnostic
 fields are additive.
 
-Reproduce: `uv run pytest tests/test_diagnostics.py` — 32 tests across
+Reproduce: `uv run pytest tests/test_diagnostics.py` — 37 tests across
 all three raise shapes (decode-time, construction-time, on-demand
 property) plus the rebasing behaviour end to end.
 

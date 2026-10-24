@@ -50,6 +50,15 @@ IPV6_ONLY_NUMBERS = frozenset(
     }
 )
 
+#: Protocol numbers both IP families reach, but through a different
+#: class in each: the ``ip.proto.v6`` entry deliberately overrides the
+#: one ``ip.proto`` would pass down. AH (RFC 4302) has the same wire
+#: format after IPv4 and IPv6, but chains onward through its own
+#: ``next_header``, and must do so through its own family's table — or
+#: IPv4 -> AH -> 0 would conjure a Hop-by-Hop layer, and IPv6 -> AH ->
+#: Destination Options (RFC 8200 §4.1) would stop dead.
+FAMILY_SPECIFIC_NUMBERS = frozenset({IPProtocol.AH})
+
 
 def install(registry: Registry) -> None:
     """Register every built-in decoder on ``registry``.
@@ -59,6 +68,8 @@ def install(registry: Registry) -> None:
     """
     from netprotocols.layer2.arp import ARP
     from netprotocols.layer2.vlan import VLAN
+    from netprotocols.layer3.ah import AH, AHv6
+    from netprotocols.layer3.esp import ESP
     from netprotocols.layer3.gre import GRE
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
     from netprotocols.layer3.igmp import IGMP
@@ -74,6 +85,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer4.udp import UDP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
 
@@ -99,6 +111,17 @@ def install(registry: Registry) -> None:
     add(TABLE_IP_PROTO, IPProtocol.IPIP, IPv4)
     add(TABLE_IP_PROTO, IPProtocol.IPV6, IPv6)
 
+    # IPsec ESP (RFC 4303) is the same header after either IP version,
+    # and a dead end after both: its payload is opaque without the keys.
+    add(TABLE_IP_PROTO, IPProtocol.ESP, ESP)
+
+    # IPsec AH (RFC 4302) — see FAMILY_SPECIFIC_NUMBERS. The v6 entry is
+    # registered first: it is then the v6 table's own, so the ip.proto
+    # entry that follows is not inherited over it (and does not
+    # conflict with it).
+    add(TABLE_IP_PROTO_V6, IPProtocol.AH, AHv6)
+    add(TABLE_IP_PROTO, IPProtocol.AH, AH)
+
     # IPv6 chain only — see IPV6_ONLY_NUMBERS.
     add(TABLE_IP_PROTO_V6, IPProtocol.HOPOPT, IPv6HopByHopOptions)
     add(TABLE_IP_PROTO_V6, IPProtocol.IPV6_ROUTE, IPv6Routing)
@@ -107,6 +130,11 @@ def install(registry: Registry) -> None:
 
     add(TABLE_UDP_PORT, 53, DNS)
     register_all(TABLE_UDP_PORT, (67, 68), DHCP, registry=registry)
+    # VXLAN's IANA port (RFC 7348 §5). An encapsulating endpoint normally
+    # sends to it and hashes the source port from the inner flow, so the
+    # destination-first lookup finds it whatever that source port is.
+    # Linux's pre-IANA 8472 is not registered: decode_as adds it per walk.
+    add(TABLE_UDP_PORT, 4789, VXLAN)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

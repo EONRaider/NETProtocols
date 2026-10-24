@@ -38,7 +38,10 @@ IPv6 extension headers must be reachable only inside an IPv6 chain, or
 a garbage IPv4 packet with ``protocol=0`` would conjure a Hop-by-Hop
 layer. So the shared entries are registered once in ``ip.proto`` and
 inherited, while the extension headers are registered directly in
-``ip.proto.v6`` and stay there.
+``ip.proto.v6`` and stay there. A direct registration in the child
+also shadows an inherited key: protocol 51 is ``AH`` in ``ip.proto``
+but ``AHv6`` in ``ip.proto.v6``, so that what follows AH dispatches in
+its own family's table.
 
 Inheritance is resolved **when you register, not when you look up**: a
 write to a parent table is copied into every child that has not
@@ -72,9 +75,13 @@ field exists to say what follows. A port is a *guess* — any service may
 run on any port, and the discriminator is split across two fields.
 Dispatch on those tables checks the destination port first (a request
 targets the server's well-known port) and then the source port (a
-response comes from it), and the class it names is expected to validate
-strictly on decode, so a wrong guess degrades to the library's ordinary
-malformed-frame path rather than to silent garbage.
+response comes from it). The class it names validates on decode, but
+can only reject what its format tells apart from noise: a wrong guess
+that it rejects takes the ordinary malformed-frame path, and one it
+accepts decodes cleanly into a wrong layer. DNS and DHCP accept almost
+any datagram long enough for their fixed headers. A caller who knows
+what a port carries says so with :meth:`Registry.derive` or
+``decode_frame(..., decode_as=...)`` rather than trusting the guess.
 """
 
 from __future__ import annotations

@@ -4,18 +4,21 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no verifiable
-upper-layer checksum — it spans the reassembled datagram). Frames used
-as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 117 frames across 19
+pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
+verifiable upper-layer checksum — it spans the reassembled datagram),
+as does every IPsec ICV, with the test keys published below. Frames
+used as checksum ground truth were captured **inbound only** — outbound
+frames routinely leave checksums to NIC offload. 140 frames across 22
 scenarios. Addresses are as-captured from the capture host's network.
 
-Six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`dns_tcp.pcap`, `ipip.pcap`, `sctp.pcap`) are captured separately by
-their own `scripts/capture_fixtures_*.sh` over purpose-built topologies
-— real kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS
-server queried over TCP, kernel IP-in-IP encapsulation, and a
-userspace SCTP association — see their rows and the notes below.
+Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
+`sctp.pcap`) are captured separately by their own
+`scripts/capture_fixtures_*.sh` over purpose-built topologies — real
+kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
+queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
+a userspace SCTP association, and IPsec ESP and AH built by a script
+and sent through raw sockets — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -37,6 +40,9 @@ userspace SCTP association — see their rows and the notes below.
 | `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
 | `dns_tcp.pcap` | 4 | DNS over TCP (RFC 1035 §4.2.2): A and TXT queries + responses from `dig +tcp` against `dnsmasq` — `Ethernet→IPv4→TCP→DNSOverTCP→DNS`; **direct capture** (see DNS-over-TCP note) |
 | `ipip.pcap` | 4 | IP-in-IP ICMP echo requests: IPv4 in IPv4 (protocol 4, RFC 2003) ×2 and IPv6 in IPv4 (protocol 41, 6in4, RFC 4213) ×2 — `Ethernet→IPv4→IPv4→ICMPv4` and `Ethernet→IPv4→IPv6→ICMPv6`; **direct capture** (see IP-in-IP note) |
+| `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
+| `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
+| `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -100,6 +106,91 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   IPv6 (RFC 2473) are covered by constructed frames in
   `tests/test_ipip.py`, and the script captures them too on a kernel
   with IPv6.
+- `esp.pcap` was produced by `scripts/capture_fixtures_ipsec.sh`. The
+  capture host's kernel has no xfrm ESP transform (`ip xfrm state add
+  … proto esp` fails with "Requested type not found"), so it cannot do
+  the IPsec processing itself; `scripts/ipsec_fixture_packets.py`
+  (stdlib only) builds each ESP packet instead — SPI, sequence number,
+  the NULL-encrypted (RFC 2410) payload, the RFC 4303 §2.4 default
+  padding (`01 02 …`) to a 4-byte boundary, Pad Length, Next Header,
+  and an HMAC-SHA-256-128 ICV (RFC 4868) over all of it — and sends it
+  through a raw socket opened for protocol 50 over a veth pair, captured
+  on the receiving side with offload disabled. **What the kernel built:
+  the outer IPv4 header** (identification, DF, TTL 64, checksum) and the
+  Ethernet header. **What the script built: every byte from the SPI
+  on**, which the script confirms after the capture by comparing each
+  captured datagram past its IPv4 header with what it sent, byte for
+  byte. In transport mode the payload is an ICMPv4 echo or UDP datagram
+  whose checksum covers the outer header's pseudo-header; in tunnel mode
+  it is a whole inner IPv4 packet (`192.0.2.1 → 192.0.2.2`, RFC 5737)
+  between the hosts behind the two gateways. `check_fixtures` verifies
+  each ICV with the keys below, then the padding, then the inner
+  packet's checksums; a frame on an SPI not listed below fails. The
+  kernel has no IPv6, so IPv6-outer ESP is covered by constructed
+  frames in `tests/test_esp.py`.
+- `ah.pcap` was produced by the same script. AH's ICV covers the outer
+  IPv4 header (RFC 4302 §3.3.3: every field but TOS, flags, fragment
+  offset, TTL and the header checksum, which are zeroed for the
+  computation), so unlike ESP the script has to build that header
+  itself, with an explicit identification (`0xa101`-`0xa106`), DSCP AF11
+  (a mutable field set non-zero on purpose), DF and TTL 64, and send the
+  whole datagram with `IP_HDRINCL` (a raw `IPPROTO_RAW` socket).
+  **What the script built: every byte of the IPv4 datagram** — header,
+  AH with its ICV, and payload. **What the kernel did:** prepended the
+  Ethernet header, and it owns three header fields even under
+  `IP_HDRINCL`: probed on the capture host, it replaced a deliberately
+  wrong total length (0, 999) and a zero header checksum with the
+  correct values, and filled in a zero source address (a zero
+  identification with DF set it left as 0). The script sends correct
+  values for all three, and its post-capture comparison found every
+  captured datagram byte-identical to the one it built — so whatever
+  the kernel recomputed, it recomputed to the bytes the ICV covers.
+  Transport mode protects a TCP SYN, an ICMPv4 echo and a UDP datagram,
+  tunnel mode an inner IPv4 packet (`192.0.2.1 → 192.0.2.2`) carrying an
+  ICMPv4 echo or a TCP SYN, and the last frame is an AH-over-ESP
+  transport-adjacency bundle (RFC 4301 §4.5). `check_fixtures` verifies
+  each AH ICV with the keys below, then what it protects: the transport
+  checksums against the outer header's pseudo-header, the inner IPv4
+  packet, or the bundled ESP packet's own ICV, padding and payload. A
+  frame on an SPI not listed below fails, as does AH behind IPv4 header
+  options or an IPv6 header, whose ICV `check_fixtures` does not
+  compute. IPv6-outer AH, with the 4 bytes of ICV padding
+  HMAC-SHA-256-128 needs there, is covered by constructed frames in
+  `tests/test_ah.py`.
+
+- `vxlan.pcap` was produced by `scripts/capture_fixtures_vxlan.sh`: a
+  kernel VXLAN device (`dstport 4789`) in each of two netns over a veth
+  underlay, the overlay addressed and exercised with a fresh ARP
+  exchange, `ping`, and one UDP datagram between fixed ports (40000 →
+  9999), captured on the underlay with offload disabled on both the
+  veth and the vxlan devices. Both directions are kept: every frame was
+  built by the kernel, and every checksum computed in software. The
+  first segment ran with `udpcsum`, so the outer UDP checksum is real
+  and `check_fixtures` verifies it over the whole encapsulated frame;
+  the second with `noudpcsum`, so it is zero ("not used", RFC 768), as
+  RFC 7348 §5 says it SHOULD be sent. `check_fixtures`
+  peels the VXLAN header on destination port 4789 and verifies the
+  inner frame's checksums too. The outer source ports are the kernel's
+  hash of each inner flow; none is a registered port. This file's echo
+  and UDP frames are the corpus's deepest chains, at 7 layers.
+
+### IPsec test keys
+
+Published so anyone can verify the captures: these keys protect
+nothing. Every SA uses HMAC-SHA-256-128 (RFC 4868: HMAC-SHA-256 with a
+256-bit key, the output truncated to its first 16 bytes) for integrity;
+every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
+32-bit (no ESN). The keys are also hard-coded, independently, in
+`scripts/check_fixtures.py`, `tests/test_esp.py` and `tests/test_ah.py`.
+
+| SPI | Protocol | Mode | Integrity key (hex) |
+|---|---|---|---|
+| `0x10000001` | ESP | transport | `e41126360fbc54a0e11a8747218b24d0cc4638f579c3985017b4d0ab1a30398b` |
+| `0x10000002` | ESP | tunnel | `4bc3ce948208049b2f5016e06616867773924d2ccb4dab8b3aff93e6d26f3834` |
+| `0x10000003` | ESP | transport, inside the AH bundle | `107c873bdbb0c7a11be8aa1d9064e51f63b26098412295c3bd6785958abd44d4` |
+| `0x20000001` | AH | transport | `8eaa03a41a3b08f31a67f3a4b7fd78a2bf3d963a97b0af5a104301ef8fbff685` |
+| `0x20000002` | AH | tunnel | `d2142153fb758a3f698e45720e2af765b2ada021d70ac1bcbde1f5bc38514fd1` |
+| `0x20000003` | AH | transport, over the bundled ESP | `008a9a220d8c1bf5edec1838a724b588364c08314bf93206985e776c385e1c7a` |
 
 - `sctp.pcap` was produced by `scripts/capture_fixtures_sctp.sh`: the
   capture host's kernel has no SCTP, so the association is between

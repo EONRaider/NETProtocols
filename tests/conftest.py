@@ -171,3 +171,34 @@ def raw_sctp_packet() -> bytes:
     """SCTP COOKIE ACK, from tests/fixtures/sctp.pcap: the common header
     and one 4-byte chunk."""
     return b"\x00\x07\xd5\xf2\xff\x09\xba\x55\xb2\x83\xdb\xc1\x0b\x00\x00\x04"
+
+
+@pytest.fixture
+def raw_esp_packet() -> bytes:
+    """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
+    NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request
+    in transport mode — 8 cleartext bytes, then the 52-byte protected
+    remainder (payload, padding, Pad Length, Next Header, ICV)."""
+    return bytes.fromhex(
+        "10000001000000010800"
+        "6c084e5000014e455450726f746f636f6c7320455350206669787475726501"
+        "020201ae4c50f31eb8912ffc460ec5e194475e"
+    )
+
+
+@pytest.fixture
+def raw_ah_header() -> bytes:
+    """AH header (SPI 0x20000001, sequence 1) from ``ah.pcap``:
+    Payload Len 5 (28 bytes), Next Header 6, then the 16-byte
+    HMAC-SHA-256-128 ICV, followed by the TCP SYN it protects."""
+    return bytes.fromhex(
+        "060500002000000100000001e91ff0893d37de87e576dc91a70ddbe2"
+        "9c4100504e500001000000006002faf0883e0000020405b4"
+    )
+
+
+@pytest.fixture
+def raw_vxlan_header() -> bytes:
+    """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
+    1193046 (0x123456), reserved bits zero."""
+    return b"\x08\x00\x00\x00\x12\x34\x56\x00"

@@ -16,14 +16,18 @@ from collections.abc import Mapping
 from hypothesis import strategies as st
 
 from netprotocols import (
+    AH,
     ARP,
     DHCP,
     DNS,
+    ESP,
     GRE,
     HTTP,
     IGMP,
     SCTP,
     VLAN,
+    VXLAN,
+    AHv6,
     DNSOverTCP,
     ICMPv4,
     ICMPv6,
@@ -91,6 +95,21 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
         dei=draw(st.integers(0, 1)),
         vid=draw(st.integers(0, 0xFFF)),
         ethertype=draw(st.integers(0, 0xFFFF)),
+    )
+
+
+@st.composite
+def vxlan_headers(draw: st.DrawFn) -> VXLAN:
+    # The round-trip property decodes what it builds, and decode rejects
+    # a clear I flag (the constructor does not; test_vxlan.py covers
+    # those headers), so the flag is forced on. The other seven flag
+    # bits and both reserved fields are carried verbatim, so they are
+    # drawn freely.
+    return VXLAN(
+        flags=draw(st.integers(0, 0xFF)) | VXLAN.I_FLAG,
+        reserved1=draw(st.integers(0, 0xFFFFFF)),
+        vni=draw(st.integers(0, 0xFFFFFF)),
+        reserved2=draw(st.integers(0, 0xFF)),
     )
 
 
@@ -281,6 +300,43 @@ def sctp_headers(draw: st.DrawFn) -> SCTP:
     )
 
 
+@st.composite
+def esp_packets(draw: st.DrawFn) -> ESP:
+    # Everything past the SPI and sequence number is opaque, so any
+    # bytes at all — including none — are a valid remainder.
+    return ESP(
+        spi=draw(st.integers(0, 0xFFFFFFFF)),
+        sequence_number=draw(st.integers(0, 0xFFFFFFFF)),
+        ciphertext=draw(st.binary(max_size=_MAX_BLOB)),
+    )
+
+
+#: Cap on an AH header's length in alignment steps (one Payload Len
+#: unit under IPv4, two under IPv6), so a header is at most
+#: (40 + 2) * 4 = 168 bytes under IPv4 and (80 + 2) * 4 = 328 under
+#: IPv6; Payload Len itself runs to 255.
+_MAX_AH_STEPS = 40
+
+
+@st.composite
+def ah_headers(draw: st.DrawFn, cls: type[AH] = AH) -> AH:
+    # payload_len / icv is AH's interdependent pair: Payload Len sizes
+    # the ICV field, and IPv6 (AHv6) needs the whole header to be a
+    # multiple of 8 octets, so payload_len is drawn in alignment steps
+    # and the ICV is drawn to exactly the length it then declares.
+    step = cls._alignment // 4
+    payload_len = draw(st.integers(1, _MAX_AH_STEPS)) * step
+    icv_len = (payload_len + 2) * 4 - 12
+    return cls(
+        next_header=draw(st.integers(0, 0xFF)),
+        payload_len=payload_len,
+        reserved=draw(st.integers(0, 0xFFFF)),
+        spi=draw(st.integers(0, 0xFFFFFFFF)),
+        sequence_number=draw(st.integers(0, 0xFFFFFFFF)),
+        icv=draw(st.binary(min_size=icv_len, max_size=icv_len)),
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -428,5 +484,9 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
     "SCTP": sctp_headers(),
+    "ESP": esp_packets(),
+    "AH": ah_headers(AH),
+    "AHv6": ah_headers(AHv6),
     "HTTP": http_messages(),
+    "VXLAN": vxlan_headers(),
 }

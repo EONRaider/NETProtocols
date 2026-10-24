@@ -3,17 +3,12 @@ inheritance, and isolation from the process-wide default."""
 
 import pytest
 
-from netprotocols import (
-    DNS,
-    SCTP,
-    TCP,
-    UDP,
-    Ethernet,
-    IPv4,
-    IPv6,
-    Protocol,
+from netprotocols import DNS, SCTP, TCP, UDP, Ethernet, IPv4, IPv6, Protocol
+from netprotocols._defaults import (
+    FAMILY_SPECIFIC_NUMBERS,
+    IPV6_ONLY_NUMBERS,
+    install,
 )
-from netprotocols._defaults import IPV6_ONLY_NUMBERS, install
 from netprotocols.registry import (
     DEFAULT,
     TABLE_ETHERTYPE,
@@ -172,6 +167,23 @@ class TestTableInheritance:
         v6 = registry.table(TABLE_IP_PROTO_V6)
         assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
 
+    def test_shared_numbers_differ_only_where_the_family_matters(self):
+        """Every number both tables hold names the same class, except
+        the family-specific ones, whose v6 entry is the table's own."""
+        # FAMILY_SPECIFIC_NUMBERS only describes the wiring, and the
+        # comparison below trusts it: pinned literally, so widening it
+        # (and with it what this test allows) is a deliberate change
+        # here, not a side effect of editing _defaults.
+        assert set(FAMILY_SPECIFIC_NUMBERS) == {51}
+        registry = Registry()
+        install(registry)
+        base = registry.table(TABLE_IP_PROTO)
+        v6 = registry.table(TABLE_IP_PROTO_V6)
+        differing = {n for n in base if v6[n] is not base[n]}
+        assert differing == set(FAMILY_SPECIFIC_NUMBERS)
+        for number in FAMILY_SPECIFIC_NUMBERS:
+            assert issubclass(v6[number], base[number])
+
 
 class TestPortDispatch:
     def test_the_destination_port_is_tried_first(self, registry):
@@ -293,11 +305,16 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 41) is IPv6
         assert DEFAULT.get(TABLE_IP_PROTO, 132) is SCTP
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 132) is SCTP
+        assert DEFAULT.get(TABLE_IP_PROTO, 50).__name__ == "ESP"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 50).__name__ == "ESP"
+        assert DEFAULT.get(TABLE_IP_PROTO, 51).__name__ == "AH"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 51).__name__ == "AHv6"
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS
         assert DEFAULT.get(TABLE_UDP_PORT, 67).__name__ == "DHCP"
         assert DEFAULT.get(TABLE_UDP_PORT, 68).__name__ == "DHCP"
+        assert DEFAULT.get(TABLE_UDP_PORT, 4789).__name__ == "VXLAN"
         assert DEFAULT.get(TABLE_TCP_PORT, 53).__name__ == "DNSOverTCP"
 
 

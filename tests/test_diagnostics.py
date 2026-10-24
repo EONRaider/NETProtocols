@@ -17,6 +17,7 @@ from dataclasses import replace
 import pytest
 
 from netprotocols import (
+    AH,
     ARP,
     DHCP,
     DNS,
@@ -167,6 +168,17 @@ class TestDecodeTimeRaises:
         assert err.field == "hdr_ext_len"
         assert err.expected == 24
         assert err.actual == 8
+
+    def test_ah_payload_len_past_the_buffer(self, raw_ah_header):
+        lying = raw_ah_header[:1] + b"\x0f" + raw_ah_header[2:]
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            AH.decode(lying)
+        err = excinfo.value
+        assert err.protocol is AH
+        assert err.field == "payload_len"
+        assert err.offset == 0
+        assert err.expected == 68
+        assert err.actual == len(raw_ah_header)
 
 
 class TestConstructionTimeRaises:

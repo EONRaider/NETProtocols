@@ -382,14 +382,20 @@ class TestRegistryGating:
 
     def test_dispatch_tables_differ_only_by_the_ipv6_only_numbers(self):
         """The gating is baked into the tables: the v6 table is the
-        base one plus the extension-header numbers, and nothing else.
+        base one plus the extension-header numbers, and nothing else —
+        apart from the family-specific numbers (AH), which both tables
+        hold but through a class of each family's own.
 
         Stated over the *built-in* registrations on a clean registry —
         once third parties can register into ``ip.proto.v6`` directly
         (#87) the live tables may legitimately differ by more, so the
         invariant that matters is the one this library ships.
         """
-        from netprotocols._defaults import IPV6_ONLY_NUMBERS, install
+        from netprotocols._defaults import (
+            FAMILY_SPECIFIC_NUMBERS,
+            IPV6_ONLY_NUMBERS,
+            install,
+        )
         from netprotocols.registry import (
             TABLE_IP_PROTO,
             TABLE_IP_PROTO_V6,
@@ -404,7 +410,10 @@ class TestRegistryGating:
         assert base
         assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
         for number, protocol in base.items():
-            assert v6[number] is protocol
+            if number in FAMILY_SPECIFIC_NUMBERS:
+                assert v6[number] is not protocol
+            else:
+                assert v6[number] is protocol
 
     def test_the_live_tables_still_gate_the_extension_headers(self):
         """The invariant above holds on the process-wide registry too,

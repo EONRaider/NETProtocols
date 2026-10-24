@@ -18,6 +18,8 @@ from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.vlan import VLAN
+from netprotocols.layer3.ah import AH, AHv6
+from netprotocols.layer3.esp import ESP
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
 from netprotocols.layer3.igmp import IGMP, IGMPv3GroupRecord
@@ -49,6 +51,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
     CapturedFrame,
@@ -86,10 +89,12 @@ _defaults.install(DEFAULT)
 __version__ = "2.3.0"
 
 __all__ = [
+    "AH",
     "ARP",
     "DEFAULT",
     "DHCP",
     "DNS",
+    "ESP",
     "GRE",
     "HTTP",
     "IGMP",
@@ -98,6 +103,8 @@ __all__ = [
     "TCP",
     "UDP",
     "VLAN",
+    "VXLAN",
+    "AHv6",
     "ARPHardwareType",
     "ARPOperation",
     "CapturedFrame",
