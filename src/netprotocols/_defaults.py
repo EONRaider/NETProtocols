@@ -59,6 +59,7 @@ def install(registry: Registry) -> None:
     """
     from netprotocols.layer2.arp import ARP
     from netprotocols.layer2.vlan import VLAN
+    from netprotocols.layer3.esp import ESP
     from netprotocols.layer3.gre import GRE
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
     from netprotocols.layer3.igmp import IGMP
@@ -97,6 +98,10 @@ def install(registry: Registry) -> None:
     # like the rest, because IPv6 can carry either.
     add(TABLE_IP_PROTO, IPProtocol.IPIP, IPv4)
     add(TABLE_IP_PROTO, IPProtocol.IPV6, IPv6)
+
+    # IPsec ESP (RFC 4303) is the same header after either IP version,
+    # and a dead end after both: its payload is opaque without the keys.
+    add(TABLE_IP_PROTO, IPProtocol.ESP, ESP)
 
     # IPv6 chain only — see IPV6_ONLY_NUMBERS.
     add(TABLE_IP_PROTO_V6, IPProtocol.HOPOPT, IPv6HopByHopOptions)

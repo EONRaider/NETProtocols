@@ -167,6 +167,19 @@ def raw_udp_header() -> bytes:
 
 
 @pytest.fixture
+def raw_esp_packet() -> bytes:
+    """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
+    NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request
+    in transport mode — 8 cleartext bytes, then the 52-byte protected
+    remainder (payload, padding, Pad Length, Next Header, ICV)."""
+    return bytes.fromhex(
+        "10000001000000010800"
+        "6c084e5000014e455450726f746f636f6c7320455350206669787475726501"
+        "020201ae4c50f31eb8912ffc460ec5e194475e"
+    )
+
+
+@pytest.fixture
 def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""

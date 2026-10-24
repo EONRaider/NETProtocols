@@ -5,6 +5,7 @@ import pytest
 
 from netprotocols import (
     ARP,
+    ESP,
     HTTP,
     TCP,
     UDP,
@@ -32,6 +33,7 @@ class TestTruncation:
             (TCP, "raw_tcp_header_with_options"),
             (UDP, "raw_udp_header"),
             (ICMPv4, "raw_icmpv4_echo_request"),
+            (ESP, "raw_esp_packet"),
             (VXLAN, "raw_vxlan_header"),
         ],
     )

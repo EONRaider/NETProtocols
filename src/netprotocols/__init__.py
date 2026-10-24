@@ -18,6 +18,7 @@ from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.vlan import VLAN
+from netprotocols.layer3.esp import ESP
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
 from netprotocols.layer3.igmp import IGMP, IGMPv3GroupRecord
@@ -90,6 +91,7 @@ __all__ = [
     "DEFAULT",
     "DHCP",
     "DNS",
+    "ESP",
     "GRE",
     "HTTP",
     "IGMP",

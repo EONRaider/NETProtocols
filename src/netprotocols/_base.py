@@ -266,9 +266,10 @@ class Protocol(ABC):
     ) -> type[Protocol] | None:
         """The class that decodes this header's payload, if known.
 
-        ``None`` means the chain ends here: either the protocol never
-        encapsulates another (ARP, UDP), or the encapsulated protocol
-        is not implemented by this library.
+        ``None`` means the chain ends here: the protocol never
+        encapsulates another (ARP, UDP), the encapsulated protocol is
+        not implemented by this library, or nothing in the clear names
+        it (ESP, whose payload's protocol is in its protected trailer).
 
         ``registry`` selects the dispatch tables to resolve against.
         Omitting it — the overwhelmingly common case — reads the

@@ -19,6 +19,7 @@ from netprotocols import (
     ARP,
     DHCP,
     DNS,
+    ESP,
     GRE,
     HTTP,
     IGMP,
@@ -271,6 +272,17 @@ def gre_headers(draw: st.DrawFn) -> GRE:
     )
 
 
+@st.composite
+def esp_packets(draw: st.DrawFn) -> ESP:
+    # Everything past the SPI and sequence number is opaque, so any
+    # bytes at all — including none — are a valid remainder.
+    return ESP(
+        spi=draw(st.integers(0, 0xFFFFFFFF)),
+        sequence_number=draw(st.integers(0, 0xFFFFFFFF)),
+        ciphertext=draw(st.binary(max_size=_MAX_BLOB)),
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -417,6 +429,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DNSOverTCP": dns_over_tcp_headers(),
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
+    "ESP": esp_packets(),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
 }

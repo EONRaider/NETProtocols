@@ -37,6 +37,7 @@ from netprotocols import (
     ARP,
     DHCP,
     DNS,
+    ESP,
     GRE,
     HTTP,
     IGMP,
@@ -87,6 +88,7 @@ ALL_PROTOCOLS = (
     DNSOverTCP,
     DHCP,
     GRE,
+    ESP,
     HTTP,
     VXLAN,
 )
