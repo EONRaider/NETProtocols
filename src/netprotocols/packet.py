@@ -131,7 +131,12 @@ class Packet:
         Nearest, not first: a tunnel (IP-in-IP, GRE) stacks an outer IP
         header whose addresses are the tunnel's endpoints and whose
         protocol number is the tunnel's (4, 41, 47), not the
-        conversation's.
+        conversation's. VXLAN is different: its outer UDP datagram is
+        the first transport layer, so the key is the tunnel's own
+        underlay flow (the endpoints' addresses, the source port hashed
+        from the inner flow, and the tunnel's port); the inner
+        conversation's key is :func:`~netprotocols.flow.flow_key` of the
+        inner transport and the IP header before it.
 
         ``None`` if either layer is missing — a packet with no
         transport layer, or a bare TCP/UDP segment built without an IP

@@ -51,8 +51,12 @@ nesting far enough to waste real time. ``max_depth`` bounds it, and
 exceeding it raises :class:`~netprotocols.MaxDepthExceededError` (or,
 in lax mode, ends the walk and is reported). The default of
 :data:`MAX_DEPTH` is generous: the deepest chain in the project's
-97-frame corpus is 5 layers, and even a doubly-tagged QinQ frame
-carrying IPv6 with three extension headers and DNS over TCP reaches 11.
+corpus is 7 layers (an ICMP echo tunnelled through VXLAN: Ethernet,
+IPv4, UDP, VXLAN, then the inner Ethernet, IPv4 and ICMPv4), and even
+a doubly-tagged QinQ frame carrying IPv6 with three extension headers
+and DNS over TCP reaches 11. A tunnel nested inside a tunnel is what
+the ceiling is for: each level of VXLAN adds four layers, so the
+default stops a frame nested eight levels deep.
 
 On ``memoryview``
 -----------------
@@ -83,8 +87,9 @@ from netprotocols.utils.exceptions import (
 __all__ = ["MAX_DEPTH", "decode_frame"]
 
 #: Default ceiling on how many headers one frame may chain. Generous
-#: against real traffic (the corpus peaks at 5) and small enough that a
-#: hostile frame cannot turn one walk into thousands of decodes.
+#: against real traffic (the corpus peaks at 7, a VXLAN-tunnelled echo)
+#: and small enough that a hostile frame cannot turn one walk into
+#: thousands of decodes.
 MAX_DEPTH = 32
 
 
