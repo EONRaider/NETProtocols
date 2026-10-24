@@ -21,6 +21,7 @@ from netprotocols import (
     IPProtocol,
     IPv4,
     IPv6,
+    IPv6DestinationOptions,
     Packet,
     Registry,
     TruncatedHeaderError,
@@ -154,11 +155,6 @@ class TestDeadEnd:
         registry = Registry.from_defaults()
         assert ESP.decode(raw_esp_packet).next_protocol(registry) is None
 
-    def test_the_docstring_says_why(self):
-        doc = ESP.__doc__ or ""
-        assert "dead end" in doc
-        assert "next_protocol" in doc
-
 
 class TestWalk:
     @pytest.mark.parametrize(
@@ -179,6 +175,43 @@ class TestWalk:
         for layer in decode_frame(frame).layers:
             assert bytes(layer) == frame[cursor : cursor + layer.header_len]
             cursor += layer.header_len
+
+    def test_ipv6_destination_options_lead_to_esp(self):
+        # RFC 4303 §3.1.1: under IPv6, Destination Options may precede
+        # ESP; the extension header's next_header reaches protocol 50
+        # through the v6 table just as the fixed header's does.
+        esp = ESP(spi=0x1234, sequence_number=7, ciphertext=CIPHERTEXT)
+        options = IPv6DestinationOptions(
+            next_header=50, hdr_ext_len=0, options=b"\x01\x04\x00\x00\x00\x00"
+        )
+        ip = make_ipv6(next_header=60, payload_len=8 + esp.header_len)
+        frame = bytes(Packet(ethernet(0x86DD), ip, options, esp))
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet.layers][1:] == [
+            IPv6,
+            IPv6DestinationOptions,
+            ESP,
+        ]
+        assert packet[ESP] == esp
+        assert packet.consumed == len(frame)
+
+    def test_link_layer_padding_lands_in_the_ciphertext(self):
+        # The documented contract, shared with ICMP's body: the
+        # remainder runs to the end of the frame, so a datagram shorter
+        # than Ethernet's 60-byte minimum (14 + 20 + 8 + 4 = 46 here)
+        # brings the padding with it, and the ciphertext's tail is that
+        # padding, not the ICV.
+        esp = ESP(spi=0x1234, sequence_number=7, ciphertext=b"\xde\xad\xbe\xef")
+        ip = make_ipv4(protocol=50, payload_len=esp.header_len)
+        datagram = bytes(Packet(ethernet(0x0800), ip, esp).with_checksums())
+        assert len(datagram) == 46
+        frame = datagram + bytes(14)
+        packet = decode_frame(frame)
+        decoded = packet[ESP]
+        assert decoded.ciphertext == b"\xde\xad\xbe\xef" + bytes(14)
+        ip_len = packet[IPv4].total_length - 20
+        assert len(decoded.ciphertext) == ip_len - 8 + 14
+        assert packet.consumed == len(frame)
 
     def test_a_truncated_prefix_is_reported_at_its_frame_offset(self):
         frame = esp_frame("ipv6")[: 14 + 40 + 5]
@@ -254,7 +287,10 @@ class TestCorpusESP:
             assert (ip.src, ip.dst) == ("192.0.2.1", "192.0.2.2")
             assert ip.total_length == len(payload)
 
-    def test_the_outer_headers_are_the_kernels(self):
+    def test_the_outer_headers_are_checksummed_ipv4_carrying_esp(self):
+        # Which bytes the kernel built is established by the capture
+        # script's byte-for-byte compare step, not by anything visible
+        # here: no field of an IPv4 header records who wrote it.
         for frame in self.FRAMES:
             ip = decode_frame(frame)[IPv4]
             assert (ip.src, ip.dst, ip.protocol) == (

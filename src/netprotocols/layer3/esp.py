@@ -4,11 +4,11 @@ ESP is IPsec's encryption container, IP protocol 50, reached from IPv4
 and IPv6 alike. Only its first eight bytes are cleartext framing: the
 Security Parameters Index naming the Security Association (SA) the
 packet belongs to, and the anti-replay Sequence Number (RFC 4303 §2.1,
-§2.2). Everything after them — the encrypted payload, any
-cipher-specific IV, the padding, the Pad Length and Next Header
-trailer, and the Integrity Check Value — is protected by the SA's keys
-and its cipher, neither of which is visible from the packet, so the
-remainder is kept as one opaque ``ciphertext`` field.
+§2.2). Everything after them — the payload, any cipher-specific IV,
+the padding, the Pad Length and Next Header trailer, and the Integrity
+Check Value — is protected by the SA's keys and algorithms, none of
+which is visible from the packet, so the remainder is kept as one
+opaque ``ciphertext`` field.
 
 This library has no cryptography and will not gain any, so it does not
 decrypt, verify, or even locate the trailer: where the ICV starts
@@ -42,11 +42,13 @@ class ESP(Protocol):
     ESP is a **dead end for the decode chain**, and that is correct
     rather than a gap: :meth:`next_protocol` always returns ``None``.
     The payload's protocol is named by the Next Header byte of the ESP
-    trailer, which sits *inside* the encrypted region at an offset only
-    the SA's cipher and integrity algorithm determine — so there is
-    nothing to dispatch on without the keys, which this library will
-    never hold. A frame walk therefore stops at ``ESP`` with the whole
-    protected payload in :attr:`ciphertext`.
+    trailer, which sits inside the protected region: encrypted under
+    every cipher but NULL (RFC 2410), and just before an ICV whose
+    length only the SA's integrity algorithm determines. Nothing in the
+    packet says which cipher or algorithm the SA uses, so the decoder
+    cannot tell whether that byte is readable, or which byte it is, and
+    never reads the trailer. A frame walk therefore stops at ``ESP``
+    with the whole protected payload in :attr:`ciphertext`.
 
     :param spi: Security Parameters Index (32 bits), which together with
         the destination identifies the SA. ``0`` is reserved for local
@@ -95,11 +97,12 @@ class ESP(Protocol):
         """Always ``None``: ESP ends the decode chain by design.
 
         The protocol of the protected payload is the trailer's Next
-        Header field, which is encrypted and sits at an offset that
-        only the SA's algorithms determine (RFC 4303 §2.4-2.8). Without
-        the keys there is nothing to dispatch on, so stopping here is
-        the correct answer, not an unimplemented one. ``registry`` is
-        accepted for the uniform signature and never consulted.
+        Header field, which is encrypted under every cipher but NULL and
+        sits at an offset that only the SA's algorithms determine (RFC
+        4303 §2.4-2.8). Without the SA there is nothing to dispatch on,
+        so stopping here is the correct answer, not an unimplemented
+        one. ``registry`` is accepted for the uniform signature and
+        never consulted.
         """
         return None
 

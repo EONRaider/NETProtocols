@@ -43,7 +43,15 @@ NSB=npesb
 A=npesva
 B=npesvb
 WORK=""
+TCPDUMP_PID=""
 cleanup() {
+    # A step that fails mid-capture must not leave tcpdump running: stop
+    # it before its netns goes away.
+    if [[ -n $TCPDUMP_PID ]]; then
+        kill -INT "$TCPDUMP_PID" 2>/dev/null || true
+        wait "$TCPDUMP_PID" 2>/dev/null || true
+        TCPDUMP_PID=""
+    fi
     ip netns del "$NSA" 2>/dev/null || true
     ip netns del "$NSB" 2>/dev/null || true
     ip link del "$A" 2>/dev/null || true
@@ -73,12 +81,13 @@ capture() {
     echo "[>] $kind"
     ip netns exec "$NSB" tcpdump -i "$B" -w "$OUT/$kind.pcap" --immediate-mode -U -q \
         "$filter" >/dev/null 2>&1 &
-    local pid=$!
+    TCPDUMP_PID=$!
     sleep 1
     ip netns exec "$NSA" python3 "$PACKETS" send "$kind" "$WORK/$kind.sent"
     sleep 1
-    kill -INT "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
+    kill -INT "$TCPDUMP_PID" 2>/dev/null || true
+    wait "$TCPDUMP_PID" 2>/dev/null || true
+    TCPDUMP_PID=""
     python3 "$PACKETS" compare "$kind" "$OUT/$kind.pcap" "$WORK/$kind.sent"
 }
 

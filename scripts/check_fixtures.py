@@ -160,10 +160,24 @@ def _check_upper_v4(
     upper: bytes,
     stats: Counter,
     depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     """Validate what an IPv4 header (``src``/``dst``) carries as
     protocol ``proto`` — directly, or behind IPsec in transport mode,
-    where the pseudo-header is still the IPv4 header's."""
+    where the pseudo-header is still the IPv4 header's.
+
+    ``strict`` is for a payload an IPsec ICV vouched for: one this
+    cannot check (an unknown protocol, or too short for its header)
+    fails instead of passing unread, since MANIFEST.md promises the
+    protected packet's checksums verify.
+
+    ``depth`` counts the encapsulations (GRE, IP-in-IP, IPsec) above
+    ``upper``. Every one of them is dispatched from here or from
+    :func:`_check_upper_v6` and recurses back through one of the two,
+    so this pair is the single place nesting is bounded."""
+    if depth > _MAX_DEPTH:
+        return ["nesting-too-deep"]
     upper_len = len(upper)
     if proto == 1 and upper_len >= 8:
         return _check_icmpv4(upper, stats)
@@ -177,9 +191,9 @@ def _check_upper_v4(
         return _check_gre(src, dst, upper, stats, depth)
     if proto in _IP_IN_IP:
         return _check_ip_in_ip(proto, upper, stats, depth)
-    if proto == 50 and upper_len >= 8:
+    if proto == 50:
         return _check_esp(src, dst, upper, stats, depth, ipv6=False)
-    return []
+    return [f"unchecked-protocol-{proto}"] if strict else []
 
 
 def _check_icmpv6(
@@ -243,8 +257,7 @@ def _check_ip_in_ip(
 #: keyed by SPI — the test keys published in tests/fixtures/MANIFEST.md.
 #: Every SA uses HMAC-SHA-256-128 (RFC 4868), and every ESP SA NULL
 #: encryption (RFC 2410), so the protected payload is readable once the
-#: ICV verifies. A packet on any other SPI is counted, not failed: a
-#: real capture of encrypted ESP is valid input this cannot verify.
+#: ICV verifies.
 _ESP_NULL_SAS = {
     0x10000001: bytes.fromhex(
         "e41126360fbc54a0e11a8747218b24d0cc4638f579c3985017b4d0ab1a30398b"
@@ -255,9 +268,42 @@ _ESP_NULL_SAS = {
 }
 _ICV_LEN = 16
 
+#: How many encapsulations (GRE, IP-in-IP, IPsec) one frame may nest
+#: before the checker refuses it. The corpus peaks at 2; the bound
+#: exists so a hostile capture cannot exhaust the interpreter's stack.
+_MAX_DEPTH = 8
+
 
 def _icv(key: bytes, data: bytes) -> bytes:
     return hmac.new(key, data, hashlib.sha256).digest()[:_ICV_LEN]
+
+
+def _verify_icv(
+    protocol: str,
+    sas: dict[int, bytes],
+    spi: int,
+    covered: bytes,
+    wire_icv: bytes,
+) -> list[str]:
+    """Verify an IPsec ICV: HMAC-SHA-256-128 over ``covered`` with the
+    key of SA ``spi`` in ``sas``. Returns ``[]`` or one failure,
+    prefixed with ``protocol`` ("esp", "ah").
+
+    An SPI with no key in ``sas`` is a failure, not a skip. MANIFEST.md
+    promises every IPsec ICV in the corpus verifies, and an unknown SPI
+    is either a corrupted frame or a fixture on an SA whose key was
+    never published — a fixture on a new SA publishes its key there and
+    adds it here. There is deliberately no mode that tolerates unknown
+    SAs: this checks the corpus, where every key is published, and a
+    capture of genuinely encrypted IPsec cannot be verified, so it
+    cannot back MANIFEST's promise and does not belong in the corpus.
+    """
+    key = sas.get(spi)
+    if key is None:
+        return [f"{protocol}-unknown-sa"]
+    if not hmac.compare_digest(_icv(key, covered), wire_icv):
+        return [f"{protocol}-icv"]
+    return []
 
 
 def _check_esp(
@@ -273,23 +319,32 @@ def _check_esp(
     # encryption) the payload, padding, Pad Length, Next Header, and the
     # ICV over everything before it.
     stats["esp"] += 1
-    key = _ESP_NULL_SAS.get(struct.unpack_from("!I", upper, 0)[0])
-    if key is None:
-        stats["esp-unknown-sa"] += 1
-        return []
     if len(upper) < 8 + 2 + _ICV_LEN:
         return ["esp-truncated"]
     protected, wire_icv = upper[:-_ICV_LEN], upper[-_ICV_LEN:]
-    if not hmac.compare_digest(_icv(key, protected), wire_icv):
-        return ["esp-icv"]
+    spi = struct.unpack_from("!I", upper, 0)[0]
+    failures = _verify_icv("esp", _ESP_NULL_SAS, spi, protected, wire_icv)
+    if failures:
+        return failures
     pad_len, next_header = protected[-2], protected[-1]
     end = len(protected) - 2 - pad_len
     # RFC 4303 §2.4: the default padding is the bytes 1, 2, 3, ...
     if end < 8 or protected[end:-2] != bytes(range(1, pad_len + 1)):
         return ["esp-padding"]
     inner = protected[8:end]
+    # strict: the ICV vouched for this payload, so one the checker
+    # cannot read fails rather than passing unchecked.
+    if next_header in _IP_IN_IP:
+        # Tunnel mode (RFC 4303 §3.1.2): the payload is a whole IP
+        # packet, counted as ESP's, not as IP-in-IP.
+        stats["esp-tunnel"] += 1
+        return _check_l3(
+            _IP_IN_IP[next_header], inner, stats, depth + 1, strict=True
+        )
+    # Transport mode: the upper-layer protocol's pseudo-header is still
+    # the enclosing IP header's.
     check = _check_upper_v6 if ipv6 else _check_upper_v4
-    return check(next_header, src, dst, inner, stats, depth + 1)
+    return check(next_header, src, dst, inner, stats, depth + 1, strict=True)
 
 
 def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
@@ -323,8 +378,13 @@ def _check_upper_v6(
     upper: bytes,
     stats: Counter,
     depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
-    """The IPv6 counterpart of :func:`_check_upper_v4`."""
+    """The IPv6 counterpart of :func:`_check_upper_v4`, bounding
+    nesting and honouring ``strict`` the same way."""
+    if depth > _MAX_DEPTH:
+        return ["nesting-too-deep"]
     upper_len = len(upper)
     if next_header == 58 and upper_len >= 4:
         return _check_icmpv6(src, dst, upper, stats)
@@ -334,22 +394,27 @@ def _check_upper_v6(
         return _check_udp6(src, dst, upper, stats)
     if next_header in _IP_IN_IP:
         return _check_ip_in_ip(next_header, upper, stats, depth)
-    if next_header == 50 and upper_len >= 8:
+    if next_header == 50:
         return _check_esp(src, dst, upper, stats, depth, ipv6=True)
-    return []
+    return [f"unchecked-protocol-{next_header}"] if strict else []
 
 
 def _check_l3(
-    ethertype: int, payload: bytes, stats: Counter, depth: int = 0
+    ethertype: int,
+    payload: bytes,
+    stats: Counter,
+    depth: int = 0,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
     is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
-    and through NULL-encrypted ESP on a known Security Association
-    after verifying its ICV. Returns a list of failure strings."""
-    if depth > 8:
-        return []  # bound pathological tunnel nesting
-
+    and through NULL-encrypted ESP after verifying its ICV; ESP on an
+    SA whose key is not published fails. Nesting deeper than
+    ``_MAX_DEPTH`` fails (see :func:`_check_upper_v4`). Under
+    ``strict`` (an ESP tunnel's inner packet) a payload that is not a
+    readable IP header fails too. Returns a list of failure strings."""
     if ethertype == 0x0806:
         stats["arp"] += 1
         return []
@@ -360,6 +425,8 @@ def _check_l3(
     if ethertype == 0x86DD and len(payload) >= 40:
         return _check_ipv6(payload, stats, depth)
 
+    if strict:
+        return [f"unchecked-ethertype-0x{ethertype:04x}"]
     stats[f"other-0x{ethertype:04x}"] += 1
     return []
 

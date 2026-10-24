@@ -121,8 +121,9 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   it is a whole inner IPv4 packet (`192.0.2.1 → 192.0.2.2`, RFC 5737)
   between the hosts behind the two gateways. `check_fixtures` verifies
   each ICV with the keys below, then the padding, then the inner
-  packet's checksums. The kernel has no IPv6, so IPv6-outer ESP is
-  covered by constructed frames in `tests/test_esp.py`.
+  packet's checksums; a frame on an SPI not listed below fails. The
+  kernel has no IPv6, so IPv6-outer ESP is covered by constructed
+  frames in `tests/test_esp.py`.
 
 ### IPsec test keys
 
