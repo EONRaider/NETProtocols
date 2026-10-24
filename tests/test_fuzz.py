@@ -45,6 +45,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    VXLAN,
     AHv6,
     DNSOverTCP,
     Ethernet,
@@ -93,6 +94,7 @@ ALL_PROTOCOLS = (
     AH,
     AHv6,
     HTTP,
+    VXLAN,
 )
 
 

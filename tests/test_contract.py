@@ -10,6 +10,7 @@ from netprotocols import (
     HTTP,
     TCP,
     UDP,
+    VXLAN,
     Ethernet,
     ICMPv4,
     InvalidIPv4AddressError,
@@ -35,6 +36,7 @@ class TestTruncation:
             (ICMPv4, "raw_icmpv4_echo_request"),
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
+            (VXLAN, "raw_vxlan_header"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):

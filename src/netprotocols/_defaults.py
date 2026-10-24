@@ -84,6 +84,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer4.udp import UDP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
 
@@ -127,6 +128,11 @@ def install(registry: Registry) -> None:
 
     add(TABLE_UDP_PORT, 53, DNS)
     register_all(TABLE_UDP_PORT, (67, 68), DHCP, registry=registry)
+    # VXLAN's IANA port (RFC 7348 §5). An encapsulating endpoint normally
+    # sends to it and hashes the source port from the inner flow, so the
+    # destination-first lookup finds it whatever that source port is.
+    # Linux's pre-IANA 8472 is not registered: decode_as adds it per walk.
+    add(TABLE_UDP_PORT, 4789, VXLAN)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

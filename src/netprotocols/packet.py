@@ -135,6 +135,12 @@ class Packet:
         do not change the key's protocol number, which is the
         transport's own; see :func:`~netprotocols.flow.flow_key` for
         what an IPv6 Routing header does to its addresses.
+        VXLAN is different: its outer UDP datagram is the first
+        transport layer, so the key is the tunnel's own underlay flow
+        (the endpoints' addresses, the source port hashed from the inner
+        flow, and the tunnel's port); the inner conversation's key is
+        :func:`~netprotocols.flow.flow_key` of the inner transport and
+        the IP header before it.
 
         ``None`` if either layer is missing — a packet with no
         transport layer, or a bare TCP/UDP segment built without an IP

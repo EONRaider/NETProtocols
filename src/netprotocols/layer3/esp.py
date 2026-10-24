@@ -14,7 +14,7 @@ This library has no cryptography and will not gain any, so it does not
 decrypt, verify, or even locate the trailer: where the ICV starts
 depends on the SA's algorithms, and the Pad Length and Next Header
 bytes are encrypted along with the payload unless the SA uses a
-confidentiality-free transform (NULL, RFC 2410; AES-GMAC, RFC 4543).
+confidentiality-free transform (e.g. NULL, RFC 2410; AES-GMAC, RFC 4543).
 Without the SA there is no way to tell where the ciphertext ends and
 the trailer begins, so the chain ends here —
 :meth:`ESP.next_protocol` returns ``None`` by design.
@@ -44,13 +44,13 @@ class ESP(Protocol):
     rather than a gap: :meth:`next_protocol` always returns ``None``.
     The payload's protocol is named by the Next Header byte of the ESP
     trailer, which sits inside the protected region: encrypted unless
-    the SA uses a confidentiality-free transform (NULL, RFC 2410;
+    the SA uses a confidentiality-free transform (e.g. NULL, RFC 2410;
     AES-GMAC, RFC 4543), and just before an ICV whose length only the
-    SA's algorithms determine. Nothing in the
-    packet says which cipher or algorithm the SA uses, so the decoder
-    cannot tell whether that byte is readable, or which byte it is, and
-    never reads the trailer. A frame walk therefore stops at ``ESP``
-    with the whole protected payload in :attr:`ciphertext`.
+    SA's algorithms determine. Nothing in the packet says which cipher
+    or algorithm the SA uses, so the decoder cannot tell whether that
+    byte is readable, or which byte it is, and never reads the trailer.
+    A frame walk therefore stops at ``ESP`` with the whole protected
+    payload in :attr:`ciphertext`.
 
     :param spi: Security Parameters Index (32 bits), which together with
         the destination identifies the SA. ``0`` is reserved for local
@@ -100,7 +100,7 @@ class ESP(Protocol):
 
         The protocol of the protected payload is the trailer's Next
         Header field, which is encrypted unless the SA uses a
-        confidentiality-free transform (NULL, AES-GMAC) and sits at an
+        confidentiality-free transform (e.g. NULL, AES-GMAC) and sits at an
         offset that only the SA's algorithms determine (RFC
         4303 §2.4-2.8). Without the SA there is nothing to dispatch on,
         so stopping here is the correct answer, not an unimplemented

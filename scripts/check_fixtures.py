@@ -95,21 +95,32 @@ def _check_tcp(
 
 
 def _check_udp(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     stats["udp"] += 1
     upper_len = len(upper)
     wire = struct.unpack_from("!H", upper, 6)[0]
+    failures: list[str] = []
     if wire == 0:
+        # RFC 768: a zero checksum over IPv4 means none was computed,
+        # which is also Linux's default for VXLAN (RFC 7348 §5 allows
+        # it). Nothing to verify, but a tunnel inside is still checked.
         stats["udp-no-checksum"] += 1
-        return []
-    zeroed = upper[:6] + b"\x00\x00" + upper[8:]
-    computed = (
-        internet_checksum(pseudo_v4(src, dst, 17, upper_len) + zeroed) or 0xFFFF
-    )
-    if computed != wire:
-        return ["udp-checksum"]
-    return []
+    else:
+        zeroed = upper[:6] + b"\x00\x00" + upper[8:]
+        computed = (
+            internet_checksum(pseudo_v4(src, dst, 17, upper_len) + zeroed)
+            or 0xFFFF
+        )
+        if computed != wire:
+            failures.append("udp-checksum")
+    return failures + _check_udp_payload(upper, stats, depth, strict=strict)
 
 
 def _check_gre(
@@ -142,6 +153,10 @@ def _check_ipv4(
 ) -> list[str]:
     failures: list[str] = []
     ihl = (payload[0] & 0x0F) * 4
+    if ihl < 20 or ihl > len(payload):
+        # An IHL below 5 (RFC 791) or past the bytes leaves no header to
+        # check; reading on would slice empty addresses or crash.
+        return ["ipv4-ihl"]
     header = payload[:ihl]
     stats["ipv4"] += 1
     if (
@@ -201,7 +216,7 @@ def _check_upper_v4(
     if proto == 6 and upper_len >= 20:
         return _check_tcp(src, dst, upper, stats)
     if proto == 17 and upper_len >= 8:
-        return _check_udp(src, dst, upper, stats)
+        return _check_udp(src, dst, upper, stats, depth, strict=strict)
     if proto == 47 and upper_len >= 4:
         return _check_gre(src, dst, upper, stats, depth, strict=strict)
     if proto in _IP_IN_IP:
@@ -242,7 +257,13 @@ def _check_tcp6(
 
 
 def _check_udp6(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     stats["udp6"] += 1
     upper_len = len(upper)
@@ -250,9 +271,42 @@ def _check_udp6(
     computed = (
         internet_checksum(pseudo_v6(src, dst, 17, upper_len) + zeroed) or 0xFFFF
     )
+    failures: list[str] = []
     if computed != struct.unpack_from("!H", upper, 6)[0]:
-        return ["udp6-checksum"]
-    return []
+        failures.append("udp6-checksum")
+    return failures + _check_udp_payload(upper, stats, depth, strict=strict)
+
+
+#: The IANA-assigned VXLAN destination port (RFC 7348 §5).
+_VXLAN_PORT = 4789
+
+
+def _check_udp_payload(
+    datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate what a UDP datagram tunnels, if anything: a VXLAN
+    payload (destination port 4789, RFC 7348 §5) is an 8-byte header
+    and then a whole Ethernet frame, validated in turn.
+
+    The destination port alone decides which datagrams are peeled,
+    which is deliberately stricter than the library's port selection
+    (it falls back to the source port when the destination is not
+    registered). The checker does not apply the decoder's I-flag
+    rule: it validates checksums, not VXLAN semantics. An
+    encapsulating endpoint sends to the tunnel's port, 4789 in every
+    capture here, from a source port hashed from the inner flow, so
+    every tunnel datagram matches by its destination alone. Matching
+    the library's fallback exactly would mean copying its port table
+    into a checker that must stay independent of it, and peeling a
+    datagram that is not VXLAN would report its bytes as checksum
+    failures; skipping one costs only the inner check."""
+    if struct.unpack_from("!H", datagram, 2)[0] != _VXLAN_PORT:
+        return []
+    if len(datagram) < 8 + 8:
+        stats["vxlan-truncated"] += 1
+        return ["vxlan-truncated"] if strict else []
+    stats["vxlan"] += 1
+    return _check_ethernet(datagram[16:], stats, depth + 1, strict=strict)
 
 
 #: IP protocol numbers whose payload is a whole IP packet: 4 carries
@@ -484,7 +538,7 @@ def _check_upper_v6(
     if next_header == 6 and upper_len >= 20:
         return _check_tcp6(src, dst, upper, stats)
     if next_header == 17 and upper_len >= 8:
-        return _check_udp6(src, dst, upper, stats)
+        return _check_udp6(src, dst, upper, stats, depth, strict=strict)
     if next_header in _IP_IN_IP:
         return _check_ip_in_ip(next_header, upper, stats, depth, strict=strict)
     if next_header == 50:
@@ -510,18 +564,23 @@ def _check_l3(
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
     is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
-    and through NULL-encrypted ESP and IPv4 AH after verifying the ICV;
-    IPsec on an SA whose key is not published fails, as does IPv6 AH or
-    IPv4 AH behind header options, whose ICV this cannot compute.
-    Nesting deeper than ``_MAX_DEPTH`` fails. Under ``strict`` (anything
-    an ESP or AH ICV vouched for, at any depth below it) a payload the
-    checker cannot read fails too: an unknown protocol or EtherType, a
-    header too short to check, or a fragment. Returns a list of failure
+    through VXLAN, whose payload is a whole Ethernet frame, and through
+    NULL-encrypted ESP and IPv4 AH after verifying the ICV; IPsec on an
+    SA whose key is not published fails, as does IPv6 AH or IPv4 AH
+    behind header options, whose ICV this cannot compute. Nesting
+    deeper than ``_MAX_DEPTH`` fails. Under ``strict`` (anything an ESP
+    or AH ICV vouched for, at any depth below it) a payload the checker
+    cannot read fails too: an unknown protocol or EtherType, a header
+    too short to check, or a fragment. Returns a list of failure
     strings."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     if ethertype == 0x0806:
         stats["arp"] += 1
+        # ARP carries no checksum; under strict, at least insist on the
+        # 28-byte Ethernet/IPv4 form rather than vouching for a stub.
+        if strict and len(payload) < 28:
+            return ["unchecked-ethertype-0x0806"]
         return []
 
     if ethertype == 0x0800 and len(payload) >= 20:
@@ -538,9 +597,19 @@ def _check_l3(
 
 def check_frame(frame: bytes, stats: Counter) -> list[str]:
     """Validate one Ethernet frame; returns a list of failure strings."""
+    return _check_ethernet(frame, stats, 0)
+
+
+def _check_ethernet(
+    frame: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate an Ethernet frame: the captured one, or one a VXLAN
+    tunnel carries (at ``depth`` > 0)."""
+    if depth > _MAX_DEPTH:
+        return ["nesting-too-deep"]
     if len(frame) < 14:
         stats["runt"] += 1
-        return []
+        return ["unchecked-runt"] if strict else []
     ethertype = struct.unpack_from("!H", frame, 12)[0]
     payload = frame[14:]
 
@@ -549,12 +618,12 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
     while ethertype in (0x8100, 0x88A8, 0x9100):
         if len(payload) < 4:
             stats["vlan-truncated"] += 1
-            return []
+            return ["unchecked-vlan-truncated"] if strict else []
         stats["vlan-tag"] += 1
         ethertype = struct.unpack_from("!H", payload, 2)[0]
         payload = payload[4:]
 
-    return _check_l3(ethertype, payload, stats)
+    return _check_l3(ethertype, payload, stats, depth, strict=strict)
 
 
 def main() -> int:

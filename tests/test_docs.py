@@ -87,6 +87,7 @@ class TestCorpusFiguresInDocs:
             "ah.py",
             "dhcp.py",
             "http.py",
+            "vxlan.py",
             "ipv6_ext.py",
             "_tlv.py",
         ],

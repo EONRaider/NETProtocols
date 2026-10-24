@@ -74,9 +74,13 @@ field exists to say what follows. A port is a *guess* — any service may
 run on any port, and the discriminator is split across two fields.
 Dispatch on those tables checks the destination port first (a request
 targets the server's well-known port) and then the source port (a
-response comes from it), and the class it names is expected to validate
-strictly on decode, so a wrong guess degrades to the library's ordinary
-malformed-frame path rather than to silent garbage.
+response comes from it). The class it names validates on decode, but
+can only reject what its format tells apart from noise: a wrong guess
+that it rejects takes the ordinary malformed-frame path, and one it
+accepts decodes cleanly into a wrong layer. DNS and DHCP accept almost
+any datagram long enough for their fixed headers. A caller who knows
+what a port carries says so with :meth:`Registry.derive` or
+``decode_frame(..., decode_as=...)`` rather than trusting the guess.
 """
 
 from __future__ import annotations

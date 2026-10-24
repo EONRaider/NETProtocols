@@ -188,3 +188,10 @@ def raw_ah_header() -> bytes:
         "060500002000000100000001e91ff0893d37de87e576dc91a70ddbe2"
         "9c4100504e500001000000006002faf0883e0000020405b4"
     )
+
+
+@pytest.fixture
+def raw_vxlan_header() -> bytes:
+    """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
+    1193046 (0x123456), reserved bits zero."""
+    return b"\x08\x00\x00\x00\x12\x34\x56\x00"
