@@ -113,7 +113,13 @@ def _check_udp(
 
 
 def _check_gre(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter, depth: int
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     # GRE: a 4-byte header (flags word + inner EtherType) plus the
     # optional checksum/key/sequence words the flag bits announce
@@ -126,10 +132,14 @@ def _check_gre(
         + (4 if gre_flags & 0x2000 else 0)
         + (4 if gre_flags & 0x1000 else 0)
     )
-    return _check_l3(inner_ethertype, upper[4 + optional :], stats, depth + 1)
+    return _check_l3(
+        inner_ethertype, upper[4 + optional :], stats, depth + 1, strict=strict
+    )
 
 
-def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
+def _check_ipv4(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
     failures: list[str] = []
     ihl = (payload[0] & 0x0F) * 4
     header = payload[:ihl]
@@ -144,12 +154,16 @@ def _check_ipv4(payload: bytes, stats: Counter, depth: int) -> list[str]:
     flags_frag = struct.unpack_from("!H", header, 6)[0]
     if flags_frag & 0x1FFF:
         stats["ipv4-fragment"] += 1
-        return failures  # non-first fragment: no upper-layer header
+        # Non-first fragment: no upper-layer header.
+        return failures + (["unchecked-fragment"] if strict else [])
     if flags_frag & 0x2000 == 0x2000 and flags_frag & 0x1FFF == 0:
         stats["ipv4-first-fragment"] += 1
-        return failures  # first fragment: upper checksum spans all parts
+        # First fragment: the upper checksum spans all parts.
+        return failures + (["unchecked-fragment"] if strict else [])
     upper = payload[ihl:total_length]
-    return failures + _check_upper_v4(proto, header, upper, stats, depth)
+    return failures + _check_upper_v4(
+        proto, header, upper, stats, depth, strict=strict
+    )
 
 
 def _check_upper_v4(
@@ -172,8 +186,10 @@ def _check_upper_v4(
 
     ``depth`` counts the encapsulations (GRE, IP-in-IP, IPsec) above
     ``upper``. Every one of them is dispatched from here or from
-    :func:`_check_upper_v6` and recurses back through one of the two,
-    so this pair is the single place nesting is bounded."""
+    :func:`_check_upper_v6` and recurses back through one of the two
+    or through :func:`_check_l3`; all three refuse a depth past
+    ``_MAX_DEPTH``, so a tunnel chain ending in anything (an IP
+    payload, ARP, an unknown EtherType) is bounded."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     src, dst = ip_header[12:16], ip_header[16:20]
@@ -187,9 +203,9 @@ def _check_upper_v4(
     if proto == 17 and upper_len >= 8:
         return _check_udp(src, dst, upper, stats)
     if proto == 47 and upper_len >= 4:
-        return _check_gre(src, dst, upper, stats, depth)
+        return _check_gre(src, dst, upper, stats, depth, strict=strict)
     if proto in _IP_IN_IP:
-        return _check_ip_in_ip(proto, upper, stats, depth)
+        return _check_ip_in_ip(proto, upper, stats, depth, strict=strict)
     if proto == 50:
         return _check_esp(ip_header, upper, stats, depth, ipv6=False)
     if proto == 51:
@@ -246,12 +262,17 @@ _IP_IN_IP = {4: 0x0800, 41: 0x86DD}
 
 
 def _check_ip_in_ip(
-    proto: int, upper: bytes, stats: Counter, depth: int
+    proto: int,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
     # No header of its own: the payload is the tunnelled packet,
     # validated in turn.
     stats["ip-in-ip"] += 1
-    return _check_l3(_IP_IN_IP[proto], upper, stats, depth + 1)
+    return _check_l3(_IP_IN_IP[proto], upper, stats, depth + 1, strict=strict)
 
 
 #: The integrity keys of the corpus's IPsec Security Associations,
@@ -284,8 +305,9 @@ _AH_SAS = {
 _ICV_LEN = 16
 
 #: How many encapsulations (GRE, IP-in-IP, IPsec) one frame may nest
-#: before the checker refuses it. The corpus peaks at 2; the bound
-#: exists so a hostile capture cannot exhaust the interpreter's stack.
+#: before the checker refuses it. The corpus peaks at 2 (ah.pcap's
+#: AH-over-ESP bundle); the bound exists so a hostile capture cannot
+#: exhaust the interpreter's stack.
 _MAX_DEPTH = 8
 
 
@@ -416,7 +438,9 @@ def _check_ah(
     )
 
 
-def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
+def _check_ipv6(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
     failures: list[str] = []
     stats["ipv6"] += 1
     payload_length, next_header = struct.unpack_from("!HB", payload, 4)
@@ -429,13 +453,14 @@ def _check_ipv6(payload: bytes, stats: Counter, depth: int) -> list[str]:
     if next_header == 44 and len(upper) >= 8:
         if struct.unpack_from("!H", upper, 2)[0] & 0xFFF8:
             stats["ipv6-fragment"] += 1
-            return failures  # non-first fragment: no upper header
+            # Non-first fragment: no upper header.
+            return failures + (["unchecked-fragment"] if strict else [])
         stats["ipv6-first-fragment"] += 1
         # The upper-layer checksum spans the reassembled datagram, not
         # this fragment's slice: nothing verifiable here.
-        return failures
+        return failures + (["unchecked-fragment"] if strict else [])
     return failures + _check_upper_v6(
-        next_header, payload[:40], upper, stats, depth
+        next_header, payload[:40], upper, stats, depth, strict=strict
     )
 
 
@@ -461,7 +486,7 @@ def _check_upper_v6(
     if next_header == 17 and upper_len >= 8:
         return _check_udp6(src, dst, upper, stats)
     if next_header in _IP_IN_IP:
-        return _check_ip_in_ip(next_header, upper, stats, depth)
+        return _check_ip_in_ip(next_header, upper, stats, depth, strict=strict)
     if next_header == 50:
         return _check_esp(ip_header, upper, stats, depth, ipv6=True)
     if next_header == 51:
@@ -488,19 +513,22 @@ def _check_l3(
     and through NULL-encrypted ESP and IPv4 AH after verifying the ICV;
     IPsec on an SA whose key is not published fails, as does IPv6 AH or
     IPv4 AH behind header options, whose ICV this cannot compute.
-    Nesting deeper than ``_MAX_DEPTH`` fails (see
-    :func:`_check_upper_v4`). Under ``strict`` (an IPsec tunnel's inner
-    packet) a payload that is not a readable IP header fails too.
-    Returns a list of failure strings."""
+    Nesting deeper than ``_MAX_DEPTH`` fails. Under ``strict`` (anything
+    an ESP or AH ICV vouched for, at any depth below it) a payload the
+    checker cannot read fails too: an unknown protocol or EtherType, a
+    header too short to check, or a fragment. Returns a list of failure
+    strings."""
+    if depth > _MAX_DEPTH:
+        return ["nesting-too-deep"]
     if ethertype == 0x0806:
         stats["arp"] += 1
         return []
 
     if ethertype == 0x0800 and len(payload) >= 20:
-        return _check_ipv4(payload, stats, depth)
+        return _check_ipv4(payload, stats, depth, strict=strict)
 
     if ethertype == 0x86DD and len(payload) >= 40:
-        return _check_ipv6(payload, stats, depth)
+        return _check_ipv6(payload, stats, depth, strict=strict)
 
     if strict:
         return [f"unchecked-ethertype-0x{ethertype:04x}"]
