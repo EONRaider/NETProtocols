@@ -181,7 +181,7 @@ heartbeat_sources = set()
 for number, frame in enumerate(frames, 1):
     ip = frame[14:]
     assert ip[9] == 132, f"frame {number} is not SCTP"
-    sctp = ip[(ip[0] & 0x0F) * 4 :]
+    sctp = ip[(ip[0] & 0x0F) * 4 : struct.unpack_from("!H", ip, 2)[0]]
     chunk_type, chunk_length = sctp[12], struct.unpack_from("!H", sctp, 14)[0]
     padded = 12 + chunk_length + -chunk_length % 4
     assert len(sctp) == padded, f"frame {number} carries more than one chunk"

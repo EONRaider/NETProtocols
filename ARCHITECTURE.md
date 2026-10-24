@@ -167,21 +167,23 @@ The second is `SCTP`. Like ICMPv4, ICMPv6 and IGMP it has no length of
 its own: the packet is the whole IP payload, and the walk does not trim
 a frame to the IP header's declared length. Those three keep the whole
 buffer, Ethernet's zero padding included: ICMPv4's and IGMP's internet
-checksum is unchanged by appended zero bytes, and an IPv6 frame is never
-short enough to be padded. SCTP's CRC32c does change when zero bytes are
-appended, so `decode()` walks the chunk headers to find where the packet
-ends and leaves a run of zero bytes where the next chunk would start
-undecoded, since that cannot begin a chunk and is what an Ethernet
-sender normally pads a short frame with. Rule 3 holds for those zeros;
-any other trailing bytes become part of the packet. Past the 12-byte
-common header `decode()` never raises, like the three it resembles: a
-remainder the walk cannot parse — a chunk cut by a snap length, an IP
-fragment or an ICMP error's quote, or a nonzero trailer such as an
-Ethernet FCS, which cannot be told from a broken chunk — is kept
-verbatim in `chunks`, the ports and verification tag still decode,
-`parsed_chunks` raises on it when asked, and `verify()` returns `False`.
-See [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module
-docstring.
+checksum is unchanged by appended zero bytes, and an IPv6 frame carrying
+ICMPv6 is never short enough to be padded. SCTP's CRC32c does change
+when zero bytes are appended, so `decode()` walks the chunk headers to
+find where the packet ends and leaves a run of zero bytes where the next
+chunk would start undecoded, since that cannot begin a chunk and is what
+an Ethernet sender normally pads a short frame with. Rule 3 holds for
+those zeros; any other trailing bytes become part of the packet. Past
+the 12-byte common header `decode()` never raises, like the three it
+resembles: a remainder the walk cannot parse — a chunk cut by a snap
+length, an IP fragment or an ICMP error's quote, or a nonzero trailer
+such as an Ethernet FCS, which cannot be told from a broken chunk — is
+kept verbatim in `chunks`, the ports and verification tag still decode,
+and `verify()` returns `False`. `parsed_chunks` raises only when the
+remainder does not walk: a trailer that happens to (an FCS whose bytes
+read as a chunk header) parses as a phantom chunk, so `verify()` is the
+reliable signal. See
+[`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized

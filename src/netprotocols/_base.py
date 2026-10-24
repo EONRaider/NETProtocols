@@ -53,10 +53,10 @@ Protocols without a length field
 --------------------------------
 ``ICMPv4``, ``ICMPv6``, ``IGMP`` and ``SCTP`` carry no length of their
 own: each is the whole IP payload, and the chain walk does not trim a
-frame to the IP header's declared length. The first three keep the
-whole buffer, so an Ethernet frame's zero padding lands in their
-``body`` (only in IPv4's: an IPv6 frame is never short enough to be
-padded), and the internet checksum ICMPv4 and IGMP carry is unchanged
+frame to the IP header's declared length. The first three keep the whole
+buffer, so an Ethernet frame's zero padding lands in their ``body``
+(only in IPv4's: an IPv6 frame carrying ICMPv6 is never short enough to
+be padded), and the internet checksum ICMPv4 and IGMP carry is unchanged
 by appended zero bytes. ``SCTP``'s CRC32c is not, so its ``decode()``
 walks the chunk headers to find where the packet ends and leaves a run
 of zero bytes where the next chunk would start undecoded: step 3 holds

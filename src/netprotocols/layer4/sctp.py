@@ -25,10 +25,12 @@ Past the 12-byte common header, ``decode`` never raises. A remainder
 the walk cannot parse — a chunk cut short by a snap length, an IP
 fragment or an ICMP error's quote, a length below 4, a nonzero trailer
 such as an Ethernet FCS — is kept in ``chunks`` verbatim, so the ports,
-verification tag and checksum still decode, :attr:`SCTP.parsed_chunks`
-raises on it when asked, and :func:`~netprotocols.checksum.verify`
-returns ``False``, since the CRC covers bytes the sender did not send
-or misses bytes it did.
+verification tag and checksum still decode, and
+:func:`~netprotocols.checksum.verify` returns ``False``, since the CRC
+covers bytes the sender did not send or misses bytes it did. That is
+the reliable signal: :attr:`SCTP.parsed_chunks` raises only when the
+remainder does not walk, and a trailer that happens to (an FCS whose
+bytes read as a chunk header) parses as a phantom chunk.
 
 One sender bug the walk cannot see past: a final chunk sent without
 its padding (RFC 9260 §3.2 requires it), followed by Ethernet's zero

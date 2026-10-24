@@ -547,7 +547,7 @@ class TestDamagedPacketsKeepTheirHeader:
 
     @LAX
     def test_sctp_quoted_in_an_icmp_error(self, lax):
-        """An ICMP error that quotes more than the SCTP common header
+        """An ICMP error whose quote holds the whole SCTP common header
         decodes the quote through to SCTP, as it does TCP and UDP."""
         quoted = FRAMES[1][14 : SCTP_START + 64]
         error = ICMPv4(type=3, code=3, checksum=0, rest=bytes(4), body=quoted)
