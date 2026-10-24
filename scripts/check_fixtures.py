@@ -164,7 +164,6 @@ def _check_ipv4(
         != struct.unpack_from("!H", header, 10)[0]
     ):
         failures.append("ipv4-header-checksum")
-    src, dst = header[12:16], header[16:20]
     proto = header[9]
     total_length = struct.unpack_from("!H", header, 2)[0]
     flags_frag = struct.unpack_from("!H", header, 6)[0]
@@ -178,23 +177,22 @@ def _check_ipv4(
         return failures + (["unchecked-fragment"] if strict else [])
     upper = payload[ihl:total_length]
     return failures + _check_upper_v4(
-        proto, src, dst, upper, stats, depth, strict=strict
+        proto, header, upper, stats, depth, strict=strict
     )
 
 
 def _check_upper_v4(
     proto: int,
-    src: bytes,
-    dst: bytes,
+    ip_header: bytes,
     upper: bytes,
     stats: Counter,
     depth: int,
     *,
     strict: bool = False,
 ) -> list[str]:
-    """Validate what an IPv4 header (``src``/``dst``) carries as
-    protocol ``proto`` — directly, or behind IPsec in transport mode,
-    where the pseudo-header is still the IPv4 header's.
+    """Validate what the IPv4 header ``ip_header`` carries as protocol
+    ``proto`` — directly, or behind IPsec in transport mode, where the
+    pseudo-header (and AH's ICV) is still the IPv4 header's.
 
     ``strict`` is for a payload an IPsec ICV vouched for: one this
     cannot check (an unknown protocol, or too short for its header)
@@ -209,6 +207,7 @@ def _check_upper_v4(
     payload, ARP, an unknown EtherType) is bounded."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
+    src, dst = ip_header[12:16], ip_header[16:20]
     upper_len = len(upper)
     if proto == 1 and upper_len >= 8:
         return _check_icmpv4(upper, stats)
@@ -223,7 +222,9 @@ def _check_upper_v4(
     if proto in _IP_IN_IP:
         return _check_ip_in_ip(proto, upper, stats, depth, strict=strict)
     if proto == 50:
-        return _check_esp(src, dst, upper, stats, depth, ipv6=False)
+        return _check_esp(ip_header, upper, stats, depth, ipv6=False)
+    if proto == 51:
+        return _check_ah(ip_header, upper, stats, depth)
     return [f"unchecked-protocol-{proto}"] if strict else []
 
 
@@ -340,12 +341,27 @@ _ESP_NULL_SAS = {
     0x10000002: bytes.fromhex(
         "4bc3ce948208049b2f5016e06616867773924d2ccb4dab8b3aff93e6d26f3834"
     ),
+    0x10000003: bytes.fromhex(
+        "107c873bdbb0c7a11be8aa1d9064e51f63b26098412295c3bd6785958abd44d4"
+    ),
+}
+_AH_SAS = {
+    0x20000001: bytes.fromhex(
+        "8eaa03a41a3b08f31a67f3a4b7fd78a2bf3d963a97b0af5a104301ef8fbff685"
+    ),
+    0x20000002: bytes.fromhex(
+        "d2142153fb758a3f698e45720e2af765b2ada021d70ac1bcbde1f5bc38514fd1"
+    ),
+    0x20000003: bytes.fromhex(
+        "008a9a220d8c1bf5edec1838a724b588364c08314bf93206985e776c385e1c7a"
+    ),
 }
 _ICV_LEN = 16
 
 #: How many encapsulations (GRE, IP-in-IP, IPsec) one frame may nest
-#: before the checker refuses it. The corpus peaks at 1; the bound
-#: exists so a hostile capture cannot exhaust the interpreter's stack.
+#: before the checker refuses it. The corpus peaks at 2 (ah.pcap's
+#: AH-over-ESP bundle); the bound exists so a hostile capture cannot
+#: exhaust the interpreter's stack.
 _MAX_DEPTH = 8
 
 
@@ -382,8 +398,7 @@ def _verify_icv(
 
 
 def _check_esp(
-    src: bytes,
-    dst: bytes,
+    ip_header: bytes,
     upper: bytes,
     stats: Counter,
     depth: int,
@@ -419,7 +434,62 @@ def _check_esp(
     # Transport mode: the upper-layer protocol's pseudo-header is still
     # the enclosing IP header's.
     check = _check_upper_v6 if ipv6 else _check_upper_v4
-    return check(next_header, src, dst, inner, stats, depth + 1, strict=True)
+    return check(next_header, ip_header, inner, stats, depth + 1, strict=True)
+
+
+def _check_ah(
+    ip_header: bytes, upper: bytes, stats: Counter, depth: int
+) -> list[str]:
+    # AH (RFC 4302): next header, payload len, reserved, SPI, sequence
+    # number, then the ICV — over the IPv4 header with its mutable
+    # fields zeroed, the AH header with its ICV zeroed, and the payload
+    # (RFC 4302 §3.3.3).
+    stats["ah"] += 1
+    if len(upper) < 12:
+        return ["ah-truncated"]
+    if len(ip_header) != 20:
+        # Options have their own mutability rules (RFC 4302 Appendix
+        # A); no corpus frame carries any, so none are implemented, and
+        # an ICV this cannot compute fails rather than passing unread.
+        return ["ah-ipv4-options-unverified"]
+    next_header, payload_len = upper[0], upper[1]
+    ah_len = (payload_len + 2) * 4
+    if ah_len != 12 + _ICV_LEN:
+        return ["ah-length"]
+    if len(upper) < ah_len:
+        return ["ah-truncated"]
+    # Zeroed: TOS (byte 1), flags + fragment offset (6-7), TTL (8), and
+    # the header checksum (10-11).
+    immutable = (
+        ip_header[:1]
+        + b"\x00"
+        + ip_header[2:6]
+        + b"\x00\x00\x00"
+        + ip_header[9:10]
+        + b"\x00\x00"
+        + ip_header[12:20]
+    )
+    payload = upper[ah_len:]
+    blank = upper[:12] + bytes(_ICV_LEN) + payload
+    spi = struct.unpack_from("!I", upper, 4)[0]
+    failures = _verify_icv(
+        "ah", _AH_SAS, spi, immutable + blank, upper[12:ah_len]
+    )
+    if failures:
+        return failures
+    # strict, as for ESP: the ICV vouched for this payload.
+    if next_header in _IP_IN_IP:
+        # Tunnel mode (RFC 4302 §3.1): the payload is a whole IP
+        # packet, counted as AH's, not as IP-in-IP.
+        stats["ah-tunnel"] += 1
+        return _check_l3(
+            _IP_IN_IP[next_header], payload, stats, depth + 1, strict=True
+        )
+    # Transport mode, or a bundle (AH over ESP): the pseudo-header is
+    # still the enclosing IPv4 header's.
+    return _check_upper_v4(
+        next_header, ip_header, payload, stats, depth + 1, strict=True
+    )
 
 
 def _check_ipv6(
@@ -428,7 +498,6 @@ def _check_ipv6(
     failures: list[str] = []
     stats["ipv6"] += 1
     payload_length, next_header = struct.unpack_from("!HB", payload, 4)
-    src, dst = payload[8:24], payload[24:40]
     upper = payload[40 : 40 + payload_length]
     # Walk extension headers (hop-by-hop 0, routing 43, dest-opts 60).
     while next_header in (0, 43, 60) and len(upper) >= 8:
@@ -445,14 +514,13 @@ def _check_ipv6(
         # this fragment's slice: nothing verifiable here.
         return failures + (["unchecked-fragment"] if strict else [])
     return failures + _check_upper_v6(
-        next_header, src, dst, upper, stats, depth, strict=strict
+        next_header, payload[:40], upper, stats, depth, strict=strict
     )
 
 
 def _check_upper_v6(
     next_header: int,
-    src: bytes,
-    dst: bytes,
+    ip_header: bytes,
     upper: bytes,
     stats: Counter,
     depth: int,
@@ -463,6 +531,7 @@ def _check_upper_v6(
     nesting and honouring ``strict`` the same way."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
+    src, dst = ip_header[8:24], ip_header[24:40]
     upper_len = len(upper)
     if next_header == 58 and upper_len >= 4:
         return _check_icmpv6(src, dst, upper, stats)
@@ -473,7 +542,14 @@ def _check_upper_v6(
     if next_header in _IP_IN_IP:
         return _check_ip_in_ip(next_header, upper, stats, depth, strict=strict)
     if next_header == 50:
-        return _check_esp(src, dst, upper, stats, depth, ipv6=True)
+        return _check_esp(ip_header, upper, stats, depth, ipv6=True)
+    if next_header == 51:
+        # The ICV would cover the IPv6 header and its extension headers
+        # under their own mutability rules (RFC 4302 §3.3.3.1.2), which
+        # are not implemented; no corpus frame needs them, so one that
+        # does fails rather than passing unverified.
+        stats["ah"] += 1
+        return ["ah-ipv6-unverified"]
     return [f"unchecked-protocol-{next_header}"] if strict else []
 
 
@@ -489,12 +565,14 @@ def _check_l3(
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
     is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
     through VXLAN, whose payload is a whole Ethernet frame, and through
-    NULL-encrypted ESP after verifying its ICV; ESP on an
-    SA whose key is not published fails. Nesting deeper than
-    ``_MAX_DEPTH`` fails. Under ``strict`` (anything an ESP ICV
-    vouched for, at any depth below it) a payload the checker cannot
-    read fails too: an unknown protocol or EtherType, a header too
-    short to check, or a fragment. Returns a list of failure strings."""
+    NULL-encrypted ESP and IPv4 AH after verifying the ICV; IPsec on an
+    SA whose key is not published fails, as does IPv6 AH or IPv4 AH
+    behind header options, whose ICV this cannot compute. Nesting
+    deeper than ``_MAX_DEPTH`` fails. Under ``strict`` (anything an ESP
+    or AH ICV vouched for, at any depth below it) a payload the checker
+    cannot read fails too: an unknown protocol or EtherType, a header
+    too short to check, or a fragment. Returns a list of failure
+    strings."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     if ethertype == 0x0806:

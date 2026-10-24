@@ -1,14 +1,22 @@
+from dataclasses import replace
+
 import pytest
 
 from netprotocols import (
+    AH,
     TCP,
     UDP,
+    AHv6,
+    Ethernet,
     FlowKey,
     ICMPv4,
     InvalidFieldError,
     IPv4,
     IPv6,
+    IPv6HopByHopOptions,
     Packet,
+    Protocol,
+    decode_frame,
     flow_key,
 )
 
@@ -104,14 +112,27 @@ class TestFlowKeyFunction:
             reply_udp, ip=reply_ip
         )
 
-    def test_ipv4_protocol_and_ipv6_next_header_both_feed_protocol(self):
-        """IPv4.protocol and IPv6.next_header are the same semantic
-        field under different attribute names; flow_key must read
-        whichever one the enclosing header actually has."""
-        v4_key = flow_key(make_tcp(1, 2), ip=make_ipv4("1.1.1.1", "2.2.2.2"))
-        v6_key = flow_key(make_tcp(1, 2), ip=make_ipv6("fe80::1", "fe80::2"))
-        assert v4_key.protocol == 6
-        assert v6_key.protocol == 6
+    @pytest.mark.parametrize(
+        ("transport", "number"),
+        [(make_tcp(1, 2), 6), (make_udp(1, 2), 17)],
+        ids=["tcp", "udp"],
+    )
+    @pytest.mark.parametrize(
+        "ip",
+        [
+            make_ipv4("1.1.1.1", "2.2.2.2", protocol=51),
+            make_ipv6("fe80::1", "fe80::2", next_header=0),
+        ],
+        ids=["ipv4-ah", "ipv6-hop-by-hop"],
+    )
+    def test_the_protocol_is_the_transports_not_the_ip_headers(
+        self, ip, transport, number
+    ):
+        """IPv4.protocol / IPv6.next_header name whatever follows the
+        IP header — AH (51) or an extension header (0) as readily as
+        the transport — so the key's protocol comes from the transport
+        layer itself."""
+        assert flow_key(transport, ip=ip).protocol == number
 
     def test_non_tcp_udp_transport_returns_none(self):
         """ICMP (or anything else without ports) has no flow to key on:
@@ -195,3 +216,109 @@ class TestPacketFlowKey:
 
     def test_empty_packet_returns_none(self):
         assert Packet().flow_key() is None
+
+
+def make_ah(next_header: int, cls: type[AH] = AH) -> AH:
+    """HMAC-SHA-256-128-sized AH: a 16-byte ICV, padded to 20 under
+    IPv6 to keep the header a multiple of 8 octets."""
+    icv = bytes(16) if cls is AH else bytes(20)
+    return cls(
+        next_header=next_header,
+        payload_len=(12 + len(icv)) // 4 - 2,
+        reserved=0,
+        spi=0x99,
+        sequence_number=1,
+        icv=icv,
+    )
+
+
+def wire(ip: IPv4 | IPv6, *rest: Protocol) -> bytes:
+    """``Ethernet → ip → rest...`` as bytes, with ``ip``'s length field
+    covering ``rest`` so the frame decodes as a real capture would."""
+    length = sum(layer.header_len for layer in rest)
+    if isinstance(ip, IPv4):
+        ip = replace(ip, total_length=ip.header_len + length)
+    else:
+        ip = replace(ip, payload_length=length)
+    eth = Ethernet(
+        dst="02:00:00:00:00:02",
+        src="02:00:00:00:00:01",
+        ethertype=0x0800 if isinstance(ip, IPv4) else 0x86DD,
+    )
+    return bytes(Packet(eth, ip, *rest).with_checksums())
+
+
+HOP_BY_HOP_TO_TCP = IPv6HopByHopOptions(
+    next_header=6, hdr_ext_len=0, options=b"\x01\x04" + bytes(4)
+)
+
+
+class TestHeadersBetweenIPAndTransport:
+    """AH and IPv6 extension headers sit between the IP header and the
+    transport, so the IP header's protocol field names them, not the
+    transport. Behind AH or a Hop-by-Hop header the flow is the same
+    conversation with or without them, so it must key the same. (A
+    Routing header with segments left is different: its IP header's
+    destination is the next segment, so only the protocol number is
+    guaranteed there.)"""
+
+    @pytest.mark.parametrize(
+        ("wrapped", "plain", "between", "number"),
+        [
+            (
+                wire(
+                    make_ipv4("10.0.0.1", "10.0.0.2", 51),
+                    make_ah(6),
+                    make_tcp(40001, 80),
+                ),
+                wire(make_ipv4("10.0.0.1", "10.0.0.2", 6), make_tcp(40001, 80)),
+                AH,
+                6,
+            ),
+            (
+                wire(
+                    make_ipv4("10.0.0.1", "10.0.0.2", 51),
+                    make_ah(17),
+                    make_udp(40002, 9),
+                ),
+                wire(make_ipv4("10.0.0.1", "10.0.0.2", 17), make_udp(40002, 9)),
+                AH,
+                17,
+            ),
+            (
+                wire(
+                    make_ipv6("2001:db8::1", "2001:db8::2", 51),
+                    make_ah(6, AHv6),
+                    make_tcp(40001, 80),
+                ),
+                wire(
+                    make_ipv6("2001:db8::1", "2001:db8::2", 6),
+                    make_tcp(40001, 80),
+                ),
+                AHv6,
+                6,
+            ),
+            (
+                wire(
+                    make_ipv6("2001:db8::1", "2001:db8::2", 0),
+                    HOP_BY_HOP_TO_TCP,
+                    make_tcp(40001, 80),
+                ),
+                wire(
+                    make_ipv6("2001:db8::1", "2001:db8::2", 6),
+                    make_tcp(40001, 80),
+                ),
+                IPv6HopByHopOptions,
+                6,
+            ),
+        ],
+        ids=["ipv4-ah-tcp", "ipv4-ah-udp", "ipv6-ahv6-tcp", "ipv6-hbh-tcp"],
+    )
+    def test_keys_like_the_unwrapped_flow(
+        self, wrapped, plain, between, number
+    ):
+        packet = decode_frame(wrapped)
+        assert type(packet.layers[2]) is between  # the wrapper decoded
+        key = packet.flow_key()
+        assert key == decode_frame(plain).flow_key()
+        assert key is not None and key.protocol == number

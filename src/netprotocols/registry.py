@@ -37,7 +37,10 @@ IPv6 extension headers must be reachable only inside an IPv6 chain, or
 a garbage IPv4 packet with ``protocol=0`` would conjure a Hop-by-Hop
 layer. So the shared entries are registered once in ``ip.proto`` and
 inherited, while the extension headers are registered directly in
-``ip.proto.v6`` and stay there.
+``ip.proto.v6`` and stay there. A direct registration in the child
+also shadows an inherited key: protocol 51 is ``AH`` in ``ip.proto``
+but ``AHv6`` in ``ip.proto.v6``, so that what follows AH dispatches in
+its own family's table.
 
 Inheritance is resolved **when you register, not when you look up**: a
 write to a parent table is copied into every child that has not

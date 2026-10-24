@@ -84,6 +84,7 @@ class TestCorpusFiguresInDocs:
             "vlan.py",
             "gre.py",
             "esp.py",
+            "ah.py",
             "dhcp.py",
             "http.py",
             "vxlan.py",

@@ -180,6 +180,17 @@ def raw_esp_packet() -> bytes:
 
 
 @pytest.fixture
+def raw_ah_header() -> bytes:
+    """AH header (SPI 0x20000001, sequence 1) from ``ah.pcap``:
+    Payload Len 5 (28 bytes), Next Header 6, then the 16-byte
+    HMAC-SHA-256-128 ICV, followed by the TCP SYN it protects."""
+    return bytes.fromhex(
+        "060500002000000100000001e91ff0893d37de87e576dc91a70ddbe2"
+        "9c4100504e500001000000006002faf0883e0000020405b4"
+    )
+
+
+@pytest.fixture
 def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""

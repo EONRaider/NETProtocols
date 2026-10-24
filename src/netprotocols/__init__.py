@@ -18,6 +18,7 @@ from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.vlan import VLAN
+from netprotocols.layer3.ah import AH, AHv6
 from netprotocols.layer3.esp import ESP
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
@@ -87,6 +88,7 @@ _defaults.install(DEFAULT)
 __version__ = "2.3.0"
 
 __all__ = [
+    "AH",
     "ARP",
     "DEFAULT",
     "DHCP",
@@ -100,6 +102,7 @@ __all__ = [
     "UDP",
     "VLAN",
     "VXLAN",
+    "AHv6",
     "ARPHardwareType",
     "ARPOperation",
     "CapturedFrame",

@@ -727,11 +727,11 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:67-72` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 118
-frames**, across 20 scenarios captured with tcpdump over real kernel
+`tests/test_corpus.py:69-74` asserts `bytes(layer) ==
+frame[cursor:cursor+layer.header_len]` for **every layer of all 124
+frames**, across 21 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies and of script-built
-IPsec ESP. Every frame's checksums, and every ESP ICV, verify
+IPsec ESP and AH. Every frame's checksums, and every ESP and AH ICV, verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
@@ -741,11 +741,12 @@ Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that five TLV/name accessors never hang, that `HTTP`'s accessors never
 raise at all, and that `bytes(decode(x)) == x` is Hypothesis-generated
-for **all 21** protocols, up from 4. `tests/strategies.py` holds one
+for **all 23** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 17 without a hand-written one (#97 added the first
-14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th). Reproduce:
+property over the 19 without a hand-written one (#97 added the first
+14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
+`AHv6` the 18th and 19th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -768,8 +769,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,755 statements, 1 missed (99.96%; re-measured 2026-10-24, after
-ESP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+2,827 statements, 1 missed (99.96%; re-measured 2026-10-24, after
+AH, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
@@ -818,7 +819,7 @@ functions: the built-in decoders go in through the same public
 `register()` a third party calls (`src/netprotocols/_defaults.py`), so
 there is no privileged path and nothing to fall out of sync.
 
-Reproduce: `uv run pytest tests/test_registry.py` — 39 tests covering
+Reproduce: `uv run pytest tests/test_registry.py` — 40 tests covering
 registration, conflict handling, table inheritance and isolation from
 the process-wide default.
 
@@ -983,7 +984,7 @@ No message string changed to make this true — every existing `str(err)`
 and `match=` assertion in the suite holds unchanged; the diagnostic
 fields are additive.
 
-Reproduce: `uv run pytest tests/test_diagnostics.py` — 36 tests across
+Reproduce: `uv run pytest tests/test_diagnostics.py` — 37 tests across
 all three raise shapes (decode-time, construction-time, on-demand
 property) plus the rebasing behaviour end to end.
 

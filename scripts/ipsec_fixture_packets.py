@@ -7,14 +7,14 @@ stdlib only, and never imports netprotocols, for the same reason
 the library, not be shaped by it.
 
 The packets are genuine IPsec, not random bytes: ESP with NULL
-encryption (RFC 2410) and HMAC-SHA-256-128 integrity (RFC 4868), so the
-payload stays readable and every ICV verifies with the published test
-keys (``tests/fixtures/MANIFEST.md``).
+encryption (RFC 2410) and AH, both with HMAC-SHA-256-128 integrity (RFC
+4868), so every payload stays readable and every ICV verifies with the
+published test keys (``tests/fixtures/MANIFEST.md``).
 
 Usage::
 
-    python3 scripts/ipsec_fixture_packets.py send esp SENT_LOG
-    python3 scripts/ipsec_fixture_packets.py compare esp PCAP SENT_LOG
+    python3 scripts/ipsec_fixture_packets.py send esp|ah SENT_LOG
+    python3 scripts/ipsec_fixture_packets.py compare esp|ah PCAP SENT_LOG
 
 ``send`` transmits the packets to 10.9.11.2 and records what it built
 in ``SENT_LOG``; ``compare`` reads the capture back and reports, frame
@@ -42,13 +42,21 @@ INNER_DST = "192.0.2.2"
 
 PROTO_IPIP = 4
 PROTO_ICMP = 1
+PROTO_TCP = 6
 PROTO_UDP = 17
 PROTO_ESP = 50
+PROTO_AH = 51
 
 #: HMAC-SHA-256-128 (RFC 4868 §2.3): the HMAC truncated to 128 bits.
 ICV_LEN = 16
 
 ESP_PAYLOAD = b"NETProtocols ESP fixture"
+AH_PAYLOAD = b"NETProtocols AH fixture"
+
+#: DSCP AF11 on every AH packet's outer header. TOS is one of the
+#: fields AH's ICV treats as mutable (RFC 4302 §3.3.3.1.1.1), so a
+#: non-zero value shows the verifier zeroing it.
+AH_TOS = 0x28
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,30 @@ ESP_TUNNEL = SA(
     0x10000002,
     bytes.fromhex(
         "4bc3ce948208049b2f5016e06616867773924d2ccb4dab8b3aff93e6d26f3834"
+    ),
+)
+ESP_BUNDLE = SA(
+    0x10000003,
+    bytes.fromhex(
+        "107c873bdbb0c7a11be8aa1d9064e51f63b26098412295c3bd6785958abd44d4"
+    ),
+)
+AH_TRANSPORT = SA(
+    0x20000001,
+    bytes.fromhex(
+        "8eaa03a41a3b08f31a67f3a4b7fd78a2bf3d963a97b0af5a104301ef8fbff685"
+    ),
+)
+AH_TUNNEL = SA(
+    0x20000002,
+    bytes.fromhex(
+        "d2142153fb758a3f698e45720e2af765b2ada021d70ac1bcbde1f5bc38514fd1"
+    ),
+)
+AH_BUNDLE = SA(
+    0x20000003,
+    bytes.fromhex(
+        "008a9a220d8c1bf5edec1838a724b588364c08314bf93206985e776c385e1c7a"
     ),
 )
 
@@ -103,6 +135,22 @@ def udp(src: str, dst: str, sport: int, dport: int, payload: bytes) -> bytes:
     datagram = struct.pack("!HHHH", sport, dport, length, 0) + payload
     checksum = internet_checksum(pseudo + datagram) or 0xFFFF
     return datagram[:6] + struct.pack("!H", checksum) + datagram[8:]
+
+
+def tcp_syn(src: str, dst: str, sport: int, dport: int, seq: int) -> bytes:
+    """A SYN carrying an MSS option (RFC 9293 §3.7.1), no payload."""
+    options = struct.pack("!BBH", 2, 4, 1460)
+    segment = (
+        struct.pack(
+            "!HHIIBBHHH", sport, dport, seq, 0, 6 << 4, 0x02, 64240, 0, 0
+        )
+        + options
+    )
+    pseudo = (
+        addr(src) + addr(dst) + struct.pack("!BBH", 0, PROTO_TCP, len(segment))
+    )
+    checksum = internet_checksum(pseudo + segment)
+    return segment[:16] + struct.pack("!H", checksum) + segment[18:]
 
 
 def ipv4(
@@ -152,6 +200,45 @@ def esp(sa: SA, seq: int, next_header: int, payload: bytes) -> bytes:
     return protected + icv(sa.key, protected)
 
 
+def ah_datagram(
+    sa: SA, seq: int, next_header: int, payload: bytes, *, identification: int
+) -> bytes:
+    """A whole IPv4 datagram protected by AH with HMAC-SHA-256-128.
+
+    The ICV covers the IPv4 header with its mutable fields — TOS,
+    flags and fragment offset, TTL, header checksum — zeroed, then the
+    AH header with its ICV zeroed, then the payload (RFC 4302 §3.3.3).
+    That is why the script builds the IPv4 header itself and sends it
+    with IP_HDRINCL: the identification and every other immutable field
+    on the wire must be the ones that were authenticated.
+    """
+    payload_len = (12 + ICV_LEN) // 4 - 2  # 28 bytes, IPv4-aligned
+    ah = struct.pack("!BBHII", next_header, payload_len, 0, sa.spi, seq)
+    blank = ah + bytes(ICV_LEN) + payload
+    header = ipv4(
+        SRC,
+        DST,
+        PROTO_AH,
+        blank,
+        identification=identification,
+        tos=AH_TOS,
+    )[:20]
+    # The same header as the ICV sees it: TOS (byte 1), flags and
+    # fragment offset (bytes 6-7), TTL (byte 8) and the checksum (bytes
+    # 10-11) zeroed; version/IHL, total length, identification,
+    # protocol and the addresses kept.
+    immutable = (
+        header[:1]
+        + bytes(1)
+        + header[2:6]
+        + bytes(3)
+        + header[9:10]
+        + bytes(2)
+        + header[12:]
+    )
+    return header + ah + icv(sa.key, immutable + blank) + payload
+
+
 def inner_ipv4(identification: int, protocol: int, payload: bytes) -> bytes:
     return ipv4(
         INNER_SRC,
@@ -192,6 +279,64 @@ def esp_packets() -> list[bytes]:
     ]
 
 
+def ah_datagrams() -> list[bytes]:
+    """The AH datagrams, in send order, outer IPv4 header included."""
+    return [
+        # Transport mode: AH between the IPv4 header and the transport,
+        # whose pseudo-header is still the IPv4 header's.
+        ah_datagram(
+            AH_TRANSPORT,
+            1,
+            PROTO_TCP,
+            tcp_syn(SRC, DST, 40001, 80, 0x4E500001),
+            identification=0xA101,
+        ),
+        ah_datagram(
+            AH_TRANSPORT,
+            2,
+            PROTO_ICMP,
+            icmp_echo(1, AH_PAYLOAD),
+            identification=0xA102,
+        ),
+        ah_datagram(
+            AH_TRANSPORT,
+            3,
+            PROTO_UDP,
+            udp(SRC, DST, 40002, 9, AH_PAYLOAD),
+            identification=0xA103,
+        ),
+        # Tunnel mode: a whole inner IPv4 packet, which the ICV covers
+        # entirely, mutable fields and all (RFC 4302 §3.1.2).
+        ah_datagram(
+            AH_TUNNEL,
+            1,
+            PROTO_IPIP,
+            inner_ipv4(0x0201, PROTO_ICMP, icmp_echo(1, AH_PAYLOAD)),
+            identification=0xA104,
+        ),
+        ah_datagram(
+            AH_TUNNEL,
+            2,
+            PROTO_IPIP,
+            inner_ipv4(
+                0x0202,
+                PROTO_TCP,
+                tcp_syn(INNER_SRC, INNER_DST, 40003, 80, 0x4E500002),
+            ),
+            identification=0xA105,
+        ),
+        # A transport-adjacency bundle (RFC 4301 §4.5): AH over ESP, the
+        # ESP packet protecting an ICMP echo and AH protecting both.
+        ah_datagram(
+            AH_BUNDLE,
+            1,
+            PROTO_ESP,
+            esp(ESP_BUNDLE, 1, PROTO_ICMP, icmp_echo(1, AH_PAYLOAD)),
+            identification=0xA106,
+        ),
+    ]
+
+
 def send(kind: str, log: Path) -> None:
     sent: list[str] = []
     if kind == "esp":
@@ -201,6 +346,15 @@ def send(kind: str, log: Path) -> None:
             for packet in esp_packets():
                 s.sendto(packet, (DST, 0))
                 sent.append(packet.hex())
+    elif kind == "ah":
+        # IPPROTO_RAW implies IP_HDRINCL: the script's IPv4 header goes
+        # out as built, because AH's ICV covers it.
+        with socket.socket(
+            socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW
+        ) as s:
+            for datagram in ah_datagrams():
+                s.sendto(datagram, (DST, 0))
+                sent.append(datagram.hex())
     else:
         raise SystemExit(f"unknown packet kind {kind!r}")
     log.write_text("\n".join(sent) + "\n")
@@ -235,6 +389,13 @@ def compare(kind: str, pcap: Path, log: Path) -> int:
             identical = wire[ihl:] == built
             ident, ttl = struct.unpack_from("!H", wire, 4)[0], wire[8]
             note = f"kernel-built IPv4 header (id {ident:#06x}, ttl {ttl})"
+        elif kind == "ah":
+            # The script built the whole datagram. Under IP_HDRINCL the
+            # kernel still rewrites the total length and the header
+            # checksum; identical bytes mean it rewrote them to the
+            # script's own values.
+            identical = wire == built
+            note = "whole datagram script-built (IP_HDRINCL)"
         else:
             raise SystemExit(f"unknown packet kind {kind!r}")
         verdict = "identical" if identical else "DIFFERS"

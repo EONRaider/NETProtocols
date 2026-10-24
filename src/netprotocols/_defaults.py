@@ -50,6 +50,15 @@ IPV6_ONLY_NUMBERS = frozenset(
     }
 )
 
+#: Protocol numbers both IP families reach, but through a different
+#: class in each: the ``ip.proto.v6`` entry deliberately overrides the
+#: one ``ip.proto`` would pass down. AH (RFC 4302) has the same wire
+#: format after IPv4 and IPv6, but chains onward through its own
+#: ``next_header``, and must do so through its own family's table — or
+#: IPv4 -> AH -> 0 would conjure a Hop-by-Hop layer, and IPv6 -> AH ->
+#: Destination Options (RFC 8200 §4.1) would stop dead.
+FAMILY_SPECIFIC_NUMBERS = frozenset({IPProtocol.AH})
+
 
 def install(registry: Registry) -> None:
     """Register every built-in decoder on ``registry``.
@@ -59,6 +68,7 @@ def install(registry: Registry) -> None:
     """
     from netprotocols.layer2.arp import ARP
     from netprotocols.layer2.vlan import VLAN
+    from netprotocols.layer3.ah import AH, AHv6
     from netprotocols.layer3.esp import ESP
     from netprotocols.layer3.gre import GRE
     from netprotocols.layer3.icmp import ICMPv4, ICMPv6
@@ -102,6 +112,13 @@ def install(registry: Registry) -> None:
     # IPsec ESP (RFC 4303) is the same header after either IP version,
     # and a dead end after both: its payload is opaque without the keys.
     add(TABLE_IP_PROTO, IPProtocol.ESP, ESP)
+
+    # IPsec AH (RFC 4302) — see FAMILY_SPECIFIC_NUMBERS. The v6 entry is
+    # registered first: it is then the v6 table's own, so the ip.proto
+    # entry that follows is not inherited over it (and does not
+    # conflict with it).
+    add(TABLE_IP_PROTO_V6, IPProtocol.AH, AHv6)
+    add(TABLE_IP_PROTO, IPProtocol.AH, AH)
 
     # IPv6 chain only — see IPV6_ONLY_NUMBERS.
     add(TABLE_IP_PROTO_V6, IPProtocol.HOPOPT, IPv6HopByHopOptions)

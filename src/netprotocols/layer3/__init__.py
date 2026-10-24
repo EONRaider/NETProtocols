@@ -1,3 +1,4 @@
+from netprotocols.layer3.ah import AH, AHv6
 from netprotocols.layer3.esp import ESP
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6, NDPOption
@@ -12,9 +13,11 @@ from netprotocols.layer3.ipv6_ext import (
 )
 
 __all__ = [
+    "AH",
     "ESP",
     "GRE",
     "IGMP",
+    "AHv6",
     "ICMPv4",
     "ICMPv6",
     "IGMPv3GroupRecord",

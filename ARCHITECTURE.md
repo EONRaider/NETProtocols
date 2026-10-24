@@ -254,6 +254,16 @@ flowchart LR
   X -->|6| T
   X -->|17| U
   X -->|50| ESP
+  I4 -->|51| AH[AH]
+  AH -->|6| T
+  AH -->|17| U
+  AH -->|50| ESP
+  I6 -->|51| AH6[AHv6]
+  X -->|51| AH6
+  AH6 -->|0, 43, 44, 60| X
+  AH6 -->|6| T
+  AH6 -->|17| U
+  AH6 -->|50| ESP
   U -->|4789| VX[VXLAN]
   VX -->|always| E
 ```
@@ -267,6 +277,17 @@ Fragment header chains onward only when `fragment_offset == 0` — a
 non-first fragment carries a slice from the middle of the original
 payload, so no upper-layer header exists at its start. The same
 offset rule applies to fragmented IPv4.
+
+IPsec's AH chains the same way, through its own `next_header`, onward
+to anything the IP header before it could have carried (the diagram
+draws only the transport, ESP and extension-header edges). It is the
+one header that comes as a pair for that reason: `AH` after IPv4 and
+`AHv6` after IPv6 have one wire format but dispatch through their own
+family's table, so IPv4 → AH → `0` stops rather than conjuring a
+Hop-by-Hop layer, while IPv6 → AH → Destination Options — an order
+RFC 8200 §4.1 permits — keeps decoding. ESP, the other IPsec header,
+ends the walk: what it carries is named only inside its protected
+trailer.
 
 VLAN tags chain the same way: a tag's `next_protocol` dispatches the
 inner EtherType through the same registry Ethernet uses, so a QinQ
@@ -283,7 +304,8 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP — no
-collisions).
+collisions; 51 is AH in both, decoded by a class of each family's
+own).
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -323,19 +345,30 @@ field they dispatch on:
 | Table | Dispatches on | Read by |
 |---|---|---|
 | `ethertype` | Ethernet II EtherType | `Ethernet`, `VLAN`, `GRE` |
-| `ip.proto` | IPv4 `protocol` | `IPv4` |
-| `ip.proto.v6` | IPv6 `next_header` | `IPv6`, extension headers |
+| `ip.proto` | IPv4 `protocol` | `IPv4`, `AH` |
+| `ip.proto.v6` | IPv6 `next_header` | `IPv6`, extension headers, `AHv6` |
 | `udp.port` | UDP well-known port | `UDP` |
 | `tcp.port` | TCP well-known port | `TCP` |
 
 `ip.proto.v6` **inherits** `ip.proto`: the two share a number space
 but not a table, because the four extension headers must be reachable
-only inside an IPv6 chain. Registering in `ip.proto` reaches both;
-registering in `ip.proto.v6` reaches the v6 chain alone. Inheritance
+only inside an IPv6 chain. Registering in `ip.proto` reaches both,
+except at a key `ip.proto.v6` owns itself (51, below); registering in
+`ip.proto.v6` reaches the v6 chain alone. Inheritance
 is resolved when you register, not when you look up, so the gating
 costs nothing on the hot path — an IPv4 packet with `protocol=0`
 cannot conjure a Hop-by-Hop layer because the table it reads has no
 entry for `0`.
+
+A child's own registration also *shadows* the inherited entry, which
+is how AH's pair is wired: `AHv6` is registered in `ip.proto.v6` first,
+then `AH` in `ip.proto`, and the parent write is not inherited over a
+key the child already owns. That works the other way round too: a
+third party replacing protocol 51 in `ip.proto` (`override=True`)
+changes IPv4 dispatch only, and must register in `ip.proto.v6` as well
+to reach IPv6. `_defaults.FAMILY_SPECIFIC_NUMBERS` names the numbers
+wired this way, and the tests hold the two tables to differing at
+those keys alone.
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its
@@ -530,6 +563,7 @@ src/netprotocols/
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
+│                   ah.py (IPsec AH: AH + AHv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
