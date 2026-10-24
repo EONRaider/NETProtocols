@@ -43,11 +43,13 @@ __all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 #: The flat ``ip.proto`` and ``ip.proto.v6`` dispatch tables of the
 #: default registry, bound once at import. The v6 table inherits the
-#: other and adds the four extension headers, so the IPv6-only gating
-#: is the table's shape rather than a test on the hot path: an IPv4
-#: packet with ``protocol=0`` cannot conjure a Hop-by-Hop layer because
-#: the table it reads has no entry for 0. Registering mutates these
-#: dicts in place, so the references stay live — see
+#: other, adds the four extension headers, and holds its own entry for
+#: AH (51), ``AHv6``, where IPv4's holds ``AH``
+#: (``_defaults.FAMILY_SPECIFIC_NUMBERS``). So the per-family gating is
+#: the tables' shape rather than a test on the hot path: an IPv4 packet
+#: with ``protocol=0`` cannot conjure a Hop-by-Hop layer because the
+#: table it reads has no entry for 0. Registering mutates these dicts
+#: in place, so the references stay live — see
 #: :mod:`netprotocols.registry`.
 _IPV4_PROTOCOL_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(
     TABLE_IP_PROTO

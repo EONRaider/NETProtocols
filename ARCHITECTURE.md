@@ -349,8 +349,9 @@ field they dispatch on:
 
 `ip.proto.v6` **inherits** `ip.proto`: the two share a number space
 but not a table, because the four extension headers must be reachable
-only inside an IPv6 chain. Registering in `ip.proto` reaches both;
-registering in `ip.proto.v6` reaches the v6 chain alone. Inheritance
+only inside an IPv6 chain. Registering in `ip.proto` reaches both,
+except at a key `ip.proto.v6` owns itself (51, below); registering in
+`ip.proto.v6` reaches the v6 chain alone. Inheritance
 is resolved when you register, not when you look up, so the gating
 costs nothing on the hot path — an IPv4 packet with `protocol=0`
 cannot conjure a Hop-by-Hop layer because the table it reads has no

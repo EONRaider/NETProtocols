@@ -128,26 +128,27 @@ class Packet:
         first TCP/UDP layer and the IPv4/IPv6 header nearest before it,
         and delegating to :func:`~netprotocols.flow.flow_key`.
 
-        Nearest, not first: a tunnel (IP-in-IP, GRE) stacks an outer IP
-        header whose addresses are the tunnel's endpoints and whose
-        protocol number is the tunnel's (4, 41, 47), not the
-        conversation's.
+        Nearest, not first: a tunnel (IP-in-IP, GRE, IPsec tunnel mode)
+        stacks an outer IP header whose addresses are the tunnel's
+        endpoints, not the conversation's. Layers between that IP header
+        and the transport (IPv6 extension headers, AH) are skipped and
+        do not change the key, whose protocol number is the
+        transport's own.
 
         ``None`` if either layer is missing — a packet with no
         transport layer, or a bare TCP/UDP segment built without an IP
         header before it — and ``None`` for a transport layer with no
         ports to key on (ICMP; see :func:`~netprotocols.flow.flow_key`).
         """
+        from netprotocols.flow import _TRANSPORTS
         from netprotocols.flow import flow_key as _flow_key
         from netprotocols.layer3.ip import IPv4, IPv6
-        from netprotocols.layer4.tcp import TCP
-        from netprotocols.layer4.udp import UDP
 
         ip: IPv4 | IPv6 | None = None
         for layer in self.layers:
             if isinstance(layer, (IPv4, IPv6)):
                 ip = layer
-            elif isinstance(layer, (TCP, UDP)):
+            elif isinstance(layer, _TRANSPORTS):
                 return None if ip is None else _flow_key(layer, ip=ip)
         return None
 

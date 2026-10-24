@@ -22,15 +22,40 @@ accessor that doesn't apply (the NDP accessors in
 
 from __future__ import annotations
 
+import typing
 from typing import NamedTuple
 
 from netprotocols._base import Protocol
+from netprotocols._enums import IPProtocol
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["FlowKey", "flow_key"]
+
+
+class _PortedLayer(typing.Protocol):
+    """What :func:`flow_key` reads from a transport layer."""
+
+    @property
+    def src_port(self) -> int: ...
+
+    @property
+    def dst_port(self) -> int: ...
+
+
+#: The transport layers :func:`flow_key` keys on, each with the IP
+#: protocol number that names it — one entry per transport, read by
+#: :meth:`Packet.flow_key <netprotocols.packet.Packet.flow_key>` too.
+#: The number comes from here, not from the enclosing IP header: that
+#: header's ``protocol`` / ``next_header`` names whatever directly
+#: follows it, which may be an IPv6 extension header or IPsec AH.
+_TRANSPORT_PROTOCOLS: dict[type[_PortedLayer], int] = {
+    TCP: IPProtocol.TCP.value,
+    UDP: IPProtocol.UDP.value,
+}
+_TRANSPORTS = tuple(_TRANSPORT_PROTOCOLS)
 
 
 class FlowKey(NamedTuple):
@@ -48,9 +73,12 @@ class FlowKey(NamedTuple):
     :param addr_b: The other endpoint address.
     :param port_a: The port paired with ``addr_a``.
     :param port_b: The port paired with ``addr_b``.
-    :param protocol: The IP protocol number (``IPv4.protocol`` /
-        ``IPv6.next_header``) of the transport layer, e.g. ``6`` for
-        TCP.
+    :param protocol: The IP protocol number of the transport layer:
+        ``6`` for TCP, ``17`` for UDP. It names the transport itself,
+        so it is the same whether the segment follows its IP header
+        directly or behind IPv6 extension headers or IPsec AH, where
+        the IP header's own ``protocol`` / ``next_header`` names the
+        first of those instead.
     """
 
     addr_a: str
@@ -72,14 +100,14 @@ def flow_key(
         does not apply to.
     :param ip: The enclosing :class:`~netprotocols.IPv4` /
         :class:`~netprotocols.IPv6` header, keyword-only. Required
-        when ``layer`` is TCP/UDP, since the addresses come from it —
-        ``IPv4.protocol`` and ``IPv6.next_header`` are the same
-        semantic field under different names, so this reads whichever
-        one ``ip`` actually has.
+        when ``layer`` is TCP/UDP, since the addresses come from it.
+        Only its addresses are read: the protocol number is
+        ``layer``'s own, so headers between ``ip`` and ``layer`` (IPv6
+        extension headers, AH) do not change the key.
     :raises InvalidFieldError: ``layer`` is TCP/UDP but ``ip`` is
         ``None``.
     """
-    if not isinstance(layer, (TCP, UDP)):
+    if not isinstance(layer, _TRANSPORTS):
         return None
     if ip is None:
         raise InvalidFieldError(
@@ -89,7 +117,11 @@ def flow_key(
             protocol=type(layer),
             field="ip",
         )
-    protocol_number = ip.protocol if isinstance(ip, IPv4) else ip.next_header
+    protocol_number = next(
+        number
+        for transport, number in _TRANSPORT_PROTOCOLS.items()
+        if isinstance(layer, transport)
+    )
     a = (ip.src, layer.src_port)
     b = (ip.dst, layer.dst_port)
     lo, hi = (a, b) if a <= b else (b, a)

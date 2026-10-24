@@ -170,6 +170,11 @@ class TestTableInheritance:
     def test_shared_numbers_differ_only_where_the_family_matters(self):
         """Every number both tables hold names the same class, except
         the family-specific ones, whose v6 entry is the table's own."""
+        # FAMILY_SPECIFIC_NUMBERS only describes the wiring, and the
+        # comparison below trusts it: pinned literally, so widening it
+        # (and with it what this test allows) is a deliberate change
+        # here, not a side effect of editing _defaults.
+        assert set(FAMILY_SPECIFIC_NUMBERS) == {51}
         registry = Registry()
         install(registry)
         base = registry.table(TABLE_IP_PROTO)

@@ -269,8 +269,10 @@ def esp_packets(draw: st.DrawFn) -> ESP:
     )
 
 
-#: Cap on an AH header's length in alignment steps — at most 160 bytes
-#: under IPv4, 320 under IPv6; Payload Len itself runs to 255.
+#: Cap on an AH header's length in alignment steps (one Payload Len
+#: unit under IPv4, two under IPv6), so a header is at most
+#: (40 + 2) * 4 = 168 bytes under IPv4 and (80 + 2) * 4 = 328 under
+#: IPv6; Payload Len itself runs to 255.
 _MAX_AH_STEPS = 40
 
 

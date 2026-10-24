@@ -134,25 +134,26 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   whole datagram with `IP_HDRINCL` (a raw `IPPROTO_RAW` socket).
   **What the script built: every byte of the IPv4 datagram** — header,
   AH with its ICV, and payload. **What the kernel did:** prepended the
-  Ethernet header, and it owns two header fields even under
+  Ethernet header, and it owns three header fields even under
   `IP_HDRINCL`: probed on the capture host, it replaced a deliberately
   wrong total length (0, 999) and a zero header checksum with the
   correct values, and filled in a zero source address (a zero
   identification with DF set it left as 0). The script sends correct
-  values for all of them, and its post-capture comparison found every
+  values for all three, and its post-capture comparison found every
   captured datagram byte-identical to the one it built — so whatever
-  the kernel recomputed, it recomputed to the bytes the ICV covers. Transport mode
-  protects a TCP SYN, an ICMPv4 echo and a UDP datagram, tunnel mode an
-  inner IPv4 packet (`192.0.2.1 → 192.0.2.2`) carrying an ICMPv4 echo
-  or a TCP SYN, and the last frame is an AH-over-ESP transport-adjacency
-  bundle (RFC 4301 §4.5). `check_fixtures` verifies each AH ICV with
-  the keys below, then what it protects: the transport checksums
-  against the outer header's pseudo-header, the inner IPv4 packet, or
-  the bundled ESP packet's own ICV, padding and payload. A frame on an
-  SPI not listed below fails, as does AH behind IPv4 header options or
-  an IPv6 header, whose ICV `check_fixtures` does not compute.
-  IPv6-outer AH, with the 4 bytes of ICV padding HMAC-SHA-256-128 needs
-  there, is covered by constructed frames in `tests/test_ah.py`.
+  the kernel recomputed, it recomputed to the bytes the ICV covers.
+  Transport mode protects a TCP SYN, an ICMPv4 echo and a UDP datagram,
+  tunnel mode an inner IPv4 packet (`192.0.2.1 → 192.0.2.2`) carrying an
+  ICMPv4 echo or a TCP SYN, and the last frame is an AH-over-ESP
+  transport-adjacency bundle (RFC 4301 §4.5). `check_fixtures` verifies
+  each AH ICV with the keys below, then what it protects: the transport
+  checksums against the outer header's pseudo-header, the inner IPv4
+  packet, or the bundled ESP packet's own ICV, padding and payload. A
+  frame on an SPI not listed below fails, as does AH behind IPv4 header
+  options or an IPv6 header, whose ICV `check_fixtures` does not
+  compute. IPv6-outer AH, with the 4 bytes of ICV padding
+  HMAC-SHA-256-128 needs there, is covered by constructed frames in
+  `tests/test_ah.py`.
 
 ### IPsec test keys
 
