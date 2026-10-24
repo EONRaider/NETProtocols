@@ -256,8 +256,11 @@ HOP_BY_HOP_TO_TCP = IPv6HopByHopOptions(
 class TestHeadersBetweenIPAndTransport:
     """AH and IPv6 extension headers sit between the IP header and the
     transport, so the IP header's protocol field names them, not the
-    transport. The flow is the same conversation with or without them,
-    so it must key the same."""
+    transport. Behind AH or a Hop-by-Hop header the flow is the same
+    conversation with or without them, so it must key the same. (A
+    Routing header with segments left is different: its IP header's
+    destination is the next segment, so only the protocol number is
+    guaranteed there.)"""
 
     @pytest.mark.parametrize(
         ("wrapped", "plain", "between", "number"),
