@@ -740,11 +740,11 @@ Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that five TLV/name accessors never hang, that `HTTP`'s accessors never
 raise at all, and that `bytes(decode(x)) == x` is Hypothesis-generated
-for **all 19** protocols, up from 4. `tests/strategies.py` holds one
+for **all 20** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 15 without a hand-written one (#97 added the first
-14; `HTTP` is the 15th). Reproduce:
+property over the 16 without a hand-written one (#97 added the first
+14; `HTTP` is the 15th, `VXLAN` the 16th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -767,9 +767,9 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,682 statements, 1 missed (99.96%; re-measured 2026-10-23, after
-IP-in-IP dispatch, and the miss is still `Packet.__eq__`'s
-`NotImplemented` branch). Enforced, not merely reported:
+2,723 statements, 1 missed (99.96%; re-measured 2026-10-24, after
+VXLAN, and the miss is still `Packet.__eq__`'s `NotImplemented`
+branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
 regression below the gate fails the build (#79).
