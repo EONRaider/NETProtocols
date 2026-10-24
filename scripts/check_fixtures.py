@@ -142,6 +142,10 @@ def _check_ipv4(
 ) -> list[str]:
     failures: list[str] = []
     ihl = (payload[0] & 0x0F) * 4
+    if ihl < 20 or ihl > len(payload):
+        # An IHL below 5 (RFC 791) or past the bytes leaves no header to
+        # check; reading on would slice empty addresses or crash.
+        return ["ipv4-ihl"]
     header = payload[:ihl]
     stats["ipv4"] += 1
     if (
@@ -444,6 +448,10 @@ def _check_l3(
         return ["nesting-too-deep"]
     if ethertype == 0x0806:
         stats["arp"] += 1
+        # ARP carries no checksum; under strict, at least insist on the
+        # 28-byte Ethernet/IPv4 form rather than vouching for a stub.
+        if strict and len(payload) < 28:
+            return ["unchecked-ethertype-0x0806"]
         return []
 
     if ethertype == 0x0800 and len(payload) >= 20:
