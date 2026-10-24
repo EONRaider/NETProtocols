@@ -207,6 +207,34 @@ def _check_ipv4(
     )
 
 
+def _check_transport_v4(
+    proto: int,
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool,
+) -> list[str] | None:
+    """Validate a transport carried directly over IPv4 (ICMP, IGMP,
+    TCP, UDP, SCTP), or return ``None`` when ``proto`` is none of them
+    or ``upper`` is too short for its header, leaving the tunnels and
+    the strict fallback to :func:`_check_upper_v4`."""
+    upper_len = len(upper)
+    if proto == 1 and upper_len >= 8:
+        return _check_icmpv4(upper, stats)
+    if proto == 2 and upper_len >= 8:
+        return _check_igmp(upper, stats)
+    if proto == 6 and upper_len >= 20:
+        return _check_tcp(src, dst, upper, stats)
+    if proto == 17 and upper_len >= 8:
+        return _check_udp(src, dst, upper, stats, depth, strict=strict)
+    if proto == 132 and upper_len >= 12:
+        return _check_sctp(upper, stats)
+    return None
+
+
 def _check_upper_v4(
     proto: int,
     ip_header: bytes,
@@ -234,19 +262,13 @@ def _check_upper_v4(
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     src, dst = ip_header[12:16], ip_header[16:20]
-    upper_len = len(upper)
-    if proto == 1 and upper_len >= 8:
-        return _check_icmpv4(upper, stats)
-    if proto == 2 and upper_len >= 8:
-        return _check_igmp(upper, stats)
-    if proto == 6 and upper_len >= 20:
-        return _check_tcp(src, dst, upper, stats)
-    if proto == 17 and upper_len >= 8:
-        return _check_udp(src, dst, upper, stats, depth, strict=strict)
-    if proto == 47 and upper_len >= 4:
+    transport = _check_transport_v4(
+        proto, src, dst, upper, stats, depth, strict=strict
+    )
+    if transport is not None:
+        return transport
+    if proto == 47 and len(upper) >= 4:
         return _check_gre(src, dst, upper, stats, depth, strict=strict)
-    if proto == 132 and upper_len >= 12:
-        return _check_sctp(upper, stats)
     if proto in _IP_IN_IP:
         return _check_ip_in_ip(proto, upper, stats, depth, strict=strict)
     if proto == 50:
@@ -546,6 +568,30 @@ def _check_ipv6(
     )
 
 
+def _check_transport_v6(
+    next_header: int,
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool,
+) -> list[str] | None:
+    """The IPv6 counterpart of :func:`_check_transport_v4` (ICMPv6,
+    TCP, UDP, SCTP)."""
+    upper_len = len(upper)
+    if next_header == 58 and upper_len >= 4:
+        return _check_icmpv6(src, dst, upper, stats)
+    if next_header == 6 and upper_len >= 20:
+        return _check_tcp6(src, dst, upper, stats)
+    if next_header == 17 and upper_len >= 8:
+        return _check_udp6(src, dst, upper, stats, depth, strict=strict)
+    if next_header == 132 and upper_len >= 12:
+        return _check_sctp(upper, stats)
+    return None
+
+
 def _check_upper_v6(
     next_header: int,
     ip_header: bytes,
@@ -560,15 +606,11 @@ def _check_upper_v6(
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     src, dst = ip_header[8:24], ip_header[24:40]
-    upper_len = len(upper)
-    if next_header == 58 and upper_len >= 4:
-        return _check_icmpv6(src, dst, upper, stats)
-    if next_header == 6 and upper_len >= 20:
-        return _check_tcp6(src, dst, upper, stats)
-    if next_header == 17 and upper_len >= 8:
-        return _check_udp6(src, dst, upper, stats, depth, strict=strict)
-    if next_header == 132 and upper_len >= 12:
-        return _check_sctp(upper, stats)
+    transport = _check_transport_v6(
+        next_header, src, dst, upper, stats, depth, strict=strict
+    )
+    if transport is not None:
+        return transport
     if next_header in _IP_IN_IP:
         return _check_ip_in_ip(next_header, upper, stats, depth, strict=strict)
     if next_header == 50:
