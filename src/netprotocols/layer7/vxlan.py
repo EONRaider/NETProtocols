@@ -35,9 +35,8 @@ Construction checks only that each field fits its width, so
 the I flag clear: what a test of how another stack drops such headers
 needs to send. The I-flag rule is decode-only, and
 ``VXLAN.decode(bytes(header))`` raises for a header that constructed
-without complaint. That makes VXLAN the one class in this library
-whose constructor accepts what its own decoder refuses; the
-round-trip guarantee in ARCHITECTURE.md names the exception.
+without complaint, which ARCHITECTURE.md's round-trip guarantee
+allows for: it covers canonical headers, which this one is not.
 
 The rule is enforced on decode because the I flag is the decoder's one
 defence against a wrong guess. VXLAN is reached through ``udp.port``,

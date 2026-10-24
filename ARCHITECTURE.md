@@ -461,8 +461,9 @@ bytes instead.
 Every class also works in reverse. Constructors take the friendly
 forms (string addresses, integer fields), validate them in
 `__post_init__` (address formats; and IHL/data-offset must agree with
-`len(options)` — you cannot construct a self-contradictory header),
-and `bytes()` re-emits the exact on-wire form.
+`len(options)`), and `bytes()` re-emits the exact on-wire form. They
+do not check everything decode does, so some headers can be built that
+decode would never produce (see below).
 
 The test suite enforces the round trip in both directions for every
 protocol:
@@ -472,14 +473,19 @@ Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
 
-The first holds for every header a constructor accepts, with one
-deliberate exception. `VXLAN(flags=0, ...)` builds, so that a test of
-another stack can send a header with the I flag clear, but
-`VXLAN.decode()` rejects it, because the I flag is the decoder's guard
+The first holds for canonical headers: the ones decode itself
+produces. A constructor accepts more than that, and for those headers
+the first line can fail. Some spellings are normalised on the way
+back (a MAC written with dashes decodes with colons, an IPv6 address
+decodes compressed); some fields must agree with what announces them
+(GRE's optional `fields` with its flag bits); some decodes need the
+context a message was sent in (HTTP's `request_method` and `closed`);
+and VXLAN accepts a clear I flag on purpose, so that a test of another
+stack can send one, though `VXLAN.decode()` rejects it as its guard
 against a wrong port guess (see *Port-based dispatch is best-effort*).
-Every other constructor accepts at most what its own `decode()` does;
-the round-trip property tests generate VXLAN headers with the I flag
-set.
+The round-trip property tests generate canonical headers only: GRE
+fields derived from its flags, VXLAN with the I flag set, HTTP decoded
+with its context.
 
 One deliberate boundary: **decode and encode carry checksums
 verbatim** — exactly what you want when faithfully re-encoding
