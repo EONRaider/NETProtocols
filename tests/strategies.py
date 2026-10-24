@@ -268,8 +268,9 @@ def sctp_chunks(draw: st.DrawFn) -> SCTPChunk:
 
 @st.composite
 def sctp_headers(draw: st.DrawFn) -> SCTP:
-    # chunks is raw bytes that decode() must be able to walk, so it is
-    # built from whole, padded chunks rather than drawn as free bytes.
+    # chunks is built from whole, padded chunks rather than drawn as
+    # free bytes: decode() leaves a zero tail where a chunk would start
+    # undecoded, so free bytes ending in one would not round-trip.
     chunks = draw(st.lists(sctp_chunks(), max_size=4))
     return SCTP(
         src_port=draw(st.integers(0, 0xFFFF)),

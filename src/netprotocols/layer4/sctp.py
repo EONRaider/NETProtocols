@@ -6,24 +6,41 @@ those four header bytes and the value, then the value itself, padded
 with zero bytes to a multiple of 4. The padding is not counted in the
 length.
 
-SCTP has no length field of its own: the packet is the whole IP
-payload. The chain walk does not trim a frame to the IP header's
-declared length, so the buffer handed to :meth:`SCTP.decode` can end in
-link-layer padding: an Ethernet sender pads a frame to its 60-byte
-minimum, normally with zero bytes, so every IP datagram under 46 bytes
-arrives with a trailer — COOKIE ACK, SHUTDOWN, SHUTDOWN ACK, SHUTDOWN
-COMPLETE, a bare ABORT. ``decode`` therefore
-walks the chunk headers to find where the packet ends, and stops at a
-remainder made only of zero bytes, which can never begin a chunk (a
-chunk length below 4 is invalid). The walk is what bounds the packet,
-so the CRC32c checksum (:func:`netprotocols.checksum.crc32c`, which a
-trailing zero byte does change) covers exactly the packet's bytes.
+SCTP has no length field of its own: like ICMP and IGMP, the packet is
+the whole IP payload, and the chain walk does not trim a frame to the
+IP header's declared length. Unlike them, SCTP cannot simply keep that
+whole buffer: an Ethernet sender pads a frame to its 60-byte minimum,
+normally with zero bytes, so every IP datagram under 46 bytes arrives
+with a trailer (COOKIE ACK, SHUTDOWN, SHUTDOWN ACK, SHUTDOWN COMPLETE,
+a bare ABORT), and the CRC32c checksum
+(:func:`netprotocols.checksum.crc32c`) changes when zero bytes are
+appended, where the internet checksum ICMPv4 and IGMP use does not.
+``decode`` therefore walks the chunk headers to find where the packet
+ends, and stops at a remainder made only of zero bytes that starts
+where a chunk would, since that can never begin a chunk (a chunk
+length below 4 is invalid), so the checksum covers exactly the
+packet's bytes.
+
+Past the 12-byte common header, ``decode`` never raises. A remainder
+the walk cannot parse — a chunk cut short by a snap length, an IP
+fragment or an ICMP error's quote, a length below 4, a nonzero trailer
+such as an Ethernet FCS — is kept in ``chunks`` verbatim, so the ports,
+verification tag and checksum still decode, :attr:`SCTP.parsed_chunks`
+raises on it when asked, and :func:`~netprotocols.checksum.verify`
+returns ``False``, since the CRC covers bytes the sender did not send
+or misses bytes it did.
+
+One sender bug the walk cannot see past: a final chunk sent without
+its padding (RFC 9260 §3.2 requires it), followed by Ethernet's zero
+bytes, takes up to three of those zeros as its padding, so the decoded
+packet is longer than the one sent and does not verify.
 
 The chunks are kept as raw ``bytes``, padding and all, so
 ``bytes(SCTP.decode(x)) == x[:header_len]`` holds by construction, even
-for the nonzero padding a receiver must ignore (§3.2). The
-:attr:`SCTP.parsed_chunks` accessor splits them into :class:`SCTPChunk`
-objects on demand and never re-encodes.
+for the nonzero padding a receiver must ignore (§3.2) and for a
+remainder that does not parse. The :attr:`SCTP.parsed_chunks` accessor
+splits them into :class:`SCTPChunk` objects on demand and never
+re-encodes.
 """
 
 from __future__ import annotations
@@ -84,7 +101,8 @@ _CHUNK_TYPE_NAMES: dict[int, str] = {
 #: I-DATA (RFC 8260 §2.1) carry I(mmediate), U(nordered), B(eginning
 #: fragment) and E(nding fragment); ABORT (§3.3.7) and SHUTDOWN
 #: COMPLETE (§3.3.13) carry T, set when the sender reflected the
-#: receiver's own verification tag.
+#: verification tag it received, which is its own tag, instead of
+#: filling in the tag its peer expects.
 _DATA_FLAGS = ((0x08, "I"), (0x04, "U"), (0x02, "B"), (0x01, "E"))
 _T_FLAG = ((0x01, "T"),)
 _CHUNK_FLAG_NAMES: dict[int, tuple[tuple[int, str], ...]] = {
@@ -164,7 +182,7 @@ class SCTPChunk:
     def flags_str(self) -> str:
         """Space-separated names of the flags set on the chunk, for the
         types that define any: ``"B E"`` for an unfragmented DATA chunk,
-        ``"T"`` for an ABORT that reflects the receiver's tag. Empty for
+        ``"T"`` for an ABORT that carries the sender's own tag. Empty for
         other types; bits this library does not name are left out (read
         :attr:`flags` for them)."""
         return " ".join(
@@ -177,9 +195,10 @@ class SCTPChunk:
     def unrecognized_action(self) -> int:
         """What a receiver does with a chunk type it does not recognize
         — the two high bits of the type (RFC 9260 §3.2): ``0`` stop
-        processing the packet and discard it, ``1`` the same and report
-        the chunk in an ERROR chunk, ``2`` skip the chunk and continue,
-        ``3`` skip it, continue, and report it."""
+        processing the packet, discarding this chunk and every chunk
+        after it (the chunks before it were already processed), ``1``
+        the same and report the chunk in an ERROR chunk, ``2`` skip the
+        chunk and continue, ``3`` skip it, continue, and report it."""
         return self.type >> 6
 
 
@@ -278,19 +297,23 @@ class SCTP(Protocol):
         """Decode the common header and the chunks after it.
 
         The chunk headers are walked to find where the packet ends; a
-        trailing run of zero bytes is left undecoded as link-layer
-        padding (see the module docstring). Errors in the chunks name
-        ``field="chunks"`` with an ``offset`` relative to ``data``.
+        run of zero bytes where the next chunk would start is left
+        undecoded as link-layer padding. A remainder the walk cannot
+        parse is kept in :attr:`chunks` as is, so past the common header
+        this never raises (see the module docstring).
 
         :raises TruncatedHeaderError: if ``data`` is shorter than the
-            common header, ends inside a chunk header, or holds fewer
-            bytes than a chunk's length declares.
-        :raises InvalidFieldError: if a chunk's length is below 4.
+            12-byte common header.
         """
         src_port, dst_port, verification_tag, checksum = cls._unpack_fixed(data)
         end = cls._struct.size
-        for *_, chunk_end in _walk_chunks(data, end, cls):
-            end = chunk_end
+        try:
+            for *_, chunk_end in _walk_chunks(data, end, cls):
+                end = chunk_end
+        except (TruncatedHeaderError, InvalidFieldError):
+            # Unwalkable: keep the rest verbatim, for parsed_chunks to
+            # report and verify() to reject.
+            end = len(data)
         return cls(
             src_port=src_port,
             dst_port=dst_port,
@@ -332,9 +355,10 @@ class SCTP(Protocol):
         parsed on demand (RFC 9260 §3.2); their padding is dropped. A
         trailing run of zero bytes is padding and yields no chunk.
 
-        Never raises on a decoded instance — :meth:`decode` already
-        walked the same bytes. On a constructed one, errors name
-        ``field="chunks"`` with an ``offset`` relative to
+        Raises when :attr:`chunks` does not walk: on a decoded instance,
+        that is a remainder :meth:`decode` kept verbatim because it
+        could not parse it (a packet cut short, a nonzero trailer).
+        Errors name ``field="chunks"`` with an ``offset`` relative to
         :attr:`chunks`.
 
         :raises TruncatedHeaderError: if :attr:`chunks` ends inside a

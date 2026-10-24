@@ -273,8 +273,8 @@ exception in this library belongs to.
 
 `Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,
 for a header pair that never went through `decode_frame`) returns a
-canonical, direction-independent key for a TCP/UDP conversation — both
-directions of one flow produce the same key:
+canonical, direction-independent key for a TCP, UDP or SCTP
+conversation — both directions of one flow produce the same key:
 
 ```python
 request = decode_frame(client_to_server_frame)
@@ -283,7 +283,7 @@ assert request.flow_key() == reply.flow_key()
 ```
 
 It returns `None`, not an error, when there is nothing to key on: no
-enclosing IP layer, no TCP/UDP layer, or a transport layer without
+enclosing IP layer, no TCP/UDP/SCTP layer, or a transport layer without
 ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
 convention for message types that have none).
 

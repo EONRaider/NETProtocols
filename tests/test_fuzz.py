@@ -473,19 +473,40 @@ class TestTCPOptionAccessorSafety:
                     _ = option.value
 
 
+#: Bytes from a small alphabet, so chunk lengths of 4, 8 and below 4,
+#: zero tails and cut chunks turn up far more often than in free bytes.
+_sctp_like = st.lists(
+    st.sampled_from([0, 0, 0, 1, 3, 4, 5, 8, 0xFF]), max_size=96
+).map(bytes)
+
+
 class TestSCTPChunkAccessorSafety:
-    @given(data=fuzz_input)
-    def test_decoded_chunks_never_raise(self, data: bytes) -> None:
-        """decode() walks the chunks to bound the packet, so on a
-        decoded instance the accessor and every display helper must not
-        raise at all, and the walk must stay inside the buffer."""
-        with contextlib.suppress(ProtocolError):
-            sctp = SCTP.decode(data)
-            assert sctp.header_len <= len(data)
-            for chunk in sctp.parsed_chunks:
-                assert chunk.type_name
-                _ = chunk.flags_str
-                assert 0 <= chunk.unrecognized_action <= 3
+    @given(data=st.one_of(fuzz_input, _sctp_like))
+    def test_decode_never_raises_past_the_common_header(
+        self, data: bytes
+    ) -> None:
+        """Past the 12-byte common header decode() keeps whatever it
+        cannot walk, so it raises only on a shorter buffer. It leaves
+        undecoded nothing but a zero tail, round-trips exactly the
+        bytes it consumed, and the accessor raises only ProtocolError,
+        and only when decode() kept an unwalkable remainder."""
+        if len(data) < 12:
+            with pytest.raises(ProtocolError):
+                SCTP.decode(data)
+            return
+        sctp = SCTP.decode(data)
+        assert bytes(sctp) == data[: sctp.header_len]
+        assert not any(data[sctp.header_len :])
+        assert SCTP.decode(bytes(sctp)) == sctp
+        try:
+            chunks = sctp.parsed_chunks
+        except ProtocolError:
+            assert sctp.header_len == len(data)
+            return
+        for chunk in chunks:
+            assert chunk.type_name
+            _ = chunk.flags_str
+            assert 0 <= chunk.unrecognized_action <= 3
 
     @given(chunks=st.lists(sctp_chunks(), max_size=6))
     def test_built_chunks_parse_back(self, chunks: list[SCTPChunk]) -> None:

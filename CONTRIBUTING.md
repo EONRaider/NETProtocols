@@ -57,9 +57,11 @@ Every protocol is a frozen, slotted dataclass whose fields mirror the
 on-wire header. `decode(data)` receives the entire remaining buffer and
 must parse its fixed portion, tolerate trailing bytes, and raise a
 subclass of `ProtocolError` (never a bare `struct.error` or
-`ValueError`) on malformed input. (SCTP, which has no length field,
-finds its own extent instead and tolerates only zero padding after
-it.) The authoritative description lives in the module docstring of
+`ValueError`) on malformed input. (SCTP, which has no length field
+and a CRC32c that trailing zeros change, finds its own extent instead:
+it leaves only zero padding after it undecoded, and keeps any other
+trailing or unparseable bytes in its `chunks` rather than raising.)
+The authoritative description lives in the module docstring of
 [`src/netprotocols/_base.py`](src/netprotocols/_base.py) — read it
 before adding a protocol.
 

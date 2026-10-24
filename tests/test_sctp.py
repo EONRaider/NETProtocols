@@ -7,6 +7,7 @@ stack never sends are built here. CRC32c itself is tested in
 test_checksum.py, where the mutation audit's test selection reaches it.
 """
 
+import zlib
 from dataclasses import replace
 
 import pytest
@@ -15,6 +16,8 @@ from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     SCTP,
     Ethernet,
+    FlowKey,
+    ICMPv4,
     InvalidFieldError,
     IPProtocol,
     IPv4,
@@ -23,6 +26,7 @@ from netprotocols import (
     Packet,
     SCTPChunk,
     TruncatedHeaderError,
+    compute,
     decode_frame,
     verify,
 )
@@ -170,11 +174,35 @@ class TestLinkLayerPadding:
         raw = packet_bytes(3)
         assert SCTP.decode(raw + b"\x00\x00").header_len == len(raw)
 
-    def test_a_nonzero_trailer_is_not_padding(self):
+    def test_a_nonzero_trailer_is_kept_verbatim(self):
         """A trailer that is not all zeros cannot be told from a broken
-        chunk, so it raises like one."""
-        with pytest.raises(InvalidFieldError):
-            SCTP.decode(packet_bytes(3) + b"\x00\x00\x00\x00\xde\xad")
+        chunk, so it stays in the chunks for parsed_chunks to report."""
+        raw = packet_bytes(3) + b"\x00\x00\x00\x00\xde\xad"
+        header = SCTP.decode(raw)
+        assert bytes(header) == raw
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _ = header.parsed_chunks
+        assert excinfo.value.offset == 4  # relative to chunks
+        assert not verify(header)
+
+    def test_zeros_after_a_broken_chunk_are_not_trimmed(self):
+        """The zero tail is padding only where a chunk would start."""
+        raw = bytes(make_sctp()) + b"\x01\x00\x00\x40" + bytes(8)
+        assert SCTP.decode(raw).header_len == len(raw)
+
+    def test_an_unpadded_final_chunk_takes_ethernet_zeros_as_padding(self):
+        """A sender bug the walk cannot see past: the final chunk's
+        missing padding (RFC 9260 §3.2) is filled from the link layer's
+        zeros, so the decoded packet is three bytes longer than the one
+        sent, and its CRC no longer matches."""
+        unpadded = SCTP.decode(bytes(make_sctp(chunk(0, 3, b"x")))[:17])
+        assert unpadded.header_len == 17  # a 5-byte DATA chunk, unpadded
+        sent = bytes(replace(unpadded, checksum=compute(unpadded)))
+        assert verify(SCTP.decode(sent))
+        # Ethernet pads the 14 + 20 + 17 = 51-byte frame to 60.
+        padded = SCTP.decode(sent + bytes(9))
+        assert padded.header_len == 20
+        assert not verify(padded)
 
     def test_a_packet_with_no_chunks_decodes_empty(self):
         header = SCTP.decode(bytes(make_sctp()) + bytes(8))
@@ -190,37 +218,48 @@ class TestTruncationAndLyingLengths:
         assert excinfo.value.protocol is SCTP
 
     def test_a_chunk_cut_short_of_its_length(self):
-        raw = packet_bytes(0)  # INIT, length 100
+        """Past the common header decode never raises: the cut chunk is
+        kept, and the accessor reports it."""
+        raw = packet_bytes(0)[:60]  # INIT, length 100
+        header = SCTP.decode(raw)
+        assert (header.src_port, header.dst_port) == (54770, 7)
+        assert header.checksum == 0x058AF060
+        assert bytes(header) == raw
+        assert not verify(header)
         with pytest.raises(TruncatedHeaderError) as excinfo:
-            SCTP.decode(raw[:60])
+            _ = header.parsed_chunks
         err = excinfo.value
         assert err.protocol is SCTP
         assert err.field == "chunks"
-        assert err.offset == 12  # relative to the decode() buffer
+        assert err.offset == 0  # relative to chunks
         assert (err.expected, err.actual) == (100, 48)
         assert str(err) == "SCTP chunk declares 100 bytes, 48 remain"
 
     def test_a_cut_chunk_header(self):
         raw = bytes(make_sctp(chunk(11))) + b"\x01\x00"
+        header = SCTP.decode(raw)
+        assert bytes(header) == raw
         with pytest.raises(TruncatedHeaderError) as excinfo:
-            SCTP.decode(raw)
+            _ = header.parsed_chunks
         err = excinfo.value
         assert err.field == "chunks"
-        assert err.offset == 16
+        assert err.offset == 4
         assert (err.expected, err.actual) == (4, 2)
         assert str(err) == "SCTP chunk header needs 4 bytes, 2 remain"
 
     @pytest.mark.parametrize("length", [0, 1, 2, 3])
     def test_a_chunk_length_below_four(self, length):
-        """Below 4 the chunk would not advance the walk: rejected, never
+        """Below 4 the chunk would not advance the walk: reported, never
         looped on."""
         raw = bytes(make_sctp()) + bytes([6, 0, 0, length]) + b"\x00" * 8
+        header = SCTP.decode(raw)
+        assert bytes(header) == raw
         with pytest.raises(InvalidFieldError) as excinfo:
-            SCTP.decode(raw)
+            _ = header.parsed_chunks
         err = excinfo.value
         assert err.protocol is SCTP
         assert err.field == "chunks"
-        assert err.offset == 12
+        assert err.offset == 0
         assert (err.expected, err.actual) == (">=4", length)
         assert str(err) == (
             f"SCTP chunk length must be at least 4, got {length}"
@@ -400,6 +439,9 @@ class TestIPv6Dispatch:
         ipv6 = packet[IPv6]
         assert isinstance(ipv6, IPv6)
         assert ipv6.next_header_name == "SCTP"
+        assert packet.flow_key() == FlowKey(
+            "2001:db8::1", "2001:db8::2", 54770, 7, 132
+        )
 
     def test_sctp_behind_an_ipv6_extension_header(self):
         hop_by_hop = IPv6HopByHopOptions(
@@ -435,3 +477,97 @@ class TestHeaderAndChecksumBehaviour:
     def test_verification_tag_hex_str_pads(self):
         assert make_sctp().verification_tag_hex_str == "0x01020304"
         assert make_sctp(checksum=0xAB).checksum_hex_str == "0x000000ab"
+
+
+def first_fragment(frame: bytes, ip_payload: int) -> bytes:
+    """``frame`` as the first fragment of its IPv4 datagram: More
+    Fragments set, ``ip_payload`` bytes of the SCTP packet kept."""
+    ip = IPv4.decode(frame[14:])
+    head = replace(ip, total_length=20 + ip_payload, flags=0b001, checksum=0)
+    head = replace(head, checksum=compute(head))
+    return frame[:14] + bytes(head) + frame[SCTP_START:][:ip_payload]
+
+
+class TestDamagedPacketsKeepTheirHeader:
+    """Past the 12-byte common header decode never raises, so SCTP keeps
+    its ports, tag and checksum through the damage a capture routinely
+    shows TCP and UDP surviving, in strict and lax walks alike; only
+    parsed_chunks and verify() see what was lost."""
+
+    LAX = pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+
+    def assert_header_kept(self, packet: Packet, index: int, end: int):
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, SCTP]
+        assert packet.stopped_by is None
+        sctp = packet[SCTP]
+        assert isinstance(sctp, SCTP)
+        original = sctp_of(index)
+        assert (sctp.src_port, sctp.dst_port) == (
+            original.src_port,
+            original.dst_port,
+        )
+        assert sctp.verification_tag == original.verification_tag
+        assert sctp.checksum == original.checksum
+        assert packet.consumed == end
+        assert not verify(sctp)
+        return sctp
+
+    @LAX
+    @pytest.mark.parametrize("index", range(len(FRAMES)))
+    def test_an_appended_ethernet_fcs(self, index, lax):
+        """A capture that keeps the FCS ends every frame in 4 nonzero
+        bytes: kept as the packet's last bytes, which the CRC rejects."""
+        frame = FRAMES[index]
+        with_fcs = frame + zlib.crc32(frame).to_bytes(4, "little")
+        packet = decode_frame(with_fcs, lax=lax)
+        sctp = self.assert_header_kept(packet, index, len(with_fcs))
+        assert sctp.chunks.startswith(sctp_of(index).chunks)
+
+    @LAX
+    @pytest.mark.parametrize("snap", [96, 128, 200])
+    def test_an_init_ack_cut_by_a_snap_length(self, snap, lax):
+        cut = FRAMES[1][:snap]  # INIT ACK: one 420-byte chunk
+        packet = decode_frame(cut, lax=lax)
+        sctp = self.assert_header_kept(packet, 1, snap)
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            _ = sctp.parsed_chunks
+        assert (excinfo.value.expected, excinfo.value.actual) == (
+            420,
+            snap - SCTP_START - 12,
+        )
+
+    @LAX
+    def test_a_first_ipv4_fragment_cut_inside_a_chunk(self, lax):
+        frame = first_fragment(FRAMES[1], 200)
+        packet = decode_frame(frame, lax=lax)
+        ip = packet[IPv4]
+        assert isinstance(ip, IPv4)
+        assert ip.fragment_offset == 0 and ip.flags & 0b001
+        self.assert_header_kept(packet, 1, len(frame))
+
+    @LAX
+    def test_sctp_quoted_in_an_icmp_error(self, lax):
+        """An ICMP error that quotes more than the SCTP common header
+        decodes the quote through to SCTP, as it does TCP and UDP."""
+        quoted = FRAMES[1][14 : SCTP_START + 64]
+        error = ICMPv4(type=3, code=3, checksum=0, rest=bytes(4), body=quoted)
+        chain = error.embedded_chain
+        assert chain is not None
+        assert [type(layer) for layer in chain] == [IPv4, SCTP]
+        assert chain.stopped_by is None
+        direct = decode_frame(quoted, start=IPv4, lax=lax)
+        assert direct.layers == chain.layers
+        sctp = chain[SCTP]
+        assert isinstance(sctp, SCTP)
+        assert (sctp.src_port, sctp.dst_port) == (7, 54770)
+        assert sctp.verification_tag == sctp_of(1).verification_tag
+
+    def test_a_quote_shorter_than_the_common_header_still_stops(self):
+        """RFC 792's minimum quote is 8 bytes past the IP header, short
+        of SCTP's 12, so that chain stops at IPv4, as TCP's does."""
+        quoted = FRAMES[1][14 : SCTP_START + 8]
+        error = ICMPv4(type=3, code=3, checksum=0, rest=bytes(4), body=quoted)
+        chain = error.embedded_chain
+        assert chain is not None
+        assert [type(layer) for layer in chain] == [IPv4]
+        assert isinstance(chain.stopped_by, TruncatedHeaderError)

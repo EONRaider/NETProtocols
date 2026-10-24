@@ -59,6 +59,30 @@ class TestTruncation:
             IPv4.decode(raw_ipv4_header[:10])
 
 
+class TestDamagedPayload:
+    """A transport layer survives a frame that is cut short or carries
+    a trailer. SCTP is the case to pin: it has no length field and walks
+    its chunks to find its end, so past its 12-byte common header it
+    keeps a remainder it cannot walk instead of raising (see _base.py),
+    in strict and lax walks alike."""
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            pytest.param(lambda raw: raw + b"\xde\xad\xbe\xef", id="trailer"),
+            pytest.param(lambda raw: raw[:14], id="cut-chunk"),
+        ],
+    )
+    def test_sctp_keeps_its_common_header(self, raw_sctp_packet, damage, lax):
+        raw = damage(raw_sctp_packet)
+        packet = decode_frame(raw, start=SCTP, lax=lax)
+        assert [type(layer) for layer in packet] == [SCTP]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw
+        assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+
 class TestDecodeInputs:
     def test_memoryview_accepted_and_not_retained(self, raw_ipv4_header):
         """Decoding from a memoryview over a mutable buffer must

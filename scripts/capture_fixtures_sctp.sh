@@ -61,8 +61,10 @@ NSB=npscb
 A=npscva
 B=npscvb
 SERVER_PID=
+TCPDUMP_PID=
 cleanup() {
     [[ -n $SERVER_PID ]] && kill "$SERVER_PID" 2>/dev/null || true
+    [[ -n $TCPDUMP_PID ]] && kill "$TCPDUMP_PID" 2>/dev/null || true
     ip netns del "$NSA" 2>/dev/null || true
     ip netns del "$NSB" 2>/dev/null || true
     ip link del "$A" 2>/dev/null || true
@@ -84,8 +86,9 @@ ip -n "$NSB" link set lo up; ip -n "$NSB" link set "$B" up
 sleep 1
 
 # One SCTP packet with a single chunk of unassigned type 63 (high bits
-# 00: a receiver that does not know it stops and discards the packet,
-# RFC 9260 §3.2), its 26-byte value padded to 28.
+# 00: a receiver that does not know it stops processing the packet and
+# discards that chunk and every one after it, RFC 9260 §3.2 -- here,
+# the whole packet), its 26-byte value padded to 28.
 UNKNOWN_PY=$(cat <<'PY'
 import socket
 import struct
@@ -116,7 +119,7 @@ PY
 echo "[>] sctp (usrsctp association, then one unknown-chunk packet)"
 ip netns exec "$NSB" tcpdump -i "$B" -w "$OUT/sctp.pcap" --immediate-mode -U -q \
     'ip proto 132' >/dev/null 2>&1 &
-tcpdump_pid=$!
+TCPDUMP_PID=$!
 sleep 1
 
 ip netns exec "$NSB" "$USRSCTP/echo_server" >/dev/null 2>&1 &
@@ -127,8 +130,13 @@ sleep 1
 # down at EOF. usrsctp's default heartbeat interval is 30 s, so holding
 # stdin open for 45 s lets both ends send one.
 echo "[i] Idling the association 45 s for its heartbeats..."
-{ echo "hello sctp"; sleep 45; } |
-    ip netns exec "$NSA" timeout 60 "$USRSCTP/client" 10.9.10.2 7 >/dev/null 2>&1 || true
+# A client that fails, or that timeout has to kill, did not complete
+# the association, so the capture is not the one described above.
+if ! { echo "hello sctp"; sleep 45; } |
+    ip netns exec "$NSA" timeout 60 "$USRSCTP/client" 10.9.10.2 7 >/dev/null 2>&1; then
+    echo "The usrsctp client failed or timed out." >&2
+    exit 1
+fi
 sleep 2
 
 ip netns exec "$NSA" python3 -c "$UNKNOWN_PY"
@@ -137,8 +145,9 @@ sleep 1
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=
-kill -INT "$tcpdump_pid" 2>/dev/null || true
-wait "$tcpdump_pid" 2>/dev/null || true
+kill -INT "$TCPDUMP_PID" 2>/dev/null || true
+wait "$TCPDUMP_PID" 2>/dev/null || true
+TCPDUMP_PID=
 
 echo
 echo "[*] Validating..."
@@ -150,9 +159,48 @@ else
     "$CHECKER_PY" scripts/check_fixtures.py "$OUT"
 fi
 
+# The frames' composition, not their exact order: the two ends'
+# heartbeats, and each end's DATA and SACK, can interleave either way.
+COMPOSITION_PY=$(cat <<'PY'
+import struct
+import sys
+from collections import Counter
+
+raw = open(sys.argv[1], "rb").read()
+assert raw[:4] == b"\xd4\xc3\xb2\xa1", "expected a little-endian classic pcap"
+assert struct.unpack_from("<I", raw, 20)[0] == 1, "expected Ethernet framing"
+frames = []
+offset = 24
+while offset < len(raw):
+    caplen = struct.unpack_from("<I", raw, offset + 8)[0]
+    frames.append(raw[offset + 16 : offset + 16 + caplen])
+    offset += 16 + caplen
+assert len(frames) == 16, f"expected 16 SCTP frames, captured {len(frames)}"
+types = []
+heartbeat_sources = set()
+for number, frame in enumerate(frames, 1):
+    ip = frame[14:]
+    assert ip[9] == 132, f"frame {number} is not SCTP"
+    sctp = ip[(ip[0] & 0x0F) * 4 :]
+    chunk_type, chunk_length = sctp[12], struct.unpack_from("!H", sctp, 14)[0]
+    padded = 12 + chunk_length + -chunk_length % 4
+    assert len(sctp) == padded, f"frame {number} carries more than one chunk"
+    types.append(chunk_type)
+    if chunk_type == 4:
+        heartbeat_sources.add(ip[12:16])
+# INIT, INIT ACK, COOKIE ECHO, COOKIE ACK; DATA and SACK each way;
+# HEARTBEAT and HEARTBEAT ACK from each end; SHUTDOWN, SHUTDOWN ACK,
+# SHUTDOWN COMPLETE; the unknown chunk.
+expected = [1, 2, 10, 11, 0, 3, 0, 3, 4, 5, 4, 5, 7, 8, 14, 63]
+assert types[:4] == expected[:4], f"handshake out of order: {types[:4]}"
+assert types[-4:] == expected[-4:], f"shutdown out of order: {types[-4:]}"
+assert Counter(types) == Counter(expected), f"unexpected chunks: {types}"
+assert len(heartbeat_sources) == 2, "expected a HEARTBEAT from each end"
+print(f"[+] 16 SCTP frames, one chunk each: {types}")
+PY
+)
+python3 -c "$COMPOSITION_PY" "$OUT/sctp.pcap"
+
 echo
-echo "[i] Expect zero checksum failures and 16 SCTP frames: the"
-echo "    association's INIT through SHUTDOWN COMPLETE, with a HEARTBEAT /"
-echo "    HEARTBEAT ACK pair from each end, then the unknown type-63 chunk"
-echo "    (unanswered). Fold tests/fixtures/staging/sctp.pcap into"
-echo "    tests/fixtures/."
+echo "[i] Expect zero checksum failures. Fold tests/fixtures/staging/sctp.pcap"
+echo "    into tests/fixtures/."

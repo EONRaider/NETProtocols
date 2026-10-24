@@ -125,8 +125,8 @@ class Packet:
     def flow_key(self) -> FlowKey | None:
         """The canonical :class:`~netprotocols.flow.FlowKey` for this
         packet's conversation, found by walking :attr:`layers` for the
-        first TCP/UDP layer and the IPv4/IPv6 header nearest before it,
-        and delegating to :func:`~netprotocols.flow.flow_key`.
+        first TCP/UDP/SCTP layer and the IPv4/IPv6 header nearest
+        before it, and delegating to :func:`~netprotocols.flow.flow_key`.
 
         Nearest, not first: a tunnel (IP-in-IP, GRE) stacks an outer IP
         header whose addresses are the tunnel's endpoints and whose
@@ -134,12 +134,13 @@ class Packet:
         conversation's.
 
         ``None`` if either layer is missing — a packet with no
-        transport layer, or a bare TCP/UDP segment built without an IP
-        header before it — and ``None`` for a transport layer with no
+        transport layer, or a bare TCP/UDP/SCTP header built without an
+        IP header before it — and ``None`` for a transport layer with no
         ports to key on (ICMP; see :func:`~netprotocols.flow.flow_key`).
         """
         from netprotocols.flow import flow_key as _flow_key
         from netprotocols.layer3.ip import IPv4, IPv6
+        from netprotocols.layer4.sctp import SCTP
         from netprotocols.layer4.tcp import TCP
         from netprotocols.layer4.udp import UDP
 
@@ -147,7 +148,7 @@ class Packet:
         for layer in self.layers:
             if isinstance(layer, (IPv4, IPv6)):
                 ip = layer
-            elif isinstance(layer, (TCP, UDP)):
+            elif isinstance(layer, (TCP, UDP, SCTP)):
                 return None if ip is None else _flow_key(layer, ip=ip)
         return None
 

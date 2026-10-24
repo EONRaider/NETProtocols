@@ -152,24 +152,34 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    `ihl * 4` and TCP answers `data_offset * 4`.
 
 **Two protocols vary this.** The first is text framing. `HTTP` has no
-fixed portion to unpack: `decode()` scans for the empty line that ends the head, then
-for the end the head's framing gives the body, so rule 1 is a scan
-rather than an unpack and `header_len` covers the whole message, not a
-`_struct` size. Its `decode()` also takes keyword-only context the
-bytes cannot carry — `request_method` (a response to `HEAD`, or a 2xx
-to `CONNECT`, has no body whatever its headers say) and `closed` (the
-buffer ends where the connection did) — and `request_method` is stored,
-but normalized: kept only when it changes the framing, so two messages
-with equal bytes and equal framing compare equal.
+fixed portion to unpack: `decode()` scans for the empty line that ends
+the head, then for the end the head's framing gives the body, so rule 1
+is a scan rather than an unpack and `header_len` covers the whole
+message, not a `_struct` size. Its `decode()` also takes keyword-only
+context the bytes cannot carry — `request_method` (a response to `HEAD`,
+or a 2xx to `CONNECT`, has no body whatever its headers say) and
+`closed` (the buffer ends where the connection did) — and
+`request_method` is stored, but normalized: kept only when it changes
+the framing, so two messages with equal bytes and equal framing compare
+equal.
 
-The second is `SCTP`, the one header with no length of its own: the
-packet is the whole IP payload, and the walk does not trim a frame to
-the IP header's declared length. So rule 3 holds only in part.
+The second is `SCTP`. Like ICMPv4, ICMPv6 and IGMP it has no length of
+its own: the packet is the whole IP payload, and the walk does not trim
+a frame to the IP header's declared length. Those three keep the whole
+buffer, Ethernet's zero padding included, because the internet
+checksum is unchanged by appended zero bytes. SCTP's CRC32c is not, so
 `decode()` walks the chunk headers to find where the packet ends and
-leaves a trailing run of zero bytes undecoded, since that cannot
-begin a chunk and is what an Ethernet sender normally pads a short
-frame with. A nonzero trailer cannot be told from a broken chunk, so
-it raises. See [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s
+leaves a run of zero bytes where the next chunk would start undecoded,
+since that cannot begin a chunk and is what an Ethernet sender
+normally pads a short frame with. Rule 3 holds for those zeros; any
+other trailing bytes become part of the packet. Past the 12-byte
+common header `decode()` never raises, like the three it resembles: a
+remainder the walk cannot parse — a chunk cut by a snap length, an IP
+fragment or an ICMP error's quote, or a nonzero trailer such as an
+Ethernet FCS, which cannot be told from a broken chunk — is kept
+verbatim in `chunks`, the ports and verification tag still decode,
+`parsed_chunks` raises on it when asked, and `verify()` returns
+`False`. See [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s
 module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
