@@ -28,9 +28,9 @@
 # addresses are fixed; a re-capture still differs in IPv4
 # identification, the echo identifier and timestamps, and the outer
 # UDP source ports, which the kernel hashes from each inner flow
-# (RFC 7348 §5). Offload is off
-# on both the veth and the vxlan devices, or the inner and outer
-# checksums are left to "offload" and never computed.
+# (RFC 7348 §5). Offload is off on both the veth and the vxlan
+# devices, or the inner and outer checksums are left to "offload" and
+# never computed.
 #
 # The kernel must be able to create a vxlan device (CONFIG_VXLAN); the
 # script checks first and stops if it cannot. Every exchange must

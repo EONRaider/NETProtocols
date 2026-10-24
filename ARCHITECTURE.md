@@ -459,11 +459,14 @@ bytes instead.
 ## The encode side, and the round-trip guarantee
 
 Every class also works in reverse. Constructors take the friendly
-forms (string addresses, integer fields), validate them in
-`__post_init__` (address formats; and IHL/data-offset must agree with
-`len(options)`), and `bytes()` re-emits the exact on-wire form. They
-do not check everything decode does, so some headers can be built that
-decode would never produce (see below).
+forms (string addresses, integer fields) and validate some of them in
+`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6
+and DHCP do not, so a malformed address there fails only in
+`bytes()`), and IPv4's IHL and TCP's data offset must agree with
+`len(options)`. For a valid header, `bytes()` re-emits the exact
+on-wire form. Constructors do not check everything decode does, so
+some headers can be built that decode would never produce (see
+below).
 
 The test suite enforces the round trip in both directions for every
 protocol:
@@ -473,19 +476,20 @@ Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
 
-The first holds for canonical headers: the ones decode itself
-produces. A constructor accepts more than that, and for those headers
-the first line can fail. Some spellings are normalised on the way
-back (a MAC written with dashes decodes with colons, an IPv6 address
-decodes compressed); some fields must agree with what announces them
-(GRE's optional `fields` with its flag bits); some decodes need the
-context a message was sent in (HTTP's `request_method` and `closed`);
-and VXLAN accepts a clear I flag on purpose, so that a test of another
-stack can send one, though `VXLAN.decode()` rejects it as its guard
-against a wrong port guess (see *Port-based dispatch is best-effort*).
-The round-trip property tests generate canonical headers only: GRE
-fields derived from its flags, VXLAN with the I flag set, HTTP decoded
-with its context.
+The first holds for canonical headers, the ones decode itself
+produces, when decode is given the context it produced them with
+(HTTP's `request_method` and `closed`). A constructor accepts more
+than that, and for those headers the first line can fail: spellings
+are normalised on the way back (a MAC written with dashes decodes with
+colons, an IPv6 address decodes compressed); GRE's optional `fields`
+must agree with its flag bits; and VXLAN accepts a clear I flag on
+purpose, so that a test of another stack can send one, though
+`VXLAN.decode()` rejects it as its guard against a wrong port guess
+(see *Port-based dispatch is best-effort*). The round-trip property
+tests generate canonical headers only: addresses spelled as decode
+spells them, GRE fields sized from its flags, VXLAN with the I flag
+set, and HTTP messages that either need no context or are decoded with
+the context they carry.
 
 One deliberate boundary: **decode and encode carry checksums
 verbatim** — exactly what you want when faithfully re-encoding
