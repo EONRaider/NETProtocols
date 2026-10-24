@@ -137,6 +137,30 @@ def _zeroed(layer_bytes: bytes, checksum_offset: int) -> bytes:
     )
 
 
+def _gre_checksum(layer: GRE, payload: bytes) -> int:
+    """GRE header plus payload, checksum field (bytes 4-5) zeroed, no
+    pseudo-header (RFC 2784 §2.5). Only meaningful when the
+    Checksum-Present bit announces the field."""
+    if layer.checksum is None:
+        raise InvalidFieldError(
+            "Computing a GRE checksum requires the Checksum-Present "
+            "bit and its field (RFC 2784 §2.5)",
+            protocol=type(layer),
+            field="checksum",
+        )
+    return internet_checksum(_zeroed(bytes(layer), 4) + payload)
+
+
+def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
+    """The whole packet, checksum field (bytes 8-11) zeroed, no
+    pseudo-header. The CRC goes on the wire least significant byte
+    first, and the field reads its four bytes big-endian."""
+    packet = bytes(layer)
+    crc = crc32c(packet[:8] + b"\x00\x00\x00\x00" + packet[12:] + payload)
+    field: int = struct.unpack("!I", crc.to_bytes(4, "little"))[0]
+    return field
+
+
 def compute(
     layer: Protocol,
     *,
@@ -173,25 +197,9 @@ def compute(
         # pseudo-header; the body is already part of bytes(layer).
         return internet_checksum(_zeroed(bytes(layer), 2))
     if isinstance(layer, GRE):
-        # GRE header plus payload, checksum field (bytes 4-5) zeroed,
-        # no pseudo-header (RFC 2784 §2.5). Only meaningful when the
-        # Checksum-Present bit announces the field.
-        if layer.checksum is None:
-            raise InvalidFieldError(
-                "Computing a GRE checksum requires the Checksum-Present "
-                "bit and its field (RFC 2784 §2.5)",
-                protocol=type(layer),
-                field="checksum",
-            )
-        return internet_checksum(_zeroed(bytes(layer), 4) + payload)
+        return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):
-        # Whole packet, checksum field (bytes 8-11) zeroed, no
-        # pseudo-header. The CRC goes on the wire least significant
-        # byte first, and the field reads its four bytes big-endian.
-        packet = bytes(layer)
-        crc = crc32c(packet[:8] + b"\x00\x00\x00\x00" + packet[12:] + payload)
-        field: int = struct.unpack("!I", crc.to_bytes(4, "little"))[0]
-        return field
+        return _sctp_checksum(layer, payload)
     if isinstance(layer, ICMPv6):
         enclosing = _require_ip(layer, ip)
         segment = _zeroed(bytes(layer), 2) + payload
