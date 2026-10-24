@@ -24,7 +24,8 @@
 #
 # dstport 4789 is passed explicitly: without it, Linux uses its
 # pre-IANA 8472. udpcsum and noudpcsum are passed explicitly too,
-# rather than left to a kernel default. The underlay and vxlan MAC addresses are fixed; a
+# rather than left to a kernel default. The underlay and vxlan MAC
+# addresses are fixed; a
 # re-capture still differs in IPv4 identification, the echo identifier
 # and timestamps, and the outer UDP source ports, which the kernel
 # hashes from each inner flow (RFC 7348 §5). Offload is off
@@ -174,6 +175,9 @@ cursor = 24
 while cursor + 16 <= len(data):
     incl = struct.unpack_from(endian + "I", data, cursor + 8)[0]
     frame = data[cursor + 16 : cursor + 16 + incl]
+    if len(frame) != incl:
+        sys.exit(f"record at byte {cursor} declares {incl} bytes, "
+                 f"{len(frame)} remain: truncated capture")
     cursor += 16 + incl
     if len(frame) < 14 + 20 + 8 + 8 + 14 + 20:
         seen["runt"] += 1  # too short for the shortest frame expected
@@ -190,6 +194,8 @@ while cursor + 16 <= len(data):
         kind = "not-vxlan"
     vni = int.from_bytes(udp[12:15], "big")
     seen[(vni, "csum" if checksum else "no-csum", kind)] += 1
+if cursor != len(data):
+    sys.exit(f"{len(data) - cursor} stray bytes after the last record")
 expected = Counter({
     (1193046, "csum", "arp"): 2,
     (1193046, "csum", "icmp"): 4,

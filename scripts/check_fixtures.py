@@ -223,16 +223,18 @@ def _check_udp_payload(
     payload (destination port 4789, RFC 7348 §5) is an 8-byte header
     and then a whole Ethernet frame, validated in turn.
 
-    The destination port alone decides, which is deliberately stricter
-    than the library (it falls back to the source port when the
-    destination is not registered). An encapsulating endpoint sends to
-    the tunnel's port, 4789 in every capture here, from a source port
-    hashed from the inner flow, so every tunnel datagram matches by its
-    destination alone. Matching the library's fallback exactly would
-    mean copying its port table into a checker that must stay
-    independent of it, and peeling a datagram that is not VXLAN would
-    report its bytes as checksum failures; skipping one costs only the
-    inner check."""
+    The destination port alone decides which datagrams are peeled,
+    which is deliberately stricter than the library's port selection
+    (it falls back to the source port when the destination is not
+    registered). The checker does not apply the decoder's I-flag
+    rule: it validates checksums, not VXLAN semantics. An
+    encapsulating endpoint sends to the tunnel's port, 4789 in every
+    capture here, from a source port hashed from the inner flow, so
+    every tunnel datagram matches by its destination alone. Matching
+    the library's fallback exactly would mean copying its port table
+    into a checker that must stay independent of it, and peeling a
+    datagram that is not VXLAN would report its bytes as checksum
+    failures; skipping one costs only the inner check."""
     if struct.unpack_from("!H", datagram, 2)[0] != _VXLAN_PORT:
         return []
     if len(datagram) < 8 + 8:

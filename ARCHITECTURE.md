@@ -404,8 +404,9 @@ the previous header's `next_protocol()`, whatever its layer. An
 encapsulating endpoint normally sends to 4789, the IANA port (RFC 7348
 §5), from a source port hashed from the inner flow, so the
 destination-first lookup finds VXLAN even when that hash lands on
-another registered port. The same precedence means a DNS or DHCP reply
-to a client whose ephemeral port happens to be 4789 decodes as VXLAN.
+another registered port. The same precedence means a DNS reply to a
+client whose ephemeral port happens to be 4789 dispatches to VXLAN,
+never to DNS (and is then rejected at the I flag about half the time).
 Only 4789 is registered, and Linux still gives a vxlan device `dstport`
 8472, the port it used before IANA assigned one, when `ip link add`
 names none, so a capture from such a device needs
@@ -425,11 +426,14 @@ one bit it requires: the I flag, which random bytes leave clear half the
 time. Over 10,000 random 300-byte UDP payloads per port, decoded with
 `decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
 50.1% of those sent to 4789 and for none of those sent to 53 or 67.
-With lengths drawn uniformly from 0-600 bytes instead, the figures are
-51%, 2% and 39%, and every DNS and DHCP rejection is a payload too short
-for the fixed header. The VXLAN header cannot reject more than it does:
-RFC 7348 says to ignore its reserved bits, so rejecting those would
-refuse real traffic, such as the Group Based Policy extension's.
+With lengths drawn uniformly from 0-600 bytes instead, in frames not
+padded to Ethernet's minimum, the figures are about 52%, 2% and 39%,
+and every DNS and DHCP rejection is a payload too short for the fixed
+header; padded to the minimum, as on the wire, the DNS figure falls to
+0%, since the padding itself decodes as a DNS header. The VXLAN
+header cannot reject more than it does: RFC 7348 says to ignore its
+reserved bits, so rejecting those would refuse real traffic, such as
+the Group Based Policy extension's.
 
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
@@ -467,6 +471,15 @@ protocol:
 Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
+
+The first holds for every header a constructor accepts, with one
+deliberate exception. `VXLAN(flags=0, ...)` builds, so that a test of
+another stack can send a header with the I flag clear, but
+`VXLAN.decode()` rejects it, because the I flag is the decoder's guard
+against a wrong port guess (see *Port-based dispatch is best-effort*).
+Every other constructor accepts at most what its own `decode()` does;
+the round-trip property tests generate VXLAN headers with the I flag
+set.
 
 One deliberate boundary: **decode and encode carry checksums
 verbatim** — exactly what you want when faithfully re-encoding

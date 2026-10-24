@@ -30,13 +30,14 @@ the I flag clear and keeps the reserved bits verbatim without judging
 them, so a header from an extension that reuses them (Group Based
 Policy, for one) still decodes and round-trips exactly.
 
-Construction checks only that each field fits its width. Like the
-other constructors in this library, it accepts values an RFC forbids
-(``IPv4(version=9, ...)`` builds), so ``VXLAN(flags=0, ...)`` builds
-and ``bytes()`` of it is a header with the I flag clear: what a test of
-how another stack drops such headers needs to send. The I-flag rule is
-decode-only, and ``VXLAN.decode(bytes(header))`` raises for a header
-that constructed without complaint.
+Construction checks only that each field fits its width, so
+``VXLAN(flags=0, ...)`` builds and ``bytes()`` of it is a header with
+the I flag clear: what a test of how another stack drops such headers
+needs to send. The I-flag rule is decode-only, and
+``VXLAN.decode(bytes(header))`` raises for a header that constructed
+without complaint. That makes VXLAN the one class in this library
+whose constructor accepts what its own decoder refuses; the
+round-trip guarantee in ARCHITECTURE.md names the exception.
 
 The rule is enforced on decode because the I flag is the decoder's one
 defence against a wrong guess. VXLAN is reached through ``udp.port``,
