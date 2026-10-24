@@ -19,12 +19,12 @@
 #   datagram between fixed ports to a listener, so the inner transport
 #   checksum is keyed on the inner IPv4 header, not the outer one.
 #
-#   VNI 100, with noudpcsum, the kernel's default for IPv4 VXLAN: the
-#   outer UDP checksum is zero, "not used" under RFC 768, which RFC 7348
-#   §5 permits. One echo.
+#   VNI 100, with noudpcsum: the outer UDP checksum is zero, "not used"
+#   under RFC 768, as RFC 7348 §5 says it SHOULD be sent. One echo.
 #
 # dstport 4789 is passed explicitly: without it, Linux uses its
-# pre-IANA 8472. The underlay and vxlan MAC addresses are fixed; a
+# pre-IANA 8472. udpcsum and noudpcsum are passed explicitly too,
+# rather than left to a kernel default. The underlay and vxlan MAC addresses are fixed; a
 # re-capture still differs in IPv4 identification, the echo identifier
 # and timestamps, and the outer UDP source ports, which the kernel
 # hashes from each inner flow (RFC 7348 §5). Offload is off
@@ -35,7 +35,8 @@
 # script checks first and stops if it cannot. Every exchange must
 # succeed, and the capture must hold exactly the frames above (2 ARP,
 # 4 ICMP and 1 UDP on VNI 1193046; 2 ARP and 2 ICMP on VNI 100), or the
-# script fails rather than stage a partial fixture.
+# script stops with an error. Whatever was captured by then is left in
+# tests/fixtures/staging for inspection and must not be folded in.
 
 set -euo pipefail
 
@@ -87,9 +88,10 @@ offload_off() {  # netns device
 echo "[*] underlay veth + two netns (10.9.12.1 <-> 10.9.12.2)"
 ip netns add "$NSA"; ip netns add "$NSB"
 no6 "ip netns exec $NSA"; no6 "ip netns exec $NSB"
-if ! ip -n "$NSA" link add "$VX" type vxlan id 1 dstport 4789 2>/dev/null; then
+if ! probe=$(ip -n "$NSA" link add "$VX" type vxlan id 1 dstport 4789 2>&1); then
     echo "This kernel cannot create a vxlan device (CONFIG_VXLAN, or" >&2
-    echo "'modprobe vxlan'); a VXLAN capture needs one." >&2
+    echo "'modprobe vxlan'); a VXLAN capture needs one. ip said:" >&2
+    echo "    $probe" >&2
     exit 1
 fi
 ip -n "$NSA" link del "$VX"
@@ -148,7 +150,7 @@ wait "$listener" ||
     fail "VNI 1193046: the UDP datagram did not reach the listener."
 listener=""
 
-# Segment 2: VNI 100, the default zero outer UDP checksum. Recreating
+# Segment 2: VNI 100, a zero ("not used") outer UDP checksum. Recreating
 # the devices empties the overlay neighbour tables, so ARP recurs.
 segment 100 noudpcsum
 ip netns exec "$NSA" ping -c 1 -I 10.9.13.1 10.9.13.2 >/dev/null ||

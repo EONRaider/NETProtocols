@@ -78,8 +78,9 @@ def transport_cases():
 CASES = transport_cases()
 
 #: UDP over IPv4 may send a zero checksum, "none computed" (RFC 768),
-#: as Linux's VXLAN does by default: verify() accepts it, but there is
-#: no value for compute() to reproduce, so those cases are held apart.
+#: as a Linux VXLAN device set to noudpcsum does: verify() accepts it,
+#: but there is no value for compute() to reproduce, so those cases are
+#: held apart.
 UNCHECKSUMMED = [
     case
     for case in CASES
@@ -123,15 +124,18 @@ class TestCorpusChecksums:
 
     def test_zero_udp_checksums_over_ipv4_verify_as_absent(self):
         """The corpus's zero UDP checksums are the four outer datagrams
-        of vxlan.pcap's VNI 100 segment, sent by a device left at the
-        kernel default (noudpcsum). A zero verifies because it means
-        "none computed", not because these datagrams would pass any
-        checksum: a wrong nonzero one fails, and the right one is not
-        zero, so zero is not what compute() happens to produce."""
+        of vxlan.pcap's VNI 100 segment, sent by a device set to
+        noudpcsum. A zero verifies because it means "none computed",
+        not because these datagrams would pass any checksum: a wrong
+        nonzero one fails, and the right one is not zero, so zero is
+        not what compute() happens to produce."""
         assert len(UNCHECKSUMMED) == 4
         for case_id, udp, ip, payload in UNCHECKSUMMED:
             assert case_id.startswith("vxlan.pcap#")
             assert udp.dst_port == 4789
+            # The payload starts with the VXLAN header; bytes 4-6 are
+            # the VNI.
+            assert int.from_bytes(payload[4:7], "big") == 100
             assert verify(udp, ip=ip, payload=payload)
             correct = compute(udp, ip=ip, payload=payload)
             assert correct != 0

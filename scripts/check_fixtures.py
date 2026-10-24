@@ -228,11 +228,11 @@ def _check_udp_payload(
     destination is not registered). An encapsulating endpoint sends to
     the tunnel's port, 4789 in every capture here, from a source port
     hashed from the inner flow, so every tunnel datagram matches by its
-    destination alone. Matching the library's
-    fallback exactly would mean copying its port table into a checker
-    that must stay independent of it, and peeling a datagram that is
-    not VXLAN would report its bytes as checksum failures; skipping
-    one costs only the inner check."""
+    destination alone. Matching the library's fallback exactly would
+    mean copying its port table into a checker that must stay
+    independent of it, and peeling a datagram that is not VXLAN would
+    report its bytes as checksum failures; skipping one costs only the
+    inner check."""
     if struct.unpack_from("!H", datagram, 2)[0] != _VXLAN_PORT:
         return []
     if len(datagram) < 8 + 8:

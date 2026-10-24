@@ -133,7 +133,8 @@ class Packet:
         protocol number is the tunnel's (4, 41, 47), not the
         conversation's. VXLAN is different: its outer UDP datagram is
         the first transport layer, so the key is the tunnel's own
-        underlay flow (endpoint addresses, port 4789); the inner
+        underlay flow (the endpoints' addresses, the source port hashed
+        from the inner flow, and the tunnel's port); the inner
         conversation's key is :func:`~netprotocols.flow.flow_key` of the
         inner transport and the IP header before it.
 

@@ -20,6 +20,7 @@ from netprotocols import (
     Packet,
     TruncatedHeaderError,
     decode_frame,
+    flow_key,
 )
 from netprotocols.registry import DEFAULT, TABLE_UDP_PORT, Registry
 
@@ -428,14 +429,20 @@ class TestTruncatedAndMalformed:
 
     def test_the_inner_frame_of_a_clear_i_flag_decodes_on_its_own(self):
         """The documented workaround for a capture with the I flag
-        clear: the inner frame starts 8 bytes past the error's offset."""
-        frame = bytearray(self.FRAME)
-        frame[VXLAN_AT] = 0x00
+        clear: the inner frame starts 8 bytes past the error's offset,
+        whether the error was raised or recorded by a lax walk."""
+        cleared = bytearray(self.FRAME)
+        cleared[VXLAN_AT] = 0x00
+        frame = bytes(cleared)
         with pytest.raises(InvalidFieldError) as caught:
-            decode_frame(bytes(frame))
-        inner = bytes(frame[caught.value.frame_offset + 8 :])
-        assert kinds(decode_frame(inner)) == [Ethernet, IPv4, ICMPv4]
-        assert decode_frame(inner) == decode_frame(inner_echo())
+            decode_frame(frame)
+        stopped_by = decode_frame(frame, lax=True).stopped_by
+        assert stopped_by is not None
+        for err in (caught.value, stopped_by):
+            assert err.frame_offset == VXLAN_AT
+            inner = decode_frame(frame[err.frame_offset + 8 :], start=Ethernet)
+            assert kinds(inner) == [Ethernet, IPv4, ICMPv4]
+            assert inner == decode_frame(inner_echo())
 
 
 class TestHostileNesting:
@@ -501,6 +508,23 @@ class TestCorpusVXLAN:
                 assert isinstance(inner, ARP)
                 assert {inner.spa, inner.tpa} == {"10.9.13.1", "10.9.13.2"}
 
+    def test_flow_key_is_the_underlay_flow(self):
+        """Packet.flow_key() takes the first transport layer, which for
+        VXLAN is the outer UDP; the inner conversation's key comes from
+        flow_key() on the inner transport and the IP header before it."""
+        udp_packet = self.packets()[6]
+        assert kinds(udp_packet) == UDP_CHAIN
+        outer = udp_packet.flow_key()
+        assert outer is not None
+        assert {outer.addr_a, outer.addr_b} == {"10.9.12.1", "10.9.12.2"}
+        assert 4789 in {outer.port_a, outer.port_b}
+        inner_ip, inner_udp = udp_packet.layers[5], udp_packet.layers[6]
+        assert isinstance(inner_ip, IPv4) and isinstance(inner_udp, UDP)
+        inner = flow_key(inner_udp, ip=inner_ip)
+        assert inner is not None
+        assert {inner.addr_a, inner.addr_b} == {"10.9.13.1", "10.9.13.2"}
+        assert {inner.port_a, inner.port_b} == {40000, 9999}
+
     def test_the_kernel_sends_to_4789_from_a_hashed_port(self):
         """Linux picks the outer source port from a hash of the inner
         flow and sends to the device's dstport, which the capture set
@@ -514,7 +538,7 @@ class TestCorpusVXLAN:
 
     def test_outer_checksums_present_then_absent(self):
         """The VNI 0x123456 segment ran with udpcsum, the VNI 100 one
-        with the kernel default, a zero ("not used") outer checksum."""
+        with noudpcsum, a zero ("not used") outer checksum."""
         checksums = [packet[UDP].checksum for packet in self.packets()]
         assert all(checksums[:7])
         assert checksums[7:] == [0] * 4

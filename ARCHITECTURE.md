@@ -369,14 +369,15 @@ registrations live together in
 [`_defaults.py`](src/netprotocols/_defaults.py), whose imports sit
 inside `install()` and run once from `__init__.py` after every
 protocol class exists. Shared enums stay in the dependency-free
-`_enums.py`. The layer modules bind their table at import and do not
-import each other's classes to dispatch: every class a header names as
-its payload comes out of a table. Two modules import another's class
-where no table applies. `layer3/icmp.py` names `IPv4` and `IPv6` to
-start the walk of the packet an ICMP error quotes, and `layer7/vxlan.py`
-names `Ethernet`, because a VXLAN payload is always an Ethernet frame.
-Neither can form a cycle: `ip.py` and `ethernet.py` import no other
-layer module.
+`_enums.py`. The layer modules bind their table at import, and every
+class a header chooses by a field value (EtherType, IP protocol, port)
+comes out of a table, never from an import. Two modules do import
+another's class, where there is no field to look up. `layer3/icmp.py`
+names `IPv4` and `IPv6` to start the walk of the packet an ICMP error
+quotes, which is not dispatch, and `layer7/vxlan.py` names `Ethernet`
+directly, because a VXLAN payload is always an Ethernet frame. Neither
+can form a cycle: `ip.py` and `ethernet.py` import no other layer
+module.
 
 ## Port-based dispatch is best-effort
 
@@ -424,9 +425,11 @@ one bit it requires: the I flag, which random bytes leave clear half the
 time. Over 10,000 random 300-byte UDP payloads per port, decoded with
 `decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
 50.1% of those sent to 4789 and for none of those sent to 53 or 67.
-VXLAN cannot reject more than that: RFC 7348 says to ignore its reserved
-bits, so rejecting those would refuse real traffic, such as the Group
-Based Policy extension's.
+With lengths drawn uniformly from 0-600 bytes instead, the figures are
+51%, 2% and 39%, and every DNS and DHCP rejection is a payload too short
+for the fixed header. The VXLAN header cannot reject more than it does:
+RFC 7348 says to ignore its reserved bits, so rejecting those would
+refuse real traffic, such as the Group Based Policy extension's.
 
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one

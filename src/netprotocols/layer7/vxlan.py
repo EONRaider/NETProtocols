@@ -51,10 +51,12 @@ The cost falls on a capture that really is VXLAN but has the flag
 clear. A strict :func:`~netprotocols.decode_frame` raises
 :class:`~netprotocols.InvalidFieldError` whose ``frame_offset`` is the
 VXLAN header's; a lax one keeps only the outer layers (Ethernet, IP,
-UDP) and reports the error as ``stopped_by``. The inner frame starts 8
-bytes past that offset, and the walk starts at
-:class:`~netprotocols.Ethernet` by default, so for that error ``err``,
-``decode_frame(frame[err.frame_offset + 8:])`` decodes it.
+UDP) and reports the same error as ``stopped_by``. The inner frame
+starts 8 bytes past that offset, so for that error ``err`` a second
+walk decodes it:
+``decode_frame(frame[err.frame_offset + 8:], start=Ethernet)``. That
+walk is a new one, so a ``registry`` or ``decode_as`` the first walk
+used must be passed to it again.
 """
 
 from __future__ import annotations
