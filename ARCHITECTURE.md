@@ -222,8 +222,9 @@ answers `next_protocol()` with the *class* that decodes its payload,
 or `None` when the chain ends (nothing encapsulated, a protocol this
 library doesn't implement yet, or a payload no header names in the
 clear — ESP's Next Header sits in its protected trailer, encrypted
-under every cipher but NULL and at an offset only the Security
-Association determines, so the decoder never reads it).
+unless the Security Association uses a confidentiality-free transform
+(NULL, RFC 2410; AES-GMAC, RFC 4543) and at an offset only the SA
+determines, so the decoder never reads it).
 
 ```mermaid
 flowchart LR
