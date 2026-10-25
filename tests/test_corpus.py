@@ -23,6 +23,7 @@ from netprotocols import (
     RIP,
     SCTP,
     SNAP,
+    STP,
     TCP,
     UDP,
     VLAN,
@@ -119,6 +120,7 @@ class TestCorpusCoverage:
             BGP,
             LLC,
             SNAP,
+            STP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

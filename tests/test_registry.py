@@ -7,6 +7,7 @@ from netprotocols import (
     DNS,
     SCTP,
     SNAP,
+    STP,
     TCP,
     UDP,
     Ethernet,
@@ -370,9 +371,9 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_llc(self):
-        """SNAP is the one built-in LLC entry; the llc.snap table starts
-        empty, for CDP and other OUIs' protocols to register in."""
-        assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP}
+        """SNAP and STP are the built-in LLC entries; the llc.snap table
+        starts empty, for CDP and other OUIs' protocols to register in."""
+        assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP, 0x42: STP}
         assert DEFAULT.table(TABLE_LLC_SNAP) == {}
 
     def test_ports(self):

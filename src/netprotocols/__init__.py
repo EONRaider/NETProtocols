@@ -27,6 +27,7 @@ from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.llc import LLC, SNAP
+from netprotocols.layer2.stp import STP
 from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.ah import AH, AHv6
 from netprotocols.layer3.esp import ESP
@@ -149,6 +150,7 @@ __all__ = [
     "RIP",
     "SCTP",
     "SNAP",
+    "STP",
     "TCP",
     "UDP",
     "VLAN",

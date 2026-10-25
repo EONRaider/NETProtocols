@@ -1171,14 +1171,29 @@ def _check_llc(
     return [f"unchecked-llc-dsap-0x{pdu[0]:02x}"] if strict else []
 
 
+#: 802.1D BPDU Types: their names in the stats, and the octets each
+#: needs (802.1D-2004 §9.3; the validation of received BPDUs ignores
+#: octets past these).
+_BPDU_TYPES = {0x00: ("config", 35), 0x02: ("rst", 36), 0x80: ("tcn", 4)}
+
+
 def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
-    """Validate an 802.1D BPDU's framing: Protocol Identifier 0, and as
-    long as its type needs, 35 bytes for a Configuration BPDU (type
-    0x00) and 4 for a Topology Change Notification (type 0x80)."""
-    needed = {0x00: 35, 0x80: 4}.get(bpdu[3] if len(bpdu) > 3 else -1)
-    if bpdu[:2] != b"\x00\x00" or needed is None or len(bpdu) < needed:
+    """Validate an 802.1D BPDU: Protocol Identifier 0, a known BPDU Type
+    and as many octets as it needs, 35 for a Configuration BPDU (type
+    0x00), 36 for an RST BPDU (0x02) and 4 for a Topology Change
+    Notification (0x80). A Configuration BPDU's six unused flag bits
+    must be 0, and an RST BPDU must have a Protocol Version of 2 or more
+    and a Version 1 Length of 0, as the validation of received BPDUs
+    requires."""
+    name, needed = _BPDU_TYPES.get(bpdu[3] if len(bpdu) > 3 else -1, ("", 0))
+    if bpdu[:2] != b"\x00\x00" or not needed or len(bpdu) < needed:
         return ["stp-bpdu-malformed"]
+    if name == "config" and bpdu[4] & 0x7E:
+        return ["stp-config-unused-flags"]
+    if name == "rst" and (bpdu[2] < 2 or bpdu[35] != 0):
+        return ["stp-rst-malformed"]
     stats["stp-bpdu"] += 1
+    stats[f"stp-{name}"] += 1
     return []
 
 

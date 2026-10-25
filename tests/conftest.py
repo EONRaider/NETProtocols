@@ -239,6 +239,24 @@ def raw_llc_header() -> bytes:
 
 
 @pytest.fixture
+def raw_stp_config_bpdu() -> bytes:
+    """The root's Configuration BPDU with Topology Change from
+    tests/fixtures/llc.pcap: Root and Bridge Identifier 0x1000 /
+    02:00:00:00:a0:00, Port Identifier 0x8001, Max Age 20 s, Hello Time
+    1 s, Forward Delay 2 s."""
+    return bytes.fromhex(
+        "0000000001100002000000a00000000000100002000000a00080010000140001000200"
+    )
+
+
+@pytest.fixture
+def raw_stp_tcn() -> bytes:
+    """The Topology Change Notification BPDU from
+    tests/fixtures/llc.pcap."""
+    return b"\x00\x00\x00\x80"
+
+
+@pytest.fixture
 def raw_snap_header() -> bytes:
     """SNAP header of a CDP frame from tests/fixtures/llc.pcap: OUI
     00-00-0C (Cisco), PID 0x2000 (CDP)."""
