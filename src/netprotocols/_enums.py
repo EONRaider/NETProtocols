@@ -57,6 +57,7 @@ class IPProtocol(IntEnum):
     IPV6_ICMP = 0x3A
     IPV6_DSTOPTS = 0x3C
     OSPF = 0x59
+    PIM = 0x67
     VRRP = 0x70
     SCTP = 0x84
 
@@ -81,6 +82,7 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
     IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
     IPProtocol.OSPF: "OSPF",
+    IPProtocol.PIM: "PIM",
     IPProtocol.VRRP: "VRRP",
     IPProtocol.SCTP: "SCTP",
 }
