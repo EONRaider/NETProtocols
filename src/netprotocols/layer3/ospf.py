@@ -72,8 +72,8 @@ packet the checksum covers, so leaving it out keeps
 :func:`~netprotocols.checksum.verify` independent of it.
 
 ``bytes(OSPF.decode(x)) == x[:header_len]`` holds by construction: the
-header fields are packed back and the body and digest are carried
-verbatim.
+header fields are packed back and the body and authentication
+trailer are carried verbatim.
 """
 
 from __future__ import annotations
@@ -472,7 +472,7 @@ class OSPF(Protocol):
         ``5`` Link State Acknowledgment (see :attr:`type_name`). Any
         other value constructs and decodes, its body kept as is.
     :param packet_length: The packet's length in bytes, header included
-        and any cryptographic digest excluded: ``24 + len(body)``.
+        and any authentication trailer excluded: ``24 + len(body)``.
     :param router_id: The sending router's Router ID, dotted-decimal.
     :param area_id: The area the packet belongs to; ``0.0.0.0`` is the
         backbone.
@@ -526,8 +526,9 @@ class OSPF(Protocol):
     #: packet and whose packet checksum is not computed: ``2`` (RFC 2328
     #: §D.4.3) and ``3``, which changes the sequence number and the
     #: Authentication field's layout (RFC 7474 §2, §3) and starts Apad,
-    #: the digest's padding constant, with the IP source address
-    #: (§5).
+    #: the value the Authentication Trailer holds while the digest is
+    #: computed (RFC 5709 §3.3), with the IP source address (RFC 7474
+    #: §5).
     CRYPTOGRAPHIC_AU_TYPES: ClassVar[frozenset[int]] = frozenset({2, 3})
 
     type_names: ClassVar[dict[int, str]] = {
@@ -642,14 +643,15 @@ class OSPF(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
-        """Decode the header, the body and any digest after it.
+        """Decode the header, the body and any authentication trailer.
 
         Packet Length bounds the body; under cryptographic
-        authentication the digest follows, Auth Data Len bytes.
+        authentication the trailer follows, Auth Data Len bytes: the
+        digest, after the 64-bit sequence number under AuType 3.
 
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             24-byte header, than Packet Length, or than Packet Length
-            plus the digest.
+            plus the authentication trailer.
         :raises InvalidFieldError: if the version is not 2, Packet
             Length is below 24, or the body does not have its message
             type's framing.
@@ -734,8 +736,8 @@ class OSPF(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Packet Length plus the digest after it, if any."""
-        # The whole packet, and the digest after it: OSPF is terminal.
+        """Packet Length plus the authentication trailer, if any."""
+        # The whole packet, and the trailer after it: OSPF is terminal.
         return self.packet_length + len(self.auth_trailer)
 
     @property

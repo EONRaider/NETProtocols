@@ -547,9 +547,10 @@ bytes instead.
 Every class also works in reverse. Constructors take the friendly
 forms (string addresses, integer fields) and validate some of them in
 `__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6,
-DHCP and OSPF do not, so a malformed address there, such as an OSPF
-`router_id`, `area_id` or an LSA header's `advertising_router`, fails
-only in `bytes()`, as an `OSError`), and IPv4's IHL and TCP's data offset must agree with
+DHCP and OSPF do not, so a malformed address there fails only in
+`bytes()`; for OSPF's `router_id`, `area_id` and its records' address
+fields, such as an LSA header's `advertising_router`, that is the
+`OSError` from `socket.inet_pton`), and IPv4's IHL and TCP's data offset must agree with
 `len(options)`. For a valid header, `bytes()` re-emits the exact
 on-wire form. Constructors do not check everything decode does, so
 some headers can be built that decode would never produce (see
