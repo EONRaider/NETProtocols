@@ -49,6 +49,19 @@ jobs:
           key: mutmut-nightly-${{ github.run_id }}
           restore-keys: |
             mutmut-nightly-
+      # The restored cache also carries mutants/mutmut-stats.json, the
+      # map from each function to the tests that call it. When that map
+      # exists, mutmut 3.8 re-traces only tests it has never seen, so a
+      # function added since the cached run (a new helper called only
+      # by existing tests) maps to no tests and every one of its
+      # mutants reads "no tests"; so does an existing test edited to
+      # call a function it didn't before. Without the map, mutmut
+      # traces the configured test selection in full, which costs one
+      # traced pytest pass. Nothing else is lost: with the positional
+      # filters below, mutmut re-runs every in-scope mutant regardless
+      # of a cached result.
+      - name: Drop the cached function-to-test map
+        run: rm -f mutants/mutmut-stats.json
       - name: Install the project with dev dependencies
         run: uv sync --group dev --frozen
       # File-level scope (src/netprotocols/checksum.py, _tlv.py,

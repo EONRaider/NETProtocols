@@ -673,6 +673,33 @@ class TestMutationWorkflow:
             "nothing would look the same as one that killed everything"
         )
 
+    def test_the_cached_test_map_is_dropped_before_the_run(self) -> None:
+        """The restored cache carries mutmut's function-to-test map, and
+        mutmut 3.8 re-traces only tests it has never seen, so a function
+        added since the cached run would read "no tests" on every one
+        of its mutants unless the map is deleted first."""
+        block = job_blocks(MUTATION).get("mutation")
+        assert block is not None, "mutation.yml has no mutation job"
+        drop = re.search(
+            r"(?m)^        run: rm -f mutants/mutmut-stats\.json$", block
+        )
+        restore_at = block.find("actions/cache@")
+        run_at = block.find("uv run --frozen mutmut run")
+        assert drop is not None, (
+            "mutation.yml no longer deletes the cached "
+            "mutants/mutmut-stats.json, so a new function's mutants "
+            "would be reported as having no tests"
+        )
+        drop_at = drop.start()
+        assert restore_at != -1 and restore_at < drop_at, (
+            "mutants/mutmut-stats.json is deleted before the cache "
+            "restore, which puts the stale map straight back"
+        )
+        assert drop_at < run_at, (
+            "mutants/mutmut-stats.json is deleted after the run, so "
+            "the run still used the stale map"
+        )
+
     def test_run_rejects_an_unquoted_argument_on_a_continued_line(
         self,
     ) -> None:
