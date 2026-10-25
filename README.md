@@ -160,6 +160,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
+| 7 | RIP | `RIP` | RFC 1058/2453, RIPv1 and RIPv2 over UDP 520; route entries (`RIPEntry`) and the authentication entry (`RIPAuthentication`: plain-text password, RFC 4822 keyed MD5/HMAC-SHA) parsed on demand; RIPng is not decoded |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
 
 ## Decoding a captured frame
@@ -514,7 +515,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-158-frame corpus of real captured traffic across 23 scenarios
+179-frame corpus of real captured traffic across 24 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

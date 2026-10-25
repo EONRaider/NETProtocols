@@ -205,6 +205,20 @@ def raw_vxlan_header() -> bytes:
 
 
 @pytest.fixture
+def raw_rip_message() -> bytes:
+    """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
+    route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and
+    10.9.52.0/24, metric 1), no authentication."""
+    return bytes.fromhex(
+        "02020000"
+        "000200000a140200ffffff000000000000000001"
+        "000200000a140100ffffff000000000000000001"
+        "000200000a140380ffffff800000000000000001"
+        "000200000a093400ffffff000000000000000001"
+    )
+
+
+@pytest.fixture
 def raw_vrrpv2_advert() -> bytes:
     """VRRPv2 advert from ``vrrp.pcap``: VRID 51, priority 200, Auth
     Type 1 (PASS), Adver Int 1 s, two addresses, then the null-padded

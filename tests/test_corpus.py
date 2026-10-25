@@ -16,6 +16,7 @@ from netprotocols import (
     ARP,
     DNS,
     ESP,
+    RIP,
     SCTP,
     TCP,
     UDP,
@@ -106,6 +107,7 @@ class TestCorpusCoverage:
             ESP,
             AH,
             VXLAN,
+            RIP,
             VRRP,
         } <= seen
 

@@ -29,10 +29,10 @@ import contextlib
 import sys
 
 import pytest
-from hypothesis import given
+from hypothesis import event, given
 from hypothesis import strategies as st
 
-from conftest import corpus_frames
+from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     AH,
     ARP,
@@ -42,6 +42,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    RIP,
     SCTP,
     TCP,
     UDP,
@@ -63,6 +64,8 @@ from netprotocols import (
     Packet,
     Protocol,
     ProtocolError,
+    RIPAuthentication,
+    RIPEntry,
     SCTPChunk,
     TCPOption,
     VRRPv6,
@@ -103,6 +106,7 @@ ALL_PROTOCOLS = (
     AHv6,
     HTTP,
     VXLAN,
+    RIP,
     VRRP,
     VRRPv6,
 )
@@ -554,6 +558,81 @@ class TestSCTPChunkAccessorSafety:
         sctp = SCTP.decode(bytes(12) + raw)
         assert sctp.chunks == raw
         assert list(sctp.parsed_chunks) == chunks
+
+
+#: Bytes from a small alphabet, so AFI 0xFFFF, authentication type 3,
+#: plausible Packet Lengths and remainders turn up far more often than
+#: in free bytes. Led by a header decode accepts.
+_rip_like = st.tuples(
+    st.sampled_from([b"\x01\x01\x00\x00", b"\x02\x02\x00\x00"]),
+    st.lists(
+        st.sampled_from([0, 0, 0x18, 0x2C, 0x40, 0xFF, 0xFF, 1, 2, 3]),
+        max_size=120,
+    ).map(bytes),
+).map(b"".join)
+
+
+#: The captured RIP messages, every one past its UDP header.
+_RIP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "rip.pcap")]
+
+
+@st.composite
+def _rip_seeded(draw: st.DrawFn) -> bytes:
+    """A captured RIP message, a few body bytes changed, cut anywhere
+    past the header and followed by nothing, an FCS-like 4 bytes or up
+    to 23 more: the authentication entries, a trailer located by a
+    real Packet Length, and remainders, which free bytes rarely
+    reach."""
+    raw = bytearray(draw(st.sampled_from(_RIP_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(4, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(4, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+class TestRIPAccessorSafety:
+    @given(data=st.one_of(_rip_seeded(), _rip_like, fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only on the 4-byte header (too short, a
+        version other than 1 or 2, command 0) and keeps every byte
+        after it; the accessors never raise, and the entries, the
+        trailer and the remainder they report tile the body exactly."""
+        try:
+            rip = RIP.decode(data)
+        except ProtocolError:
+            assert len(data) < 4 or data[1] not in (1, 2) or data[0] == 0
+            return
+        assert bytes(rip) == data
+        assert RIP.decode(bytes(rip)) == rip
+        assert rip.command_name
+        entries = rip.entries
+        trailer = rip.authentication_trailer
+        assert trailer is None or b"\xff\xff\x00\x01".startswith(trailer[:4])
+        tiled = b"".join(bytes(entry) for entry in entries)
+        tiled += rip.remainder + (trailer if trailer is not None else b"")
+        assert tiled == rip.body
+        assert len(rip.remainder) < 20
+        assert rip.routes == tuple(
+            e for e in entries if isinstance(e, RIPEntry)
+        )
+        for entry in entries:
+            if isinstance(entry, RIPAuthentication):
+                assert entry.auth_type_name
+                _ = (entry.password, entry.packet_length, entry.key_id)
+                _ = (entry.auth_data_len, entry.sequence_number)
+            else:
+                assert entry.afi_name
+        auth = rip.authentication
+        assert auth is None or entries[0] == auth
+        event(f"RIP authentication type: {auth and auth.auth_type}")
+        event(f"RIP trailer located: {trailer is not None}")
+        event(f"RIP remainder: {bool(rip.remainder)}")
 
 
 #: VRRP's display and per-version accessors, every one of which must

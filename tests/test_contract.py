@@ -8,6 +8,7 @@ from netprotocols import (
     ARP,
     ESP,
     HTTP,
+    RIP,
     SCTP,
     TCP,
     UDP,
@@ -40,6 +41,7 @@ class TestTruncation:
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
             (VXLAN, "raw_vxlan_header"),
+            (RIP, "raw_rip_message"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
         ],
@@ -76,11 +78,12 @@ class TestTruncation:
 
 
 class TestDamagedPayload:
-    """A transport layer survives a frame that is cut short or carries
-    a trailer. SCTP is the case to pin: it has no length field and walks
-    its chunks to find its end, so past its 12-byte common header it
-    keeps a remainder it cannot walk instead of raising (see _base.py),
-    in strict and lax walks alike."""
+    """A layer without a length field survives a frame that is cut
+    short or carries a trailer. SCTP walks its chunks to find its end,
+    so past its 12-byte common header it keeps a remainder it cannot
+    walk instead of raising (see _base.py); RIP keeps everything past
+    its 4-byte header and reports a remainder shorter than an entry. In
+    strict and lax walks alike."""
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(
@@ -97,6 +100,27 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            pytest.param(lambda raw: raw + b"\xde\xad\xbe\xef", id="trailer"),
+            pytest.param(lambda raw: raw[:30], id="cut-entry"),
+        ],
+    )
+    def test_rip_keeps_its_whole_entries(self, raw_rip_message, damage, lax):
+        """RIP has no length field either: past its 4-byte header it
+        keeps everything, and a remainder shorter than an entry is
+        reported, not raised."""
+        raw = damage(raw_rip_message)
+        packet = decode_frame(raw, start=RIP, lax=lax)
+        assert [type(layer) for layer in packet] == [RIP]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw
+        rip = packet[RIP]
+        assert len(rip.entries) == (len(raw) - 4) // 20
+        assert rip.remainder == raw[4 + 20 * len(rip.entries) :]
 
 
 class TestDecodeInputs:

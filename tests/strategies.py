@@ -24,6 +24,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    RIP,
     SCTP,
     VLAN,
     VRRP,
@@ -491,6 +492,20 @@ def http_wire(draw: st.DrawFn) -> bytes:
     return bytes(raw[:cut]) if draw(st.booleans()) else bytes(raw)
 
 
+@st.composite
+def rip_messages(draw: st.DrawFn) -> RIP:
+    # The body is kept raw whatever it holds, so it is drawn as free
+    # bytes, any length: whole entries, a trailer, a remainder. decode()
+    # rejects a version other than 1 or 2 and command 0 (the
+    # constructor does not; test_rip.py covers those).
+    return RIP(
+        command=draw(st.integers(1, 0xFF)),
+        version=draw(st.sampled_from([1, 2])),
+        reserved=draw(st.integers(0, 0xFFFF)),
+        body=draw(st.binary(max_size=_MAX_BLOB * 2)),
+    )
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -518,4 +533,5 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "VRRPv6": vrrp_headers(VRRPv6),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
+    "RIP": rip_messages(),
 }

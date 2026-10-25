@@ -185,6 +185,20 @@ read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
 [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
 
+`RIP` has the same problem one layer up: its 20-byte entries fill the
+rest of the UDP datagram, and the walk does not trim to UDP's length
+either. It keeps the whole buffer after its 4-byte header, as ICMPv4
+and IGMP do, leaving no trailing bytes, so `bytes(RIP.decode(x)) == x`.
+Its accessors read whole entries, up to the RFC 4822 authentication
+trailer that the first entry's Packet Length locates (when the bytes
+there start as a trailer does, `0xFFFF 0x0001`), and report what
+is left, fewer than 20 bytes, as `remainder`: an entry a snap length
+cut, or a trailer such as an Ethernet FCS, which only the UDP length
+could tell apart. Past the header neither `decode()` nor any accessor
+raises. Ethernet's zero padding reaches only a message with no entries,
+since one entry already fills the minimum frame. See
+[`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
+
 `VRRP` has no length field either, but needs no walk: its version and
 address count give its exact length (8 bytes, the addresses, and
 VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
@@ -302,6 +316,7 @@ flowchart LR
   X -->|112| VR6
   U -->|4789| VX[VXLAN]
   VX -->|always| E
+  U -->|520| R[RIP]
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -515,6 +530,20 @@ header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
 
+RIP on UDP 520 rejects the most, because two of its four header bytes
+have values no RIP message carries: `RIP.decode()` requires version 1
+or 2 and a nonzero command, which 510 of the 65,536 two-byte prefixes
+satisfy, so about 99.2% of random datagrams are rejected. Measured the
+same way, the walk stopped for about 99.2% in each case: the 300-byte
+payloads sent to 520, and the 0-600 byte ones unpadded and padded, the
+differences between them within sampling noise; an empty datagram
+padded to the minimum is rejected too, since the padding reads as
+version 0. It goes no further. The obsolete and extension commands
+(TraceOn, TraceOff, the triggered and update messages) decode, and so
+does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
+tells a receiver to ignore but a decoder should show. Past the header,
+any 20 bytes are an entry.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -626,7 +655,8 @@ src/netprotocols/
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
-│                   and the HTTP codec class), vxlan.py
+│                   and the HTTP codec class), vxlan.py, rip.py
+│                   (RIPv1 + RIPv2)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
