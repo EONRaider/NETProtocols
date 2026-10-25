@@ -54,7 +54,10 @@ then split that body without raising:
   authentication trailer when the message has one.
 - :attr:`RIP.authentication_trailer` is the RFC 4822 trailer: the bytes
   from the offset the RIPv2 Packet Length field gives to the end of the
-  body. It is not sized by Auth Data Len, which senders fill in two
+  body, when they start with the trailer's ``0xFFFF 0x0001`` (or as
+  much of it as a cut capture kept); otherwise the body is read as
+  entries, so a wrong Packet Length cannot hide routes as a trailer.
+  It is not sized by Auth Data Len, which senders fill in two
   ways: the digest's own length, as RFC 4822 says, or that plus the
   trailer's 4-byte header. BIRD 2.14 does each: the corpus's keyed-MD5
   messages declare 20 for a 16-byte digest, its HMAC-SHA-256 ones 32
@@ -90,7 +93,7 @@ bytes then decide, and of their 65,536 values 510 pass, so a random
 datagram on port 520 is rejected 99.2% of the time.
 
 Nothing else is checked. The commands past Request and Response (RFC
-1058's obsolete Traceon and Traceoff, Sun's reserved 5, RFC 1582's
+1058's obsolete TraceOn and TraceOff, Sun's reserved 5, RFC 1582's
 triggered and RFC 2091's update messages) decode, with their body
 framed as entries all the same. A RIPv1 message whose must-be-zero
 fields are not zero, which RFC 1058 §3.4 tells a receiver to ignore,
@@ -130,13 +133,17 @@ _AFI_AUTHENTICATION = 0xFFFF
 _AUTH_CRYPTOGRAPHIC = 3
 _CRYPTOGRAPHIC_FIELDS = Struct("!HBBI8x")
 
+#: How an authentication trailer starts: AFI 0xFFFF, then type 1,
+#: Authentication Trailer (RFC 4822 §2.1).
+_TRAILER_HEADER = b"\xff\xff\x00\x01"
+
 #: RIP commands (IANA "RIP Commands"; RFC 1058 §3.1 for 1-5, RFC 1582
 #: for 6-8, RFC 2091 for 9-11).
 _COMMAND_NAMES: dict[int, str] = {
     1: "Request",
     2: "Response",
-    3: "Traceon",
-    4: "Traceoff",
+    3: "TraceOn",
+    4: "TraceOff",
     5: "Reserved",
     6: "Triggered Request",
     7: "Triggered Response",
@@ -158,8 +165,9 @@ _AFI_NAMES: dict[int, str] = {
 #: Authentication types (IANA "RIP Authentication Type"). Type 1 names
 #: the trailer RFC 4822 appends, not an entry.
 _AUTH_TYPE_NAMES: dict[int, str] = {
+    0: "none",
     1: "Authentication Trailer",
-    2: "Plain-text Password",
+    2: "Plain-text password",
     3: "Cryptographic Hash Function",
 }
 
@@ -288,7 +296,7 @@ class RIPAuthentication:
 
     @property
     def auth_type_name(self) -> str:
-        """Name the authentication type, e.g. ``"Plain-text Password"``.
+        """Name the authentication type, e.g. ``"Plain-text password"``.
 
         Falls back to ``"unknown (n)"`` for a type not named here.
         """
@@ -469,13 +477,16 @@ class RIP(Protocol):
 
         ``None`` unless the first entry is a type 3 authentication entry
         whose RIPv2 Packet Length is usable: past that entry, at an
-        entry boundary, and within the body.
+        entry boundary, within the body, and at bytes that begin the
+        trailer's ``0xFFFF 0x0001``, or as much of it as the body holds.
         """
         body = self.body
         if len(body) < _ENTRY_LEN or body[:4] != b"\xff\xff\x00\x03":
             return None
         offset = int.from_bytes(body[4:6], "big") - self._struct.size
         if offset < _ENTRY_LEN or offset % _ENTRY_LEN or offset > len(body):
+            return None
+        if not _TRAILER_HEADER.startswith(body[offset : offset + 4]):
             return None
         return offset
 
@@ -533,8 +544,10 @@ class RIP(Protocol):
         ``None`` when there is none to find: no type 3 authentication
         entry, or a Packet Length that is not past it, at an entry
         boundary and within the body (a message cut before its trailer,
-        for one). Bytes after the datagram, such as an Ethernet FCS, run
-        on into it (see the module docstring).
+        for one), or that points at bytes other than the trailer's
+        ``0xFFFF 0x0001`` (a route, for one). Bytes after the datagram,
+        such as an Ethernet FCS, run on into it (see the module
+        docstring).
         """
         offset = self._trailer_offset
         return None if offset is None else self.body[offset:]

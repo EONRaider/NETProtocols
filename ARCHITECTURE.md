@@ -190,7 +190,8 @@ rest of the UDP datagram, and the walk does not trim to UDP's length
 either. It keeps the whole buffer after its 4-byte header, as ICMPv4
 and IGMP do, leaving no trailing bytes, so `bytes(RIP.decode(x)) == x`.
 Its accessors read whole entries, up to the RFC 4822 authentication
-trailer that the first entry's Packet Length locates, and report what
+trailer that the first entry's Packet Length locates (when the bytes
+there start as a trailer does, `0xFFFF 0x0001`), and report what
 is left, fewer than 20 bytes, as `remainder`: an entry a snap length
 cut, or a trailer such as an Ethernet FCS, which only the UDP length
 could tell apart. Past the header neither `decode()` nor any accessor
@@ -518,11 +519,13 @@ the Group Based Policy extension's.
 RIP on UDP 520 rejects the most, because two of its four header bytes
 have values no RIP message carries: `RIP.decode()` requires version 1
 or 2 and a nonzero command, which 510 of the 65,536 two-byte prefixes
-satisfy. Measured the same way, the walk stopped for 99.3% of the
-300-byte payloads sent to 520, and for 99.1% and 99.2% of the 0-600
-byte ones unpadded and padded; an empty datagram padded to the minimum
-is rejected too, since the padding reads as version 0. It goes no
-further. The obsolete and extension commands (Traceon, Traceoff, the
+satisfy, so about 99.2% of random datagrams are rejected. Measured the
+same way, the walk stopped for about 99.2% in each case: the 300-byte
+payloads sent to 520, and the 0-600 byte ones unpadded and padded, the
+differences between them within sampling noise; an empty datagram
+padded to the minimum is rejected too, since the padding reads as
+version 0. It goes no further. The obsolete and extension commands
+(TraceOn, TraceOff, the
 triggered and update messages) decode, and so does a RIPv1 message
 with nonzero must-be-zero fields, which RFC 1058 tells a receiver to
 ignore but a decoder should show. Past the header, any 20 bytes are an

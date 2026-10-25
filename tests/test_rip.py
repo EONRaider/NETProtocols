@@ -198,7 +198,7 @@ class TestCapturedMessages:
             auth = rip.authentication
             assert auth is not None
             assert (auth.afi, auth.auth_type) == (0xFFFF, 2)
-            assert auth.auth_type_name == "Plain-text Password"
+            assert auth.auth_type_name == "Plain-text password"
             assert auth.password == b"nprip-pw"
             assert auth.data == b"nprip-pw".ljust(16, b"\x00")
             assert auth.packet_length is None
@@ -237,16 +237,18 @@ class TestCapturedMessages:
             assert rip.header_len == auth.packet_length + trailer_len
 
     def test_sequence_numbers(self):
-        """Lead with sequence number 0 in a Request, then count up.
+        """Send sequence number 0 in a Request, then a larger one.
 
-        BIRD's Responses carry a nonzero, non-decreasing one.
+        Per router: its Request carries 0 and its first Response, two
+        frames later, a nonzero number (BIRD's clock).
         """
         for indices in (MD5, SHA256):
-            numbers = [
-                rip_of(i).authentication.sequence_number for i in indices
-            ]
-            assert numbers[:2] == [0, 0]
-            assert all(number > 0 for number in numbers[2:])
+            for request in indices[:2]:
+                numbers = [
+                    rip_of(i).authentication.sequence_number
+                    for i in (request, request + 2)
+                ]
+                assert numbers[0] == 0 < numbers[1]
 
     def test_the_digests_verify_with_the_published_keys(self):
         """Verify every digest with the published keys.
@@ -355,6 +357,14 @@ class TestTrailersAndTruncation:
         )
         assert rip.entries == rip_of(19).entries
 
+    def test_a_cut_inside_the_trailer_header_keeps_what_arrived(self):
+        """A trailer cut inside its 4-byte header is still the trailer."""
+        raw = message_bytes(19)
+        packet_length = rip_of(19).authentication.packet_length
+        rip = RIP.decode(raw[: packet_length + 2])
+        assert rip.authentication_trailer == b"\xff\xff"
+        assert rip.remainder == b""
+
     def test_a_cut_at_the_trailer_leaves_it_empty(self):
         """A message cut where its trailer starts has an empty trailer."""
         packet_length = rip_of(19).authentication.packet_length
@@ -382,8 +392,35 @@ class TestPacketLength:
     """Locate the trailer only by a usable Packet Length.
 
     That is one past the authentication entry, on an entry boundary and
-    within the body.
+    within the body, at bytes that start as a trailer does.
     """
+
+    def test_a_packet_length_pointing_at_a_route_names_no_trailer(self):
+        """Read a route, not a trailer, where Packet Length points at it.
+
+        The trailer must start ``0xFFFF 0x0001``; a Packet Length that
+        points at a route instead falls back to 20-byte entries.
+        """
+        routes = entry() + entry("198.51.100.0")
+        trailer = b"\xff\xff\x00\x01" + bytes(16)
+        rip = RIP.decode(
+            b"\x02\x02\x00\x00" + crypto_auth(24) + routes + trailer
+        )
+        assert rip.authentication_trailer is None
+        assert [r.address for r in rip.routes] == ["192.0.2.0", "198.51.100.0"]
+        assert rip.remainder == b""
+        assert len(rip.entries) == 4
+        assert rip.entries[3].auth_type_name == "Authentication Trailer"
+
+    def test_the_widest_cryptographic_fields(self):
+        """Read every type 3 field unsigned, its widest value included."""
+        auth = RIPAuthentication(3, b"\xff" * 8 + bytes(8))
+        assert (
+            auth.packet_length,
+            auth.key_id,
+            auth.auth_data_len,
+            auth.sequence_number,
+        ) == (0xFFFF, 0xFF, 0xFF, 0xFFFFFFFF)
 
     def test_a_trailer_that_is_not_a_multiple_of_twenty(self):
         """A 36-byte HMAC-SHA-256 trailer is located by Packet Length."""
@@ -443,6 +480,27 @@ class TestPacketLength:
         assert rip.entries[1].password == b"pw"
         assert len(rip.routes) == 1
 
+    def test_a_first_entry_with_afi_0xff00_is_a_route(self):
+        """Authenticate only with AFI 0xFFFF, both bytes of it."""
+        rip = RIP.decode(b"\x02\x02\x00\x00" + entry(afi=0xFF00))
+        assert rip.authentication is None
+        (route,) = rip.routes
+        assert route.afi == 0xFF00
+        assert rip.entries == (route,)
+
+    def test_a_password_keeps_its_leading_bytes(self):
+        """Strip only the NUL padding on the right (RFC 2453 §4.1).
+
+        The password is left-justified, so a leading NUL or space is
+        part of it.
+        """
+        auth = RIPAuthentication(2, b"\x00 pw ".ljust(16, b"\x00"))
+        assert auth.password == b"\x00 pw "
+
+    def test_authentication_type_0_is_named_none(self):
+        """Name type 0 as IANA's registry does."""
+        assert RIPAuthentication(0).auth_type_name == "none"
+
     def test_unknown_authentication_types(self):
         """An unknown authentication type decodes, its fields ``None``."""
         auth = RIPAuthentication(9, bytes(range(16)))
@@ -474,6 +532,7 @@ class TestDecodeGuard:
         with pytest.raises(InvalidFieldError) as caught:
             RIP.decode(b"\x00\x02\x00\x00" + entry())
         assert (caught.value.field, caught.value.offset) == ("command", 0)
+        assert (caught.value.actual, caught.value.expected) == (0, "1-255")
 
     def test_a_rejected_guess_is_reported_at_the_rip_header(self):
         """A rejected guess keeps the layers below and names its offset."""
@@ -503,11 +562,14 @@ class TestDecodeGuard:
     @pytest.mark.parametrize(
         "command,name",
         [
-            (3, "Traceon"),
-            (4, "Traceoff"),
+            (3, "TraceOn"),
+            (4, "TraceOff"),
             (5, "Reserved"),
             (6, "Triggered Request"),
+            (7, "Triggered Response"),
+            (8, "Triggered Acknowledgement"),
             (9, "Update Request"),
+            (10, "Update Response"),
             (11, "Update Acknowledge"),
             (12, "unknown (12)"),
             (255, "unknown (255)"),
