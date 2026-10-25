@@ -278,11 +278,11 @@ class Registry:
                 self._publish(child, key, protocol)
 
     def _withhold(self, table: str, key: int) -> None:
-        """Make ``key`` in ``table`` dispatch to nothing, and stay that
-        way when its parent table registers the key.
+        """Make ``key`` in ``table`` dispatch to nothing, inherited or not.
 
-        For a number one IP family must not inherit from the other: the
-        defaults withhold OSPF's 89 from ``ip.proto.v6``, where it means
+        It stays that way when the parent table registers the key. This
+        is for a number one IP family must not inherit from the other:
+        the defaults withhold OSPF's 89 from ``ip.proto.v6``, where it means
         OSPFv3. A registration made directly in ``table`` still fills
         the key, since that is a deliberate choice for this table.
         A class already registered directly in ``table`` stands, so

@@ -149,8 +149,8 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | GRE | `GRE` | RFC 2784/2890, IP protocol 47; payload chains onward by EtherType |
 | 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 3 | IPsec ESP | `ESP` | RFC 4303, IP protocol 50; SPI and sequence number decoded, the protected remainder kept as opaque `ciphertext` — the chain ends here by design, since without the Security Association nothing says where the Next Header is |
-| 3 | OSPFv2 | `OSPF` | RFC 2328, IP protocol 89 over IPv4; the 24-byte header, then Hello, Database Description, LS Request, LS Update and LS Acknowledgment parsed by typed accessors; LSA headers decoded, LSA bodies kept raw; packet checksum and LSA Fletcher checksum compute/verify. OSPFv3 (RFC 5340, IPv6) is not decoded: IPv6 protocol 89 ends the walk |
 | 3 | IPsec AH | `AH`, `AHv6` | RFC 4302, IP protocol 51; fixed fields decoded and the ICV kept raw (never verified), then the payload chains onward by `next_header` through the outer IP family's table — `AHv6`, an `AH` subclass, is what IPv6 dispatches to |
+| 3 | OSPFv2 | `OSPF` | RFC 2328, IP protocol 89 over IPv4; the 24-byte header, then Hello, Database Description, LS Request, LS Update and LS Acknowledgment parsed by typed accessors; LSA headers decoded, LSA bodies kept raw; packet checksum and LSA Fletcher checksum compute/verify. OSPFv3 (RFC 5340, IPv6) is not decoded: IPv6 protocol 89 ends the walk |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |

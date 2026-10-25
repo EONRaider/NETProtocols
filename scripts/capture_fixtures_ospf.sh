@@ -96,11 +96,16 @@ cleanup() {
     sleep 1
     ip netns del "$NSA" 2>/dev/null || true
     ip netns del "$NSB" 2>/dev/null || true
+    # A setup that failed between creating the veth pair and moving its
+    # ends leaves one in the root namespace; deleting it removes its
+    # peer as well.
+    ip link del "$A" 2>/dev/null || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
 ip netns del "$NSA" 2>/dev/null || true
 ip netns del "$NSB" 2>/dev/null || true
+ip link del "$A" 2>/dev/null || true
 
 echo "[*] veth + two netns (A 10.9.83.1, B 10.9.83.2)"
 ip netns add "$NSA"; ip netns add "$NSB"
@@ -229,8 +234,14 @@ for segment in none simple md5; do
     # FRR delays its acknowledgments (RFC 2328 §13.5) by about a second.
     sleep 4
     kill -INT "$TCPDUMP_PID"
-    wait "$TCPDUMP_PID" || true
+    # tcpdump exits 0 on SIGINT; anything else means a broken capture.
+    status=0
+    wait "$TCPDUMP_PID" || status=$?
     TCPDUMP_PID=
+    if (( status != 0 )); then
+        echo "tcpdump exited with status $status ($segment)." >&2
+        exit 1
+    fi
     stop_routers
 done
 
