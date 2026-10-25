@@ -1125,3 +1125,63 @@ class TestIndependentChecker:
         frame = bytearray(FRAMES[0])
         frame[PIM_START] = 0x10
         assert self.check(bytes(frame))[0] == ["pim-version"]
+
+    @staticmethod
+    def ipv6_null_register(source_address: str, dummy_len: int = 4) -> bytes:
+        """Build an IPv6 Null-Register as RFC 7761 §4.9.3 describes it.
+
+        Its packet is a dummy IPv6 header from ``source_address`` to
+        ``ff3e::1`` (next header 103, payload length 4) and the dummy PIM
+        header after it, cut to ``dummy_len`` bytes: version, type and
+        reserved zero, its checksum over the pseudo-header of that
+        source and group, computed here.
+        """
+        src = IPv6Address(source_address).packed
+        grp = IPv6Address("ff3e::1").packed
+        pseudo = src + grp + struct.pack("!I3xB", 4, 103)
+        dummy_pim = struct.pack(
+            "!HH", 0, ones_complement_checksum(pseudo + bytes(4))
+        )
+        header = struct.pack("!IHBB", 6 << 28, 4, 103, 255) + src + grp
+        packet = header + dummy_pim[:dummy_len]
+        register = PIMRegister(null_register=True, packet=packet)
+        return ipv6_frame(PIM(type=1, body=bytes(register)))
+
+    #: Sources whose third and fourth bytes (the dummy IPv6 header's
+    #: bytes 10-11, an IPv4 header's checksum) are nonzero and zero.
+    NULL_REGISTER_SOURCES = ["2001:db8::10", "::1"]
+
+    @pytest.mark.parametrize("source_address", NULL_REGISTER_SOURCES)
+    def test_an_ipv6_null_registers_dummy_pim_header_is_checked(
+        self, source_address
+    ):
+        """Check the dummy PIM header's checksum, not parse it as PIM."""
+        frame = self.ipv6_null_register(source_address)
+        failures, stats = self.check(frame)
+        assert failures == []
+        assert stats["pim"] == 1
+        assert stats["pim-null-register-v6"] == 1
+        assert "pim-null-register-unchecked" not in stats
+        for offset in (-1, -6):  # its checksum; the dummy header's group
+            tampered = bytearray(frame)
+            tampered[offset] ^= 0x01
+            failures, _ = self.check(bytes(tampered))
+            assert failures == ["pim-null-register-checksum"]
+
+    def test_an_ipv6_null_register_without_a_dummy_pim_header(self):
+        """Pass one without the dummy PIM header, which has no checksum.
+
+        RFC 7761 §4.9.3 checks it only "if the dummy PIM header is
+        present".
+        """
+        frame = self.ipv6_null_register("2001:db8::10", dummy_len=0)
+        failures, stats = self.check(frame)
+        assert failures == []
+        assert stats["pim-null-register-unchecked"] == 1
+
+    def test_an_ipv6_null_registers_cut_dummy_pim_header(self):
+        """Count a dummy PIM header cut short as truncated."""
+        frame = self.ipv6_null_register("2001:db8::10", dummy_len=2)
+        failures, stats = self.check(frame)
+        assert failures == []
+        assert stats["pim-null-register-truncated"] == 1

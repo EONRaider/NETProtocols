@@ -249,7 +249,9 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   kernel), and `check_fixtures` verifies it too. The Null-Register's
   dummy IPv4 header carries a zero header checksum, which RFC 7761
   §4.9.3 says a receiver must not check, so `check_fixtures` counts it
-  as `pim-null-register-unchecked`. veth does not pad frames, and the
+  as `pim-null-register-unchecked` (an IPv6 Null-Register's dummy PIM
+  header, which no capture here holds, is checked by its own checksum;
+  `tests/test_pim.py` builds two). veth does not pad frames, and the
   shortest here (the Register-Stop, a 38-byte datagram) would get 8
   bytes of zero padding from a real NIC; `tests/test_pim.py` appends
   padding and a 4-byte trailer by hand. The kernel had no IPv6, so PIM

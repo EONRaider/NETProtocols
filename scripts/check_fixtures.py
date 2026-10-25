@@ -384,19 +384,64 @@ def _check_pim_register(
     upper: bytes, stats: Counter, depth: int, *, strict: bool
 ) -> list[str]:
     """Validate the packet a PIM Register encapsulates, from its IP
-    header. A Null-Register's dummy IPv4 header may carry a zero header
-    checksum, which RFC 7761 §4.9.3 says a receiver must not check; one
-    that carries a checksum is checked like any packet."""
+    header; a Null-Register's dummy header goes to
+    :func:`_check_null_register` first."""
     if len(upper) < 8:
         stats["pim-register-truncated"] += 1
         return ["unchecked-pim-register-truncated"] if strict else []
     inner = upper[8:]
-    null_register = bool(upper[4] & 0x40)
-    if null_register and len(inner) >= 20 and inner[10:12] == b"\x00\x00":
-        stats["pim-null-register-unchecked"] += 1
-        return []
+    if upper[4] & 0x40:
+        null_register = _check_null_register(inner, stats, strict=strict)
+        if null_register is not None:
+            return null_register
     ethertype = 0x86DD if inner[:1] and inner[0] >> 4 == 6 else 0x0800
     return _check_l3(ethertype, inner, stats, depth + 1, strict=strict)
+
+
+def _check_null_register(
+    inner: bytes, stats: Counter, *, strict: bool
+) -> list[str] | None:
+    """Validate a Null-Register's dummy header where it is not an IP
+    packet to check like any other, else return ``None``. A dummy IPv4
+    header may carry a zero header checksum, which RFC 7761 §4.9.3 says
+    a receiver must not check; one that carries a checksum is checked
+    like any packet. A dummy IPv6 header is followed by a dummy PIM
+    header of version 0, not a PIM message, so it is checked by
+    :func:`_check_null_register_v6` instead. The version nibble decides
+    which: bytes 10-11 are an IPv6 header's source address."""
+    version = inner[0] >> 4 if inner else None
+    if version == 4 and len(inner) >= 20 and inner[10:12] == b"\x00\x00":
+        stats["pim-null-register-unchecked"] += 1
+        return []
+    if version == 6 and len(inner) >= 40:
+        return _check_null_register_v6(inner, stats, strict=strict)
+    return None
+
+
+def _check_null_register_v6(
+    inner: bytes, stats: Counter, *, strict: bool
+) -> list[str]:
+    """Validate an IPv6 Null-Register's dummy PIM header (RFC 7761
+    §4.9.3): the 4 bytes after the dummy IPv6 header, version, type and
+    reserved all zero, whose checksum covers them under the IPv6
+    pseudo-header of the dummy header's source and group, upper-layer
+    length 4 and next header 103. The RFC asks a receiver to check that
+    checksum "if the dummy PIM header is present", and names nothing
+    else to check. One that is absent has no checksum to check, like a
+    dummy IPv4 header's zero one; one cut short cannot be checked."""
+    stats["pim-null-register-v6"] += 1
+    dummy = inner[40:44]
+    if not dummy:
+        stats["pim-null-register-unchecked"] += 1
+        return []
+    if len(dummy) < 4:
+        stats["pim-null-register-truncated"] += 1
+        return ["unchecked-pim-null-register-truncated"] if strict else []
+    pseudo = pseudo_v6(inner[8:24], inner[24:40], _PIM, len(dummy))
+    wire = struct.unpack_from("!H", dummy, 2)[0]
+    if internet_checksum(pseudo + dummy[:2] + b"\x00\x00") != wire:
+        return ["pim-null-register-checksum"]
+    return []
 
 
 #: The IANA-assigned VXLAN destination port (RFC 7348 §5).
