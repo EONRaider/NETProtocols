@@ -180,7 +180,10 @@ def _check_ospf_md5(
     if key is None or authentication[3] != _OSPF_MD5_LEN:
         return ["ospf-unknown-key"]
     digest = upper[len(packet) : len(packet) + _OSPF_MD5_LEN]
-    expected = hashlib.md5(packet + key.ljust(16, b"\x00")).digest()
+    # RFC 2328 Appendix D mandates MD5; this only verifies the router's digest.
+    expected = hashlib.md5(
+        packet + key.ljust(16, b"\x00"), usedforsecurity=False
+    ).digest()
     failures = [] if wire == 0 else ["ospf-checksum"]
     if not hmac.compare_digest(digest, expected):
         failures.append("ospf-md5-digest")

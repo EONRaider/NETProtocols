@@ -559,7 +559,10 @@ class TestAuthentication:
         for frame in FRAMES[36:]:
             ospf = decode_frame(frame)[OSPF]
             packet = bytes(ospf)[: ospf.packet_length]
-            assert ospf.auth_trailer == hashlib.md5(packet + MD5_KEY).digest()
+            # RFC 2328 Appendix D mandates MD5; this only verifies the
+            # digest the router sent.
+            digest = hashlib.md5(packet + MD5_KEY, usedforsecurity=False)
+            assert ospf.auth_trailer == digest.digest()
 
     def test_a_cut_digest_raises(self):
         """Raise on a digest the buffer cuts short."""
@@ -579,7 +582,9 @@ class TestAuthentication:
         frame[34 + 14] = 1
         length = int.from_bytes(frame[36:38], "big")
         packet = bytes(frame[34 : 34 + length])
-        frame[34 + length :] = hashlib.md5(packet + MD5_KEY).digest()
+        # RFC 2328 Appendix D mandates MD5; this recomputes a router's digest.
+        digest = hashlib.md5(packet + MD5_KEY, usedforsecurity=False)
+        frame[34 + length :] = digest.digest()
         return bytes(frame)
 
     def test_the_instance_id_is_byte_14_and_au_type_byte_15(self):

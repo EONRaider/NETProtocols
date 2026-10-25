@@ -626,7 +626,10 @@ def ospf_instance_1_md5_frame() -> bytes:
     frame[34 + 14] = 1
     length = int.from_bytes(frame[36:38], "big")
     packet = bytes(frame[34 : 34 + length])
-    digest = hashlib.md5(packet + b"NETProtocols-md5").digest()
+    # RFC 2328 Appendix D mandates MD5; this recomputes a router's digest.
+    digest = hashlib.md5(
+        packet + b"NETProtocols-md5", usedforsecurity=False
+    ).digest()
     frame[34 + length :] = digest
     return bytes(frame)
 
