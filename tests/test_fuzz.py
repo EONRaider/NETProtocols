@@ -29,10 +29,10 @@ import contextlib
 import sys
 
 import pytest
-from hypothesis import given
+from hypothesis import event, given
 from hypothesis import strategies as st
 
-from conftest import corpus_frames
+from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     AH,
     ARP,
@@ -567,8 +567,32 @@ _rip_like = st.tuples(
 ).map(b"".join)
 
 
+#: The captured RIP messages, every one past its UDP header.
+_RIP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "rip.pcap")]
+
+
+@st.composite
+def _rip_seeded(draw: st.DrawFn) -> bytes:
+    """A captured RIP message, a few body bytes changed, cut anywhere
+    past the header and followed by nothing, an FCS-like 4 bytes or up
+    to 23 more: the authentication entries, a trailer located by a
+    real Packet Length, and remainders, which free bytes rarely
+    reach."""
+    raw = bytearray(draw(st.sampled_from(_RIP_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(4, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(4, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
 class TestRIPAccessorSafety:
-    @given(data=st.one_of(fuzz_input, _rip_like))
+    @given(data=st.one_of(_rip_seeded(), _rip_like, fuzz_input))
     def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
         """decode() raises only on the 4-byte header (too short, a
         version other than 1 or 2, command 0) and keeps every byte
@@ -600,6 +624,9 @@ class TestRIPAccessorSafety:
                 assert entry.afi_name
         auth = rip.authentication
         assert auth is None or entries[0] == auth
+        event(f"RIP authentication type: {auth and auth.auth_type}")
+        event(f"RIP trailer located: {trailer is not None}")
+        event(f"RIP remainder: {bool(rip.remainder)}")
 
 
 def _read_every_accessor(msg: HTTP) -> None:

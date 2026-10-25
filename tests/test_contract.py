@@ -75,11 +75,12 @@ class TestTruncation:
 
 
 class TestDamagedPayload:
-    """A transport layer survives a frame that is cut short or carries
-    a trailer. SCTP is the case to pin: it has no length field and walks
-    its chunks to find its end, so past its 12-byte common header it
-    keeps a remainder it cannot walk instead of raising (see _base.py),
-    in strict and lax walks alike."""
+    """A layer without a length field survives a frame that is cut
+    short or carries a trailer. SCTP walks its chunks to find its end,
+    so past its 12-byte common header it keeps a remainder it cannot
+    walk instead of raising (see _base.py); RIP keeps everything past
+    its 4-byte header and reports a remainder shorter than an entry. In
+    strict and lax walks alike."""
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(

@@ -4,7 +4,7 @@ RIP (RFC 1058 for version 1, RFC 2453 for version 2) is a
 distance-vector routing protocol carried in UDP datagrams to and from
 port 520. A message is a 4-byte header followed by a list of 20-byte
 entries filling the rest of the datagram, up to 25 of them (RFC 2453
-§4)::
+§3.6; the layout is §4's)::
 
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -56,9 +56,10 @@ then split that body without raising:
   from the offset the RIPv2 Packet Length field gives to the end of the
   body. It is not sized by Auth Data Len, which senders fill in two
   ways: the digest's own length, as RFC 4822 says, or that plus the
-  trailer's 4-byte header, as Quagga did for keyed MD5. BIRD 2.14 does
-  each: the corpus's keyed-MD5 messages declare 20 for a 16-byte digest,
-  its HMAC-SHA-256 ones 32 for a 32-byte digest.
+  trailer's 4-byte header. BIRD 2.14 does each: the corpus's keyed-MD5
+  messages declare 20 for a 16-byte digest, its HMAC-SHA-256 ones 32
+  for a 32-byte digest. FRR's ripd has a switch between two keyed-MD5
+  lengths for the same reason (``auth-length rfc|old-ripd``).
 - :attr:`RIP.remainder` is what is left after the last whole entry
   when the message has no trailer: fewer than 20 bytes, which cannot be
   an entry.

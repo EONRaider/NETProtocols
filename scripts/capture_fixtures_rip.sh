@@ -19,9 +19,9 @@
 # authentication trailer: 20 bytes for keyed MD5 and 36 for
 # HMAC-SHA-256, which is not a multiple of a route entry's 20 bytes.
 # BIRD fills in Auth Data Len inconsistently between the two (20 for
-# keyed MD5, counting the trailer's own 4-byte header as Quagga did, but
-# 32 for HMAC-SHA-256, the digest alone, as RFC 4822 says), and the
-# fixture keeps both as sent.
+# keyed MD5, counting the trailer's own 4-byte header with the 16-byte
+# digest, but 32 for HMAC-SHA-256, the digest alone, as RFC 4822 says),
+# and the fixture keeps both as sent.
 #
 # On start each daemon sends a Request for the whole table (one entry,
 # AFI 0, metric 16, RFC 2453 §3.9.1) and then a Response. Updates
