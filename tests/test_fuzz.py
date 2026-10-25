@@ -36,6 +36,7 @@ from conftest import corpus_frames
 from netprotocols import (
     AH,
     ARP,
+    BGP,
     DHCP,
     DNS,
     ESP,
@@ -48,6 +49,8 @@ from netprotocols import (
     VLAN,
     VXLAN,
     AHv6,
+    BGPPathAttribute,
+    BGPPrefix,
     DNSOverTCP,
     Ethernet,
     ICMPv4,
@@ -67,6 +70,8 @@ from netprotocols import (
 )
 from strategies import (
     ROUND_TRIP_STRATEGIES,
+    bgp_path_attributes,
+    bgp_prefixes,
     http_context_responses,
     http_messages,
     http_wire,
@@ -100,6 +105,7 @@ ALL_PROTOCOLS = (
     AHv6,
     HTTP,
     VXLAN,
+    BGP,
 )
 
 
@@ -439,6 +445,163 @@ class TestIPv6OptionAccessorSafety:
                 for option in header.parsed_options:
                     assert option.type_name
                     _ = option.unrecognized_action
+
+
+#: Message bodies from a small alphabet of the values BGP's lengths and
+#: flags turn on (prefix lengths at and past 32, the Extended Length
+#: flag, RFC 9072's 255), so the body accessors' error paths are hit far
+#: more often than free bytes would hit them.
+_bgp_body = st.lists(
+    st.sampled_from([0, 0, 1, 2, 3, 4, 8, 24, 32, 33, 0x10, 0x40, 0x50, 0xFF]),
+    max_size=80,
+).map(bytes)
+
+
+def _sized(raw: bytes, width: int = 2) -> bytes:
+    return len(raw).to_bytes(width, "big") + raw
+
+
+def _attribute(flags: int, code: int, data: bytes) -> bytes:
+    return bytes([flags, code]) + _sized(data, 2 if flags & 0x10 else 1)
+
+
+#: Well-formed path attributes and OPEN parameters, mostly of the
+#: types whose values are decoded, with values of every length near the
+#: right one.
+_bgp_attributes = st.lists(
+    st.builds(
+        _attribute,
+        st.sampled_from([0x40, 0x50, 0x80, 0xC0, 0xD0, 0x20]),
+        st.sampled_from([1, 2, 3, 4, 5, 6, 8, 14, 99]),
+        st.binary(max_size=6),
+    ),
+    max_size=5,
+).map(b"".join)
+_bgp_prefixes = st.lists(bgp_prefixes(), max_size=5).map(
+    lambda prefixes: b"".join(map(bytes, prefixes))
+)
+_bgp_parameters = st.lists(
+    st.builds(
+        lambda type_, value: bytes([type_]) + _sized(value, 1),
+        st.sampled_from([1, 2, 7]),
+        st.binary(max_size=6),
+    ),
+    max_size=4,
+).map(b"".join)
+
+
+@st.composite
+def bgp_body(draw: st.DrawFn, type_: int) -> bytes:
+    """A body shaped like the type's: an UPDATE's three fields behind
+    lengths that fit, an OPEN's fixed fields and parameters behind a
+    length that fits (or 255, RFC 9072's marker), from
+    :data:`_bgp_body`'s alphabet, so the field walks both succeed and
+    fail; and, now and then, one byte overwritten to break a length."""
+    if type_ == 2:
+        withdrawn = draw(st.one_of(_bgp_prefixes, _bgp_body))
+        attributes = draw(st.one_of(_bgp_attributes, _bgp_body))
+        nlri = draw(st.one_of(_bgp_prefixes, _bgp_body))
+        body = _sized(withdrawn) + _sized(attributes) + nlri
+    elif type_ == 1:
+        params = draw(st.one_of(_bgp_parameters, _bgp_body))
+        declared = draw(st.sampled_from([len(params) % 256, 255]))
+        body = draw(st.binary(min_size=9, max_size=9)) + bytes([declared])
+        body += params
+    else:
+        body = draw(_bgp_body)
+    if body and not draw(st.integers(0, 3)):
+        at = draw(st.integers(0, len(body) - 1))
+        byte = draw(st.sampled_from([0x00, 0x01, 0xFF]))
+        body = body[:at] + bytes([byte]) + body[at + 1 :]
+    return body
+
+
+@st.composite
+def bgp_like(draw: st.DrawFn) -> bytes:
+    """A Marker, a Length that matches the body, a Type 1-5 and a body
+    from :func:`bgp_body`, sometimes with bytes after it."""
+    type_ = draw(st.integers(min_value=1, max_value=5))
+    body = draw(bgp_body(type_))
+    tail = draw(st.sampled_from([b"", b"\xff" * 3, bytes(4), b"\x01"]))
+    header = b"\xff" * 16 + (19 + len(body)).to_bytes(2, "big")
+    return header + bytes([type_]) + body + tail
+
+
+def _read_every_bgp_accessor(msg: BGP) -> None:
+    """Read every accessor: the body parsers may raise InvalidFieldError,
+    and nothing else may raise at all."""
+    for name in (
+        "type_name",
+        "version",
+        "my_as",
+        "hold_time",
+        "bgp_identifier",
+        "extended_optional_parameters",
+        "error_code",
+        "error_subcode",
+        "error_data",
+        "error_code_name",
+        "error_subcode_name",
+        "shutdown_communication",
+    ):
+        getattr(msg, name)
+    with contextlib.suppress(InvalidFieldError):
+        for param in msg.optional_parameters or ():
+            assert param.type_name
+    for name in ("withdrawn_routes", "nlri"):
+        with contextlib.suppress(InvalidFieldError):
+            for prefix in getattr(msg, name) or ():
+                assert str(prefix) == str(prefix.network)
+                assert bytes(prefix)
+    with contextlib.suppress(InvalidFieldError):
+        for attribute in msg.path_attributes or ():
+            assert attribute.type_name
+            _ = (attribute.value, attribute.value_text, bytes(attribute))
+            _ = (attribute.optional, attribute.transitive, attribute.partial)
+
+
+class TestBGPAccessorSafety:
+    @given(data=st.one_of(fuzz_input, bgp_like()))
+    def test_accessors_never_hang_or_escape(self, data: bytes) -> None:
+        """Decode bounds a message by its own Length, whatever follows
+        it; the body accessors raise only InvalidFieldError and the
+        rest never raise."""
+        try:
+            msg = BGP.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(msg) == data[: msg.header_len]
+        assert BGP.decode(bytes(msg)) == msg
+        _read_every_bgp_accessor(msg)
+
+    @given(
+        withdrawn=st.lists(bgp_prefixes(), max_size=6),
+        attributes=st.lists(bgp_path_attributes(), max_size=6),
+        nlri=st.lists(bgp_prefixes(), max_size=6),
+    )
+    def test_built_updates_parse_back(
+        self,
+        withdrawn: list[BGPPrefix],
+        attributes: list[BGPPathAttribute],
+        nlri: list[BGPPrefix],
+    ) -> None:
+        """An UPDATE built from prefixes and attributes (either length
+        width) parses back into exactly those parts."""
+        raw_withdrawn = b"".join(map(bytes, withdrawn))
+        raw_attributes = b"".join(map(bytes, attributes))
+        body = (
+            len(raw_withdrawn).to_bytes(2, "big")
+            + raw_withdrawn
+            + len(raw_attributes).to_bytes(2, "big")
+            + raw_attributes
+            + b"".join(map(bytes, nlri))
+        )
+        msg = BGP.decode(
+            b"\xff" * 16 + (19 + len(body)).to_bytes(2, "big") + b"\x02" + body
+        )
+        assert msg.withdrawn_routes == tuple(withdrawn)
+        assert msg.path_attributes == tuple(attributes)
+        assert msg.nlri == tuple(nlri)
 
 
 class TestIPv4OptionAccessorSafety:

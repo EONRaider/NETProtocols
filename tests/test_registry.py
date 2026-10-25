@@ -316,6 +316,7 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_UDP_PORT, 68).__name__ == "DHCP"
         assert DEFAULT.get(TABLE_UDP_PORT, 4789).__name__ == "VXLAN"
         assert DEFAULT.get(TABLE_TCP_PORT, 53).__name__ == "DNSOverTCP"
+        assert DEFAULT.get(TABLE_TCP_PORT, 179).__name__ == "BGP"
 
 
 class TestRepr:

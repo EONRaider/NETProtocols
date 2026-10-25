@@ -50,13 +50,19 @@ chain always terminates; but nothing stopped a crafted frame from
 nesting far enough to waste real time. ``max_depth`` bounds it, and
 exceeding it raises :class:`~netprotocols.MaxDepthExceededError` (or,
 in lax mode, ends the walk and is reported). The default of
-:data:`MAX_DEPTH` is generous: the deepest chain in the project's
-corpus is 7 layers (an ICMP echo tunnelled through VXLAN: Ethernet,
-IPv4, UDP, VXLAN, then the inner Ethernet, IPv4 and ICMPv4), and even
-a doubly-tagged QinQ frame carrying IPv6 with three extension headers
-and DNS over TCP reaches 11. A tunnel nested inside a tunnel is what
-the ceiling is for: each level of VXLAN adds four layers, so the
-default stops a frame nested eight levels deep.
+:data:`MAX_DEPTH` is generous for nested headers: the deepest such
+chain in the project's corpus is 7 layers (an ICMP echo tunnelled
+through VXLAN: Ethernet, IPv4, UDP, VXLAN, then the inner Ethernet,
+IPv4 and ICMPv4), and even a doubly-tagged QinQ frame carrying IPv6
+with three extension headers and DNS over TCP reaches 11. A tunnel
+nested inside a tunnel is what the ceiling is for: each level of VXLAN
+adds four layers, so the default stops a frame nested eight levels
+deep. BGP is the exception that nests nothing: every message in a TCP
+segment is a layer of its own, so a segment of many small messages
+makes a long chain on its own. The corpus's deepest chain is one, 10
+layers (a segment of 7 UPDATEs), but a 1448-byte segment can hold 76
+KEEPALIVEs, 79 layers, which the default stops; see
+:mod:`netprotocols.layer7.bgp`.
 
 On ``memoryview``
 -----------------
@@ -87,8 +93,9 @@ from netprotocols.utils.exceptions import (
 __all__ = ["MAX_DEPTH", "decode_frame"]
 
 #: Default ceiling on how many headers one frame may chain. Generous
-#: against real traffic (the corpus peaks at 7, a VXLAN-tunnelled echo)
-#: and small enough that a hostile frame cannot turn one walk into
+#: against real traffic (the corpus peaks at 10, a TCP segment of 7 BGP
+#: messages, and at 7 for nested headers, a VXLAN-tunnelled echo) and
+#: small enough that a hostile frame cannot turn one walk into
 #: thousands of decodes.
 MAX_DEPTH = 32
 

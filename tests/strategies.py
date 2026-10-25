@@ -18,6 +18,7 @@ from hypothesis import strategies as st
 from netprotocols import (
     AH,
     ARP,
+    BGP,
     DHCP,
     DNS,
     ESP,
@@ -28,6 +29,8 @@ from netprotocols import (
     VLAN,
     VXLAN,
     AHv6,
+    BGPPathAttribute,
+    BGPPrefix,
     DNSOverTCP,
     ICMPv4,
     ICMPv6,
@@ -301,6 +304,39 @@ def sctp_headers(draw: st.DrawFn) -> SCTP:
 
 
 @st.composite
+def bgp_prefixes(draw: st.DrawFn) -> BGPPrefix:
+    length = draw(st.integers(0, 32))
+    size = (length + 7) // 8
+    return BGPPrefix(
+        length=length, prefix=draw(st.binary(min_size=size, max_size=size))
+    )
+
+
+@st.composite
+def bgp_path_attributes(draw: st.DrawFn) -> BGPPathAttribute:
+    flags = draw(st.integers(0, 0xFF))
+    limit = 300 if flags & 0x10 else 0xFF
+    return BGPPathAttribute(
+        flags=flags,
+        type_code=draw(st.integers(0, 0xFF)),
+        data=draw(st.binary(max_size=limit)),
+    )
+
+
+@st.composite
+def bgp_messages(draw: st.DrawFn) -> BGP:
+    # Any of the five types, with a body inside that type's length
+    # bounds (decode() rejects the rest); the body is opaque bytes, so
+    # an UPDATE or OPEN drawn here need not parse, which is what lets
+    # the round trip cover messages whose accessors would raise.
+    bounds = {1: (10, 64), 2: (4, 64), 3: (2, 64), 4: (0, 0), 5: (4, 64)}
+    type_ = draw(st.sampled_from(sorted(bounds)))
+    low, high = bounds[type_]
+    body = draw(st.binary(min_size=low, max_size=high))
+    return BGP(marker=BGP.MARKER, length=19 + len(body), type=type_, body=body)
+
+
+@st.composite
 def esp_packets(draw: st.DrawFn) -> ESP:
     # Everything past the SPI and sequence number is opaque, so any
     # bytes at all — including none — are a valid remainder.
@@ -489,4 +525,5 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "AHv6": ah_headers(AHv6),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
+    "BGP": bgp_messages(),
 }

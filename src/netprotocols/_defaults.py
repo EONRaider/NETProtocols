@@ -83,6 +83,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer4.sctp import SCTP
     from netprotocols.layer4.tcp import TCP
     from netprotocols.layer4.udp import UDP
+    from netprotocols.layer7.bgp import BGP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
     from netprotocols.layer7.vxlan import VXLAN
@@ -140,3 +141,9 @@ def install(registry: Registry) -> None:
     # port 53 names the shim that consumes it and then chains to the DNS
     # message, keeping the chain walk uniform.
     add(TABLE_TCP_PORT, 53, DNSOverTCP)
+
+    # BGP-4 (RFC 4271 §8.2.1): a speaker listens on 179 and the peer that
+    # opened the connection sends from an ephemeral port, so the
+    # destination-first lookup finds it in both directions. Each message
+    # decodes as one layer and chains to the next one in the segment.
+    add(TABLE_TCP_PORT, 179, BGP)

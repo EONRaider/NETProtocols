@@ -34,6 +34,12 @@ from netprotocols.layer3.ipv6_ext import (
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
+from netprotocols.layer7.bgp import (
+    BGP,
+    BGPOptionalParameter,
+    BGPPathAttribute,
+    BGPPrefix,
+)
 from netprotocols.layer7.dhcp import DHCP, DHCPOption
 from netprotocols.layer7.dns import (
     DNS,
@@ -91,6 +97,7 @@ __version__ = "2.4.0"
 __all__ = [
     "AH",
     "ARP",
+    "BGP",
     "DEFAULT",
     "DHCP",
     "DNS",
@@ -107,6 +114,9 @@ __all__ = [
     "AHv6",
     "ARPHardwareType",
     "ARPOperation",
+    "BGPOptionalParameter",
+    "BGPPathAttribute",
+    "BGPPrefix",
     "CapturedFrame",
     "DHCPOption",
     "DNSOverTCP",

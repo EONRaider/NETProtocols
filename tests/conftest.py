@@ -198,6 +198,13 @@ def raw_ah_header() -> bytes:
 
 
 @pytest.fixture
+def raw_bgp_keepalive() -> bytes:
+    """BGP KEEPALIVE from tests/fixtures/bgp.pcap: the all-ones Marker,
+    Length 19, Type 4, and no body."""
+    return b"\xff" * 16 + b"\x00\x13\x04"
+
+
+@pytest.fixture
 def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""

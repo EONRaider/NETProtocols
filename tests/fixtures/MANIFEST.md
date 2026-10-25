@@ -8,17 +8,18 @@ pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 140 frames across 22
+frames routinely leave checksums to NIC offload. 159 frames across 23
 scenarios. Addresses are as-captured from the capture host's network.
 
-Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Ten scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`) are captured separately by their own
+`sctp.pcap`, `bgp.pcap`) are captured separately by their own
 `scripts/capture_fixtures_*.sh` over purpose-built topologies — real
 kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
-a userspace SCTP association, and IPsec ESP and AH built by a script
-and sent through raw sockets — see their rows and the notes below.
+a userspace SCTP association, IPsec ESP and AH built by a script
+and sent through raw sockets, and BGP sessions between three BIRD
+speakers — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -43,6 +44,7 @@ and sent through raw sockets — see their rows and the notes below.
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
+| `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages (see BGP note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -172,7 +174,32 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   peels the VXLAN header on destination port 4789 and verifies the
   inner frame's checksums too. The outer source ports are the kernel's
   hash of each inner flow; none is a registered port. This file's echo
-  and UDP frames are the corpus's deepest chains, at 7 layers.
+  and UDP frames are the deepest chains outside `bgp.pcap`, at 7 layers.
+
+- `bgp.pcap` was produced by `scripts/capture_fixtures_bgp.sh`: three
+  BIRD 2.14 instances in their own netns on one Linux bridge — A (AS
+  65001) with an eBGP session to B (AS 65002) and an iBGP session to C
+  (AS 65001) — captured on the bridge, so both sessions and both
+  directions are in one file. Offload (checksum, TSO, GSO, GRO) was
+  disabled on every veth end first, so the kernel computed every TCP
+  checksum and no segment exceeds the 1460-byte MSS; `check_fixtures`
+  verifies them all. **What BIRD built: every BGP message** (the TCP
+  payload); **what the kernel built: the Ethernet, IPv4 and TCP
+  headers.** A originates five prefixes of different lengths (/24 to
+  /32), each with its own MED, B two with a MED and 600 /24s without
+  one, C one; then A withdraws its five and shuts both sessions down
+  with an RFC 8203 shutdown communication. Both speakers advertised
+  4-byte AS numbers (RFC 6793), so every AS_PATH carries 4-byte ones.
+  The script writes every frame to `bgp/bgp_session.pcap` (see below)
+  and keeps here only the frames whose payload is a whole number of
+  complete messages — of those carrying nothing but a KEEPALIVE, only
+  the first in each direction of each session — since a bare ACK or a
+  segment that starts or ends inside a message does not walk cleanly.
+  It checks what each direction's reassembled stream announced and
+  withdrew, prefix by prefix, before writing either file. The busiest
+  segment carries 7 UPDATEs, a 10-layer chain and the corpus's deepest.
+  The kernel had no IPv6, so BGP over IPv6 is covered by constructed
+  frames in `tests/test_bgp.py`.
 
 ### IPsec test keys
 
@@ -250,6 +277,20 @@ opened; `tests/test_http.py` reassembles them again through
 curl cannot pipeline (libcurl's `CURLMOPT_PIPELINING` has no effect for
 HTTP/1.1 since 7.62.0), hence the socket client for 07. The streams
 also seed `tests/fuzz/fuzz_http_decode.py`.
+
+## BGP session capture (`tests/fixtures/bgp/`)
+
+Outside the corpus on purpose, like the HTTP captures above: none of
+the counts above include it. `bgp_session.pcap` (94 frames, every TCP
+checksum verified by `check_fixtures`) is every frame of the session
+`bgp.pcap` was cut from, the handshakes, bare ACKs, FINs and
+KEEPALIVE-only segments included. Its point is the segments a
+per-segment walk cannot decode whole: frame 31 holds two complete
+UPDATEs and the first 332 bytes of a 1063-byte third, which frame 33
+finishes; frames 34-35 and 86-87 each split one UPDATE (2090 and 2430
+bytes) between them. `tests/test_bgp.py` walks those strictly and in
+lax mode, and reassembles each direction's stream to check it is
+nothing but whole messages.
 
 ## Provenance note
 

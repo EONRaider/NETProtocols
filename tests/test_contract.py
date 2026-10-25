@@ -6,6 +6,7 @@ import pytest
 from netprotocols import (
     AH,
     ARP,
+    BGP,
     ESP,
     HTTP,
     SCTP,
@@ -39,6 +40,7 @@ class TestTruncation:
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
             (VXLAN, "raw_vxlan_header"),
+            (BGP, "raw_bgp_keepalive"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
@@ -66,6 +68,13 @@ class TestTruncation:
         lying = raw_ah_header[:1] + b"\xff" + raw_ah_header[2:]
         with pytest.raises(TruncatedHeaderError):
             AH.decode(lying)
+
+    def test_lying_bgp_length_raises(self, raw_bgp_keepalive):
+        """An UPDATE whose Length claims 4096 bytes on a 23-byte
+        buffer: a message the segment cut, not a malformed one."""
+        lying = raw_bgp_keepalive[:16] + b"\x10\x00\x02" + bytes(4)
+        with pytest.raises(TruncatedHeaderError):
+            BGP.decode(lying)
 
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):

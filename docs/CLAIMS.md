@@ -998,8 +998,9 @@ eight lines:
   `MaxDepthExceededError`. Chains already terminated — every header
   validates its own declared length — so this bounds *cost*, not
   correctness: a crafted frame cannot turn one walk into thousands of
-  decodes. Corpus maximum is 7 layers (an ICMP echo tunnelled
-  through VXLAN).
+  decodes. Corpus maximum is 10 layers (a TCP segment carrying 7
+  BGP messages, one layer each); 7 for nested headers (an ICMP echo
+  tunnelled through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make
   you name the class and hand-roll the rest.
