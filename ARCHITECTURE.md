@@ -292,6 +292,8 @@ flowchart LR
   AH6 -->|50| ESP
   U -->|4789| VX[VXLAN]
   VX -->|always| E
+  T -->|179| BGP[BGP message]
+  BGP -->|another message in the segment| BGP
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -501,6 +503,31 @@ header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
 
+BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
+every message opens with a 16-byte Marker of all ones, which random
+bytes match once in 2^128, and then a Length and Type whose bounds
+depend on each other (§6.1). Measured the same way, over 10,000 random
+300-byte payloads and 10,000 of uniformly random length 0-600, padded
+or not, every walk to port 179 ended with `stopped_by` set and none
+decoded a BGP layer; with the Marker forced to all ones, the Length and
+Type checks alone still rejected 9,999 of 10,000 random 300-byte
+payloads. What the port cannot tell the decoder is where a message
+starts: TCP cuts its byte stream where it likes, so a segment can hold
+several messages, the tail of one, or the head of the next. Each
+message decodes as one `BGP` layer, and `BGP.next_protocol()` answers
+`BGP` while another message begins in the same segment. It is handed no
+bytes, so `BGP.decode()` records the answer on the instance, outside
+its comparison and hash, like `HTTP`'s decode context. A segment that
+ends inside a message raises `TruncatedHeaderError` at that message
+(lax mode keeps the ones before it); one that begins inside a message
+fails the Marker check; a bare ACK, like one on port 53, sends an empty
+payload into the decoder. A segment of many small messages is a deep
+chain — a 1448-byte one holds 76 KEEPALIVEs, 79 layers with Ethernet,
+IPv4 and TCP — so `max_depth` stops it unless raised; the busiest
+segment of the captured session in the corpus carries 7. Reassembling
+the stream is the caller's, as it is for `HTTP` below: see
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -605,7 +632,8 @@ src/netprotocols/
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
-│                   and the HTTP codec class), vxlan.py
+│                   and the HTTP codec class), vxlan.py,
+│                   bgp.py (BGP-4 messages)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
