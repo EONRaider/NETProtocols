@@ -11,9 +11,11 @@ an LLDPDU with no End TLV, malformed mandatory TLVs — is built here.
 is run over the corpus and over tampered copies of it.
 """
 
+import gc
 import importlib.util
 import struct
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -135,6 +137,11 @@ class TestCapturedLLDPDUs:
         assert lldp.tlv(5) == LLDPTLV(5, b"nplldp-a")
         assert lldp.tlv(6) == LLDPTLV(6, b"NETProtocols LLDP fixture, agent A")
         assert lldp.tlv(4) == LLDPTLV(4, b"nplldp-va")
+        # The first of the three type-127 TLVs: lldpd's IEEE 802.3 (OUI
+        # 00-12-0f) subtype 3, not the custom one after it.
+        assert lldp.tlv(127) == LLDPTLV(
+            127, bytes.fromhex("00120f0301") + bytes(4)
+        )
         # Management Address: length 5, IPv4 (family 1) 10.9.86.1, then
         # the interface numbering subtype, number and OID length.
         management = lldp.tlv(8)
@@ -246,6 +253,17 @@ class TestNoEndOfLLDPDU:
         lldp = LLDP.decode(self.NO_END + b"\x0a\x02AB")
         assert lldp.tlvs[-1] == LLDPTLV(5, b"AB")
 
+    @pytest.mark.parametrize(
+        "trailer",
+        [b"\x00\x02\xaa\xbb", b"\x01\x00" + b"\xaa" * 256],
+        ids=["00-02", "01-00"],
+    )
+    def test_a_trailer_that_reads_as_an_end_tlv_with_a_length(self, trailer):
+        """Raise for an End TLV header whose nonzero Length fits."""
+        with pytest.raises(InvalidFieldError) as err:
+            LLDP.decode(self.NO_END + trailer)
+        assert (err.value.field, err.value.offset) == ("tlvs", len(self.NO_END))
+
 
 class TestFraming:
     """What decode rejects, and nothing else.
@@ -258,8 +276,9 @@ class TestFraming:
         """Reject a buffer too short for one TLV header."""
         with pytest.raises(TruncatedHeaderError) as err:
             LLDP.decode(data)
-        assert err.value.offset == 0
-        assert err.value.expected == 2
+        assert (err.value.offset, err.value.field) == (0, None)
+        assert (err.value.expected, err.value.actual) == (2, len(data))
+        assert err.value.protocol is LLDP
 
     def test_a_cut_tlv_header(self):
         """A single byte left where a TLV header would start."""
@@ -445,6 +464,21 @@ class TestMandatoryTLVs:
         lldp = LLDP.decode(raw)
         assert lldp.chassis_id == LLDPChassisID(4, MAC_A)
         assert lldp.tlvs[3] == LLDPTLV(1, b"\x07other")
+        assert lldp.tlv(1) == LLDPTLV(1, b"\x04" + MAC_A)
+        assert lldp.has_mandatory_tlvs
+
+    @pytest.mark.parametrize("subtype", [0, 8, 255])
+    def test_a_reserved_subtype_is_read(self, subtype):
+        """Read an ID of a reserved subtype like any other."""
+        raw = (
+            tlv_bytes(1, bytes((subtype,)) + MAC_A)
+            + tlv_bytes(2, bytes((subtype,)) + b"eth0")
+            + MINIMAL[16:]
+        )
+        lldp = LLDP.decode(raw)
+        assert lldp.chassis_id == LLDPChassisID(subtype, MAC_A)
+        assert lldp.port_id == LLDPPortID(subtype, b"eth0")
+        assert lldp.has_mandatory_tlvs
 
     @pytest.mark.parametrize(
         "subtype,chassis,port",
@@ -537,6 +571,21 @@ class TestConstruction:
             LLDP(tlvs=tlvs)
         assert err.value.field == "tlvs"
 
+    @pytest.mark.parametrize(
+        "tlvs",
+        [
+            (LLDPChassisID(4, b"x"),),
+            (LLDPTLV(1, b"\x07x"), b"\x00\x00"),
+        ],
+        ids=["identifier", "bytes"],
+    )
+    def test_a_tlv_that_is_not_an_lldptlv(self, tlvs):
+        """Reject an element that is not an LLDPTLV."""
+        with pytest.raises(InvalidFieldError) as err:
+            LLDP(tlvs=tlvs)
+        assert (err.value.field, err.value.expected) == ("tlvs", "LLDPTLV")
+        assert err.value.actual == type(tlvs[-1]).__name__
+
     def test_no_end_tlv_is_allowed(self):
         """Accept an LLDPDU without an End TLV, which decodes back."""
         lldp = LLDP(tlvs=(LLDPTLV(1, b"\x07x"),))
@@ -570,42 +619,85 @@ class TestDispatch:
         assert packet.consumed == len(frame)
 
 
-class _SliceCountingBytes(bytes):
-    """Bytes that count how many bytes their slices and indexes return."""
+class _ReadCountingBytes(bytes):
+    """Bytes that count the bytes read out of them.
+
+    By slicing and indexing, and by copying them whole with ``bytes()``.
+    """
 
     read = 0
 
     def __getitem__(self, key):
-        """Return ``bytes(self)[key]``, adding its length to the count."""
-        result = bytes(self)[key]
+        """Return ``bytes.__getitem__(self, key)``, counting its length."""
+        result = bytes.__getitem__(self, key)
         type(self).read += len(result) if isinstance(key, slice) else 1
         return result
 
+    def __bytes__(self):
+        """Return a copy, counting every byte of it."""
+        type(self).read += len(self)
+        return bytes.__bytes__(self)
+
+
+def _reserved_tlvs(count: int) -> bytes:
+    """Build an LLDPDU of ``count`` 1-byte reserved TLVs, then End."""
+    return tlv_bytes(9, b"x") * count + tlv_bytes(0)
+
 
 class TestDecodeCost:
-    """An LLDPDU of 32,000 empty reserved TLVs.
+    """LLDPDUs of thousands of 3-byte reserved TLVs.
 
-    That is the most TLVs a 64 KB buffer holds: decode reads each byte
-    a bounded number of times.
+    Small TLVs make the most of them per byte, the worst case for any
+    work the walk does per TLV over the rest of the buffer. Of two such
+    mistakes only one can be counted: copying the whole buffer with
+    ``bytes()`` calls the ``__bytes__`` a :class:`bytes` subclass
+    defines, but copying it through a :class:`memoryview` calls no
+    Python code at all. So one test counts the bytes read, and the other
+    compares decode times on 8 times the TLVs.
     """
 
-    COUNT = 32000
-    RAW = b"\x12\x00" * COUNT + b"\x00\x00"
+    COUNT = 10000
+    RAW = _reserved_tlvs(COUNT)
 
     def test_it_decodes_whole(self):
-        """Decode all 32,001 TLVs."""
+        """Decode all 10,001 TLVs."""
         lldp = LLDP.decode(self.RAW)
         assert len(lldp.tlvs) == self.COUNT + 1
+        assert lldp.tlvs[0] == LLDPTLV(9, b"x")
         assert lldp.header_len == len(self.RAW)
         assert lldp.chassis_id is None
 
-    def test_the_walk_reads_the_buffer_a_bounded_number_of_times(self):
-        """Read no more than twice the buffer's bytes by slicing."""
-        data = _SliceCountingBytes(self.RAW)
-        _SliceCountingBytes.read = 0
+    def test_the_walk_reads_each_byte_at_most_once(self):
+        """Read no more bytes, by slicing or copying, than the buffer has."""
+        data = _ReadCountingBytes(self.RAW)
+        _ReadCountingBytes.read = 0
         lldp = LLDP.decode(data)
         assert len(lldp.tlvs) == self.COUNT + 1
-        assert _SliceCountingBytes.read <= 2 * len(data)
+        assert 0 < _ReadCountingBytes.read <= len(data)
+
+    def test_8_times_the_tlvs_take_about_8_times_as_long(self):
+        """Take under 16 times as long: twice what linear work would.
+
+        A wall-clock bound would be flaky on a slow runner, so this
+        bounds a ratio of two timings taken side by side, each the best
+        of 5. Linear work makes it about 8; copying the rest of the
+        buffer through a :class:`memoryview` at each TLV made it 25 or
+        more on the machine this test was written on.
+        """
+        raws = (self.RAW, _reserved_tlvs(8 * self.COUNT))
+        best = [float("inf")] * 2
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            for _ in range(5):
+                for index, raw in enumerate(raws):
+                    start = time.perf_counter()
+                    LLDP.decode(raw)
+                    best[index] = min(best[index], time.perf_counter() - start)
+        finally:
+            if enabled:
+                gc.enable()
+        assert best[1] / best[0] < 16
 
 
 def _load_checker() -> ModuleType:
@@ -653,11 +745,13 @@ class TestIndependentChecker:
             (lambda f: f[:-2], "lldp-unwalkable"),
             (lambda f: f + b"\xde\xad\xbe\xef", "lldp-bad-end"),
             (lambda f: f[:-2] + b"\x00\x01\x00", "lldp-bad-end"),
+            (lambda f: f[:-2] + b"\x00\x05", "lldp-unwalkable"),
             (
                 lambda f: f[:14] + f[23:35] + f[14:23] + f[35:],
                 "lldp-mandatory-tlvs",
             ),
             (lambda f: f[:-2] + f[14:23] + b"\x00\x00", "lldp-mandatory-tlvs"),
+            (lambda f: f[:-2] + f[35:39] + b"\x00\x00", "lldp-mandatory-tlvs"),
             (
                 lambda f: f[:-2] + b"\x0a\x01x\x00\x00",
                 "lldp-shutdown-extra-tlvs",
@@ -668,8 +762,10 @@ class TestIndependentChecker:
             "no-end",
             "trailer",
             "end-with-length",
+            "end-runs-past",
             "port-id-first",
             "duplicate-chassis-id",
+            "duplicate-ttl",
             "shutdown-with-system-name",
         ],
     )
@@ -679,11 +775,16 @@ class TestIndependentChecker:
         assert failures == [failure]
 
     @pytest.mark.parametrize(
+        "tlv_type,start,end",
+        [(1, 14, 23), (2, 23, 35)],
+        ids=["chassis", "port"],
+    )
+    @pytest.mark.parametrize(
         "value", [b"", b"\x04", b"\x07" + bytes(256)], ids=["0", "1", "257"]
     )
-    def test_a_malformed_id_fails(self, value):
-        """Fail a Chassis ID TLV of 0, 1 or 257 bytes."""
-        frame = FRAMES[2][:14] + tlv_bytes(1, value) + FRAMES[2][23:]
+    def test_a_malformed_id_fails(self, tlv_type, start, end, value):
+        """Fail a Chassis ID or Port ID TLV of 0, 1 or 257 bytes."""
+        frame = FRAMES[2][:start] + tlv_bytes(tlv_type, value) + FRAMES[2][end:]
         assert self.check(frame)[0] == ["lldp-mandatory-tlvs"]
 
     def test_a_ttl_of_three_bytes_fails(self):

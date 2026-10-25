@@ -226,11 +226,13 @@ Length runs past the buffer raises `TruncatedHeaderError`, as a lying
 length does in rule 2. Wireshark's dissector notes that 802.1AB-2016
 made the End TLV optional, so an LLDPDU that reaches the end of the
 buffer without one decodes too; there nothing marks where a trailer
-starts, and zero padding reads as an End TLV. The mandatory Chassis ID, Port ID and Time To Live TLVs
-are read by accessors from the first three positions, which answer
-`None` rather than raise when the order is broken, since that is not
-framing. See [`layer2/lldp.py`](src/netprotocols/layer2/lldp.py)'s
-module docstring.
+starts, so the walk reads one as TLVs: two or more zero bytes read as
+an End TLV, and other bytes as another TLV or a framing error. The
+mandatory Chassis ID, Port ID and Time To Live TLVs are read by
+accessors from the first three positions, which answer `None` rather
+than raise when the order is broken, since that is not framing. See
+[`layer2/lldp.py`](src/netprotocols/layer2/lldp.py)'s module
+docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized

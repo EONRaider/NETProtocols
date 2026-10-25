@@ -37,12 +37,16 @@ a captured FCS can follow it in the buffer :meth:`LLDP.decode` is handed
   an LLDPDU without one.) A snap length that happens to cut the capture
   at a TLV boundary looks just the same, and decodes the same way.
 * Without an End TLV, nothing marks where the LLDPDU stops and a
-  trailer starts, so a trailer is read as TLVs. A run of zero padding
-  reads as an End TLV, which ``decode`` then keeps as the LLDPDU's
-  last TLV (2 bytes of the padding become part of the message, and the
-  rest is left undecoded). A nonzero trailer such as an FCS is read as a
-  TLV header and, unless its length happens to fit in the bytes left,
-  raises as a TLV that runs past the buffer, below.
+  trailer starts, so the walk reads a trailer as TLVs, its first two
+  bytes as a TLV header. A single byte left raises as a cut header,
+  below. A header whose Length runs past the buffer raises as such a
+  TLV, below. Otherwise a header of Type 0 (a first byte of ``00`` or
+  ``01``) is an End TLV: with Length 0 — two or more bytes of zero
+  padding — ``decode`` keeps it as the LLDPDU's last TLV (2 bytes of
+  the padding become part of the message, and the rest is left
+  undecoded), and with any other Length it raises as an End TLV with
+  a Length, below. A header of any other Type reads as a TLV that the
+  sender never sent, and the walk goes on after it.
 
 ``decode`` checks framing, and nothing more: a TLV header cut short (a
 single byte left), or a TLV whose Length runs past the buffer, raises
@@ -51,7 +55,9 @@ offset of the TLV's header), as any header that lies about its length
 does; an End of LLDPDU TLV with a nonzero Length raises
 :class:`~netprotocols.InvalidFieldError` there, as lldpd's receiver
 rejects one. An empty buffer, or one of a single byte, holds no TLV
-header and raises :class:`~netprotocols.TruncatedHeaderError`.
+header and raises :class:`~netprotocols.TruncatedHeaderError` as any
+buffer too short for a header's fixed part does (offset 0, no
+``field``).
 
 The mandatory order is not framing, and ``decode`` does not enforce it:
 lldpd's receiver discards an LLDPDU whose first three TLVs are not
@@ -330,8 +336,9 @@ class LLDP(Protocol):
     def __post_init__(self) -> None:
         """Validate the TLVs as :meth:`decode` would read them back.
 
-        :raises InvalidFieldError: no TLVs, an End of LLDPDU TLV before
-            the last, or one with a value.
+        :raises InvalidFieldError: no TLVs, one that is not an
+            :class:`LLDPTLV`, an End of LLDPDU TLV before the last, or
+            one with a value.
         """
         if not self.tlvs:
             raise InvalidFieldError(
@@ -342,6 +349,15 @@ class LLDP(Protocol):
                 actual=0,
             )
         for index, tlv in enumerate(self.tlvs):
+            if not isinstance(tlv, LLDPTLV):
+                raise InvalidFieldError(
+                    f"LLDP tlvs must all be LLDPTLV; found "
+                    f"{type(tlv).__name__} at index {index}",
+                    protocol=type(self),
+                    field="tlvs",
+                    expected="LLDPTLV",
+                    actual=type(tlv).__name__,
+                )
             if tlv.type != _END_OF_LLDPDU:
                 continue
             if index != len(self.tlvs) - 1 or tlv.value:
@@ -359,8 +375,10 @@ class LLDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the LLDPDU at the start of ``data``; see the module.
 
-        :raises TruncatedHeaderError: ``data`` holds no TLV header, or a
-            TLV's header or value runs past it (``field="tlvs"``).
+        :raises TruncatedHeaderError: ``data`` is shorter than one TLV
+            header, 2 bytes (no ``field``, as for any fixed header); or
+            a later TLV's header, or any TLV's value, runs past it
+            (``field="tlvs"``, the offset of that TLV).
         :raises InvalidFieldError: an End of LLDPDU TLV has a nonzero
             Length (``field="tlvs"``).
         """
@@ -438,8 +456,12 @@ class LLDP(Protocol):
         """Report whether the LLDPDU opens as 802.1AB requires.
 
         That is, whether :attr:`chassis_id`, :attr:`port_id` and
-        :attr:`ttl` are all present: a Chassis ID, a Port ID and a Time
-        To Live TLV, each well formed, in the first three positions.
+        :attr:`ttl` are all present: in the first three positions, a
+        Chassis ID and a Port ID TLV of 2 to 256 bytes each, then a
+        Time To Live TLV of 2 bytes or more. Nothing else is checked:
+        any subtype passes, the reserved ones (``0`` and ``8``-``255``)
+        included, as do bytes past a TTL's first two and a later
+        duplicate of any of the three.
         """
         return (
             self.chassis_id is not None

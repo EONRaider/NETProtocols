@@ -339,45 +339,46 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
 - `lldp.pcap` was produced by `scripts/capture_fixtures_lldp.sh`: lldpd
   1.0.18 in each of two netns over a veth pair whose ends have fixed,
   locally administered MAC addresses, run without `-c`, `-e`, `-f` or
-  `-s`, so only LLDP is spoken, each on its own veth end (`-I`) with
-  its own control socket (`-u`), its IPv4 address as management
-  address (`-m`) and a configuration file of `lldpcli` commands
-  (`-O`), which lldpd runs before it sends anything: a system name and
-  description, the Port ID subtype (`portidsubtype ifname` for A,
-  `macaddress` for B), and for A a custom TLV (`custom-tlv oui
-  0a,4e,50 subtype 1` with 300 bytes of content, `00 01 … ff 00 … 2b`),
-  for B a locally assigned Chassis ID (`system chassisid`) and
-  `tx-hold 6`. A's Port ID is then changed at run time with `lldpcli
-  configure lldp portidsubtype local np-port-a`, and both agents are
-  stopped with SIGTERM. **What lldpd built: every byte of every
-  frame**, the Ethernet header included — `_lldp_send()` writes it and
-  the frame goes out through a raw `PF_PACKET` socket — so there is no
-  kernel-built header and no checksum: LLDP has none. **What the configuration chose:** the
-  system names and descriptions, the Port ID subtypes, A's custom TLV,
-  B's Chassis ID and its TTL (tx-interval 30 s × tx-hold 6); the rest is
+  `-s`, so only LLDP is spoken, each on its own veth end (`-I`) with its
+  own control socket (`-u`), its IPv4 address as management address
+  (`-m`) and a configuration file of `lldpcli` commands (`-O`), which
+  lldpd runs before it sends anything: a system name and description,
+  the Port ID subtype (`portidsubtype ifname` for A, `macaddress` for
+  B), and for A a custom TLV (`custom-tlv oui 0a,4e,50 subtype 1` with
+  300 bytes of content, `00 01 … ff 00 … 2b`), for B a locally assigned
+  Chassis ID (`system chassisid`) and `tx-hold 6`. A's Port ID is then
+  changed at run time with `lldpcli configure lldp portidsubtype local
+  np-port-a`, and both agents are stopped with SIGTERM. **What lldpd
+  built: every byte of every frame**, the Ethernet header included —
+  `_lldp_send()` writes it and the frame goes out through a raw
+  `PF_PACKET` socket — so there is no kernel-built header and no
+  checksum: LLDP has none. **What the configuration chose:** the system
+  names and descriptions, the Port ID subtypes, A's custom TLV, B's
+  Chassis ID and its TTL (tx-interval 30 s × tx-hold 6); the rest is
   lldpd's default — Chassis ID from A's MAC address, TTL 120 (30 s × 4),
   the System Capabilities, the two IEEE 802.3 TLVs (link aggregation,
   MAC/PHY), and the interface number in the Management Address TLV (42
   for A and 41 for B in this capture, 8 and 7 in an earlier run), which
-  lldpd takes from the system and the script does not pin. lldpd sends a shutdown LLDPDU (TTL 0, the three mandatory TLVs
-  and End of LLDPDU only) when it stops, and before it sends with a
-  changed chassis or port ID, for the old one. Both directions were
-  captured on B's side of the pair (`ether proto 0x88cc`); lldpd
-  repeats an unchanged LLDPDU every 30 s, so the script keeps the first
-  LLDPDU of each kind (sender, Port ID subtype, shutdown or not) and
-  asserts the six exactly: destination, sender, Chassis ID, Port ID,
-  TTL, the TLV type sequence, A's custom TLV, and that nothing follows
-  End of LLDPDU. Every TLV is under 512 bytes, as the 9-bit Length
-  requires, and the custom one, at 304, is the only one past 255.
-  veth does not pad, so the shutdown frames are 41 and 48 bytes;
-  `tests/test_lldp.py` pads every frame to 60 bytes, and appends a
-  4-byte trailer, to show the walk leaves both undecoded, and builds
-  the TLV types, lengths and malformed LLDPDUs no capture holds. LLDP
-  has no checksum, so `check_fixtures` checks each LLDPDU's structure
-  instead: the TLVs walk to an empty End of LLDPDU TLV followed only
-  by zero bytes, the first three are a Chassis ID and a Port ID (each
-  a subtype and a 1-255 byte ID) and a 2-byte Time To Live, none of
-  which recurs, and a shutdown LLDPDU carries nothing else.
+  lldpd takes from the system and the script does not pin. lldpd sends a
+  shutdown LLDPDU (TTL 0, the three mandatory TLVs and End of LLDPDU
+  only) when it stops, and before it sends with a changed chassis or
+  port ID, for the old one. Both directions were captured on B's side of
+  the pair (`ether proto 0x88cc`); lldpd repeats an unchanged LLDPDU
+  every 30 s, so the script keeps the first LLDPDU of each kind (sender,
+  Port ID subtype, shutdown or not) and asserts the six exactly:
+  destination, sender, Chassis ID, Port ID, TTL, the TLV type sequence,
+  A's custom TLV, and that nothing follows End of LLDPDU. Every TLV is
+  under 512 bytes, as the 9-bit Length requires, and the custom one, at
+  304, is the only one past 255. veth does not pad, so the shutdown
+  frames are 41 and 48 bytes; `tests/test_lldp.py` pads every frame to
+  60 bytes, and appends a 4-byte trailer, to show the walk leaves both
+  undecoded, and builds the TLV types, lengths and malformed LLDPDUs no
+  capture holds. LLDP has no checksum, so `check_fixtures` checks each
+  LLDPDU's structure instead: the TLVs walk to an empty End of LLDPDU
+  TLV followed only by zero bytes, the first three are a Chassis ID and
+  a Port ID (each a subtype and a 1-255 byte ID) and a 2-byte Time To
+  Live, none of which recurs, and a shutdown LLDPDU carries nothing
+  else.
 
 - `pim.pcap` was produced by `scripts/capture_fixtures_pim.sh`: four
   netns in a line over three veth pairs — a multicast source, two FRR
