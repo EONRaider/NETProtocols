@@ -151,7 +151,7 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
-**Two protocols vary this.** The first is text framing. `HTTP` has no
+**Three protocols vary this.** The first is text framing. `HTTP` has no
 fixed portion to unpack: `decode()` scans for the empty line that ends
 the head, then for the end the head's framing gives the body, so rule 1
 is a scan rather than an unpack and `header_len` covers the whole
@@ -184,6 +184,16 @@ remainder does not walk: a trailer that happens to (an FCS whose bytes
 read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
 [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
+
+The third is `BGP`, the one header whose `next_protocol()` answers from
+decode context rather than from a wire field. A TCP segment can carry
+several BGP messages, each decoded as a layer, and only the bytes after
+a message say whether another follows; `next_protocol()` is handed no
+bytes, so `decode()` records the answer on the instance, outside its
+comparison and hash. Two equal messages compare equal however they were
+found, and can still chain differently. See *Port-based dispatch is
+best-effort* below and
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized

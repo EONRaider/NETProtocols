@@ -111,10 +111,12 @@ start of a 77th, or about 26 of the 55-byte single-prefix UPDATEs the
 corpus's session carries; the busiest segment in the corpus carries 7
 messages. A strict walk of a longer chain raises
 :class:`~netprotocols.MaxDepthExceededError`. No segment of 1460
-bytes or fewer holds more than 76 whole messages, so
-``max_depth=79`` reaches every one of them in an untagged Ethernet,
-IPv4 and TCP frame (one more for each VLAN tag or IPv6 extension
-header).
+bytes or fewer holds more than 76 whole messages, so in an untagged
+Ethernet, IPv4 and TCP frame (add one for each VLAN tag or IPv6
+extension header) ``max_depth=79`` decodes a segment of 76 whole
+messages, and ``max_depth=80`` reaches the cut 77th that may follow
+them, which then raises :class:`~netprotocols.TruncatedHeaderError`
+instead.
 
 Out of scope
 ------------

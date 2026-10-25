@@ -65,6 +65,14 @@ packet. Like the other three, it never raises past its fixed portion:
 a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
 stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
 report. See :mod:`netprotocols.layer4.sctp`.
+
+Decode context in ``next_protocol``
+-----------------------------------
+``BGP`` is the one header whose ``next_protocol()`` answers from what
+``decode()`` saw rather than from a wire field: whether the bytes after
+the message begin another one in the same TCP segment. ``decode()``
+records that on the instance outside its comparison and hash. See
+:mod:`netprotocols.layer7.bgp`.
 """
 
 from __future__ import annotations
