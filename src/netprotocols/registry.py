@@ -281,10 +281,11 @@ class Registry:
         """Make ``key`` in ``table`` dispatch to nothing, inherited or not.
 
         It stays that way when the parent table registers the key. This
-        is for a number one IP family must not inherit from the other:
-        the defaults withhold OSPF's 89 from ``ip.proto.v6``, where it means
-        OSPFv3. A registration made directly in ``table`` still fills
-        the key, since that is a deliberate choice for this table.
+        is for a protocol number that one IP family must not inherit
+        from the other: the defaults withhold OSPF's 89 from
+        ``ip.proto.v6``, where it means OSPFv3. A registration made
+        directly in ``table`` still fills the key, since that is a
+        deliberate choice for this table.
         A class already registered directly in ``table`` stands, so
         withholding is idempotent and never undoes a deliberate entry.
         Private: the defaults are its only caller.
