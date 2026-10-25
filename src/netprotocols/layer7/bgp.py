@@ -226,15 +226,15 @@ _OPTIONAL_PARAMETER_NAMES: dict[int, str] = {
 _OPTIONAL, _TRANSITIVE, _PARTIAL, _EXTENDED_LENGTH = 0x80, 0x40, 0x20, 0x10
 
 #: Path attribute type codes, named as the IANA "BGP Path Attributes"
-#: registry assigns them (https://www.iana.org/assignments/bgp-parameters,
-#: last updated 2026-09-09, fetched 2026-10-25): every permanent
-#: registration, deprecated ones included, under the registry's name,
-#: except that 1-18 and 32 keep the RFCs' spelling (RFC 4271 §5.1 for
-#: 1-7, then RFC 1997, RFC 4456, RFC 4760, RFC 4360, RFC 6793 and RFC
-#: 8092). The temporary registrations (34, whose term ran out on
-#: 2025-07-28, and 42) are left unnamed. Only the values of 1, 3, 4 and
-#: 5 are decoded (:attr:`BGPPathAttribute.value`); every other value is
-#: kept raw.
+#: registry assigns them
+#: (https://www.iana.org/assignments/bgp-parameters, last updated
+#: 2026-09-09, fetched 2026-10-25): every permanent registration,
+#: deprecated ones included, under the registry's name, except that 16
+#: is spelled EXTENDED_COMMUNITIES, like its neighbours, where the
+#: registry has "EXTENDED COMMUNITIES". The temporary registrations
+#: (34, whose term ran out on 2025-07-28, and 42) are left unnamed. Only
+#: the values of 1, 3, 4 and 5 are decoded
+#: (:attr:`BGPPathAttribute.value`); every other value is kept raw.
 _ATTRIBUTE_NAMES: dict[int, str] = {
     0: "Reserved",
     1: "ORIGIN",
@@ -248,14 +248,14 @@ _ATTRIBUTE_NAMES: dict[int, str] = {
     9: "ORIGINATOR_ID",
     10: "CLUSTER_LIST",
     11: "DPA (deprecated)",
-    12: "ADVERTISER (deprecated)",
-    13: "RCID_PATH / CLUSTER_ID (deprecated)",
+    12: "ADVERTISER (historic) (deprecated)",
+    13: "RCID_PATH / CLUSTER_ID (Historic) (deprecated)",
     14: "MP_REACH_NLRI",
     15: "MP_UNREACH_NLRI",
     16: "EXTENDED_COMMUNITIES",
     17: "AS4_PATH",
     18: "AS4_AGGREGATOR",
-    19: "SAFI Specific Attribute (deprecated)",
+    19: "SAFI Specific Attribute (SSA) (deprecated)",
     20: "Connector Attribute (deprecated)",
     21: "AS_PATHLIMIT (deprecated)",
     22: "PMSI_TUNNEL",
@@ -312,10 +312,12 @@ _ERROR_CODE_NAMES: dict[int, str] = {
 #: RFC 4271 §4.5 (and RFC Errata 4493's "Unspecific" 0) for codes 1-3,
 #: with OPEN's 7 from RFC 5492 and 8-11 from RFC 9234; RFC 6608 for the
 #: Finite State Machine Error; RFC 4486 for Cease, with 9 from RFC 8538
-#: and 10 from RFC 9384; RFC 7313 for ROUTE-REFRESH. A code without a
-#: registry (4, 8, 9) names only subcode 0, "Unspecific" (RFC 4271
-#: §4.5; RFC 9687 §6 sets it to 0 for code 8), and so does an unknown
-#: code.
+#: and 10 from RFC 9384; RFC 7313 for ROUTE-REFRESH. OPEN's 5 and
+#: UPDATE's 7, which the registry lists only as "[Deprecated]", keep
+#: the names RFC 4271 Appendix A gives them, with "(deprecated)". A
+#: code without a registry (4, 8, 9) names only subcode 0,
+#: "Unspecific" (RFC 4271 §4.5; RFC 9687 §6 sets it to 0 for code 8),
+#: and so does an unknown code.
 _ERROR_SUBCODE_NAMES: dict[int, dict[int, str]] = {
     1: {
         0: "Unspecific",
