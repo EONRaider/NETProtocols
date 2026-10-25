@@ -87,9 +87,12 @@ decoder does what it can without reassembly:
   error on ``packet.stopped_by``.
 - A segment that begins inside a message — the rest of one the previous
   segment cut — fails the Marker check with
-  :class:`~netprotocols.InvalidFieldError`, or in lax mode stops after
-  the TCP layer, as :class:`~netprotocols.HTTP` does under
-  ``decode_as`` (ARCHITECTURE.md).
+  :class:`~netprotocols.InvalidFieldError`, or, when it holds fewer
+  than the 19 bytes of a header, raises
+  :class:`~netprotocols.TruncatedHeaderError` before the Marker is
+  read. In lax mode either stops the walk after the TCP layer, as
+  :class:`~netprotocols.HTTP` does under ``decode_as``
+  (ARCHITECTURE.md).
 - A segment with no payload at all (a bare ACK, the handshake, a FIN)
   raises :class:`~netprotocols.TruncatedHeaderError` at the empty
   buffer, as ``DNSOverTCP`` does on port 53: port dispatch happens

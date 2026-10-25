@@ -526,8 +526,8 @@ depend on each other (§6.1). Measured the same way, over 10,000 random
 300-byte payloads and 10,000 of uniformly random length 0-600, padded
 or not, every walk to port 179 ended with `stopped_by` set and none
 decoded a BGP layer; with the Marker forced to all ones, the Length and
-Type checks alone still rejected 9,999 of 10,000 random 300-byte
-payloads. What the port cannot tell the decoder is where a message
+Type checks alone still rejected 9,998 to 10,000 of 10,000 random
+300-byte payloads (`random.Random` seeds 0-4). What the port cannot tell the decoder is where a message
 starts: TCP cuts its byte stream where it likes, so a segment can hold
 several messages, the tail of one, or the head of the next. Each
 message decodes as one `BGP` layer, and `BGP.next_protocol()` answers
@@ -536,8 +536,9 @@ bytes, so `BGP.decode()` records the answer on the instance, in a field
 outside its comparison and hash (see *Walking a frame* above). A
 segment that ends inside a message raises `TruncatedHeaderError` at
 that message (lax mode keeps the ones before it); one that begins
-inside a message fails the Marker check; a bare ACK, like one on port
-53, sends an empty payload into the decoder. A segment of many small messages is a deep
+inside a message fails the Marker check, or raises
+`TruncatedHeaderError` if it is shorter than a header; a bare ACK, like
+one on port 53, sends an empty payload into the decoder. A segment of many small messages is a deep
 chain, and here `max_depth` bounds correctness, not just cost: the
 default leaves room for 29 messages after Ethernet, IPv4 and TCP, and
 valid segments hold more. A 1448-byte one holds 76 KEEPALIVEs or 30

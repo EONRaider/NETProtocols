@@ -357,6 +357,22 @@ class TestSession:
         packet = decode_frame(raw, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, TCP]
 
+    def test_a_short_segment_starting_inside_a_message(self):
+        """Under 19 bytes of a message's tail is too short for a Marker.
+
+        The header cannot be read, so it raises TruncatedHeaderError
+        rather than failing the Marker check (constructed: the last 10
+        bytes of an UPDATE).
+        """
+        raw = frame(update(nlri=bytes([24, 10, 0, 0]) * 3)[-10:])
+        with pytest.raises(TruncatedHeaderError) as caught:
+            decode_frame(raw)
+        assert caught.value.protocol is BGP
+        assert caught.value.frame_offset == 54
+        packet = decode_frame(raw, lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, TCP]
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
+
     @pytest.mark.parametrize("index", [33, 85])
     def test_a_segment_holding_only_the_start_of_one(self, index):
         """A segment that ends inside its only message raises at it."""
