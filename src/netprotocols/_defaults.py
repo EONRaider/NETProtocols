@@ -88,6 +88,7 @@ def install(registry: Registry) -> None:
     no-op, so calling this twice on the same registry changes nothing.
     """
     from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.lldp import LLDP
     from netprotocols.layer2.mpls import MPLS
     from netprotocols.layer2.vlan import VLAN
     from netprotocols.layer3.ah import AH, AHv6
@@ -120,6 +121,10 @@ def install(registry: Registry) -> None:
     add(TABLE_ETHERTYPE, EtherType.IPV4, IPv4)
     add(TABLE_ETHERTYPE, EtherType.IPV6, IPv6)
     register_all(TABLE_ETHERTYPE, VLAN_TAG_ETHERTYPES, VLAN, registry=registry)
+    # LLDP (IEEE 802.1AB): an LLDPDU follows the Ethernet header, or a
+    # VLAN tag, directly, and ends the walk.
+    add(TABLE_ETHERTYPE, EtherType.LLDP, LLDP)
+
     # MPLS (RFC 3032): its stack names no payload protocol, so MPLS
     # chains onward through this same table, at IPv4's or IPv6's
     # EtherType, by the convention its module docstring describes.

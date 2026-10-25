@@ -142,6 +142,7 @@ ip.proto                  → error: "IPv4" has no attribute
 |---|---|---|---|
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
+| 2 | LLDP | `LLDP`, `LLDPTLV`, `LLDPChassisID`, `LLDPPortID` | IEEE 802.1AB, EtherType 0x88CC; every TLV through End of LLDPDU, the End TLV's bound leaving padding and an FCS undecoded; Chassis ID and Port ID (subtype and ID) and Time To Live typed, every other TLV raw with its type named |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 2 | MPLS label stack | `MPLS` | RFC 3032 §2.1, EtherTypes 0x8847 and 0x8848 (and GRE's Protocol Type, RFC 4023); the whole stack as one layer of `MPLSLabel` entries (label, traffic class, S, TTL); no field names the payload, so it dispatches by convention to IPv4 or IPv6 — the bottom label when it is an Explicit NULL, otherwise the first nibble after the stack — and stops at a pseudowire control word |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
@@ -453,7 +454,7 @@ Every class exposes human-readable properties next to the raw fields:
 `Ethernet.ethertype_name`, `IPv4.protocol_name`, `IPv4.flags_name`,
 `TCP.flags_str` (`"SYN ACK"`), `ARP.oper_name`, `ICMPv4.type_name`,
 and hexadecimal renderings such as `checksum_hex_str`. Unknown values
-degrade gracefully (`"0x88cc"`, `"unknown (47)"`) instead of raising.
+degrade gracefully (`"0x88b5"`, `"unknown (47)"`) instead of raising.
 
 ## How it works
 
@@ -529,7 +530,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-273-frame corpus of real captured traffic across 28 scenarios
+279-frame corpus of real captured traffic across 29 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

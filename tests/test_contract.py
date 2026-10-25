@@ -9,6 +9,7 @@ from netprotocols import (
     BGP,
     ESP,
     HTTP,
+    LLDP,
     MPLS,
     OSPF,
     PIM,
@@ -35,6 +36,7 @@ class TestTruncation:
         "protocol,fixture",
         [
             (Ethernet, "raw_eth_header"),
+            (LLDP, "raw_lldp_shutdown"),
             (ARP, "raw_arp_header"),
             (IPv4, "raw_ipv4_header"),
             (IPv6, "raw_ipv6_header"),
@@ -93,6 +95,13 @@ class TestTruncation:
         lying = raw_bgp_keepalive[:16] + b"\x10\x00\x02" + bytes(4)
         with pytest.raises(TruncatedHeaderError):
             BGP.decode(lying)
+
+    def test_lying_lldp_tlv_length_raises(self, raw_lldp_shutdown):
+        """A Port ID TLV whose Length claims 511 bytes on a 27-byte
+        buffer."""
+        lying = raw_lldp_shutdown[:9] + b"\x05\xff" + raw_lldp_shutdown[11:]
+        with pytest.raises(TruncatedHeaderError):
+            LLDP.decode(lying)
 
     def test_a_stack_cut_before_its_bottom_raises(self, raw_mpls_stack):
         """MPLS has no length to lie with: its S bit ends the stack, so

@@ -42,7 +42,7 @@ src/netprotocols/
   checksum.py     RFC 1071 internet checksum, SCTP's CRC32c, the
                   Fletcher checksum of OSPF's LSAs, compute()/verify()
   packet.py       Packet: an ordered stack of headers, with_checksums()
-  layer2/         Ethernet, VLAN, ARP, MPLS
+  layer2/         Ethernet, VLAN, ARP, LLDP, MPLS
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
                   GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)

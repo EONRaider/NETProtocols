@@ -17,6 +17,7 @@ from netprotocols import (
     BGP,
     DNS,
     ESP,
+    LLDP,
     MPLS,
     OSPF,
     PIM,
@@ -116,6 +117,7 @@ class TestCorpusCoverage:
             RIP,
             VRRP,
             BGP,
+            LLDP,
             MPLS,
         } <= seen
 

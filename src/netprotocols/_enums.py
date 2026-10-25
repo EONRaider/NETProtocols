@@ -21,6 +21,7 @@ class EtherType(IntEnum):
     IPV6 = 0x86DD
     MPLS = 0x8847
     MPLS_UPSTREAM_ASSIGNED = 0x8848
+    LLDP = 0x88CC
 
     @property
     def display_name(self) -> str:
@@ -38,6 +39,7 @@ _ETHERTYPE_NAMES = {
     # retired 0x8848's original "MPLS multicast" meaning.
     EtherType.MPLS: "MPLS",
     EtherType.MPLS_UPSTREAM_ASSIGNED: "MPLS with upstream-assigned label",
+    EtherType.LLDP: "LLDP",
 }
 
 

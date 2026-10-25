@@ -218,6 +218,22 @@ header with a length field and leaves Ethernet's padding undecoded. It
 must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
 wire, and VRRPv3's pseudo-header carries the message's length.
 
+`LLDP` has no length for the whole LLDPDU either, but bounds itself
+by its last TLV: its TLVs each carry a Length, and the End of LLDPDU
+TLV ends the walk, so it obeys rule 3 like a header with a length
+field and leaves Ethernet's padding and an FCS undecoded. A TLV whose
+Length runs past the buffer raises `TruncatedHeaderError`, as a lying
+length does in rule 2. Wireshark's dissector notes that 802.1AB-2016
+made the End TLV optional, so an LLDPDU that reaches the end of the
+buffer without one decodes too; there nothing marks where a trailer
+starts, so the walk reads one as TLVs: two or more zero bytes read as
+an End TLV, and other bytes as another TLV or a framing error. The
+mandatory Chassis ID, Port ID and Time To Live TLVs are read by
+accessors from the first three positions, which answer `None` rather
+than raise when the order is broken, since that is not framing. See
+[`layer2/lldp.py`](src/netprotocols/layer2/lldp.py)'s module
+docstring.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -320,6 +336,8 @@ flowchart LR
   V -->|0x8847, 0x8848| M
   M -->|bottom label 0, or first nibble 4| I4
   M -->|bottom label 2, or first nibble 6| I6
+  E -->|0x88CC| L[LLDP]
+  V -->|0x88CC| L
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
@@ -792,6 +810,7 @@ src/netprotocols/
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
+│                   lldp.py (LLDP, IEEE 802.1AB),
 │                   mpls.py (MPLS label stack: MPLS + MPLSLabel)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),

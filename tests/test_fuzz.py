@@ -44,6 +44,8 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    LLDP,
+    LLDPTLV,
     MPLS,
     OSPF,
     PIM,
@@ -68,6 +70,8 @@ from netprotocols import (
     IPv6Fragment,
     IPv6HopByHopOptions,
     IPv6Routing,
+    LLDPChassisID,
+    LLDPPortID,
     MPLSLabel,
     Packet,
     PIMHello,
@@ -88,6 +92,7 @@ from strategies import (
     http_context_responses,
     http_messages,
     http_wire,
+    lldp_lldpdus,
     mpls_stacks,
     ospf_packets,
     pim_headers,
@@ -100,6 +105,7 @@ from test_corpus import walk
 ALL_PROTOCOLS = (
     Ethernet,
     VLAN,
+    LLDP,
     ARP,
     IPv4,
     IPv6,
@@ -932,6 +938,68 @@ class TestVRRPAccessorSafety:
         for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
             decoded = cls.decode(wire + trailer)
             assert decoded == header, trailer
+            assert decoded.header_len == len(wire), trailer
+
+
+#: TLVs of a few common types (End, Chassis ID, Port ID, TTL, System
+#: Name, organizationally specific, a reserved one), short values, then
+#: free bytes, so the walk goes deep and the mandatory positions are
+#: often of the right type but the wrong length.
+_lldp_like = st.tuples(
+    st.lists(
+        st.tuples(
+            st.sampled_from([0, 1, 2, 3, 3, 5, 9, 127]),
+            st.binary(max_size=4),
+        ).map(
+            lambda tlv: struct.pack("!H", (tlv[0] << 9) | len(tlv[1])) + tlv[1]
+        ),
+        max_size=8,
+    ).map(b"".join),
+    st.binary(max_size=6),
+).map(b"".join)
+
+
+class TestLLDPAccessorSafety:
+    @given(data=st.one_of(fuzz_input, _lldp_like))
+    def test_decoded_lldpdus_answer_every_accessor(self, data: bytes) -> None:
+        """Whatever decodes, every accessor answers without raising, and
+        the typed views agree with the TLVs they are read from."""
+        try:
+            lldp = LLDP.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(lldp) == data[: lldp.header_len]
+        assert all(tlv.type for tlv in lldp.tlvs[:-1])
+        for tlv in lldp.tlvs:
+            assert tlv.type_name
+            assert lldp.tlv(tlv.type) is not None
+        chassis_id, port_id, ttl = lldp.chassis_id, lldp.port_id, lldp.ttl
+        if isinstance(chassis_id, LLDPChassisID):
+            assert chassis_id.tlv == lldp.tlvs[0]
+            assert chassis_id.subtype_name
+        if isinstance(port_id, LLDPPortID):
+            assert port_id.tlv == lldp.tlvs[1]
+            assert port_id.subtype_name
+        if ttl is not None:
+            assert ttl == int.from_bytes(lldp.tlvs[2].value[:2])
+        assert lldp.is_shutdown is (ttl == 0)
+        assert lldp.has_mandatory_tlvs is (
+            None not in (chassis_id, port_id, ttl)
+        )
+        event(f"LLDP mandatory TLVs: {lldp.has_mandatory_tlvs}")
+        event(f"LLDP ends with End: {lldp.tlvs[-1].type == 0}")
+
+    @given(lldp=lldp_lldpdus())
+    def test_trailing_bytes_stay_out_of_the_lldpdu(self, lldp: LLDP) -> None:
+        """An End of LLDPDU TLV bounds the LLDPDU, so Ethernet's zero
+        padding (every length up to its 46-byte maximum) and a nonzero
+        trailer such as a 4-byte FCS are left undecoded."""
+        if lldp.tlvs[-1].type != 0:
+            lldp = LLDP(tlvs=(*lldp.tlvs, LLDPTLV(0)))
+        wire = bytes(lldp)
+        for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
+            decoded = LLDP.decode(wire + trailer)
+            assert decoded == lldp, trailer
             assert decoded.header_len == len(wire), trailer
 
 
