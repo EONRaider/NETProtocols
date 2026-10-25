@@ -111,6 +111,10 @@ class TestDamagedPayload:
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     def test_pim_keeps_a_cut_message(self, raw_pim_join_prune, lax):
+        """Keep a Join/Prune cut mid-address whole in ``body``.
+
+        Past its 4-byte header PIM never raises, so neither walk stops.
+        """
         raw = raw_pim_join_prune[:20]
         packet = decode_frame(raw, start=PIM, lax=lax)
         assert [type(layer) for layer in packet] == [PIM]

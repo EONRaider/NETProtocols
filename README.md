@@ -52,9 +52,10 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 ## Why NETProtocols
 
 Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 2.4.0 corpus
-of real captured traffic, 140 frames (CPython 3.12.3, x86-64 Linux; re-measured for
-2.4.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
-number below, its reproduction command, and its caveats):
+of real captured traffic, 140 frames (CPython 3.12.3, x86-64 Linux;
+re-measured for 2.4.0 on 2026-10-25 — see
+[docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
+reproduction command, and its caveats):
 
 - **Within 15% of dpkt on decode, 4.1× faster than scapy** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is

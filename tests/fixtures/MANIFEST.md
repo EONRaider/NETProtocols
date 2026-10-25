@@ -45,7 +45,7 @@ rows and the notes below.
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
-| `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind (see PIM note) |
+| `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -229,7 +229,14 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   `ip igmp` on R2's receiver-facing interface). Static RPs are on
   opposite routers — R2 for `239.184.0.1`, R1 for `239.184.0.2` — so
   both a (*,G) tree and a Register exchange cross the R1–R2 link, where
-  tcpdump captured `ip proto 103` on R1's side. `ip pim
+  tcpdump captured `ip proto 103` on R1's side. So R1's own Hello and
+  both Registers (frames 1, 4 and 8) are outbound frames, despite the
+  inbound-only rule above, and the other ten are R2's, inbound. That
+  is harmless here, as for SCTP: pimd computes every PIM checksum
+  itself, in userspace, before the kernel sees the packet, the kernel
+  computes IPv4 header checksums in software, the script asks ethtool
+  to turn veth offloads off, and `check_fixtures` verifies all of
+  them. `ip pim
   register-suppress-time 15` brings R1's Null-Register probe inside the
   capture. The receiver then leaves (R2 prunes), and R2's pimd is
   stopped (its goodbye Hello). Hello and Join/Prune timers make the raw
