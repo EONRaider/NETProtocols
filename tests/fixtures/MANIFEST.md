@@ -193,9 +193,10 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   this leaves in the identification counters are adverts it dropped.
   It asserts the kept frames' composition exactly. `check_fixtures`
   verifies every VRRP checksum: the message alone for VRRPv2 (RFC 3768
-  §5.3.8), behind the IPv4 pseudo-header for VRRPv3 (RFC 5798 §5.2.8) —
-  with the real destination, so for VRID 54 the unicast peer's address
-  rather than `224.0.0.18`. That is keepalived's default; its
+  §5.3.8), behind the IPv4 pseudo-header for VRRPv3 — with the real
+  destination, so for VRID 54 the unicast peer's address rather than
+  `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
+  only RFC 2460's pseudo-header, which is IPv6's. keepalived's
   `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
   leave the IPv4 pseudo-header out, and such an advert fails both
   `check_fixtures` and `verify()`. It also requires each message's

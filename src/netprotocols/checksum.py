@@ -13,15 +13,20 @@ CRC32c (the Castagnoli CRC, also iSCSI's), computed by :func:`crc32c`
 over the whole packet with no pseudo-header.
 
 VRRP's internet checksum depends on its version: VRRPv2's covers the
-message alone (RFC 3768 §5.3.8), VRRPv3's adds the IP pseudo-header
-for both families (RFC 5798 §5.2.8). That is what :func:`compute`
-does, and what keepalived 2.2.8 sends by default, multicast and
-unicast alike (``tests/fixtures/vrrp.pcap``). Over IPv4 it is not the
-only practice: RFC 9568 §5.2.8, which obsoletes RFC 5798 without
-otherwise changing the wire format, leaves the pseudo-header out for
-IPv4, keepalived's manual says Cisco and Juniper do the same, and its
-``v3_checksum_as_v2`` option makes keepalived do so too. :func:`verify`
-returns ``False`` for an advert checksummed that way.
+message alone (RFC 3768 §5.3.8), VRRPv3's adds an IP pseudo-header.
+Over IPv6 that is RFC 5798 §5.2.8's rule. Over IPv4 it is a reading,
+not the text: §5.2.8 cites only the pseudo-header of RFC 2460 §8.1,
+which is IPv6's, and RFC 9568 §5.2.8, which obsoletes RFC 5798 without
+otherwise changing the wire format, has the IPv4 sum cover the message
+alone (its §1.1 calls that a clarification). :func:`compute` adds the
+IPv4 pseudo-header too, as keepalived does by default: keepalived
+2.2.8 sends it, multicast and unicast alike
+(``tests/fixtures/vrrp.pcap``). keepalived 2.2.8's keepalived.conf(5)
+says some manufacturers (e.g. Cisco) read §5.2.8 as IPv6-only, and
+its ``v3_checksum_as_v2`` option leaves the IPv4 pseudo-header out;
+keepalived 2.3.0's adds Juniper, and says most open-source
+implementations, tcpdump and Wireshark among them, include it.
+:func:`verify` returns ``False`` for an advert checksummed without it.
 
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
@@ -187,11 +192,16 @@ def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
 
 
 def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
-    """The whole VRRP message, checksum field (bytes 6-7) zeroed: alone
-    in VRRPv2 (RFC 3768 §5.3.8), behind the pseudo-header of ``ip``
-    with protocol 112 and the message's length in VRRPv3, over IPv4 as
-    over IPv6 (RFC 5798 §5.2.8). The message is ``bytes(layer)``, never
-    what follows it, so Ethernet padding cannot reach the sum."""
+    """Return VRRP's checksum, over the message with bytes 6-7 zeroed.
+
+    VRRPv2 sums the message alone (RFC 3768 §5.3.8). VRRPv3 puts the
+    pseudo-header of ``ip``, with protocol 112 and the message's
+    length, in front of it, over IPv4 as over IPv6: RFC 5798 §5.2.8
+    gives the IPv6 one, the IPv4 one is keepalived's default, and RFC
+    9568 §5.2.8 leaves it out (see the module docstring). The message
+    is ``bytes(layer)``, never what follows it, so Ethernet padding
+    cannot reach the sum.
+    """
     message = _zeroed(bytes(layer), 6)
     if layer.version == 2:
         return internet_checksum(message)
@@ -220,7 +230,9 @@ def compute(
         returned as the field's big-endian reading of the CRC's
         little-endian wire bytes (RFC 9260 Appendix A); ``VRRP`` covers
         the message alone in VRRPv2 and prepends the pseudo-header in
-        VRRPv3 (RFC 5798 §5.2.8), with ``payload`` ignored either way.
+        VRRPv3, over IPv4 too as keepalived does by default, though RFC
+        9568 §5.2.8 leaves it out there (see the module docstring),
+        with ``payload`` ignored either way.
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6 and
         VRRPv3.
     :param payload: The bytes following ``layer`` on the wire. A decoded

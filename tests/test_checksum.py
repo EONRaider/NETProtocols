@@ -330,7 +330,8 @@ class TestSCTPChecksum:
 class TestVRRPChecksum:
     """The VRRP arm: the whole message, checksum field (bytes 6-7)
     zeroed — alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
-    pseudo-header in VRRPv3 (RFC 5798 §5.2.8). Every expected value is
+    pseudo-header in VRRPv3 (over IPv6 RFC 5798 §5.2.8, over IPv4
+    keepalived's default). Every expected value is
     the wire's (keepalived computed the corpus's) or this suite's own
     sum (``test_vrrp.ones_complement``)."""
 
@@ -399,7 +400,8 @@ class TestVRRPChecksum:
 
     def test_the_rfc_9568_ipv4_form_does_not_verify(self):
         """RFC 9568 §5.2.8 leaves the pseudo-header out over IPv4;
-        compute() follows RFC 5798, so such an advert fails verify()."""
+        compute() follows keepalived's default, so such an advert fails
+        verify()."""
         vrrp, ip = self.advert(9)
         raw = bytes(vrrp)
         without = ones_complement(raw[:6] + b"\x00\x00" + raw[8:])

@@ -162,14 +162,15 @@ def _check_vrrp(
 
     The checksum covers the VRRP message, checksum field (bytes 6-7)
     zeroed: alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
-    pseudo-header with protocol 112 in VRRPv3, over IPv4 as over IPv6
-    (RFC 5798 §5.2.8). RFC 9568 §5.2.8's IPv4 form, without the
-    pseudo-header, is not accepted: the corpus's VRRPv3 adverts are
-    all RFC 5798's. The message's length follows from its version and
-    address count (RFC 3768 §5.1: 8 bytes, the addresses, and 8 bytes
-    of authentication data; RFC 5798 §5.1: no authentication data),
-    and must be the IP payload's exactly. VRRPv2 is defined for IPv4
-    alone.
+    pseudo-header with protocol 112 in VRRPv3, over IPv4 as over IPv6.
+    RFC 5798 §5.2.8 cites only RFC 2460's pseudo-header, IPv6's; the
+    IPv4 one is keepalived's default. RFC 9568 §5.2.8's IPv4 form,
+    without the pseudo-header, is not accepted: the corpus's VRRPv3
+    adverts are all keepalived's default form. The message's length
+    follows from its version and address count (RFC 3768 §5.1: 8
+    bytes, the addresses, and 8 bytes of authentication data; RFC 5798
+    §5.1: no authentication data), and must be the IP payload's
+    exactly. VRRPv2 is defined for IPv4 alone.
     """
     if len(upper) < 8:
         return None

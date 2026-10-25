@@ -18,9 +18,10 @@ addresses. The version decides the rest:
   alone (§5.3.8).
 * VRRPv3 (RFC 5798), IPv4 and IPv6: the word is 4 reserved bits and Max
   Adver Int (12 bits, in centiseconds), with no authentication data,
-  and the checksum adds the IP pseudo-header (§5.2.8). RFC 9568, which
-  obsoletes RFC 5798, keeps this layout and its section numbers, but
-  drops the pseudo-header over IPv4; see :mod:`netprotocols.checksum`.
+  and the checksum adds the IPv6 pseudo-header over IPv6 (§5.2.8).
+  Over IPv4, keepalived adds the IPv4 one by default, and RFC 9568,
+  which obsoletes RFC 5798 and keeps this layout and its section
+  numbers, leaves it out; see :mod:`netprotocols.checksum`.
 
 So the version nibble is the one field :meth:`VRRP.decode` rejects (as
 :class:`~netprotocols.InvalidFieldError`, ``field="version"``) when it

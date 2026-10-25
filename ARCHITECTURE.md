@@ -584,10 +584,11 @@ one transport that does not use the internet checksum: its CRC32c
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
 VRRP's checksum is the internet checksum of the message alone in
-VRRPv2 and behind the IP pseudo-header in VRRPv3 (RFC 5798), the form
-keepalived sends by default; RFC 9568, which obsoletes RFC 5798, drops
-the pseudo-header over IPv4, and `verify()` returns `False` for an
-advert checksummed that way.
+VRRPv2 and behind the IP pseudo-header in VRRPv3. RFC 5798 §5.2.8
+cites only IPv6's pseudo-header; adding IPv4's too is keepalived's
+default, and `compute()`'s. RFC 9568, which obsoletes RFC 5798, leaves
+it out over IPv4, and `verify()` returns `False` for an advert
+checksummed that way.
 
 That is also why `SCTP.decode()` bounds its own extent (see "The decode
 contract" above): otherwise Ethernet's padding would land inside the

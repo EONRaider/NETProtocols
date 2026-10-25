@@ -84,10 +84,12 @@ def v3_checksum_v6(src: str, dst: str, message: bytes) -> int:
 
 
 def v3_checksum_v4(src: str, dst: str, message: bytes) -> int:
-    """Return a VRRPv3 checksum over IPv4, as RFC 5798 §5.2.8 gives it.
+    """Return a VRRPv3 checksum over IPv4, as keepalived sends it.
 
-    The pseudo-header with protocol 112, then the message, checksum
-    field zeroed.
+    The IPv4 pseudo-header with protocol 112, then the message,
+    checksum field zeroed: keepalived's default. RFC 5798 §5.2.8 cites
+    only RFC 2460's pseudo-header, IPv6's, and RFC 9568 §5.2.8 leaves
+    it out over IPv4.
     """
     pseudo = (
         socket.inet_aton(src)
