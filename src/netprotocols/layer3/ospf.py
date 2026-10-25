@@ -58,8 +58,8 @@ outside Packet Length; its size is the Auth Data Len byte of the
 Authentication field, and it is kept in :attr:`OSPF.auth_trailer`.
 AuType 3, cryptographic authentication with extended sequence numbers
 (RFC 7474), is laid out the same way: the 64-bit sequence number and
-then the digest follow the packet, and Auth Data Len counts both (RFC
-7474 §2, §3), so they are its ``auth_trailer``. So ``header_len`` is
+then the digest follow the packet (RFC 7474 §3), and Auth Data Len
+counts both (§2), so they are its ``auth_trailer``. So ``header_len`` is
 Packet Length plus the trailer, and ``bytes(OSPF.decode(x)) ==
 x[:header_len]``. Nothing after that is consumed. The chain walk does
 not trim a frame to the IP header's length, so what may follow is an
@@ -524,8 +524,10 @@ class OSPF(Protocol):
 
     #: The cryptographic authentication types, whose trailer follows the
     #: packet and whose packet checksum is not computed: ``2`` (RFC 2328
-    #: §D.4.3) and ``3``, which changes only the sequence number and
-    #: the Authentication field's layout (RFC 7474 §3, §5).
+    #: §D.4.3) and ``3``, which changes the sequence number and the
+    #: Authentication field's layout (RFC 7474 §2, §3) and starts Apad,
+    #: the digest's padding constant, with the IP source address
+    #: (§5).
     CRYPTOGRAPHIC_AU_TYPES: ClassVar[frozenset[int]] = frozenset({2, 3})
 
     type_names: ClassVar[dict[int, str]] = {
@@ -688,7 +690,8 @@ class OSPF(Protocol):
         end = packet_length + cls._trailer_len(au_type, authentication)
         if end > len(data):
             raise TruncatedHeaderError(
-                f"OSPF digest ends at byte {end}, buffer holds {len(data)}",
+                f"OSPF AuType {au_type} authentication trailer ends at "
+                f"byte {end}, buffer holds {len(data)}",
                 protocol=cls,
                 offset=packet_length,
                 field="auth_trailer",
@@ -785,11 +788,11 @@ class OSPF(Protocol):
     def crypto_sequence_number(self) -> int | None:
         """The cryptographic sequence number, which guards against replay.
 
-        It never decreases (RFC 2328 §D.3): the Authentication field's
-        last 32 bits under AuType 2, and under AuType 3 the 64 bits
-        that open the trailer, boot count then packet counter (RFC
-        7474 §2, §3), or ``None`` if the trailer is shorter than that.
-        ``None`` under any other AuType.
+        Under AuType 2 it is the Authentication field's last 32 bits,
+        which never decrease (RFC 2328 §D.3). Under AuType 3 it is the
+        64 bits that open the trailer (RFC 7474 §3), boot count then a
+        packet counter that strictly increases (§2), or ``None`` if the
+        trailer is shorter than that. ``None`` under any other AuType.
         """
         if self.au_type == _AU_TYPE_EXTENDED:
             if len(self.auth_trailer) < _EXTENDED_SEQUENCE_SIZE:
