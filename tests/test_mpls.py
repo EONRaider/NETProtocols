@@ -921,6 +921,14 @@ class TestIndependentChecker:
             ((13,), b"\x10\x00\x00\x07"),
             ((13,), icmp_packet()),
             ((14,), icmp_packet()),
+            (
+                (13,),
+                b"\x00\x00\x00\x01" + bytes(ethernet(0x0800)) + icmp_packet(),
+            ),
+            (
+                (14,),
+                b"\x00\x00\x00\x01" + bytes(ethernet(0x0800)) + icmp_packet(),
+            ),
             ((100,), b"\x50"),
             ((100,), b""),
         ],
@@ -928,6 +936,8 @@ class TestIndependentChecker:
             "gal",
             "gal-over-ipv4",
             "oam-alert-over-ipv4",
+            "gal-over-control-word",
+            "oam-alert-over-control-word",
             "nibble-5",
             "empty",
         ],
@@ -938,7 +948,8 @@ class TestIndependentChecker:
         """GAL, an unknown nibble or nothing: unread, or strict-failed.
 
         A GAL or OAM Alert bottom label stops the walk even over an
-        IPv4 packet, whose nibble alone would name IPv4.
+        IPv4 packet, whose nibble alone would name IPv4, or over a
+        control word, which alone would start an Ethernet pseudowire.
         """
         frame = labelled(payload, *labels)
         failures, stats = self.check(frame)
@@ -964,9 +975,17 @@ class TestIndependentChecker:
         assert self.check(frame) == (["ipv4-ihl"], {"mpls-stack": 1})
 
     def test_ipv6_explicit_null_outranks_an_ipv4_nibble(self):
-        """Read what label 2 carries as IPv6, never as IPv4."""
+        """Read what label 2 carries as IPv6, never as IPv4.
+
+        Only the route is asserted: the checker checks an IPv6
+        header's version and payload length against nothing, so an
+        IPv4 packet read as IPv6 passes it.
+        """
         frame = bytes(ethernet(0x8847)) + entry(2, bottom=1) + icmp_packet()
-        assert self.check(frame) == ([], {"mpls-stack": 1, "ipv6": 1})
+        _, stats = self.check(frame)
+        assert stats["mpls-stack"] == 1
+        assert "ipv6" in stats
+        assert "ipv4" not in stats
 
     def test_an_ordinary_bottom_label_defers_to_the_nibble(self):
         """Read IPv4 by its nibble under label 1, the Router Alert.

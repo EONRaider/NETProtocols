@@ -248,7 +248,7 @@ class TestRegisterExample:
         "path", [README, ARCHITECTURE, CLAIMS], ids=lambda p: p.name
     )
     def test_the_example_registers_on_a_free_ethertype(
-        self, path: Path
+        self, path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         (code,) = [
             block
@@ -257,15 +257,13 @@ class TestRegisterExample:
             )
             if '@register("ethertype"' in block
         ]
-        assert DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is None
+        # As below: the example registers in a copy of the defaults.
+        fresh = DEFAULT.derive()
+        monkeypatch.setattr(registry_module, "DEFAULT", fresh)
         namespace: dict[str, object] = {}
-        try:
-            exec(code, namespace)
-            assert (
-                DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is namespace["Telemetry"]
-            )
-        finally:
-            DEFAULT.table(TABLE_ETHERTYPE).pop(0x88B5, None)
+        exec(code, namespace)
+        assert fresh.get(TABLE_ETHERTYPE, 0x88B5) is namespace["Telemetry"]
+        assert DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is None
 
     def test_the_registry_py_examples_register_on_free_keys(
         self, monkeypatch: pytest.MonkeyPatch

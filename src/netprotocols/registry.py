@@ -1,11 +1,11 @@
 """The dispatch registry: how a header names the class that decodes
 what it carries, and how third parties add their own.
 
-Every ``next_protocol()`` in this library is a lookup in one of five
-tables, each named after the wire field it dispatches on. MPLS is the
-exception: its label stack names no payload protocol, so it looks up
-the ``ethertype`` table at 0x0800 or 0x86DD by convention (see
-:mod:`netprotocols.layer2.mpls`).
+A ``next_protocol()`` that dispatches on a wire field is a lookup in
+one of five tables, each named after that field. A few return a fixed
+successor instead (VXLAN, ``DNSOverTCP``, BGP), and MPLS, whose label
+stack names no payload protocol, looks up the ``ethertype`` table at
+0x0800 or 0x86DD by convention (see :mod:`netprotocols.layer2.mpls`).
 
 ===============  =========================================================
 ``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here too,

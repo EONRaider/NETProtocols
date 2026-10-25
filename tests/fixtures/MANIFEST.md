@@ -222,9 +222,9 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   cut at byte 20, 2 bytes past each stack's first entry, so the six
   stacks of two or three entries end after their first
   (`TruncatedHeaderError` from `MPLS` at frame offset 18) and the two
-  one-entry stacks hand a 2-byte IPv4 header to `IPv4`. The capture script checks that each record is the
-  first 20 bytes of the matching corpus frame; `tests/test_mpls.py`
-  walks them.
+  one-entry stacks hand a 2-byte IPv4 header to `IPv4`. The capture
+  script checks that each record is the first 20 bytes of the
+  matching corpus frame; `tests/test_mpls.py` walks them.
 
 - `bgp.pcap` was produced by `scripts/capture_fixtures_bgp.sh`: three
   BIRD 2.14 instances in their own netns on one Linux bridge — A (AS
