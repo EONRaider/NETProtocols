@@ -140,7 +140,10 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
 1. **It receives the entire remaining buffer** — everything from the
    start of its header to the end of the captured frame — and parses
    the fixed portion with `_struct.unpack_from`. A buffer too short
-   for the fixed portion raises `TruncatedHeaderError`.
+   for the fixed portion raises `TruncatedHeaderError`. One enclosing
+   length shortens that buffer in a walk: after an Ethernet or VLAN
+   header holding an IEEE 802.3 Length, every later layer's buffer ends
+   where the Length ends the LLC PDU (see *802.3 framing* below).
 2. **Variable-length headers finish the job themselves.** IPv4 reads
    its IHL and TCP reads its data offset, sanity-checks it (5–15, and
    the declared bytes must exist in the buffer — a header that *lies*
@@ -217,6 +220,29 @@ VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
 header with a length field and leaves Ethernet's padding undecoded. It
 must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
 wire, and VRRPv3's pseudo-header carries the message's length.
+
+**802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
+length (IEEE 802.3 Clause 3.2.6): from 0x0600 an EtherType, up to 1500
+the length of an IEEE 802.2 LLC PDU, and undefined between, where the
+walk ends. `Ethernet.ethertype` holds the raw value either way, and
+`VLAN` reads the 2 bytes after a tag the same way. Neither `LLC` nor
+`SNAP` has a length of its own, and a short PDU arrives padded to
+Ethernet's minimum, often with an FCS after it; STP's BPDUs are that
+short, and CDP's checksum covers exactly its PDU. So the Length is the
+one enclosing length `decode_frame()` honours: after a header that
+holds one (a class setting `_BOUNDS_PAYLOAD`, answering
+`_payload_extent()`, both private while #235 settles the public form),
+it ends the buffer it hands every later layer at the PDU's end. A
+bound past the end of the frame bounds nothing, so a frame a snap
+length cut decodes what was captured; a later, looser bound never
+widens an earlier one; and a Length shorter than the LLC header leaves
+`LLC.decode()` too few bytes, so the walk raises
+`TruncatedHeaderError`. IPv4's, IPv6's and UDP's lengths are still not
+honoured (#235), so padding behind a short IPv4 packet in Ethernet II
+framing reaches its last layer as before. Called directly,
+`LLC.decode()` has no Length to go by and leaves the rest of its buffer
+to the caller, who can slice `frame[14 : 14 + eth.length]`. See
+[`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
@@ -308,6 +334,11 @@ flowchart LR
   E -->|0x0800| I4[IPv4]
   E -->|0x86DD| I6[IPv6]
   E -->|0x8100, 0x88A8, 0x9100| V[VLAN tag]
+  E -->|length ≤ 1500| L[LLC]
+  V -->|length ≤ 1500| L
+  L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
+  SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
+  SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   V -->|0x8100, 0x88A8, 0x9100| V
   V -->|0x0806| A
   V -->|0x0800| I4
@@ -413,11 +444,13 @@ packet = decode_frame(frame)          # Packet(Ethernet(...), IPv4(...), TCP(...
 Underneath it is the loop the two answers imply:
 
 ```python
-layers, cursor, protocol = [], 0, start
+layers, cursor, end, protocol = [], 0, len(frame), start
 while protocol is not None:
-    header = protocol.decode(frame[cursor:])
+    header = protocol.decode(frame[cursor:end])
     layers.append(header)
     cursor += header.header_len
+    if header._BOUNDS_PAYLOAD:  # an 802.3 Length (see above)
+        end = _bounded(header, cursor, end)
     protocol = header.next_protocol(registry)
 ```
 
@@ -434,12 +467,14 @@ Wrapping each frame in a `memoryview` internally measured *slower*
 **Where do those arrows live?** Not in the protocol classes. Every
 one of them is a row in a dispatch table owned by
 [`registry.py`](src/netprotocols/registry.py), and `next_protocol()`
-is a single `dict.get` against one of five tables named after the wire
+is a single `dict.get` against one of seven tables named after the wire
 field they dispatch on:
 
 | Table | Dispatches on | Read by |
 |---|---|---|
-| `ethertype` | Ethernet II EtherType | `Ethernet`, `VLAN`, `GRE` |
+| `ethertype` | Ethernet II EtherType (0x0600-0xFFFF only) | `Ethernet`, `VLAN`, `GRE`, `SNAP` (OUI 00-00-00, 00-00-F8) |
+| `llc.dsap` | IEEE 802.2 LLC DSAP | `LLC` |
+| `llc.snap` | SNAP `(oui << 16) \| pid`, any other OUI | `SNAP` |
 | `ip.proto` | IPv4 `protocol` | `IPv4`, `AH` |
 | `ip.proto.v6` | IPv6 `next_header` | `IPv6`, extension headers, `AHv6` |
 | `udp.port` | UDP well-known port | `UDP` |
@@ -519,17 +554,19 @@ inside `install()` and run once from `__init__.py` after every
 protocol class exists. Shared enums stay in the dependency-free
 `_enums.py`. The layer modules bind their table at import, and every
 class a header chooses by a field value (EtherType, IP protocol, port)
-comes out of a table, never from an import. Two modules do import
+comes out of a table, never from an import. Three modules do import
 another's class, where there is no field to look up. `layer3/icmp.py`
 names `IPv4` and `IPv6` to start the walk of the packet an ICMP error
-quotes, which is not dispatch, and `layer7/vxlan.py` names `Ethernet`
-directly, because a VXLAN payload is always an Ethernet frame. Neither
-can form a cycle: `ip.py` and `ethernet.py` import no other layer
-module.
+quotes, which is not dispatch; `layer7/vxlan.py` names `Ethernet`
+directly, because a VXLAN payload is always an Ethernet frame; and
+`layer2/ethernet.py` names `LLC`, because whatever an 802.3 Length's
+value, an LLC header follows it. None can form a cycle: `ip.py` and
+`llc.py` import no other layer module, and `ethernet.py` imports only
+`llc.py`.
 
 ## Port-based dispatch is best-effort
 
-The `ethertype` and `ip.proto` tables dispatch on a single
+The `ethertype`, `llc.*` and `ip.proto` tables dispatch on a single
 authoritative field: it exists to say what follows. The two port
 tables break that model, and differ in kind rather than just in name.
 A port is a *guess* — any service may run on any port, and the
@@ -751,7 +788,8 @@ src/netprotocols/
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
-├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
+├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
+│                   llc.py (802.2 LLC + SNAP, after an 802.3 Length)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

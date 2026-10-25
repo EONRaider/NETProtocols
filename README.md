@@ -51,8 +51,8 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265-frame corpus
-of real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265 frames of
+real captured traffic the corpus held at 2.5.0 (CPython 3.12.3, x86-64 Linux; re-measured for
 2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
 number below, its reproduction command, and its caveats):
 
@@ -139,8 +139,10 @@ ip.proto                  → error: "IPv4" has no attribute
 
 | Layer | Protocol | Class | Notes |
 |---|---|---|---|
-| 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
-| 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
+| 2 | Ethernet II / IEEE 802.3 | `Ethernet` | IEEE 802.3; the type/length field dispatches as an EtherType from 0x0600 and as an 802.3 Length (then LLC) up to 1500, which also bounds the walk's later layers |
+| 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking; the inner type/length field reads as Ethernet's does |
+| 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized, never dispatched |
+| 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
@@ -407,8 +409,9 @@ class MPLS(Protocol):
     ...
 ```
 
-The five tables are `ethertype`, `ip.proto`, `ip.proto.v6`, `udp.port`
-and `tcp.port`, each named after the wire field it dispatches on. To
+The seven tables are `ethertype`, `llc.dsap`, `llc.snap`, `ip.proto`,
+`ip.proto.v6`, `udp.port` and `tcp.port`, each named after the wire
+field it dispatches on. To
 change decoding for one call only — DNS on a nonstandard port in one
 capture — say so per call instead of registering globally:
 
@@ -527,7 +530,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-265-frame corpus of real captured traffic across 27 scenarios
+278-frame corpus of real captured traffic across 28 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See
