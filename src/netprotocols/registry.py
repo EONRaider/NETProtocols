@@ -41,7 +41,8 @@ inherited, while the extension headers are registered directly in
 ``ip.proto.v6`` and stay there. A direct registration in the child
 also shadows an inherited key: protocol 51 is ``AH`` in ``ip.proto``
 but ``AHv6`` in ``ip.proto.v6``, so that what follows AH dispatches in
-its own family's table.
+its own family's table, and protocol 112 is ``VRRP`` and ``VRRPv6``, so
+that each reads its virtual addresses at its own family's width.
 
 Inheritance is resolved **when you register, not when you look up**: a
 write to a parent table is copied into every child that has not

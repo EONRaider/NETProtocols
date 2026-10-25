@@ -31,6 +31,7 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.vrrp import VRRP, VRRPv6
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
@@ -87,7 +88,7 @@ from netprotocols.walk import MAX_DEPTH, decode_frame
 # registrations name the classes. See netprotocols/_defaults.py.
 _defaults.install(DEFAULT)
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 __all__ = [
     "AH",
@@ -105,6 +106,7 @@ __all__ = [
     "TCP",
     "UDP",
     "VLAN",
+    "VRRP",
     "VXLAN",
     "AHv6",
     "ARPHardwareType",
@@ -154,6 +156,7 @@ __all__ = [
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",
+    "VRRPv6",
     "__version__",
     "compute",
     "crc32c",

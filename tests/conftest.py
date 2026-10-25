@@ -216,3 +216,18 @@ def raw_rip_message() -> bytes:
         "000200000a140380ffffff800000000000000001"
         "000200000a093400ffffff000000000000000001"
     )
+
+
+@pytest.fixture
+def raw_vrrpv2_advert() -> bytes:
+    """VRRPv2 advert from ``vrrp.pcap``: VRID 51, priority 200, Auth
+    Type 1 (PASS), Adver Int 1 s, two addresses, then the null-padded
+    password ``np-vrrp``."""
+    return bytes.fromhex("2133c80201015af60a0914330a0914346e702d7672727000")
+
+
+@pytest.fixture
+def raw_vrrpv3_advert() -> bytes:
+    """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
+    Adver Int 100 cs, one address — the minimal 12-byte message."""
+    return bytes.fromhex("3135c8010064e97c0a091446")

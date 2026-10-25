@@ -199,6 +199,13 @@ raises. Ethernet's zero padding reaches only a message with no entries,
 since one entry already fills the minimum frame. See
 [`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
 
+`VRRP` has no length field either, but needs no walk: its version and
+address count give its exact length (8 bytes, the addresses, and
+VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
+header with a length field and leaves Ethernet's padding undecoded. It
+must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
+wire, and VRRPv3's pseudo-header carries the message's length.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -304,6 +311,9 @@ flowchart LR
   AH6 -->|6| T
   AH6 -->|17| U
   AH6 -->|50| ESP
+  I4 -->|112| VR[VRRP]
+  I6 -->|112| VR6[VRRPv6]
+  X -->|112| VR6
   U -->|4789| VX[VXLAN]
   VX -->|always| E
   U -->|520| R[RIP]
@@ -321,12 +331,15 @@ offset rule applies to fragmented IPv4.
 
 IPsec's AH chains the same way, through its own `next_header`, onward
 to anything the IP header before it could have carried (the diagram
-draws only the transport, ESP and extension-header edges). It is the
-one header that comes as a pair for that reason: `AH` after IPv4 and
-`AHv6` after IPv6 have one wire format but dispatch through their own
-family's table, so IPv4 → AH → `0` stops rather than conjuring a
-Hop-by-Hop layer, while IPv6 → AH → Destination Options — an order
-RFC 8200 §4.1 permits — keeps decoding. ESP, the other IPsec header,
+draws only the transport, ESP and extension-header edges). It comes as
+a pair for that reason: `AH` after IPv4 and `AHv6` after IPv6 have one
+wire format but dispatch through their own family's table, so IPv4 →
+AH → `0` stops rather than conjuring a Hop-by-Hop layer, while IPv6 →
+AH → Destination Options — an order RFC 8200 §4.1 permits — keeps
+decoding. VRRP is the other pair, for a different reason: it ends the
+walk, but its list of virtual addresses is 4 bytes an entry after IPv4
+and 16 after IPv6, which nothing in the VRRP header says, so `VRRP`
+reads the one and its subclass `VRRPv6` the other. ESP, the other IPsec header,
 ends the walk: what it carries is named only inside its protected
 trailer.
 
@@ -345,8 +358,8 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
-is SCTP — no collisions; 51 is AH in both, decoded by a class of each
-family's own).
+is SCTP — no collisions; 51 is AH and 112 is VRRP in both, each
+decoded by a class of each family's own).
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -394,7 +407,7 @@ field they dispatch on:
 `ip.proto.v6` **inherits** `ip.proto`: the two share a number space
 but not a table, because the four extension headers must be reachable
 only inside an IPv6 chain. Registering in `ip.proto` reaches both,
-except at a key `ip.proto.v6` owns itself (51, below); registering in
+except at a key `ip.proto.v6` owns itself (51 and 112, below); registering in
 `ip.proto.v6` reaches the v6 chain alone. Inheritance
 is resolved when you register, not when you look up, so the gating
 costs nothing on the hot path — an IPv4 packet with `protocol=0`
@@ -402,10 +415,11 @@ cannot conjure a Hop-by-Hop layer because the table it reads has no
 entry for `0`.
 
 A child's own registration also *shadows* the inherited entry, which
-is how AH's pair is wired: `AHv6` is registered in `ip.proto.v6` first,
-then `AH` in `ip.proto`, and the parent write is not inherited over a
+is how AH's and VRRP's pairs are wired: `AHv6` is registered in
+`ip.proto.v6` first, then `AH` in `ip.proto` (and `VRRPv6`, then
+`VRRP`, likewise), and the parent write is not inherited over a
 key the child already owns. That works the other way round too: a
-third party replacing protocol 51 in `ip.proto` (`override=True`)
+third party replacing protocol 51 or 112 in `ip.proto` (`override=True`)
 changes IPv4 dispatch only, and must register in `ip.proto.v6` as well
 to reach IPv6. `_defaults.FAMILY_SPECIFIC_NUMBERS` names the numbers
 wired this way, and the tests hold the two tables to differing at
@@ -555,8 +569,8 @@ bytes instead.
 
 Every class also works in reverse. Constructors take the friendly
 forms (string addresses, integer fields) and validate some of them in
-`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6
-and DHCP do not, so a malformed address there fails only in
+`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6,
+DHCP and VRRP do not, so a malformed address there fails only in
 `bytes()`), and IPv4's IHL and TCP's data offset must agree with
 `len(options)`. For a valid header, `bytes()` re-emits the exact
 on-wire form. Constructors do not check everything decode does, so
@@ -598,6 +612,12 @@ one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
+VRRP's checksum is the internet checksum of the message alone in
+VRRPv2 and behind the IP pseudo-header in VRRPv3. RFC 5798 §5.2.8
+cites only IPv6's pseudo-header; adding IPv4's too is keepalived's
+default, and `compute()`'s. RFC 9568, which obsoletes RFC 5798, leaves
+it out over IPv4, and `verify()` returns `False` for an advert
+checksummed that way.
 
 That is also why `SCTP.decode()` bounds its own extent (see "The decode
 contract" above): otherwise Ethernet's padding would land inside the
@@ -629,6 +649,7 @@ src/netprotocols/
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),
+│                   vrrp.py (VRRPv2/v3: VRRP + VRRPv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table

@@ -16,6 +16,7 @@ from netprotocols import (
     SCTP,
     TCP,
     UDP,
+    VRRP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -24,13 +25,22 @@ from netprotocols import (
     IPv6,
     IPv6Fragment,
     Packet,
+    ProtocolError,
     SCTPChunk,
+    VRRPv6,
     compute,
     crc32c,
     internet_checksum,
     verify,
 )
 from test_corpus import walk
+from test_vrrp import (
+    V6_GROUP,
+    V6_SRC,
+    ones_complement,
+    v3_checksum_v4,
+    v6_message,
+)
 
 CORPUS = corpus_frames()
 
@@ -315,6 +325,137 @@ class TestSCTPChecksum:
         assert isinstance(filled, SCTP)
         assert verify(filled)
         assert filled.checksum == compute(built)
+
+
+class TestVRRPChecksum:
+    """The VRRP arm: the whole message, checksum field (bytes 6-7)
+    zeroed — alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
+    pseudo-header in VRRPv3 (over IPv6 RFC 5798 §5.2.8, over IPv4
+    keepalived's default). Every expected value is
+    the wire's (keepalived computed the corpus's) or this suite's own
+    sum (``test_vrrp.ones_complement``)."""
+
+    FRAMES = pcap_frames(FIXTURES / "vrrp.pcap")
+
+    def advert(self, index: int) -> tuple[VRRP, IPv4]:
+        frame = self.FRAMES[index]
+        return VRRP.decode(frame[34:]), IPv4.decode(frame[14:])
+
+    def v6(self) -> tuple[VRRPv6, IPv6]:
+        message = v6_message()
+        ip = IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=len(message),
+            next_header=112,
+            hop_limit=255,
+            src=V6_SRC,
+            dst=V6_GROUP,
+        )
+        return VRRPv6.decode(message), ip
+
+    def test_the_corpus_covers_both_versions(self):
+        versions = [self.advert(i)[0].version for i in range(len(self.FRAMES))]
+        assert set(versions) == {2, 3}
+
+    def test_every_captured_advert_recomputes(self):
+        for index in range(len(self.FRAMES)):
+            vrrp, ip = self.advert(index)
+            assert compute(vrrp, ip=ip) == vrrp.checksum, index
+            assert verify(vrrp, ip=ip), index
+
+    def test_vrrpv2_has_no_pseudo_header(self):
+        """VRRPv2 needs no IP layer, and any one given changes nothing."""
+        vrrp, ip = self.advert(0)
+        assert vrrp.version == 2
+        assert compute(vrrp) == vrrp.checksum == 0x5AF6
+        assert compute(vrrp, ip=replace(ip, src="192.0.2.99")) == 0x5AF6
+        raw = bytes(vrrp)
+        assert ones_complement(raw[:6] + b"\x00\x00" + raw[8:]) == 0x5AF6
+
+    def test_vrrpv3_needs_the_ip_layer(self):
+        vrrp, _ = self.advert(9)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(vrrp)
+        err = excinfo.value
+        assert err.protocol is VRRP
+        assert err.field == "checksum"
+
+    def test_vrrpv3_covers_the_ipv4_pseudo_header(self):
+        """Protocol 112, the message's own length, and both addresses:
+        a unicast advert's real destination, not the multicast group."""
+        vrrp, ip = self.advert(15)
+        assert ip.dst == "10.9.20.2"
+        expected = v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+        assert compute(vrrp, ip=ip) == expected == vrrp.checksum
+        assert compute(vrrp, ip=replace(ip, dst="224.0.0.18")) != expected
+        assert compute(vrrp, ip=replace(ip, src="10.9.20.9")) != expected
+
+    def test_vrrpv3_covers_the_ipv6_pseudo_header(self):
+        vrrp, ip = self.v6()
+        assert compute(vrrp, ip=ip) == vrrp.checksum
+        assert verify(vrrp, ip=ip)
+        assert not verify(vrrp, ip=replace(ip, src="fe80::2"))
+
+    def test_the_rfc_9568_ipv4_form_does_not_verify(self):
+        """RFC 9568 §5.2.8 leaves the pseudo-header out over IPv4;
+        compute() follows keepalived's default, so such an advert fails
+        verify()."""
+        vrrp, ip = self.advert(9)
+        raw = bytes(vrrp)
+        without = ones_complement(raw[:6] + b"\x00\x00" + raw[8:])
+        assert without != vrrp.checksum
+        assert not verify(replace(vrrp, checksum=without), ip=ip)
+
+    def test_the_checksum_field_is_excluded(self):
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            assert compute(replace(vrrp, checksum=0xFFFF), ip=ip) == (
+                vrrp.checksum
+            )
+
+    def test_a_zero_sum_is_sent_as_zero(self):
+        """Return ``0x0000`` for a message whose checksum is zero.
+
+        VRRP has no UDP-style ``0x0000 → 0xFFFF`` substitution. The last
+        authentication-data word of this VRRPv2 message was chosen to
+        make its checksum zero.
+        """
+        raw = bytes.fromhex("2133c802010100000a0914330a0914346e702d767272caf6")
+        assert ones_complement(raw) == 0x0000
+        vrrp = VRRP.decode(raw)
+        assert compute(vrrp) == 0x0000
+        assert verify(vrrp)
+        assert not verify(replace(vrrp, checksum=0xFFFF))
+
+    def test_payload_is_ignored(self):
+        """Nothing after the message is part of it: padding passed as
+        ``payload`` (as with_checksums() passes its own) cannot reach
+        the sum."""
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            assert compute(vrrp, ip=ip, payload=b"\x01\x02") == vrrp.checksum
+            assert verify(vrrp, ip=ip, payload=b"\x01\x02")
+
+    def test_a_flipped_bit_is_detected(self):
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            raw = bytes(vrrp)
+            for position in (0, 3, 5, 8, len(raw) - 1):
+                flipped = bytearray(raw)
+                flipped[position] ^= 0x01
+                try:
+                    corrupted = VRRP.decode(bytes(flipped))
+                except ProtocolError:
+                    continue  # a flipped version or count no longer decodes
+                assert not verify(corrupted, ip=ip), (index, position)
+
+    def test_with_checksums_fills_both_families(self):
+        for vrrp, ip in (self.advert(3), self.advert(16), self.v6()):
+            stale = replace(vrrp, checksum=0)
+            (_, filled) = Packet(ip, stale).with_checksums().layers
+            assert filled.checksum == vrrp.checksum
 
 
 class TestGREChecksum:

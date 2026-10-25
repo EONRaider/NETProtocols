@@ -174,7 +174,7 @@ class TestTableInheritance:
         # comparison below trusts it: pinned literally, so widening it
         # (and with it what this test allows) is a deliberate change
         # here, not a side effect of editing _defaults.
-        assert set(FAMILY_SPECIFIC_NUMBERS) == {51}
+        assert set(FAMILY_SPECIFIC_NUMBERS) == {51, 112}  # AH, VRRP
         registry = Registry()
         install(registry)
         base = registry.table(TABLE_IP_PROTO)
@@ -308,6 +308,8 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 50).__name__ == "ESP"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 50).__name__ == "ESP"
         assert DEFAULT.get(TABLE_IP_PROTO, 51).__name__ == "AH"
+        assert DEFAULT.get(TABLE_IP_PROTO, 112).__name__ == "VRRP"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 112).__name__ == "VRRPv6"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 51).__name__ == "AHv6"
 
     def test_ports(self):

@@ -92,6 +92,7 @@ class TestCorpusFiguresInDocs:
             "_tlv.py",
             "sctp.py",
             "rip.py",
+            "vrrp.py",
         ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:
