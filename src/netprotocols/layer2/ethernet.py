@@ -57,7 +57,7 @@ _MIN_ETHERTYPE = 0x0600
 def _type_or_length_class(
     value: int, registry: Registry | None = None
 ) -> type[Protocol] | None:
-    """The class that decodes what follows an 802.3 Length/Type field.
+    """Return the class that decodes what follows a Length/Type field.
 
     An EtherType (0x0600 or more) dispatches as
     :func:`_ethertype_class` does; a length (1500 or less) is followed
@@ -75,8 +75,10 @@ def _type_or_length_class(
 
 
 def _length(value: int) -> int | None:
-    """The 802.3 Length in a Length/Type field, or ``None`` if it holds
-    a type or an undefined value."""
+    """Return the 802.3 Length in a Length/Type field, or ``None``.
+
+    ``None`` when the field holds an EtherType or an undefined value.
+    """
     return value if value <= _MAX_LENGTH else None
 
 
@@ -145,29 +147,36 @@ class Ethernet(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class for the payload: the ``ethertype`` table's entry for
-        an EtherType, :class:`~netprotocols.LLC` after an 802.3 Length,
-        and ``None`` for the undefined 1501-1535."""
+        """Return the class for the payload, by type or by length.
+
+        The ``ethertype`` table's entry for an EtherType,
+        :class:`~netprotocols.LLC` after an 802.3 Length, and ``None``
+        for the undefined 1501-1535.
+        """
         return _type_or_length_class(self.ethertype, registry)
 
     @property
     def is_length(self) -> bool:
-        """Whether :attr:`ethertype` holds an 802.3 Length (1500 or
-        less) rather than an EtherType or an undefined value."""
+        """Whether :attr:`ethertype` holds an 802.3 Length.
+
+        That is, 1500 or less, rather than an EtherType or an undefined
+        value.
+        """
         return self.ethertype <= _MAX_LENGTH
 
     @property
     def length(self) -> int | None:
-        """The 802.3 Length: how many bytes after this header belong to
-        the LLC PDU, or ``None`` when :attr:`ethertype` is not a length.
+        """The 802.3 Length, or ``None`` when :attr:`ethertype` is not one.
 
-        The bytes after those are padding or a trailer such as an FCS;
+        How many bytes after this header belong to the LLC PDU. The
+        bytes after those are padding or a trailer such as an FCS;
         :func:`~netprotocols.decode_frame` ends the next layers' buffer
         there, and a direct caller can slice ``frame[14 : 14 + length]``.
         """
         return _length(self.ethertype)
 
     def _payload_extent(self) -> int | None:
+        """Return the 802.3 Length, which bounds the LLC PDU after it."""
         return _length(self.ethertype)
 
     @property

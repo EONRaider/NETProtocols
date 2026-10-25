@@ -1,4 +1,6 @@
-"""IEEE 802.3 Length/Type dispatch, the 802.2 LLC and SNAP headers, and
+"""Test 802.3 type/length dispatch, LLC and SNAP, and the walk's bound.
+
+IEEE 802.3 Length/Type dispatch, the 802.2 LLC and SNAP headers, and
 the walk's bound at the end of an LLC PDU.
 
 The real frames come from tests/fixtures/llc.pcap (see its MANIFEST
@@ -73,9 +75,11 @@ CDP_KEY = 0x00000C << 16 | 0x2000
 
 @dataclass(frozen=True, slots=True)
 class WholeBuffer(Protocol):
-    """A stand-in for a decoder with no length of its own, as STP's and
-    CDP's will be: it keeps every byte it is handed, so what it holds
-    shows where the walk ended its buffer."""
+    """A stand-in for a decoder with no length of its own.
+
+    STP's and CDP's will be such decoders: this one keeps every byte it
+    is handed, so what it holds shows where the walk ended its buffer.
+    """
 
     body: bytes
 
@@ -86,6 +90,7 @@ class WholeBuffer(Protocol):
         return cls(bytes(data))
 
     def __bytes__(self) -> bytes:
+        """Serialize the bytes kept."""
         return self.body
 
     @property
@@ -110,8 +115,10 @@ def check_fixtures():
 
 
 def frame_8023(pdu: bytes, length: int | None = None) -> bytes:
-    """An 802.3 frame carrying ``pdu``, its Length ``len(pdu)`` unless
-    ``length`` says otherwise."""
+    """Build an 802.3 frame carrying ``pdu``.
+
+    Its Length is ``len(pdu)`` unless ``length`` says otherwise.
+    """
     value = len(pdu) if length is None else length
     return DST + SRC + struct.pack("!H", value) + pdu
 
@@ -122,14 +129,16 @@ def pad(frame: bytes) -> bytes:
 
 
 def pdu_of(frame: bytes) -> bytes:
-    """The LLC PDU of an untagged 802.3 frame, as its Length bounds it."""
+    """Return the LLC PDU of an untagged 802.3 frame, as its Length says."""
     return frame[14 : 14 + struct.unpack_from("!H", frame, 12)[0]]
 
 
 def cdp_checksum(data: bytes) -> int:
-    """CDP's checksum, written out here rather than taken from the
-    library: RFC 1071's sum, but an odd final byte is added as the low
-    byte of a last word (lldpd's ``frame_checksum``)."""
+    """Return CDP's checksum of ``data``, written out here.
+
+    Not taken from the library: RFC 1071's sum, but an odd final byte is
+    added as the low byte of a last word (lldpd's ``frame_checksum``).
+    """
     total = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
@@ -145,8 +154,11 @@ def kinds(packet) -> list[type[Protocol]]:
 
 
 class TestTypeOrLength:
-    """IEEE 802.3 Clause 3.2.6: bytes 12-13 are a length up to 1500, a
-    type from 0x0600, and undefined between."""
+    """IEEE 802.3 Clause 3.2.6's type/length boundaries.
+
+    Bytes 12-13 are a length up to 1500, a type from 0x0600, and
+    undefined between.
+    """
 
     @pytest.mark.parametrize("value", [0, 3, 38, 1500])
     def test_a_length_dispatches_to_llc(self, value):
@@ -183,8 +195,10 @@ class TestTypeOrLength:
         assert VLAN(0, 0, 30, 36).next_protocol(Registry()) is LLC
 
     def test_gre_keeps_reading_an_ethertype(self):
-        """GRE's Protocol Type is an EtherType only (RFC 2784): a value
-        of 1500 or less names nothing, and is not an 802.3 Length."""
+        """GRE's Protocol Type is an EtherType only (RFC 2784).
+
+        A value of 1500 or less names nothing, and is not a Length.
+        """
         gre = GRE.decode(b"\x00\x00\x00\x26")
         assert gre.next_protocol() is None
 
@@ -269,8 +283,10 @@ class TestLLCHeader:
 
 
 class TestLLCDispatch:
-    """Only I-format and UI PDUs carry upper-layer data; SNAP needs SSAP
-    0xAA and UI; Novell raw 802.3 never dispatches."""
+    """Only I-format and UI PDUs carry upper-layer data.
+
+    SNAP needs SSAP 0xAA and UI too; Novell raw 802.3 never dispatches.
+    """
 
     @pytest.fixture
     def registry(self):
@@ -424,8 +440,10 @@ class TestTheFixture:
 
 
 class TestTheWalkBound:
-    """After an 802.3 Length, every later layer's buffer ends where the
-    Length ends the PDU: padding and an FCS reach no decoder."""
+    """After an 802.3 Length, later buffers end where the PDU does.
+
+    Padding and an FCS reach no decoder.
+    """
 
     @pytest.mark.parametrize(
         "trailer",
@@ -446,8 +464,10 @@ class TestTheWalkBound:
         "trailer", [bytes(4), FCS, bytes(3) + FCS], ids=["zeros", "fcs", "both"]
     )
     def test_a_cdp_pdu_reaches_its_decoder_exactly(self, frame, trailer):
-        """CDP's checksum covers exactly its PDU, which only the 802.3
-        Length bounds: with the bound it still verifies."""
+        """CDP's checksum covers exactly its PDU, which the Length bounds.
+
+        With the bound it still verifies, and without it would not.
+        """
         packet = decode_frame(frame + trailer, decode_as=WHOLE)
         body = packet[WholeBuffer].body
         assert body == pdu_of(frame)[8:]
@@ -498,9 +518,12 @@ class TestTheWalkBound:
         assert packet[WholeBuffer].body == pdu_of(STP_CONFIG_A)[3:]
 
     def test_the_tighter_bound_wins(self):
-        """RFC 1042 IPv4/UDP/VXLAN carrying an 802.3 frame: the outer
+        """An inner Length cannot widen an outer bound.
+
+        RFC 1042 IPv4/UDP/VXLAN carrying an 802.3 frame: the outer
         Length ends the outer PDU 8 bytes into the inner BPDU, whose own
-        Length (38) reaches further, and cannot widen the bound."""
+        Length (38) reaches further.
+        """
         outer = pcap_frames(FIXTURES / "vxlan.pcap")[0]
         ihl = (outer[14] & 0x0F) * 4
         ip_udp_vxlan = outer[14 : 14 + ihl + 8 + 8]
@@ -526,14 +549,30 @@ class TestTheWalkBound:
         assert packet[WholeBuffer].body == pdu_of(STP_CONFIG_A)[3:11]
         assert packet.consumed == 14 + len(pdu)
 
+    def test_only_ethernet_and_vlan_bound_their_payload(self):
+        """Any other header has no extent, and the walk never asks it."""
+        arp = decode_frame(RFC1042_ARP)[ARP]
+        assert not arp._BOUNDS_PAYLOAD
+        assert arp._payload_extent() is None
+        assert Ethernet._BOUNDS_PAYLOAD
+        assert VLAN._BOUNDS_PAYLOAD
+        assert not LLC._BOUNDS_PAYLOAD
+        assert (
+            Ethernet.decode(RFC1042_ICMP[:12] + b"\x08\x00")._payload_extent()
+            is None
+        )
+
     def test_a_memoryview_walks_the_same(self):
         frame = pad(RFC1042_ARP) + FCS
         assert decode_frame(memoryview(frame)) == decode_frame(frame)
 
 
 class TestTheChecker:
-    """check_fixtures.py validates the frames independently: the 802.3
-    Length against the frame, the LLC/SNAP structure, CDP's checksum."""
+    """check_fixtures.py validates the frames independently.
+
+    The 802.3 Length against the frame, the LLC/SNAP structure, and
+    CDP's checksum.
+    """
 
     def test_every_fixture_frame_passes(self, check_fixtures):
         for frame in LLC_FRAMES:

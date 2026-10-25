@@ -328,10 +328,10 @@ class Protocol(ABC):
         return self._struct.size
 
     def _payload_extent(self) -> int | None:
-        """How many bytes after this header its payload occupies, by a
-        length field the header carries, or ``None`` if it carries none.
+        """Return how many bytes after this header its payload occupies.
 
-        Read by the chain walk only for a class that sets
+        That is, by a length field the header carries, or ``None`` if it
+        carries none. Read by the chain walk only for a class that sets
         ``_BOUNDS_PAYLOAD`` (see "Payload extent" in this module's
         docstring).
         """

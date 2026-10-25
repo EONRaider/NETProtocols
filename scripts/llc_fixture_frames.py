@@ -76,12 +76,12 @@ def pad(frame: bytes) -> bytes:
 
 
 def ethernet_8023(dst: bytes, pdu: bytes) -> bytes:
-    """An 802.3 header whose Length is ``len(pdu)``, then the PDU."""
+    """Prefix ``pdu`` with an 802.3 header whose Length is its length."""
     return dst + SRC_MAC + struct.pack("!H", len(pdu)) + pdu
 
 
 def arp_request() -> bytes:
-    """ARP: who has 10.9.30.2? Tell 10.9.30.1 (RFC 826)."""
+    """Build an ARP request: who has 10.9.30.2? Tell 10.9.30.1."""
     return struct.pack(
         "!HHBBH6s4s6s4s",
         1,
@@ -97,7 +97,7 @@ def arp_request() -> bytes:
 
 
 def icmp_echo_in_ipv4() -> bytes:
-    """An IPv4 packet carrying an ICMP echo request, checksums filled."""
+    """Build an IPv4 packet carrying an ICMP echo request, checksummed."""
     payload = b"NETProtocols LLC/SNAP fixture"
     icmp = struct.pack("!BBHHH", 8, 0, 0, 0x4C4C, 1) + payload
     icmp = icmp[:2] + struct.pack("!H", internet_checksum(icmp)) + icmp[4:]
@@ -121,12 +121,12 @@ def icmp_echo_in_ipv4() -> bytes:
 
 
 def snap(oui: bytes, pid: int, payload: bytes) -> bytes:
-    """An LLC/SNAP PDU: the SNAP LLC header, OUI, PID, then payload."""
+    """Build an LLC/SNAP PDU: the SNAP LLC header, OUI, PID, payload."""
     return LLC_SNAP + oui + struct.pack("!H", pid) + payload
 
 
 def raw_ipx() -> bytes:
-    """A Novell raw 802.3 PDU: a 30-byte IPX header, no LLC, no data.
+    """Build a Novell raw 802.3 PDU: a 30-byte IPX header, no LLC.
 
     Checksum 0xFFFF, length 30, transport control 0, packet type 4
     (PEP), destination network 0 node broadcast socket 0x0452 (SAP),
@@ -148,7 +148,7 @@ def raw_ipx() -> bytes:
 
 
 def frames() -> list[bytes]:
-    """The six frames, in the order they are sent."""
+    """Build the six frames, in the order they are sent."""
     arp = arp_request()
     tagged_pdu = snap(OUI_RFC1042, ETH_P_ARP, arp)
     tagged = (

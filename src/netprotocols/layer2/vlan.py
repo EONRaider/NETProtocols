@@ -116,24 +116,32 @@ class VLAN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class for the tagged payload, read as
+        """Return the class for the tagged payload, by type or by length.
+
+        The field is read as
         :meth:`Ethernet.next_protocol <netprotocols.Ethernet.next_protocol>`
-        reads its own field."""
+        reads its own.
+        """
         return _type_or_length_class(self.ethertype, registry)
 
     @property
     def is_length(self) -> bool:
-        """Whether :attr:`ethertype` holds an 802.3 Length (see
-        :attr:`Ethernet.is_length <netprotocols.Ethernet.is_length>`)."""
+        """Whether :attr:`ethertype` holds an 802.3 Length.
+
+        See :attr:`Ethernet.is_length <netprotocols.Ethernet.is_length>`.
+        """
         return self.ethertype <= _MAX_LENGTH
 
     @property
     def length(self) -> int | None:
-        """The 802.3 Length of the LLC PDU after this tag, or ``None``
-        (see :attr:`Ethernet.length <netprotocols.Ethernet.length>`)."""
+        """The 802.3 Length of the LLC PDU after this tag, or ``None``.
+
+        See :attr:`Ethernet.length <netprotocols.Ethernet.length>`.
+        """
         return _length(self.ethertype)
 
     def _payload_extent(self) -> int | None:
+        """Return the 802.3 Length, which bounds the LLC PDU after it."""
         return _length(self.ethertype)
 
     @property

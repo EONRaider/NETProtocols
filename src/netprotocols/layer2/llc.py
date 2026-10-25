@@ -190,6 +190,12 @@ class LLC(Protocol):
     _struct: ClassVar[Struct] = Struct("!BBB")
 
     def __post_init__(self) -> None:
+        """Check that each field fits its octets.
+
+        :raises InvalidFieldError: the DSAP or SSAP is outside 0-255, or
+            the Control is negative or wider than its format allows (one
+            octet when its two low bits are ``11``, else two).
+        """
         _check_octet(self.dsap, type(self), "dsap")
         _check_octet(self.ssap, type(self), "ssap")
         limit = 0xFF if self.control & 0x03 == 0x03 else 0xFFFF
@@ -226,6 +232,7 @@ class LLC(Protocol):
         return cls(dsap=dsap, ssap=ssap, control=control)
 
     def __bytes__(self) -> bytes:
+        """Serialize the header, the Control's first octet first."""
         head = self._struct.pack(self.dsap, self.ssap, self.control & 0xFF)
         if self.control & 0x03 == 0x03:
             return head
@@ -255,14 +262,19 @@ class LLC(Protocol):
 
     @property
     def is_raw_ipx(self) -> bool:
-        """Whether this is Novell "raw 802.3": DSAP and SSAP 0xFF are
-        an IPX checksum, not an LLC header (see the module docstring)."""
+        """Whether this is Novell "raw 802.3", not an LLC header.
+
+        DSAP and SSAP 0xFF are then an IPX checksum (see the module
+        docstring).
+        """
         return self.dsap == 0xFF and self.ssap == 0xFF
 
     @property
     def dsap_name(self) -> str:
-        """Display name of the DSAP, e.g. ``"Bridge Spanning Tree"``;
-        falls back to the hexadecimal value for an unlisted one."""
+        """Display name of the DSAP, e.g. ``"Bridge Spanning Tree"``.
+
+        Falls back to the hexadecimal value for an unlisted one.
+        """
         return _sap_name(self.dsap)
 
     @property
@@ -272,8 +284,10 @@ class LLC(Protocol):
 
     @property
     def dsap_enum(self) -> LLCSAP | None:
-        """The DSAP as an :class:`~netprotocols.LLCSAP`, or ``None`` for
-        a value the IEEE does not list as assigned."""
+        """The DSAP as an :class:`~netprotocols.LLCSAP`, or ``None``.
+
+        ``None`` for a value the IEEE does not list as assigned.
+        """
         try:
             return LLCSAP(self.dsap)
         except ValueError:
@@ -282,7 +296,7 @@ class LLC(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class registered in ``llc.dsap`` for the DSAP, if any.
+        """Return the class registered in ``llc.dsap`` for the DSAP.
 
         ``None`` for a PDU that carries no upper-layer data (anything
         but I-format and UI), for Novell raw 802.3, and for DSAP 0xAA
@@ -322,6 +336,10 @@ class SNAP(Protocol):
     _struct: ClassVar[Struct] = Struct("!BHH")
 
     def __post_init__(self) -> None:
+        """Check that the OUI fits 24 bits and the PID 16.
+
+        :raises InvalidFieldError: either is out of range.
+        """
         if not 0 <= self.oui <= 0xFFFFFF:
             raise InvalidFieldError(
                 f"SNAP OUI must be within 0-0xffffff, got {self.oui}",
@@ -349,6 +367,7 @@ class SNAP(Protocol):
         return cls(oui=oui_high << 16 | oui_low, pid=pid)
 
     def __bytes__(self) -> bytes:
+        """Serialize the OUI and the PID."""
         return self._struct.pack(self.oui >> 16, self.oui & 0xFFFF, self.pid)
 
     @property
@@ -358,8 +377,10 @@ class SNAP(Protocol):
 
     @property
     def snap_key(self) -> int:
-        """This header's key in the ``llc.snap`` table,
-        ``(oui << 16) | pid``."""
+        """This header's key in the ``llc.snap`` table.
+
+        That is ``(oui << 16) | pid``.
+        """
         return self.oui << 16 | self.pid
 
     @property
@@ -370,9 +391,11 @@ class SNAP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class for the PID: from ``ethertype`` when
-        :attr:`carries_ethertype`, else from ``llc.snap`` under
-        :attr:`snap_key`."""
+        """Return the class for the PID, from the table its OUI selects.
+
+        From ``ethertype`` when :attr:`carries_ethertype`, else from
+        ``llc.snap`` under :attr:`snap_key`.
+        """
         if self.carries_ethertype:
             if registry is None:
                 return _ETHERTYPE_CLASSES.get(self.pid)

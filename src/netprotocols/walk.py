@@ -206,7 +206,7 @@ def decode_frame(
 def _too_deep(
     max_depth: int, protocol: type[Protocol], cursor: int
 ) -> MaxDepthExceededError:
-    """The error for a chain still going after ``max_depth`` headers."""
+    """Build the error for a chain still going after ``max_depth``."""
     plural = "" if max_depth == 1 else "s"
     return MaxDepthExceededError(
         f"chain still going after {max_depth} header{plural} "
@@ -219,7 +219,7 @@ def _too_deep(
 
 
 def _bounded(header: Protocol, cursor: int, end: int) -> int:
-    """Where the buffers after ``header`` end, given its payload extent.
+    """Return where the buffers after ``header`` end, given its extent.
 
     ``cursor`` is the offset just past ``header`` and ``end`` the
     current bound. The tighter of the two wins, so a length larger than
