@@ -286,21 +286,25 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP` is the one exception, and it answers from decode context rather
-than from a wire field. A BGP message carries no payload: a TCP segment
-can hold several messages back to back, each decoded as its own layer,
-so `BGP.next_protocol()` names the next message *beside* it — `BGP`
-when the bytes after this message begin another one, `None` when they
-do not. Only those bytes can say which, and `next_protocol()` is handed
-none, so `decode()` records the answer on the instance in a field kept
-out of the dataclass's comparison and hash (`compare=False`, the
-mechanism `HTTP` uses for its `_message` parse cache). Two equal
-messages compare equal however they were found, and can still chain
-differently. The rules of the decode contract hold for it unchanged;
-see *Port-based dispatch is best-effort* below,
+`BGP` and `MPLS` are the two exceptions: they answer from decode
+context rather than from a wire field alone. A BGP message carries no
+payload: a TCP segment can hold several messages back to back, each
+decoded as its own layer, so `BGP.next_protocol()` names the next
+message *beside* it — `BGP` when the bytes after this message begin
+another one, `None` when they do not. An MPLS label stack carries a
+packet but no field naming its protocol (see *MPLS: dispatch by
+convention* below), so `MPLS.next_protocol()` infers one, partly from
+the first byte after the stack. Only the bytes can say, and
+`next_protocol()` is handed none, so each `decode()` records what it
+saw on the instance in a field kept out of the dataclass's comparison
+and hash (`compare=False`, the mechanism `HTTP` uses for its `_message`
+parse cache). Two equal headers compare equal however they were found,
+and can still chain differently. The rules of the decode contract hold
+for both unchanged; see *Port-based dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
-next_protocol*, and
-[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+next_protocol*, and the module docstrings of
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py) and
+[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py).
 
 ```mermaid
 flowchart LR
@@ -312,6 +316,10 @@ flowchart LR
   V -->|0x0806| A
   V -->|0x0800| I4
   V -->|0x86DD| I6
+  E -->|0x8847, 0x8848| M[MPLS label stack]
+  V -->|0x8847, 0x8848| M
+  M -->|bottom label 0, or first nibble 4| I4
+  M -->|bottom label 2, or first nibble 6| I6
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
@@ -390,8 +398,36 @@ bitfields — `pcp`, `dei`, `vid` — as dataclass fields validated in
 property (the same pattern `IPv6` uses for `version` /
 `traffic_class` / `flow_label`).
 
+**MPLS: dispatch by convention.** An MPLS label stack (RFC 3032) sits
+where a VLAN tag does, after Ethernet's EtherType (0x8847, or 0x8848
+for a multicast frame whose top label is upstream-assigned, RFC 5332),
+and decodes as one `MPLS` layer however many 4-byte entries it holds:
+the stack ends at the entry with its Bottom of Stack bit set, so it
+bounds itself, and a deep stack counts once against `max_depth`. What
+it does not have is a field naming the packet it carries. RFC 3032
+§2.2 leaves that to the binding of the label popped at the egress,
+which a capture never shows, so `MPLS.next_protocol()` follows a
+convention. A bottom label reserved for a payload settles it — 0, IPv4
+Explicit NULL, is IPv4 and 2, IPv6 Explicit NULL, is IPv6, whatever
+the bytes say, while 13 (GAL) and 14 (OAM Alert) are followed by a
+channel header or an OAM message and stop the walk. Otherwise the
+first nibble after the stack is read as an IP version, 4 or 6, as
+routers that load-balance IP over MPLS do (RFC 4928); anything else, a
+pseudowire control word's 0 among them, stops the walk. The class
+comes from the `ethertype` table at 0x0800 or 0x86DD, so a `registry`
+or `decode_as` override reaches the labelled packet too. The nibble is
+a guess, as a port is: an Ethernet pseudowire sent without a control
+word, whose inner destination MAC address happens to begin with 4 or
+6, decodes as an IP header, which is the misreading RFC 4928 and RFC
+4385's control word exist to prevent. GRE dispatches its Protocol Type
+through the `ethertype` table too, so MPLS in GRE (RFC 4023) reaches
+`MPLS` with no code of its own. See
+[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py)'s module
+docstring.
+
 The numbers on the arrows are the wire values — EtherTypes out of
-Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
+Ethernet, IP protocol numbers out of IPv4/IPv6; MPLS's arrows, which
+no wire field names, are the convention above — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
@@ -439,7 +475,7 @@ field they dispatch on:
 
 | Table | Dispatches on | Read by |
 |---|---|---|
-| `ethertype` | Ethernet II EtherType | `Ethernet`, `VLAN`, `GRE` |
+| `ethertype` | Ethernet II EtherType | `Ethernet`, `VLAN`, `GRE`; `MPLS` at 0x0800 and 0x86DD, by convention |
 | `ip.proto` | IPv4 `protocol` | `IPv4`, `AH` |
 | `ip.proto.v6` | IPv6 `next_header` | `IPv6`, extension headers, `AHv6` |
 | `udp.port` | UDP well-known port | `UDP` |
@@ -532,8 +568,10 @@ module.
 ## Port-based dispatch is best-effort
 
 The `ethertype` and `ip.proto` tables dispatch on a single
-authoritative field: it exists to say what follows. The two port
-tables break that model, and differ in kind rather than just in name.
+authoritative field: it exists to say what follows (MPLS, which looks
+up the `ethertype` table by convention, is the exception described
+above). The two port tables break that model, and differ in kind
+rather than just in name.
 A port is a *guess* — any service may run on any port, and the
 discriminator is split across the source and destination ports.
 Dispatch therefore checks the destination port first (a request
@@ -753,7 +791,8 @@ src/netprotocols/
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
-├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
+├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
+│                   mpls.py (MPLS label stack: MPLS + MPLSLabel)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

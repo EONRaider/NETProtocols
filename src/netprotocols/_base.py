@@ -82,15 +82,25 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
 
+``MPLS`` has none either, but its label stack ends at the entry with the
+Bottom of Stack bit set, so step 3 holds as for a header with one: the
+labelled packet, and any padding after it, is the next layer's. See
+:mod:`netprotocols.layer2.mpls`.
+
 Decode context in ``next_protocol``
 -----------------------------------
-``BGP`` is the one header whose ``next_protocol()`` answers from what
-``decode()`` saw rather than from a wire field, and names the next
-message beside it rather than a class for its payload: whether the
-bytes after the message begin another one in the same TCP segment.
-``decode()`` records that on the instance in a ``compare=False`` field,
-outside its comparison and hash. Steps 1-3 above hold for it unchanged.
-See :mod:`netprotocols.layer7.bgp`.
+Two headers answer ``next_protocol()`` from what ``decode()`` saw
+rather than from a wire field alone, because no field says what follows
+them. ``BGP`` names the next message beside it rather than a class for
+its payload: whether the bytes after the message begin another one in
+the same TCP segment. ``MPLS`` names its payload by convention: by its
+bottom label where RFC 3032 reserves that label for one, and otherwise
+by the first nibble after the stack, read as an IP version. Each
+``decode()`` records what only the bytes could tell it on the instance,
+in a ``compare=False`` field outside its comparison and hash, so two
+equal headers compare equal wherever they were found, and can still
+chain differently. Steps 1-3 above hold for both unchanged. See
+:mod:`netprotocols.layer7.bgp` and :mod:`netprotocols.layer2.mpls`.
 """
 
 from __future__ import annotations

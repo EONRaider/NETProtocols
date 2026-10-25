@@ -142,6 +142,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
+| 2 | MPLS label stack | `MPLS` | RFC 3032 §2.1, EtherTypes 0x8847 and 0x8848 (and GRE's Protocol Type, RFC 4023); the whole stack as one layer of `MPLSLabel` entries (label, traffic class, S, TTL); no field names the payload, so it dispatches by convention to IPv4 or IPv6 — the bottom label when it is an Explicit NULL, otherwise the first nibble after the stack — and stops at a pseudowire control word |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
 | 3 | IPv6 Hop-by-Hop Options | `IPv6HopByHopOptions` | RFC 8200 §4.3 |
