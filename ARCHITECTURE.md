@@ -525,11 +525,10 @@ payloads sent to 520, and the 0-600 byte ones unpadded and padded, the
 differences between them within sampling noise; an empty datagram
 padded to the minimum is rejected too, since the padding reads as
 version 0. It goes no further. The obsolete and extension commands
-(TraceOn, TraceOff, the
-triggered and update messages) decode, and so does a RIPv1 message
-with nonzero must-be-zero fields, which RFC 1058 tells a receiver to
-ignore but a decoder should show. Past the header, any 20 bytes are an
-entry.
+(TraceOn, TraceOff, the triggered and update messages) decode, and so
+does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
+tells a receiver to ignore but a decoder should show. Past the header,
+any 20 bytes are an entry.
 
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one

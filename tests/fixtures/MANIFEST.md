@@ -234,21 +234,23 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   a capture cannot pin down, so the script captures each scenario whole
   and keeps a fixed selection, asserting it exactly: per scenario, each
   router's first Request and first Response, and in the RIPv2 scenario
-  10.9.52.1's first Response more than 5 s after the scenario's first
-  captured frame (6 or more by whole-second timestamps), past its 5-second update timer: a whole-table update,
-  carrying the peer's routes back poisoned. BIRD sends a RIPv1 router only classful networks, so
-  the v1 routes are a class A, B and C network and the connected /24 is
-  not advertised. In the RFC 4822 scenarios BIRD fills in Auth Data Len
-  as 20 for keyed MD5, counting the trailer's 4-byte header with the
-  16-byte digest, and as 32 for HMAC-SHA-256, the digest alone, as the
-  RFC says;
-  `tests/test_rip.py` pins both. The sequence numbers of the Responses
-  come from BIRD's clock, so a re-capture differs in them, the digests,
-  the IPv4 identification and the timestamps. Everything here is IPv4:
-  RIP has no IPv6 form (RIPng, RFC 2080, is a separate protocol on UDP
-  521, not decoded), and veth does not pad, so no frame carries Ethernet
-  padding or an FCS; `tests/test_rip.py` appends a 4-byte trailer to
-  every frame and cuts one inside an entry to cover both.
+  10.9.52.1's first Response whose whole-second pcap timestamp is 6 or
+  more past the scenario's first captured frame's, hence more than 5 s
+  after it (not necessarily the first Response more than 5 s after),
+  past its 5-second update timer: a whole-table update, carrying the
+  peer's routes back poisoned. BIRD sends a RIPv1 router only classful
+  networks, so the v1 routes are a class A, B and C network and the
+  connected /24 is not advertised. In the RFC 4822 scenarios BIRD fills
+  in Auth Data Len as 20 for keyed MD5, counting the trailer's 4-byte
+  header with the 16-byte digest, and as 32 for HMAC-SHA-256, the digest
+  alone, as the RFC says; `tests/test_rip.py` pins both. The sequence
+  numbers of the Responses come from BIRD's clock, so a re-capture
+  differs in them, the digests, the IPv4 identification and the
+  timestamps. Everything here is IPv4: RIP has no IPv6 form (RIPng,
+  RFC 2080, is a separate protocol on UDP 521, not decoded), and veth
+  does not pad, so no frame carries Ethernet padding or an FCS;
+  `tests/test_rip.py` appends a 4-byte trailer to every frame and cuts
+  one inside an entry to cover both.
 
 ### RIP test keys
 

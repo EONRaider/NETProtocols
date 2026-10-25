@@ -29,12 +29,13 @@
 # capture cannot pin down. So the full capture of each scenario goes to
 # a scratch directory, and the fixture keeps a fixed selection: each
 # router's first Request and first Response, and in the v2 scenario the
-# first Response 10.9.52.1 sent more than 5 seconds after the
-# scenario's first captured frame (6 or more by the pcap's whole-second
-# timestamps), past its 5-second update timer: a whole-table
-# update, which by then also carries the peer's routes, poisoned
-# (metric 16, split horizon with poisoned reverse). The
-# script asserts that selection exactly, by router, version, command,
+# first Response from 10.9.52.1 whose whole-second pcap timestamp is 6
+# or more past the scenario's first captured frame's, hence more than
+# 5 seconds after that frame (not necessarily the first Response more
+# than 5 seconds after it), past its 5-second update timer: a
+# whole-table update, which by then also carries the peer's routes,
+# poisoned (metric 16, split horizon with poisoned reverse). The script
+# asserts that selection exactly, by router, version, command,
 # authentication type and route-entry count, and stops otherwise.
 #
 # What BIRD built: every RIP byte, including the authentication entries
