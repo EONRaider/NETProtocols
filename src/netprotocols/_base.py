@@ -82,6 +82,13 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
 
+``LLDP`` has no length for the whole LLDPDU, but each TLV has one and
+the End of LLDPDU TLV ends the walk, so step 3 holds after it; a TLV
+running past the buffer raises :class:`TruncatedHeaderError`, as in
+step 2. An LLDPDU without an End TLV (optional since 802.1AB-2016, as
+Wireshark's dissector notes) runs to the end of the buffer. See
+:mod:`netprotocols.layer2.lldp`.
+
 Decode context in ``next_protocol``
 -----------------------------------
 ``BGP`` is the one header whose ``next_protocol()`` answers from what

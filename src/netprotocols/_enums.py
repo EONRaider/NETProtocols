@@ -19,6 +19,7 @@ class EtherType(IntEnum):
     VLAN_TAG_QINQ = 0x88A8
     VLAN_TAG_9100 = 0x9100
     IPV6 = 0x86DD
+    LLDP = 0x88CC
 
     @property
     def display_name(self) -> str:
@@ -32,6 +33,7 @@ _ETHERTYPE_NAMES = {
     EtherType.VLAN_TAG_QINQ: "802.1ad S-TAG (QinQ)",
     EtherType.VLAN_TAG_9100: "VLAN double tag (legacy)",
     EtherType.IPV6: "IPv6",
+    EtherType.LLDP: "LLDP",
 }
 
 

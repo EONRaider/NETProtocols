@@ -141,6 +141,7 @@ ip.proto                  → error: "IPv4" has no attribute
 |---|---|---|---|
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
+| 2 | LLDP | `LLDP`, `LLDPTLV`, `LLDPChassisID`, `LLDPPortID` | IEEE 802.1AB, EtherType 0x88CC; every TLV through End of LLDPDU, the End TLV's bound leaving padding and an FCS undecoded; Chassis ID and Port ID (subtype and ID) and Time To Live typed, every other TLV raw with its type named |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
@@ -451,7 +452,7 @@ Every class exposes human-readable properties next to the raw fields:
 `Ethernet.ethertype_name`, `IPv4.protocol_name`, `IPv4.flags_name`,
 `TCP.flags_str` (`"SYN ACK"`), `ARP.oper_name`, `ICMPv4.type_name`,
 and hexadecimal renderings such as `checksum_hex_str`. Unknown values
-degrade gracefully (`"0x88cc"`, `"unknown (47)"`) instead of raising.
+degrade gracefully (`"0x88b5"`, `"unknown (47)"`) instead of raising.
 
 ## How it works
 

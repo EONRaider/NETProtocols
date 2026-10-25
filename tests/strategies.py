@@ -25,6 +25,8 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    LLDP,
+    LLDPTLV,
     OSPF,
     OSPFLSA,
     PIM,
@@ -44,6 +46,8 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    LLDPChassisID,
+    LLDPPortID,
     OSPFDatabaseDescription,
     OSPFHello,
     OSPFLSAHeader,
@@ -119,6 +123,38 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
         vid=draw(st.integers(0, 0xFFF)),
         ethertype=draw(st.integers(0, 0xFFFF)),
     )
+
+
+#: An LLDP TLV value: mostly short, sometimes long enough to need the
+#: 9th Length bit, up to the 511 bytes the Length can carry.
+_lldp_values = st.one_of(
+    st.binary(max_size=24), st.binary(min_size=256, max_size=511)
+)
+
+
+@st.composite
+def lldp_lldpdus(draw: st.DrawFn) -> LLDP:
+    # tlvs is LLDP's one field, constrained as decode produces it: an
+    # End of LLDPDU TLV (type 0) comes last, empty, or not at all, and
+    # an LLDPDU holds at least one TLV. Half open with the mandatory
+    # Chassis ID, Port ID and TTL, so the typed accessors have
+    # something to read.
+    tlvs: list[LLDPTLV] = []
+    if draw(st.booleans()):
+        ids = st.tuples(
+            st.integers(0, 0xFF), st.binary(min_size=1, max_size=32)
+        )
+        tlvs.append(LLDPChassisID(*draw(ids)).tlv)
+        tlvs.append(LLDPPortID(*draw(ids)).tlv)
+        tlvs.append(LLDPTLV(3, draw(st.integers(0, 0xFFFF)).to_bytes(2)))
+    tlvs += draw(
+        st.lists(
+            st.builds(LLDPTLV, st.integers(1, 0x7F), _lldp_values), max_size=6
+        )
+    )
+    if not tlvs or draw(st.booleans()):
+        tlvs.append(LLDPTLV(0))
+    return LLDP(tlvs=tuple(tlvs))
 
 
 @st.composite
@@ -773,6 +809,7 @@ def pim_headers(draw: st.DrawFn) -> PIM:
 ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "ARP": arp_headers(),
     "VLAN": vlan_headers(),
+    "LLDP": lldp_lldpdus(),
     "IPv4": ipv4_headers(),
     "IPv6": ipv6_headers(),
     "IPv6HopByHopOptions": ipv6_hop_by_hop_headers,

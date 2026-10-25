@@ -258,3 +258,13 @@ def raw_vrrpv3_advert() -> bytes:
     """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
     Adver Int 100 cs, one address — the minimal 12-byte message."""
     return bytes.fromhex("3135c8010064e97c0a091446")
+
+
+@pytest.fixture
+def raw_lldp_shutdown() -> bytes:
+    """Shutdown LLDPDU from ``lldp.pcap``: agent A's Chassis ID (MAC
+    address ``02:4e:50:86:00:0a``), Port ID (interface name
+    ``nplldp-va``), a Time To Live of 0, and End of LLDPDU."""
+    return bytes.fromhex(
+        "020704024e5086000a040a056e706c6c64702d7661060200000000"
+    )
