@@ -14,6 +14,7 @@ from netprotocols import (
     IPv4,
     IPv6,
     Protocol,
+    TruncatedHeaderError,
     decode_frame,
 )
 from netprotocols._defaults import (
@@ -393,19 +394,20 @@ class TestRepr:
 
 
 class TestKeyRanges:
-    """A key its wire field cannot carry is refused at registration."""
+    """The LLC tables refuse a key their field cannot carry; the others
+    accept any key, ``ethertype`` included, as in 2.5.0."""
 
-    @pytest.mark.parametrize("key", [0, 46, 1500, 1501, 1535, -1, 0x10000])
-    def test_ethertype_refuses_lengths_and_the_undefined_gap(
-        self, registry, key
-    ):
-        """An Ethernet header reads 1500 or less as an 802.3 Length and
-        1501-1535 as undefined, so an entry there would never be
-        reached from Ethernet."""
-        with pytest.raises(InvalidRegistryKeyError) as excinfo:
-            registry.register(TABLE_ETHERTYPE, key, Fake)
-        assert TABLE_ETHERTYPE in str(excinfo.value)
-        assert registry.get(TABLE_ETHERTYPE, key) is None
+    @pytest.mark.parametrize(
+        "key",
+        [0, 0x0004, 0x0026, 0x00FE, 0x0200, 1500, 1501, 1535, -1, 0x10000],
+    )
+    def test_ethertype_accepts_any_key_as_2_5_0_did(self, registry, key):
+        """GRE and SNAP read ``ethertype`` whatever the value, and RFC
+        1701 assigns GRE Protocol Types 0x0004, 0x00FE and 0x0200; a
+        negative key or one past 0xFFFF is accepted, as it always was,
+        though no 16-bit field reaches it."""
+        registry.register(TABLE_ETHERTYPE, key, Fake)
+        assert registry.get(TABLE_ETHERTYPE, key) is Fake
 
     @pytest.mark.parametrize("key", [0x0600, 0x88B5, 0xFFFF])
     def test_ethertype_accepts_every_type_value(self, registry, key):
@@ -424,29 +426,44 @@ class TestKeyRanges:
     def test_the_llc_tables_take_their_field_width(
         self, registry, table, bad, good
     ):
-        with pytest.raises(InvalidRegistryKeyError):
+        with pytest.raises(InvalidRegistryKeyError) as excinfo:
             registry.register(table, bad, Fake)
+        assert table in str(excinfo.value)
+        assert registry.get(table, bad) is None
         registry.register(table, good, Fake)
         assert registry.get(table, good) is Fake
 
     def test_every_way_to_register_refuses_too(self):
         isolated = Registry()
         with pytest.raises(InvalidRegistryKeyError):
-            register(TABLE_ETHERTYPE, 0x0026, registry=isolated)(Fake)
+            register(TABLE_LLC_DSAP, 0x100, registry=isolated)(Fake)
         with pytest.raises(InvalidRegistryKeyError):
-            register_all(
-                TABLE_ETHERTYPE, (0x0800, 0x0026), Fake, registry=isolated
-            )
+            register_all(TABLE_LLC_DSAP, (0x42, 0x100), Fake, registry=isolated)
         # Not atomic: the key before the refused one stays registered.
-        assert isolated.get(TABLE_ETHERTYPE, 0x0800) is Fake
+        assert isolated.get(TABLE_LLC_DSAP, 0x42) is Fake
         with pytest.raises(InvalidRegistryKeyError):
-            isolated.derive({TABLE_ETHERTYPE: {0x0026: Fake}})
+            isolated.derive({TABLE_LLC_SNAP: {1 << 40: Fake}})
         with pytest.raises(InvalidRegistryKeyError):
-            decode_frame(bytes(14), decode_as={TABLE_ETHERTYPE: {38: Fake}})
+            decode_frame(bytes(14), decode_as={TABLE_LLC_DSAP: {0x100: Fake}})
         with pytest.raises(InvalidRegistryKeyError):
             decode_frame(
-                bytes(14), lax=True, decode_as={TABLE_ETHERTYPE: {38: Fake}}
+                bytes(14), lax=True, decode_as={TABLE_LLC_DSAP: {-1: Fake}}
             )
+
+    def test_every_way_to_register_accepts_a_low_ethertype(self):
+        isolated = Registry()
+        register(TABLE_ETHERTYPE, 0x0026, registry=isolated)(Fake)
+        register_all(TABLE_ETHERTYPE, (0x0004, 0x0200), Fake, registry=isolated)
+        child = isolated.derive({TABLE_ETHERTYPE: {0x00FE: Fake}})
+        for key in (0x0004, 0x0026, 0x00FE, 0x0200):
+            assert child.get(TABLE_ETHERTYPE, key) is Fake
+        # Ethernet reads type/length 0 as a Length: LLC, which has no
+        # bytes here. The override is accepted and never consulted.
+        packet = decode_frame(
+            bytes(14), lax=True, decode_as={TABLE_ETHERTYPE: {0x26: Fake}}
+        )
+        assert [type(layer) for layer in packet.layers] == [Ethernet]
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
 
     def test_the_other_tables_accept_any_key(self, registry):
         registry.register(TABLE_UDP_PORT, 0x10000, Fake)

@@ -160,10 +160,10 @@ def decode_frame(
     :raises UnknownTableError: ``decode_as`` names a table that is not
         one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
         says.
-    :raises InvalidRegistryKeyError: ``decode_as`` names a key outside
-        the range its table accepts, such as an ``ethertype`` key below
-        0x0600 (see "Key ranges" in :mod:`netprotocols.registry`),
-        whatever ``lax`` says.
+    :raises InvalidRegistryKeyError: ``decode_as`` names an
+        ``llc.dsap`` or ``llc.snap`` key outside the range that table
+        accepts, such as a DSAP above 0xFF (see "Key ranges" in
+        :mod:`netprotocols.registry`), whatever ``lax`` says.
     :raises ValueError: ``max_depth`` is below 1.
 
     Building the override registry costs a small copy, so a caller

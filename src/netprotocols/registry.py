@@ -36,20 +36,24 @@ The decorator returns the class unchanged, so it stacks with
 Key ranges
 ----------
 
-Three tables reject a key their wire field cannot reach, raising
+Two tables reject a key their wire field cannot carry, raising
 :class:`InvalidRegistryKeyError` at registration (never on a lookup):
 
-* ``ethertype`` takes 0x0600-0xFFFF only. IEEE 802.3 Clause 3.2.6 makes
-  a type/length value of 1500 or less a frame length, followed by an
-  802.2 LLC header, and leaves 1501-1535 undefined, so an Ethernet or
-  VLAN header never dispatches those values through this table. A
-  decoder registered at one would never be reached from Ethernet, and
-  would silently answer a GRE Protocol Type or SNAP PID that no
-  standard assigns; refusing it says so at once.
 * ``llc.dsap`` takes 0-0xFF, the width of the DSAP octet.
 * ``llc.snap`` takes 0 to 2**40 - 1: a 24-bit OUI and a 16-bit PID.
 
-The other tables accept any key, as they always have.
+The other tables accept any key, as they always have, ``ethertype``
+among them. An Ethernet or VLAN header never consults ``ethertype``
+for a type/length value of 1500 or less, which IEEE 802.3 Clause 3.2.6
+makes a frame Length followed by an 802.2 LLC header, nor for the
+undefined 1501-1535. But a GRE Protocol Type, and a SNAP PID under OUI
+00-00-00 or 00-00-F8, are looked up there whatever their value, and
+GRE has low values assigned: RFC 1701's "Current List of Protocol Types"
+assigns SNA 0x0004, OSI network layer 0x00FE and PUP 0x0200 ("The
+following table of values MUST be used to identify the following
+protocols"). A decoder registered at ``ethertype`` 0x00FE is reached
+from a GRE Protocol Type or a SNAP PID of 0x00FE, and never from an
+Ethernet or VLAN header.
 
 Table inheritance
 -----------------
@@ -175,7 +179,6 @@ _CHILDREN: Mapping[str, tuple[str, ...]] = {
 #: them (see "Key ranges" in the module docstring). Checked when a key is
 #: registered, never on a lookup.
 _KEY_RANGES: Mapping[str, range] = {
-    TABLE_ETHERTYPE: range(0x0600, 0x1_0000),
     TABLE_LLC_DSAP: range(0x100),
     TABLE_LLC_SNAP: range(1 << 40),
 }
@@ -195,13 +198,10 @@ class UnknownTableError(ProtocolError):
 class InvalidRegistryKeyError(ProtocolError):
     """A registration named a key its table's wire field cannot carry.
 
-    Raised for an ``ethertype`` key outside 0x0600-0xFFFF: a key below
-    0x0600 is a value an Ethernet header reads as an 802.3 Length or an
-    undefined value rather than an EtherType, and one above 0xFFFF, or
-    negative, fits no 16-bit field. Raised too for an ``llc.dsap`` key
-    outside 0-0xFF and an ``llc.snap`` key outside 0 to 2**40 - 1 (a
-    negative key included), the values the fields they are read from
-    can carry. See "Key ranges" in the module docstring.
+    Raised for an ``llc.dsap`` key outside 0-0xFF and an ``llc.snap``
+    key outside 0 to 2**40 - 1 (a negative key included), the values
+    the fields they are read from can carry. No other table raises it.
+    See "Key ranges" in the module docstring.
     """
 
 
@@ -301,8 +301,9 @@ class Registry:
         """Register ``protocol`` as the decoder for ``key`` in ``table``.
 
         :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
-        :raises InvalidRegistryKeyError: ``key`` is outside the range
-            ``table`` accepts (see "Key ranges" in the module docstring).
+        :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+            ``llc.snap`` and ``key`` is outside the range it accepts (see
+            "Key ranges" in the module docstring).
         :raises RegistryConflictError: ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
             class to the same key succeeds and changes nothing.
@@ -371,9 +372,9 @@ class Registry:
         raise a conflict: naming a key that is already taken is the
         point.
 
-        :raises InvalidRegistryKeyError: an override names a key outside
-            the range its table accepts (see "Key ranges" in the module
-            docstring).
+        :raises InvalidRegistryKeyError: an override names an
+            ``llc.dsap`` or ``llc.snap`` key outside the range that table
+            accepts (see "Key ranges" in the module docstring).
         """
         child = Registry()
         for name in TABLES:
@@ -498,8 +499,9 @@ def register_all(
     before it stay registered and the ones after it are not tried.
 
     :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
-    :raises InvalidRegistryKeyError: a key is outside the range
-        ``table`` accepts (see "Key ranges" in the module docstring).
+    :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+        ``llc.snap`` and a key is outside the range it accepts (see "Key
+        ranges" in the module docstring).
     :raises RegistryConflictError: a key is held by a different class
         and ``override`` is false.
     """

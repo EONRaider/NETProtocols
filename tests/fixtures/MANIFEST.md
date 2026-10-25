@@ -452,8 +452,9 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   byte from 0x80 is not padded as RFC 1071 pads it, nor added as its
   plain value or as 0xFF00 plus it without the `- 1`, but it cannot
   tell lldpd's form from adding the byte less 0x100, which differs
-  only where the folded sum is zero, giving a checksum of 0 under one
-  and 0xFFFF under the other: `test_cdp_odd_byte_is_lldpds_form` in
+  only where the sum under `v - 0x100` folds to 0, which is 0xFFFF
+  under lldpd's form, giving a checksum of 0xFFFF under `v - 0x100`
+  and 0 under lldpd's: `test_cdp_odd_byte_is_lldpds_form` in
   `tests/test_llc.py` separates the two on `b"\x00\x7f\x81"`), and
   verifies the IPv4 and ICMP checksums inside RFC 1042 framing. veth
   does not pad, so the BPDUs and CDP frames carry no padding (the TCN is a
