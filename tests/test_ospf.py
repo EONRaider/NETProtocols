@@ -978,6 +978,24 @@ class TestConstruction:
         assert dd.flags_str == "M"
         assert dd.options_str == "O E"
 
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: make_ospf(5, router_id="10.0.0.256"),
+            lambda: make_ospf(5, area_id="area 0"),
+            lambda: lsa_header(advertising_router="::1"),
+        ],
+    )
+    def test_a_malformed_address_fails_only_in_bytes(self, build):
+        """Construct a malformed address; raise OSError from ``bytes()``.
+
+        Like IPv6 and DHCP, OSPF does not check addresses when it is
+        built (ARCHITECTURE, *The encode side*).
+        """
+        record = build()
+        with pytest.raises(OSError):
+            bytes(record)
+
 
 def load_checker():
     path = FIXTURES.parent.parent / "scripts" / "check_fixtures.py"
