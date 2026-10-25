@@ -18,11 +18,13 @@ import pytest
 
 from conftest import FIXTURES, corpus_frames
 from netprotocols import HTTP, HTTPDisposition, HTTPFraming
+from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = FIXTURES / "MANIFEST.md"
 README = ROOT / "README.md"
 ARCHITECTURE = ROOT / "ARCHITECTURE.md"
+CLAIMS = ROOT / "docs" / "CLAIMS.md"
 
 ACTUAL_FRAMES = len(corpus_frames())
 ACTUAL_SCENARIOS = len(list(FIXTURES.glob("*.pcap")))
@@ -199,3 +201,34 @@ class TestReadmeHTTPExamples:
             runner = doctest.DocTestRunner()
             runner.run(test)
             assert runner.summarize().failed == 0, block
+
+
+class TestRegisterExample:
+    """The ``@register`` example README.md, ARCHITECTURE.md and
+    docs/CLAIMS.md show, run as written. It must claim an EtherType no
+    built-in decoder holds, or it raises RegistryConflictError: it used
+    0x8847 until MPLS shipped (#187), and now uses 0x88B5, IEEE 802's
+    Local Experimental EtherType."""
+
+    @pytest.mark.parametrize(
+        "path", [README, ARCHITECTURE, CLAIMS], ids=lambda p: p.name
+    )
+    def test_the_example_registers_on_a_free_ethertype(
+        self, path: Path
+    ) -> None:
+        (code,) = [
+            block
+            for block in re.findall(
+                r"```python\n(.*?)```", path.read_text(), re.S
+            )
+            if '@register("ethertype"' in block
+        ]
+        assert DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is None
+        namespace: dict[str, object] = {}
+        try:
+            exec(code, namespace)
+            assert (
+                DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is namespace["Telemetry"]
+            )
+        finally:
+            DEFAULT.table(TABLE_ETHERTYPE).pop(0x88B5, None)

@@ -18,8 +18,10 @@ library source::
     from netprotocols import Protocol
     from netprotocols.registry import register
 
-    @register("ethertype", 0x8847)
-    class MPLS(Protocol):
+    # 0x88B5 is IEEE 802's Local Experimental EtherType, so no
+    # built-in decoder holds it
+    @register("ethertype", 0x88B5)
+    class Telemetry(Protocol):
         ...
 
     # or, for a class you did not write (253 is reserved for
@@ -385,8 +387,8 @@ def register(
 
     Used as a decorator, the class is returned unchanged::
 
-        @register("ethertype", 0x8847)
-        class MPLS(Protocol):
+        @register("ethertype", 0x88B5)
+        class Telemetry(Protocol):
             ...
 
     Used directly, ``protocol`` names a class you did not write::

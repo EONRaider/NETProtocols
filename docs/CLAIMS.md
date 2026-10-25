@@ -1022,8 +1022,8 @@ a built-in:
 from netprotocols import Protocol
 from netprotocols.registry import register
 
-@register("ethertype", 0x8847)
-class MPLS(Protocol):
+@register("ethertype", 0x88B5)  # IEEE 802 Local Experimental
+class Telemetry(Protocol):
     ...
 ```
 

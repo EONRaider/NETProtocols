@@ -487,16 +487,18 @@ therefore take the nearest one before it, as `Packet.with_checksums()`
 and `Packet.flow_key()` do, not the first.
 
 **Extending the walk without forking.** The tables are public. A
-protocol this library does not implement — MPLS, a proprietary
-telemetry header — is one registration away from participating in
+protocol this library does not implement — a proprietary telemetry
+header, say, sent under 0x88B5, which IANA's EtherType registry lists
+as "IEEE Std 802 - Local Experimental Ethertype", so no built-in
+decoder holds it — is one registration away from participating in
 frame walks like any built-in:
 
 ```python
 from netprotocols import Protocol
 from netprotocols.registry import register
 
-@register("ethertype", 0x8847)
-class MPLS(Protocol):
+@register("ethertype", 0x88B5)
+class Telemetry(Protocol):
     ...
 ```
 
