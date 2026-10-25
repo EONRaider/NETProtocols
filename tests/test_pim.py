@@ -782,7 +782,8 @@ class TestEncodedAddresses:
         """Raise for a family or encoding type that cannot be sized.
 
         Encoding type 1 is defined only for an Encoded-Source (RFC
-        5384); this address is the Register-Stop's Encoded-Group.
+        5384); this address is the Join/Prune's upstream neighbor, an
+        Encoded-Unicast.
         """
         raw = bytearray(message_bytes(2))
         raw[4:6] = bytes((family, encoding))
