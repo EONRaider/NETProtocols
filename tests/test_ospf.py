@@ -1133,6 +1133,27 @@ class TestCheckerCatchesTampering:
         restored = decode_frame(damaged).with_checksums()
         assert self.check(checker, bytes(restored)) == ["ospf-lsa-checksum"]
 
+    def update_frame(self, ls_checksum: int) -> bytes:
+        """Build an update carrying one LSA whose checksum should be 0xffff."""
+        lsa = OSPFLSA(
+            lsa_header(ls_checksum=ls_checksum, length=24),
+            bytes.fromhex("8a00c200"),
+        )
+        return v4_frame(make_ospf(4, struct.pack("!I", 1) + bytes(lsa)))
+
+    def test_a_zero_lsa_checksum_fails(self, checker):
+        """Fail an LS Checksum of 0x0000 (RFC 2328 §12.1.7).
+
+        Its Fletcher sums are zero, as they are for the 0xffff this LSA
+        generates (each byte may read 0x00 for 0xff, as 0x00ff and
+        0xff00 show), so only the zero rule catches it.
+        """
+        for passing in (0xFFFF, 0x00FF, 0xFF00):
+            assert self.check(checker, self.update_frame(passing)) == []
+        assert self.check(checker, self.update_frame(0)) == [
+            "ospf-lsa-checksum"
+        ]
+
     def test_a_nonzero_instance_id_passes(self, checker):
         """Pass a valid AuType 2 frame with Instance ID 1 (RFC 6549 §2)."""
         frame = TestAuthentication().instance_1_md5()

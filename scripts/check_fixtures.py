@@ -44,14 +44,18 @@ def crc32c(data: bytes) -> int:
     return crc ^ 0xFFFFFFFF
 
 
-def fletcher_verifies(data: bytes) -> bool:
+def fletcher_verifies(data: bytes, offset: int) -> bool:
     """Check ``data`` against the ISO 8473 Fletcher checksum it carries.
 
-    With the checksum field in place, both running sums must be ``0``
-    modulo 255 (RFC 905 Annex B.4). The library's ``verify_lsa`` makes
-    the same check; this is its own implementation, sharing no code
-    with it.
+    The checksum is the two bytes at ``offset``. With it in place, both
+    running sums must be ``0`` modulo 255 (RFC 905 Annex B.4), and the
+    field must not be ``0x0000``: RFC 2328 §12.1.7 forbids a zero LS
+    Checksum and counts one as a failure, though B.4's sums can come
+    out zero over it. The library's ``verify_lsa`` makes the same
+    check; this is its own implementation, sharing no code with it.
     """
+    if data[offset : offset + 2] == b"\x00\x00":
+        return False
     c0 = c1 = 0
     for byte in data:
         c0 = (c0 + byte) % 255
@@ -197,7 +201,9 @@ def _check_ospf_lsas(body: bytes, stats: Counter) -> list[str]:
         if length < 20 or cursor + length > len(body):
             return [*failures, "ospf-lsa-length"]
         stats["ospf-lsa"] += 1
-        if not fletcher_verifies(body[cursor + 2 : cursor + length]):
+        lsa = body[cursor + 2 : cursor + length]
+        # LS Checksum: header bytes 16-17, 14-15 once LS Age is cut.
+        if not fletcher_verifies(lsa, 14):
             failures.append("ospf-lsa-checksum")
         cursor += length
     return failures

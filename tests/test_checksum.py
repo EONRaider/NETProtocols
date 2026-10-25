@@ -824,8 +824,8 @@ def fletcher_sums(data: bytes) -> tuple[int, int]:
     """Return RFC 905 B.4's running sums, reimplemented here.
 
     Both are 0 modulo 255 over a correctly checksummed field. verify_lsa
-    makes the same check; this copy keeps the tests from trusting the
-    library's sums.
+    makes the same check, and also rejects a zero LS Checksum; this copy
+    keeps the tests from trusting the library's sums.
     """
     c0 = c1 = 0
     for byte in data:
@@ -983,6 +983,23 @@ class TestLSAChecksum:
         assert verify_lsa(lsa)
         assert verify_lsa(self.lsa(lsa.body, 0x3100))
         assert not verify_lsa(self.lsa(lsa.body, 0x3101))
+
+    def test_a_zero_checksum_fails_though_its_sums_are_zero(self):
+        """Reject an LS Checksum of 0x0000, which zeroes both sums here.
+
+        This LSA generates 0xffff, and 0x0000 is equal to it modulo
+        255, so RFC 905 B.4 alone would pass it; RFC 2328 §12.1.7 says
+        the field cannot be zero and calls a zero a checksum failure.
+        The zero rule is on the 16-bit value: one zero byte is fine.
+        """
+        lsa = self.lsa(bytes.fromhex("8a00c200"))
+        assert lsa.header.ls_checksum == 0xFFFF
+        assert verify_lsa(lsa)
+        assert verify_lsa(self.lsa(lsa.body, 0x00FF))
+        assert verify_lsa(self.lsa(lsa.body, 0xFF00))
+        zero = self.lsa(lsa.body, 0)
+        assert fletcher_sums(bytes(zero)[2:]) == (0, 0)
+        assert not verify_lsa(zero)
 
     def test_swapped_adjacent_bytes_are_detected(self):
         """Reject two swapped adjacent bytes.

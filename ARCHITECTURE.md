@@ -606,7 +606,9 @@ Checksum is an ISO 8473 Fletcher checksum of the LSA but its LS Age;
 an LSA is not a layer, so it has functions of its own:
 `lsa_checksum()` generates the field with `fletcher_checksum()`, and
 `verify_lsa()` checks it the way RFC 905 B.4 does, by both running sums
-being zero, so it does not depend on how the field was generated.
+being zero, so a byte stored as `0x00` where the generator writes
+`0xff` passes; and, since RFC 2328 §12.1.7 says the field cannot be
+zero, it fails a field of `0x0000` even where those sums are zero.
 
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.

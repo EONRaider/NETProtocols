@@ -171,15 +171,21 @@ def lsa_checksum(lsa: OSPFLSA) -> int:
 
 
 def verify_lsa(lsa: OSPFLSA) -> bool:
-    """Whether ``lsa``'s LS Checksum checks.
+    """Return whether ``lsa``'s LS Checksum checks.
 
     That is RFC 905 B.4's check over the LSA but its LS Age, the
     checksum in place: both running sums must be ``0`` modulo 255. It
     does not compare the field with :func:`lsa_checksum`, which reports
-    a zero ``X`` or ``Y`` as ``255``: the check accepts either form,
-    ``0x00`` and ``0xff`` being equal modulo 255.
+    a zero ``X`` or ``Y`` as ``255``: the check accepts either form of
+    one byte, ``0x00`` and ``0xff`` being equal modulo 255.
+
+    RFC 2328 §12.1.7 adds one rule: the LS Checksum cannot be zero, and
+    a zero is a checksum failure. So a field of ``0x0000`` fails even
+    where B.4's sums come out zero, as they do for an LSA whose
+    generated checksum is ``0xffff``.
     """
-    return _fletcher_sums(bytes(lsa)[2:]) == (0, 0)
+    sums = _fletcher_sums(bytes(lsa)[2:])
+    return lsa.header.ls_checksum != 0 and sums == (0, 0)
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
