@@ -856,6 +856,26 @@ class TestUpdate:
         assert med.value == 256
         assert bytes(unknown) + bytes(med) == attributes
 
+    @pytest.mark.parametrize(
+        "type_code,name",
+        [
+            (0, "Reserved"),
+            (16, "EXTENDED_COMMUNITIES"),
+            (35, "Only to Customer (OTC)"),
+            (40, "BGP Prefix-SID"),
+            (128, "ATTR_SET"),
+            (255, "Reserved for development"),
+            (34, "unknown (34)"),  # a temporary registration, lapsed
+            (43, "unknown (43)"),
+        ],
+    )
+    def test_attribute_type_names(self, type_code, name):
+        """Type codes carry their IANA names; values stay raw."""
+        attribute = BGPPathAttribute(0xC0, type_code, b"\x00\x00\x00\x01")
+        assert attribute.type_name == name
+        assert attribute.value is None
+        assert attribute.value_text == "00000001"
+
     def test_wrong_length_values_are_not_decoded(self):
         """A value of the wrong length stays raw."""
         attributes = (
@@ -988,18 +1008,42 @@ class TestNotification:
     @pytest.mark.parametrize(
         "code,subcode,code_name,subcode_name",
         [
+            (1, 0, "Message Header Error", "Unspecific"),
             (1, 2, "Message Header Error", "Bad Message Length"),
+            (2, 7, "OPEN Message Error", "Unsupported Capability"),
+            (2, 11, "OPEN Message Error", "Role Mismatch"),
+            (2, 12, "OPEN Message Error", "unknown (12)"),
             (3, 11, "UPDATE Message Error", "Malformed AS_PATH"),
             (4, 0, "Hold Timer Expired", "Unspecific"),
-            (5, 0, "Finite State Machine Error", "Unspecific"),
-            (6, 8, "Cease", "Out of Resources"),
-            (6, 9, "Cease", "unknown (9)"),
             (4, 1, "Hold Timer Expired", "unknown (1)"),
-            (9, 1, "unknown (9)", "unknown (1)"),
+            (5, 0, "Finite State Machine Error", "Unspecified Error"),
+            (
+                5,
+                3,
+                "Finite State Machine Error",
+                "Receive Unexpected Message in Established State",
+            ),
+            (6, 0, "Cease", "Reserved"),
+            (6, 8, "Cease", "Out of Resources"),
+            (6, 9, "Cease", "Hard Reset"),
+            (6, 10, "Cease", "BFD Down"),
+            (6, 11, "Cease", "unknown (11)"),
+            (7, 0, "ROUTE-REFRESH Message Error", "Reserved"),
+            (7, 1, "ROUTE-REFRESH Message Error", "Invalid Message Length"),
+            (8, 0, "Send Hold Timer Expired", "Unspecific"),
+            (9, 0, "Loss of LSDB Synchronization", "Unspecific"),
+            (0, 0, "Reserved", "Unspecific"),
+            (10, 0, "unknown (10)", "Unspecific"),
+            (10, 1, "unknown (10)", "unknown (1)"),
         ],
     )
     def test_names(self, code, subcode, code_name, subcode_name):
-        """Error codes and subcodes are named, and unknown ones by number."""
+        """Error codes and subcodes carry their IANA names.
+
+        Subcode 0 has a name per code where the code has a subcode
+        registry, and is "Unspecific" (RFC 4271 §4.5) where it has none;
+        anything unassigned is named by number.
+        """
         msg = BGP.decode(message(3, bytes([code, subcode])))
         assert msg.error_code_name == code_name
         assert msg.error_subcode_name == subcode_name

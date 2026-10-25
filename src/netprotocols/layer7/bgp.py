@@ -200,11 +200,18 @@ _OPTIONAL_PARAMETER_NAMES: dict[int, str] = {
 #: Path attribute flag bits (RFC 4271 §4.3).
 _OPTIONAL, _TRANSITIVE, _PARTIAL, _EXTENDED_LENGTH = 0x80, 0x40, 0x20, 0x10
 
-#: Path attribute type codes this library names: RFC 4271 §5.1 (1-7),
-#: then RFC 1997 (8), RFC 4456 (9, 10), RFC 4760 (14, 15), RFC 4360
-#: (16), RFC 6793 (17, 18) and RFC 8092 (32). Only the values of 1, 3,
-#: 4 and 5 are decoded (:attr:`BGPPathAttribute.value`).
+#: Path attribute type codes, named as the IANA "BGP Path Attributes"
+#: registry assigns them (https://www.iana.org/assignments/bgp-parameters,
+#: last updated 2026-09-09, fetched 2026-10-25): every permanent
+#: registration, deprecated ones included, under the registry's name,
+#: except that 1-18 and 32 keep the RFCs' spelling (RFC 4271 §5.1 for
+#: 1-7, then RFC 1997, RFC 4456, RFC 4760, RFC 4360, RFC 6793 and RFC
+#: 8092). The temporary registrations (34, whose term ran out on
+#: 2025-07-28, and 42) are left unnamed. Only the values of 1, 3, 4 and
+#: 5 are decoded (:attr:`BGPPathAttribute.value`); every other value is
+#: kept raw.
 _ATTRIBUTE_NAMES: dict[int, str] = {
+    0: "Reserved",
     1: "ORIGIN",
     2: "AS_PATH",
     3: "NEXT_HOP",
@@ -215,12 +222,42 @@ _ATTRIBUTE_NAMES: dict[int, str] = {
     8: "COMMUNITIES",
     9: "ORIGINATOR_ID",
     10: "CLUSTER_LIST",
+    11: "DPA (deprecated)",
+    12: "ADVERTISER (deprecated)",
+    13: "RCID_PATH / CLUSTER_ID (deprecated)",
     14: "MP_REACH_NLRI",
     15: "MP_UNREACH_NLRI",
     16: "EXTENDED_COMMUNITIES",
     17: "AS4_PATH",
     18: "AS4_AGGREGATOR",
+    19: "SAFI Specific Attribute (deprecated)",
+    20: "Connector Attribute (deprecated)",
+    21: "AS_PATHLIMIT (deprecated)",
+    22: "PMSI_TUNNEL",
+    23: "Tunnel Encapsulation",
+    24: "Traffic Engineering",
+    25: "IPv6 Address Specific Extended Community",
+    26: "AIGP",
+    27: "PE Distinguisher Labels",
+    28: "BGP Entropy Label Capability Attribute (deprecated)",
+    29: "BGP-LS Attribute",
+    30: "Deprecated",
+    31: "Deprecated",
     32: "LARGE_COMMUNITY",
+    33: "BGPsec_Path",
+    35: "Only to Customer (OTC)",
+    36: "BGP Domain Path (D-PATH)",
+    37: "SFP attribute",
+    38: "BFD Discriminator",
+    39: "Next Hop Dependent Characteristic (NHC)",
+    40: "BGP Prefix-SID",
+    41: "BIER",
+    128: "ATTR_SET",
+    129: "Deprecated",
+    241: "Deprecated",
+    242: "Deprecated",
+    243: "Deprecated",
+    255: "Reserved for development",
 }
 
 _ORIGIN, _NEXT_HOP, _MED, _LOCAL_PREF = 1, 3, 4, 5
@@ -228,33 +265,55 @@ _ORIGIN, _NEXT_HOP, _MED, _LOCAL_PREF = 1, 3, 4, 5
 #: ORIGIN values (RFC 4271 §4.3, §5.1.1).
 _ORIGIN_NAMES: dict[int, str] = {0: "IGP", 1: "EGP", 2: "INCOMPLETE"}
 
-#: NOTIFICATION error codes (RFC 4271 §4.5).
+#: NOTIFICATION error codes and their subcodes, named as the IANA "BGP
+#: Error (Notification) Codes" and "BGP Error Subcodes" registries
+#: assign them (https://www.iana.org/assignments/bgp-parameters, last
+#: updated 2026-09-09, fetched 2026-10-25): RFC 4271 §4.5 for codes 1-6,
+#: RFC 7313 for 7, RFC 9687 for 8 and RFC 9815 for 9.
 _ERROR_CODE_NAMES: dict[int, str] = {
+    0: "Reserved",
     1: "Message Header Error",
     2: "OPEN Message Error",
     3: "UPDATE Message Error",
     4: "Hold Timer Expired",
     5: "Finite State Machine Error",
     6: "Cease",
+    7: "ROUTE-REFRESH Message Error",
+    8: "Send Hold Timer Expired",
+    9: "Loss of LSDB Synchronization",
 }
 
-#: Error subcodes by error code: RFC 4271 §4.5 for codes 1-3, RFC 4486
-#: §4 for Cease. Subcode 0 is "Unspecific" for every code (§4.5).
+#: Error subcodes by error code, for the codes with a subcode registry:
+#: RFC 4271 §4.5 (and RFC Errata 4493's "Unspecific" 0) for codes 1-3,
+#: with OPEN's 7 from RFC 5492 and 8-11 from RFC 9234; RFC 6608 for the
+#: Finite State Machine Error; RFC 4486 for Cease, with 9 from RFC 8538
+#: and 10 from RFC 9384; RFC 7313 for ROUTE-REFRESH. A code without a
+#: registry (4, 8, 9) names only subcode 0, "Unspecific" (RFC 4271
+#: §4.5; RFC 9687 §6 sets it to 0 for code 8), and so does an unknown
+#: code.
 _ERROR_SUBCODE_NAMES: dict[int, dict[int, str]] = {
     1: {
+        0: "Unspecific",
         1: "Connection Not Synchronized",
         2: "Bad Message Length",
         3: "Bad Message Type",
     },
     2: {
+        0: "Unspecific",
         1: "Unsupported Version Number",
         2: "Bad Peer AS",
         3: "Bad BGP Identifier",
         4: "Unsupported Optional Parameter",
         5: "Authentication Failure (deprecated)",
         6: "Unacceptable Hold Time",
+        7: "Unsupported Capability",
+        8: "Deprecated",
+        9: "Deprecated",
+        10: "Deprecated",
+        11: "Role Mismatch",
     },
     3: {
+        0: "Unspecific",
         1: "Malformed Attribute List",
         2: "Unrecognized Well-known Attribute",
         3: "Missing Well-known Attribute",
@@ -267,7 +326,14 @@ _ERROR_SUBCODE_NAMES: dict[int, dict[int, str]] = {
         10: "Invalid Network Field",
         11: "Malformed AS_PATH",
     },
+    5: {
+        0: "Unspecified Error",
+        1: "Receive Unexpected Message in OpenSent State",
+        2: "Receive Unexpected Message in OpenConfirm State",
+        3: "Receive Unexpected Message in Established State",
+    },
     6: {
+        0: "Reserved",
         1: "Maximum Number of Prefixes Reached",
         2: "Administrative Shutdown",
         3: "Peer De-configured",
@@ -276,8 +342,17 @@ _ERROR_SUBCODE_NAMES: dict[int, dict[int, str]] = {
         6: "Other Configuration Change",
         7: "Connection Collision Resolution",
         8: "Out of Resources",
+        9: "Hard Reset",
+        10: "BFD Down",
+    },
+    7: {
+        0: "Reserved",
+        1: "Invalid Message Length",
     },
 }
+
+#: Subcode 0 under an error code with no subcode registry (RFC 4271 §4.5).
+_UNSPECIFIC: dict[int, str] = {0: "Unspecific"}
 
 #: The Cease subcodes whose data may carry a shutdown communication
 #: (RFC 8203 §2, as updated by RFC 9003).
@@ -923,14 +998,14 @@ class BGP(Protocol):
         """Display name of a NOTIFICATION's Error Subcode.
 
         Named in the context of its Error Code, e.g. ``"Administrative
-        Shutdown"`` for Cease; ``None`` for other messages.
+        Shutdown"`` for Cease, as the IANA registry names it; subcode 0
+        is ``"Unspecific"`` under a code with no subcode registry.
+        ``None`` for other messages.
         """
         code, subcode = self.error_code, self.error_subcode
         if code is None or subcode is None:
             return None
-        if subcode == 0:
-            return "Unspecific"
-        names = _ERROR_SUBCODE_NAMES.get(code, {})
+        names = _ERROR_SUBCODE_NAMES.get(code, _UNSPECIFIC)
         return names.get(subcode, f"unknown ({subcode})")
 
     @property
