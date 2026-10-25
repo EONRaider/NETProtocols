@@ -31,9 +31,10 @@
 # its priority-0 advert. The kept frames' composition is asserted
 # exactly at the end.
 #
-# Both directions are captured on B's side of the veth pair, with
-# offload disabled (ethtool -K) first; check_fixtures.py verifies
-# every IPv4 header checksum and VRRP checksum.
+# Both directions are captured on B's side of the veth pair. Offload
+# is turned off first (ethtool -K) as best effort: the result is not
+# checked. What is guaranteed is that check_fixtures.py verifies every
+# IPv4 header checksum and VRRP checksum in the capture.
 
 set -euo pipefail
 

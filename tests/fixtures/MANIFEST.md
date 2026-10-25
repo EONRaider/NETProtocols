@@ -178,13 +178,17 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
 
 - `vrrp.pcap` was produced by `scripts/capture_fixtures_vrrp.sh`:
   keepalived 2.2.8 in two netns over a veth pair, run through four
-  segments (one VRID each, see the row above), captured on B's side
-  with offload disabled. **What keepalived built: the whole IPv4
-  datagram but its header checksum** — it sends through a raw socket
-  with `IP_HDRINCL` (TOS `0xc0`, TTL 255, its own identification
-  counter), and `strace`, run once while developing the script,
-  showed it handing the kernel a zero header checksum for the kernel
-  to fill — plus every byte of the VRRP message, checksum included.
+  segments (one VRID each, see the row above), captured on B's side.
+  The script asks ethtool to turn offload off first but, like the
+  other capture scripts, does not check that it did; what is
+  guaranteed is that `check_fixtures` verifies every IPv4 header
+  checksum and VRRP checksum in the file. **What keepalived built:
+  the whole IPv4 datagram but its header checksum** — it sends
+  through a raw socket with `IP_HDRINCL` (TOS `0xc0`, TTL 255, its
+  own identification counter), and `strace`, run once while
+  developing the script, showed it handing the kernel a zero header
+  checksum for the kernel to fill — plus every byte of the VRRP
+  message, checksum included.
   **What the kernel built:** the IPv4 header checksum and the Ethernet
   header. A master advertises once per interval for as long as it
   runs, so the script drives each segment by watching the capture,
