@@ -143,6 +143,12 @@ error's ``frame_offset`` in strict mode, is where that message starts::
         messages.extend(packet)
         rest = rest[packet.consumed :]
 
+Only the lax walk keeps what it decoded: a strict walk's
+:class:`~netprotocols.MaxDepthExceededError` carries no layers, so
+walking on from its ``frame_offset`` yields the messages after the
+limit but not those before it. Use the lax loop above, or a larger
+``max_depth``, when every message is wanted.
+
 Out of scope
 ------------
 AS_PATH (and the other attribute values but ORIGIN, NEXT_HOP,
@@ -585,7 +591,7 @@ class BGPOptionalParameter:
         rather than one. The enclosing OPEN chooses that for all its
         parameters (RFC 9072's encoding, signalled by a Non-Ext OP Type
         of 255; see :attr:`BGP.extended_optional_parameters`), and each
-        parameter records it, as :meth:`BGP.decode` sets it.
+        parameter records it, as :attr:`BGP.optional_parameters` sets it.
 
     ``bytes(parameter)`` is the on-wire form, the Parameter Length one
     or two bytes by :attr:`extended_length`, so a parameter without it

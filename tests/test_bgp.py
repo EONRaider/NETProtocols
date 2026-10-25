@@ -1198,6 +1198,8 @@ class TestNotification:
         [
             (1, 0, "Message Header Error", "Unspecific"),
             (1, 2, "Message Header Error", "Bad Message Length"),
+            (2, 0, "OPEN Message Error", "Unspecific"),
+            (3, 0, "UPDATE Message Error", "Unspecific"),
             (2, 7, "OPEN Message Error", "Unsupported Capability"),
             (2, 11, "OPEN Message Error", "Role Mismatch"),
             (2, 12, "OPEN Message Error", "unknown (12)"),
