@@ -26,9 +26,12 @@ Addresses in the messages are Encoded-Unicast, Encoded-Group or
 Encoded-Source addresses (§4.9.1), each naming its own address family
 and encoding, so their width comes from the message, not from the IP
 header carrying it. Native IPv4 (family ``1``) and IPv6 (family ``2``)
-encodings are decoded; any other family or encoding type — RFC 5384's
-type 1 Encoded-Source, which appends join attributes, included — cannot
-be sized, and the parser raises :class:`InvalidFieldError` there.
+encodings are decoded. Any other family, or an encoding type no RFC
+defines, cannot be sized, and the parser raises
+:class:`InvalidFieldError` there. RFC 5384's type 1 Encoded-Source could
+be sized — its join attributes are TLVs (``F``, ``E``, a 6-bit type, a
+length byte, the value) ending at the one with the E bit set (§3.4.1) —
+but is not supported, and the parser raises there too.
 
 PIM has no length field of its own: like ICMP, IGMP and SCTP, the
 message is the whole IP payload, and the chain walk does not trim a
@@ -49,8 +52,10 @@ structure, using the same parser :attr:`PIM.message` does:
   option) is kept as a phantom option, and one that does not makes the
   remainder unwalkable (below).
 * A Register's data packet, and the other types' bodies, run to the end
-  of the buffer and are kept whole. A Register's checksum covers only
-  its first 8 bytes (§4.9.3), so a trailer cannot break it.
+  of the buffer and are kept whole. A Register's checksum in the form
+  §4.9.3 specifies (and FRR sends) covers only its first 8 bytes, so a
+  trailer cannot break it; in the whole-message form a receiver also
+  accepts, a trailer counts like any other kept byte (below).
 
 When the parser cannot read the body (a message cut short by a snap
 length, an unknown address family, a count or length that runs past
@@ -58,13 +63,17 @@ the buffer, a nonzero trailer after a Hello that does not walk), the
 whole remainder is kept in ``body`` verbatim and :attr:`PIM.message`
 raises. Past the 4-byte header ``decode`` never raises. The checksum
 (:mod:`netprotocols.checksum`) is the signal for what the structure
-cannot see, within what the internet checksum itself can see: over
-IPv4 it is blind to zero bytes, so a zero tail kept in ``body``, or a
-cut that removes only zero bytes, still verifies, while a nonzero
-trailer kept in ``body`` (a phantom Hello option, an unwalkable
-remainder) or a cut that removes nonzero bytes fails. A Register's
-checksum covers its first 8 bytes only, so it says nothing about the
-data packet: a trailer in it, or a cut through it, still verifies.
+cannot see, but only as far as the internet checksum sees. Over IPv4
+there is no pseudo-header, so bytes kept in ``body`` or cut from it
+change the checksum only by their share of the one's-complement sum,
+and bytes whose share is zero are invisible: zero bytes, but also a
+nonzero trailer such as ``ff ff 00 00`` after a Hello (kept as a
+phantom option) or ``12 34 ed cb`` (an unwalkable remainder, so
+:attr:`PIM.message` raises), both of which still verify. A trailer or
+cut whose share is not zero fails. Over IPv6 the pseudo-header's length
+counts the kept bytes too. A Register's checksum in its 8-byte form
+says nothing about the data packet: a trailer in it, or a cut through
+it, still verifies.
 
 ``bytes(PIM.decode(x)) == x[:header_len]`` holds by construction: the
 header fields are packed back and ``body`` is carried verbatim. Every
@@ -359,8 +368,9 @@ def _read_encoded(
     :returns: ``(family, encoding, the fixed bytes after those two, the
         address string, where the address ends)``.
     :raises TruncatedHeaderError: if the address runs past ``body``.
-    :raises InvalidFieldError: if the family or encoding is not one this
-        library can size (native IPv4 or IPv6).
+    :raises InvalidFieldError: if the family or encoding is not native
+        IPv4 or IPv6: one this library cannot size, or RFC 5384's join
+        attribute encoding, which it does not support.
     """
     if cursor + fixed > len(body):
         raise TruncatedHeaderError(
@@ -983,8 +993,8 @@ class PIM(Protocol):
             instance, only when :meth:`decode` kept it whole for that
             reason: a :class:`TruncatedHeaderError` for a message cut
             short, an :class:`InvalidFieldError` for an address family
-            or encoding this library cannot size, or a Hello option that
-            runs past the message.
+            or encoding this library does not support, or a Hello option
+            that runs past the message.
         """
         parser = _PARSERS.get(self.type)
         if parser is None:

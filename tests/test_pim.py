@@ -414,6 +414,34 @@ class TestTrailingBytes:
         assert hello.options[-1] == PIMHelloOption(0xABCD)
         assert not verify(packet[PIM], ip=packet[IPv4])
 
+    @pytest.mark.parametrize(
+        "trailer,phantom",
+        [
+            (b"\xff\xff\x00\x00", PIMHelloOption(0xFFFF)),
+            (b"\x12\x34\xed\xcb", None),
+        ],
+        ids=["phantom-option", "unwalkable"],
+    )
+    def test_a_trailer_that_adds_nothing_to_the_sum_verifies(
+        self, trailer, phantom
+    ):
+        """Verify a nonzero trailer whose words sum to zero, over IPv4.
+
+        ``ffff + 0000`` and ``1234 + edcb`` are both one's-complement
+        zero, so the checksum cannot see them: one walks as a phantom
+        option, the other makes :attr:`PIM.message` raise.
+        """
+        packet = decode_frame(FRAMES[1] + trailer)
+        assert packet[PIM].body.endswith(trailer)
+        assert verify(packet[PIM], ip=packet[IPv4])
+        if phantom is None:
+            with pytest.raises(InvalidFieldError):
+                _ = packet[PIM].message
+        else:
+            hello = packet[PIM].message
+            assert isinstance(hello, PIMHello)
+            assert hello.options[-1] == phantom
+
     @pytest.mark.parametrize("trailer", [bytes(8), FCS], ids=["zeros", "fcs"])
     def test_a_register_keeps_the_trailer_and_still_verifies(self, trailer):
         """Keep the trailer in a Register's data packet.
@@ -713,7 +741,11 @@ class TestEncodedAddresses:
     def test_an_unknown_family_or_encoding_cannot_be_sized(
         self, family, encoding
     ):
-        """Test an unknown family or encoding cannot be sized."""
+        """Raise for a family or encoding type that cannot be sized.
+
+        Encoding type 1 is defined only for an Encoded-Source (RFC
+        5384); this address is the Register-Stop's Encoded-Group.
+        """
         raw = bytearray(message_bytes(2))
         raw[4:6] = bytes((family, encoding))
         pim = PIM.decode(bytes(raw) + bytes(4))
@@ -722,10 +754,11 @@ class TestEncodedAddresses:
             _ = pim.message
         assert (excinfo.value.field, excinfo.value.offset) == ("body", 0)
 
-    def test_a_join_attribute_source_cannot_be_sized(self):
-        """Report RFC 5384's type 1 Encoded-Source, never guess at it.
+    def test_a_join_attribute_source_is_not_supported(self):
+        """Report RFC 5384's type 1 Encoded-Source, never guess past it.
 
-        It appends join attributes of their own lengths.
+        Its join attributes are TLVs ending at the one with the E bit
+        set (§3.4.1), so it could be sized; it is out of scope.
         """
         raw = bytearray(message_bytes(4))
         source_offset = 6 + 4 + 8 + 4
