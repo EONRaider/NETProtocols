@@ -680,10 +680,9 @@ class TestTrailingBytes:
 
 
 def one_prefix_update(index: int) -> bytes:
-    """A 47-byte eBGP UPDATE announcing ``10.0.<index>.0/24``.
+    """Build a 47-byte eBGP UPDATE announcing ``10.0.<index>.0/24``.
 
-    Only ORIGIN, a one-AS AS_PATH and NEXT_HOP: about the smallest
-    announcement of one /24 a speaker sends.
+    Its only attributes are ORIGIN, a one-AS AS_PATH and NEXT_HOP.
     """
     attributes = (
         bytes([0x40, 1, 1, 0])
