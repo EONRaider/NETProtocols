@@ -36,6 +36,12 @@ VLAN_TAG_ETHERTYPES = frozenset(
     {EtherType.VLAN_TAG, EtherType.VLAN_TAG_QINQ, EtherType.VLAN_TAG_9100}
 )
 
+#: EtherType values that carry an MPLS label stack (RFC 3032 §5): 0x8847
+#: for every MPLS frame but one whose top label is upstream-assigned in
+#: a multicast frame, which takes 0x8848 (RFC 5332 §4). The stack has
+#: the same format under both, so both dispatch to one class.
+MPLS_ETHERTYPES = frozenset({EtherType.MPLS, EtherType.MPLS_UPSTREAM_ASSIGNED})
+
 #: Protocol numbers that only make sense inside an IPv6 chain (RFC 8200
 #: §4.3-4.6): extension headers follow the IPv6 fixed header or one
 #: another, never an IPv4 header. They are registered in
@@ -82,6 +88,7 @@ def install(registry: Registry) -> None:
     no-op, so calling this twice on the same registry changes nothing.
     """
     from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.mpls import MPLS
     from netprotocols.layer2.vlan import VLAN
     from netprotocols.layer3.ah import AH, AHv6
     from netprotocols.layer3.esp import ESP
@@ -113,6 +120,10 @@ def install(registry: Registry) -> None:
     add(TABLE_ETHERTYPE, EtherType.IPV4, IPv4)
     add(TABLE_ETHERTYPE, EtherType.IPV6, IPv6)
     register_all(TABLE_ETHERTYPE, VLAN_TAG_ETHERTYPES, VLAN, registry=registry)
+    # MPLS (RFC 3032): its stack names no payload protocol, so MPLS
+    # chains onward through this same table, at IPv4's or IPv6's
+    # EtherType, by the convention its module docstring describes.
+    register_all(TABLE_ETHERTYPE, MPLS_ETHERTYPES, MPLS, registry=registry)
 
     # Shared by IPv4 and IPv6: registering in ip.proto reaches
     # ip.proto.v6 too, because the latter inherits it.

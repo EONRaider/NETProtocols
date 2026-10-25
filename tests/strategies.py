@@ -25,6 +25,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    MPLS,
     OSPF,
     OSPFLSA,
     PIM,
@@ -44,6 +45,7 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    MPLSLabel,
     OSPFDatabaseDescription,
     OSPFHello,
     OSPFLSAHeader,
@@ -118,6 +120,24 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
         dei=draw(st.integers(0, 1)),
         vid=draw(st.integers(0, 0xFFF)),
         ethertype=draw(st.integers(0, 0xFFFF)),
+    )
+
+
+@st.composite
+def mpls_stacks(draw: st.DrawFn) -> MPLS:
+    # Construction requires S on the last entry alone, which is also all
+    # decode produces, so every buildable stack is canonical.
+    depth = draw(st.integers(1, 8))
+    return MPLS(
+        labels=tuple(
+            MPLSLabel(
+                label=draw(st.integers(0, 0xFFFFF)),
+                traffic_class=draw(st.integers(0, 0b111)),
+                bottom_of_stack=int(index == depth - 1),
+                ttl=draw(st.integers(0, 0xFF)),
+            )
+            for index in range(depth)
+        )
     )
 
 
@@ -773,6 +793,7 @@ def pim_headers(draw: st.DrawFn) -> PIM:
 ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "ARP": arp_headers(),
     "VLAN": vlan_headers(),
+    "MPLS": mpls_stacks(),
     "IPv4": ipv4_headers(),
     "IPv6": ipv6_headers(),
     "IPv6HopByHopOptions": ipv6_hop_by_hop_headers,

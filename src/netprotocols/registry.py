@@ -1,16 +1,20 @@
 """The dispatch registry: how a header names the class that decodes
 what it carries, and how third parties add their own.
 
-Every ``next_protocol()`` in this library is a lookup in one of five
-tables, each named after the wire field it dispatches on:
+A ``next_protocol()`` that dispatches on a wire field is a lookup in
+one of five tables, each named after that field. A few return a fixed
+successor instead (VXLAN, ``DNSOverTCP``, BGP), and MPLS, whose label
+stack names no payload protocol, looks up the ``ethertype`` table at
+0x0800 or 0x86DD by convention (see :mod:`netprotocols.layer2.mpls`).
 
-===============  =======================================================
-``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here too
+===============  =========================================================
+``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here too,
+                 and MPLS by convention
 ``ip.proto``     IPv4 ``protocol``
 ``ip.proto.v6``  IPv6 ``next_header`` — inherits ``ip.proto``
 ``udp.port``     UDP well-known port (best-effort; see below)
 ``tcp.port``     TCP well-known port (best-effort; see below)
-===============  =======================================================
+===============  =========================================================
 
 Registering a decoder is how you extend the frame walk without editing
 library source::
@@ -18,8 +22,10 @@ library source::
     from netprotocols import Protocol
     from netprotocols.registry import register
 
-    @register("ethertype", 0x8847)
-    class MPLS(Protocol):
+    # 0x88B5 is IEEE 802's Local Experimental EtherType, so no
+    # built-in decoder holds it
+    @register("ethertype", 0x88B5)
+    class Telemetry(Protocol):
         ...
 
     # or, for a class you did not write (253 is reserved for
@@ -80,8 +86,10 @@ Best-effort tables
 
 ``udp.port`` and ``tcp.port`` differ from the other three in kind, not
 just in name. An EtherType or IP protocol number is authoritative: the
-field exists to say what follows. A port is a *guess* — any service may
-run on any port, and the discriminator is split across two fields.
+field exists to say what follows (MPLS, which looks up the ``ethertype``
+table by convention, is the exception described above). A port is a
+*guess* — any service may run on any port, and the discriminator is
+split across two fields.
 Dispatch on those tables checks the destination port first (a request
 targets the server's well-known port) and then the source port (a
 response comes from it). The class it names validates on decode, but
@@ -385,8 +393,8 @@ def register(
 
     Used as a decorator, the class is returned unchanged::
 
-        @register("ethertype", 0x8847)
-        class MPLS(Protocol):
+        @register("ethertype", 0x88B5)
+        class Telemetry(Protocol):
             ...
 
     Used directly, ``protocol`` names a class you did not write::

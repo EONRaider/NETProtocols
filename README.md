@@ -51,10 +51,11 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265-frame corpus
-of real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
-2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
-number below, its reproduction command, and its caveats):
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265 frames of
+real captured traffic the corpus held at 2.5.0 (CPython 3.12.3, x86-64
+Linux; re-measured for 2.5.0 on 2026-10-25 — see
+[docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
+reproduction command, and its caveats):
 
 - **3.4× faster than scapy on decode; dpkt is 1.3× faster** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
@@ -142,6 +143,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | Ethernet II | `Ethernet` | IEEE 802.3 |
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
+| 2 | MPLS label stack | `MPLS` | RFC 3032 §2.1, EtherTypes 0x8847 and 0x8848 (and GRE's Protocol Type, RFC 4023); the whole stack as one layer of `MPLSLabel` entries (label, traffic class, S, TTL); no field names the payload, so it dispatches by convention to IPv4 or IPv6 — the bottom label when it is an Explicit NULL, otherwise the first nibble after the stack — and stops at a pseudowire control word |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
 | 3 | IPv6 Hop-by-Hop Options | `IPv6HopByHopOptions` | RFC 8200 §4.3 |
@@ -402,8 +404,8 @@ implement can join the walk without forking it:
 from netprotocols import Protocol
 from netprotocols.registry import register
 
-@register("ethertype", 0x8847)
-class MPLS(Protocol):
+@register("ethertype", 0x88B5)  # IEEE 802 Local Experimental
+class Telemetry(Protocol):
     ...
 ```
 
@@ -527,7 +529,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-265-frame corpus of real captured traffic across 27 scenarios
+273-frame corpus of real captured traffic across 28 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

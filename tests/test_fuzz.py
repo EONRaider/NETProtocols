@@ -44,6 +44,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    MPLS,
     OSPF,
     PIM,
     RIP,
@@ -67,6 +68,7 @@ from netprotocols import (
     IPv6Fragment,
     IPv6HopByHopOptions,
     IPv6Routing,
+    MPLSLabel,
     Packet,
     PIMHello,
     PIMJoinPrune,
@@ -86,6 +88,7 @@ from strategies import (
     http_context_responses,
     http_messages,
     http_wire,
+    mpls_stacks,
     ospf_packets,
     pim_headers,
     sctp_chunks,
@@ -119,6 +122,7 @@ ALL_PROTOCOLS = (
     AH,
     AHv6,
     HTTP,
+    MPLS,
     VXLAN,
     OSPF,
     RIP,
@@ -927,6 +931,43 @@ class TestVRRPAccessorSafety:
         wire = bytes(header)
         for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
             decoded = cls.decode(wire + trailer)
+            assert decoded == header, trailer
+            assert decoded.header_len == len(wire), trailer
+
+
+#: A built label stack and then a few bytes, so the payload nibble
+#: and every bottom-label rule turn up far more often than in free bytes.
+_mpls_like = st.tuples(mpls_stacks(), st.binary(max_size=8)).map(
+    lambda parts: bytes(parts[0]) + parts[1]
+)
+
+
+class TestMPLSAccessorSafety:
+    @given(data=st.one_of(fuzz_input, _mpls_like))
+    def test_decoded_stacks_answer_every_accessor(self, data: bytes) -> None:
+        """Whatever decodes round-trips, and every accessor answers
+        without raising; the payload is IPv4, IPv6 or nothing."""
+        try:
+            mpls = MPLS.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(mpls) == data[: mpls.header_len]
+        assert MPLS.decode(bytes(mpls)) == mpls
+        assert mpls.bottom is mpls.labels[-1]
+        assert mpls.next_protocol() in (None, IPv4, IPv6)
+        event(f"MPLS payload: {mpls.payload_ethertype!r}")
+        for entry in mpls.labels:
+            assert MPLSLabel.from_word(entry.word) == entry
+            assert entry.label_name is None or entry.is_special_purpose
+
+    @given(header=mpls_stacks())
+    def test_trailing_bytes_stay_out_of_the_stack(self, header: MPLS) -> None:
+        """The S bit bounds the stack, so Ethernet's zero padding (every
+        length up to its 46-byte maximum) and a nonzero trailer such as
+        a 4-byte FCS are left undecoded."""
+        wire = bytes(header)
+        for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
+            decoded = MPLS.decode(wire + trailer)
             assert decoded == header, trailer
             assert decoded.header_len == len(wire), trailer
 
