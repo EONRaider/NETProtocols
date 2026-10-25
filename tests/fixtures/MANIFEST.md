@@ -4,21 +4,24 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
+pseudo-header, ICMPv4/v6, SCTP's CRC32c, the OSPF packet checksum and
+every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
-as does every IPsec ICV, with the test keys published below. Frames
+as does every IPsec ICV and OSPF MD5 digest, with the test keys
+published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 140 frames across 22
+frames routinely leave checksums to NIC offload. 194 frames across 23
 scenarios. Addresses are as-captured from the capture host's network.
 
-Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Ten scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`) are captured separately by their own
+`sctp.pcap`, `ospf.pcap`) are captured separately by their own
 `scripts/capture_fixtures_*.sh` over purpose-built topologies — real
 kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
-a userspace SCTP association, and IPsec ESP and AH built by a script
-and sent through raw sockets — see their rows and the notes below.
+a userspace SCTP association, IPsec ESP and AH built by a script and
+sent through raw sockets, and two FRR OSPF routers — see their rows and
+the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -43,6 +46,7 @@ and sent through raw sockets — see their rows and the notes below.
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
+| `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -173,6 +177,50 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   inner frame's checksums too. The outer source ports are the kernel's
   hash of each inner flow; none is a registered port. This file's echo
   and UDP frames are the corpus's deepest chains, at 7 layers.
+
+- `ospf.pcap` was produced by `scripts/capture_fixtures_ospf.sh`: FRR
+  8.4's `zebra` and `ospfd` in each of two netns over a veth pair, with
+  2 s hello and 8 s dead intervals; router A (router ID 10.0.0.1,
+  priority 10) also redistributes a connected /32, 192.0.2.1, so it
+  originates an AS-external LSA. For each AuType the daemons are started
+  fresh, A first and alone until it has elected itself Designated
+  Router, off the capture; then the capture starts and B comes up, so
+  the whole adjacency (2-Way, the Database Description exchange, the
+  requests, the flooding and its acknowledgments) is captured within
+  seconds of B's first Hello, and the capture stops once both routers
+  are Full with all four LSAs in both databases, before any daemon is
+  stopped. The three
+  captures are concatenated, AuType 0, 1, 2 in that order. **What
+  ospfd built: every OSPF byte** — header, messages, the packet
+  checksum, every LSA and its LS checksum, and the MD5 digest. **What
+  the kernel built:** the IPv4 header (TOS `0xc0`, TTL 1, to
+  224.0.0.5 or the neighbor) and the Ethernet header. Both directions
+  were captured on B's side of the veth pair with offload disabled; all
+  of those checksums are computed in software (OSPF's in userspace).
+  `check_fixtures` verifies the IPv4 header checksums, the OSPF packet
+  checksum of every AuType 0 and 1 packet (the internet checksum of the
+  packet but its Authentication field, RFC 2328 §D.4.1), the published
+  password of every AuType 1 packet, the keyed-MD5 digest (RFC 2328
+  §D.4.3) of every AuType 2 packet, whose packet checksum must be zero,
+  with the published key, and every LSA's Fletcher checksum (RFC 2328
+  §12.1.7) in its own verification form. ospfd sent no Link-Local
+  Signaling (RFC 5613): no Hello or Database Description sets the L bit,
+  and every IP payload is exactly Packet Length (plus the 16-byte digest
+  under MD5), which the script asserts. Bytes after a packet (LLS,
+  Ethernet padding, an FCS) and OSPFv3 over IPv6 (the kernel had no
+  IPv6) are covered by constructed frames in `tests/test_ospf.py`. How
+  B's two router LSAs are packed into updates varied between runs (one
+  update, or one each); this capture has them together.
+
+### OSPF test secrets
+
+Published for the same reason as the IPsec keys below. Also hard-coded,
+independently, in `scripts/check_fixtures.py` and `tests/test_ospf.py`.
+
+| AuType | Secret |
+|---|---|
+| 1, simple password | `NPospf1` (NUL-padded to the 8-byte field) |
+| 2, keyed MD5, Key ID 1 | `NETProtocols-md5` |
 
 ### IPsec test keys
 

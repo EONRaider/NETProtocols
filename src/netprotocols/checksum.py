@@ -1,5 +1,6 @@
 """Checksum computation and verification: the internet checksum (RFC
-1071) and SCTP's CRC32c (RFC 9260 Appendix A).
+1071), SCTP's CRC32c (RFC 9260 Appendix A), and the Fletcher checksum
+OSPF's LSAs carry (RFC 2328 §12.1.7).
 
 The primitive, :func:`internet_checksum`, returns the raw ones'-
 complement result — ``0x0000`` is a legal return value, and TCP, ICMP,
@@ -11,6 +12,14 @@ and the IPv4 header checksum legitimately transmit it. The famous
 SCTP alone does not use the internet checksum: its packets carry a
 CRC32c (the Castagnoli CRC, also iSCSI's), computed by :func:`crc32c`
 over the whole packet with no pseudo-header.
+
+OSPF carries two kinds. The packet checksum is the internet checksum
+of the whole packet but its 64-bit Authentication field (RFC 2328
+§D.4.1), through :func:`compute`/:func:`verify` like the others. Each
+LSA inside also carries an LS Checksum, the ISO 8473 Fletcher checksum
+of the LSA but its LS Age (RFC 2328 §12.1.7, RFC 905 Annex B). An LSA
+is not a layer, so that one has functions of its own:
+:func:`lsa_checksum` and :func:`verify_lsa`.
 
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
@@ -33,12 +42,21 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.ospf import OSPF, OSPFLSA
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["compute", "crc32c", "internet_checksum", "verify"]
+__all__ = [
+    "compute",
+    "crc32c",
+    "fletcher_checksum",
+    "internet_checksum",
+    "lsa_checksum",
+    "verify",
+    "verify_lsa",
+]
 
 
 def internet_checksum(data: bytes | memoryview) -> int:
@@ -95,6 +113,49 @@ def crc32c(data: bytes | memoryview) -> int:
     for byte in data:
         crc = _CRC32C_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
     return crc ^ 0xFFFFFFFF
+
+
+def fletcher_checksum(data: bytes | memoryview, offset: int) -> int:
+    """Compute the ISO 8473 Fletcher checksum field for ``data``.
+
+    The field's two bytes sit at ``offset`` and are read as zero (RFC
+    905 Annex B; RFC 1008 §7). The result is the 16-bit value
+    ``X << 8 | Y`` that makes both running sums of ``data``, with it in
+    place, ``0`` modulo 255.
+
+    Each of ``X`` and ``Y`` is reported in ``1``-``255``, ``255``
+    standing for zero, as RFC 905 B.3 says, so the result never has a
+    zero byte. OSPF's LS Checksum is this over an LSA from byte 2, its
+    LS Age excluded (see :func:`lsa_checksum`).
+    """
+    field = bytes(data)
+    field = field[:offset] + b"\x00\x00" + field[offset + 2 :]
+    c0 = c1 = 0
+    for byte in field:
+        c0 = (c0 + byte) % 255
+        c1 = (c1 + c0) % 255
+    x = ((len(field) - offset - 1) * c0 - c1) % 255 or 255
+    y = (510 - c0 - x) % 255 or 255
+    return x << 8 | y
+
+
+#: Where an LSA's LS Checksum sits once its 2-byte LS Age is excluded:
+#: header byte 16 (RFC 2328 §A.4.1), counted from byte 2.
+_LSA_CHECKSUM_OFFSET = 14
+
+
+def lsa_checksum(lsa: OSPFLSA) -> int:
+    """Compute the correct LS Checksum for ``lsa``.
+
+    That is :func:`fletcher_checksum` of the whole LSA but its LS Age
+    (RFC 2328 §12.1.7), the checksum field read as zero.
+    """
+    return fletcher_checksum(bytes(lsa)[2:], _LSA_CHECKSUM_OFFSET)
+
+
+def verify_lsa(lsa: OSPFLSA) -> bool:
+    """Whether ``lsa``'s LS Checksum matches a recomputation."""
+    return lsa_checksum(lsa) == lsa.header.ls_checksum
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
@@ -161,45 +222,36 @@ def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     return field
 
 
-def compute(
-    layer: Protocol,
-    *,
-    ip: IPv4 | IPv6 | None = None,
-    payload: bytes = b"",
-) -> int:
-    """The correct checksum field value for ``layer``.
+def _ospf_checksum(layer: OSPF) -> int:
+    """Checksum an OSPF packet but its Authentication field.
 
-    :param layer: The header to checksum. ``IPv4`` covers its own
-        header only (options included; ``ip``/``payload`` ignored);
-        ``ICMPv4`` covers header plus ``payload`` (no pseudo-header);
-        ``GRE`` covers header plus ``payload`` with no pseudo-header
-        (RFC 2784 §2.5) and requires the Checksum-Present bit;
-        ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
-        built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
-        its chunks included, with no pseudo-header (``ip`` ignored),
-        returned as the field's big-endian reading of the CRC's
-        little-endian wire bytes (RFC 9260 Appendix A).
-    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
-    :param payload: The bytes following ``layer`` on the wire. A decoded
-        ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
-        packet, already carries its whole body in ``bytes(layer)``, so
-        pass a ``payload`` only for bytes the layer object does not
-        itself hold.
-    :raises InvalidFieldError: For layers without a checksum field, or
-        a missing ``ip`` where the pseudo-header needs one.
+    The whole packet, checksum field (bytes 12-13) zeroed and the
+    8-byte Authentication field (bytes 16-23) left out (RFC 2328
+    §D.4.1); no pseudo-header. ``bytes(layer)`` is exactly Packet
+    Length bytes here: only cryptographic authentication appends a
+    digest, and it computes no checksum (§D.4.3).
     """
-    if isinstance(layer, IPv4):
-        return internet_checksum(_zeroed(bytes(layer), 10))
-    if isinstance(layer, ICMPv4):
-        return internet_checksum(_zeroed(bytes(layer), 2) + payload)
-    if isinstance(layer, IGMP):
-        # Whole message, checksum field (bytes 2-3) zeroed, no
-        # pseudo-header; the body is already part of bytes(layer).
-        return internet_checksum(_zeroed(bytes(layer), 2))
-    if isinstance(layer, GRE):
-        return _gre_checksum(layer, payload)
-    if isinstance(layer, SCTP):
-        return _sctp_checksum(layer, payload)
+    if layer.au_type == OSPF.AU_TYPE_CRYPTOGRAPHIC:
+        raise InvalidFieldError(
+            "An OSPF packet under cryptographic authentication (AuType 2) "
+            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)",
+            protocol=type(layer),
+            field="checksum",
+        )
+    packet = bytes(layer)
+    return internet_checksum(
+        packet[:12] + b"\x00\x00" + packet[14:16] + packet[24:]
+    )
+
+
+def _pseudo_header_checksum(
+    layer: Protocol, ip: IPv4 | IPv6 | None, payload: bytes
+) -> int | None:
+    """Checksum a transport whose checksum covers a pseudo-header.
+
+    Those are ICMPv6, TCP and UDP, over the enclosing IP header's
+    pseudo-header; ``None`` for any other layer.
+    """
     if isinstance(layer, ICMPv6):
         enclosing = _require_ip(layer, ip)
         segment = _zeroed(bytes(layer), 2) + payload
@@ -222,6 +274,57 @@ def compute(
         # UDP-only transmit rule: 0 means "no checksum", so a computed
         # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
         return raw or 0xFFFF
+    return None
+
+
+def compute(
+    layer: Protocol,
+    *,
+    ip: IPv4 | IPv6 | None = None,
+    payload: bytes = b"",
+) -> int:
+    """The correct checksum field value for ``layer``.
+
+    :param layer: The header to checksum. ``IPv4`` covers its own
+        header only (options included; ``ip``/``payload`` ignored);
+        ``ICMPv4`` covers header plus ``payload`` (no pseudo-header);
+        ``GRE`` covers header plus ``payload`` with no pseudo-header
+        (RFC 2784 §2.5) and requires the Checksum-Present bit;
+        ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
+        built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
+        its chunks included, with no pseudo-header (``ip`` ignored),
+        returned as the field's big-endian reading of the CRC's
+        little-endian wire bytes (RFC 9260 Appendix A); ``OSPF`` covers
+        its own Packet Length bytes but the Authentication field, with
+        no pseudo-header (``ip`` and ``payload`` ignored, so an LLS
+        block after the packet never enters it), and raises under
+        cryptographic authentication, which computes none.
+    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
+    :param payload: The bytes following ``layer`` on the wire. A decoded
+        ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
+        packet, already carries its whole body in ``bytes(layer)``, so
+        pass a ``payload`` only for bytes the layer object does not
+        itself hold.
+    :raises InvalidFieldError: For layers without a checksum field, or
+        a missing ``ip`` where the pseudo-header needs one.
+    """
+    if isinstance(layer, IPv4):
+        return internet_checksum(_zeroed(bytes(layer), 10))
+    if isinstance(layer, ICMPv4):
+        return internet_checksum(_zeroed(bytes(layer), 2) + payload)
+    if isinstance(layer, IGMP):
+        # Whole message, checksum field (bytes 2-3) zeroed, no
+        # pseudo-header; the body is already part of bytes(layer).
+        return internet_checksum(_zeroed(bytes(layer), 2))
+    if isinstance(layer, GRE):
+        return _gre_checksum(layer, payload)
+    if isinstance(layer, SCTP):
+        return _sctp_checksum(layer, payload)
+    if isinstance(layer, OSPF):
+        return _ospf_checksum(layer)
+    transport = _pseudo_header_checksum(layer, ip, payload)
+    if transport is not None:
+        return transport
     raise InvalidFieldError(
         f"{type(layer).__name__} has no checksum field to compute",
         protocol=type(layer),
@@ -241,7 +344,9 @@ def verify(
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
     invalid). A GRE header whose Checksum-Present bit is clear carries
     no checksum at all (RFC 2784 §2.5) and likewise verifies as True —
-    a frame cannot fail a checksum it does not have.
+    a frame cannot fail a checksum it does not have — as does an OSPF
+    packet under cryptographic authentication (RFC 2328 §D.4.3), whose
+    digest this library cannot check without the key.
     """
     if (
         isinstance(layer, UDP)
@@ -250,6 +355,8 @@ def verify(
     ):
         return True
     if isinstance(layer, GRE) and not layer.checksum_present:
+        return True
+    if isinstance(layer, OSPF) and layer.au_type == OSPF.AU_TYPE_CRYPTOGRAPHIC:
         return True
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire

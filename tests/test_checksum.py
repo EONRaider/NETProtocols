@@ -13,6 +13,8 @@ from netprotocols import (
     ARP,
     GRE,
     IGMP,
+    OSPF,
+    OSPFLSA,
     SCTP,
     TCP,
     UDP,
@@ -27,9 +29,11 @@ from netprotocols import (
     SCTPChunk,
     compute,
     crc32c,
+    decode_frame,
     internet_checksum,
     verify,
 )
+from netprotocols.checksum import fletcher_checksum, lsa_checksum, verify_lsa
 from test_corpus import walk
 
 CORPUS = corpus_frames()
@@ -600,3 +604,215 @@ class TestPacketWithChecksums:
         )
         packet = Packet(eth, arp)
         assert bytes(packet.with_checksums()) == bytes(packet)
+
+
+def ospf_packets() -> list[OSPF]:
+    return [walk(frame)[0][2] for frame in pcap_frames(FIXTURES / "ospf.pcap")]
+
+
+def ospf_hello(**fields) -> OSPF:
+    body = bytes.fromhex("ffffff00000a0201000000280a0953010a0953020a000002")
+    values = {
+        "version": 2,
+        "type": 1,
+        "packet_length": 24 + len(body),
+        "router_id": "10.0.0.1",
+        "area_id": "0.0.0.1",
+        "checksum": 0,
+        "au_type": 0,
+        "authentication": bytes(8),
+        "body": body,
+    }
+    values.update(fields)
+    return OSPF(**values)
+
+
+class TestOSPFChecksum:
+    """The packet checksum: the internet checksum of the whole packet
+    but the Authentication field (RFC 2328 §D.4.1), none under
+    cryptographic authentication (§D.4.3)."""
+
+    def test_every_captured_packet_recomputes(self):
+        packets = ospf_packets()
+        checksummed = [p for p in packets if p.au_type != 2]
+        assert {p.au_type for p in checksummed} == {0, 1}
+        assert len(checksummed) == 36
+        for ospf in checksummed:
+            assert compute(ospf) == ospf.checksum
+            assert verify(ospf)
+
+    def test_the_sum_is_over_the_packet_without_its_authentication(self):
+        ospf = ospf_hello(checksum=0x1234, authentication=b"password")
+        wire = bytes(ospf)
+        covered = wire[:12] + b"\x00\x00" + wire[14:16] + wire[24:]
+        assert compute(ospf) == internet_checksum(covered)
+
+    def test_the_authentication_field_is_excluded(self):
+        ospf = ospf_hello(au_type=1, authentication=b"NPospf1\x00")
+        other = replace(ospf, authentication=b"\xff" * 8)
+        assert compute(ospf) == compute(other)
+
+    def test_the_checksum_field_is_excluded(self):
+        assert compute(ospf_hello(checksum=0xBEEF)) == compute(ospf_hello())
+
+    def test_every_other_header_byte_is_covered(self):
+        base = compute(ospf_hello())
+        for changed in (
+            ospf_hello(router_id="10.0.0.2"),
+            ospf_hello(area_id="0.0.0.2"),
+            ospf_hello(au_type=1),
+            ospf_hello(type=6),
+        ):
+            assert compute(changed) != base
+
+    def test_ip_and_payload_are_ignored(self):
+        """An LLS block after the packet is passed as payload by
+        with_checksums(); the checksum must not cover it."""
+        ospf = ospf_hello()
+        assert compute(ospf, payload=b"\x00\x00\x00\x03lls!") == compute(ospf)
+
+    def test_a_flipped_body_bit_is_detected(self):
+        ospf = replace(ospf_hello(), checksum=compute(ospf_hello()))
+        assert verify(ospf)
+        flipped = bytearray(ospf.body)
+        flipped[-1] ^= 0x01
+        assert not verify(replace(ospf, body=bytes(flipped)))
+
+    def test_cryptographic_authentication_computes_none(self):
+        ospf = ospf_packets()[-1]
+        assert ospf.au_type == 2
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(ospf)
+        err = excinfo.value
+        assert err.protocol is OSPF
+        assert err.field == "checksum"
+        assert str(err) == (
+            "An OSPF packet under cryptographic authentication (AuType 2) "
+            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)"
+        )
+
+    @pytest.mark.parametrize("checksum", [0, 1, 0xFFFF])
+    def test_cryptographic_authentication_verifies_vacuously(self, checksum):
+        ospf = replace(ospf_packets()[-1], checksum=checksum)
+        assert verify(ospf)
+
+    def test_with_checksums_fills_a_built_packet(self):
+        frame = pcap_frames(FIXTURES / "ospf.pcap")[1]
+        packet = decode_frame(frame)
+        blank = Packet(
+            packet[0],
+            replace(packet[IPv4], checksum=0),
+            replace(packet[OSPF], checksum=0),
+        )
+        assert blank.with_checksums() == packet
+        assert bytes(blank.with_checksums()) == frame
+
+    def test_with_checksums_leaves_cryptographic_packets_alone(self):
+        for frame in pcap_frames(FIXTURES / "ospf.pcap")[36:]:
+            packet = decode_frame(frame)
+            assert packet[OSPF].checksum == 0
+            blank = Packet(
+                packet[0], replace(packet[IPv4], checksum=0), packet[OSPF]
+            )
+            assert blank.with_checksums() == packet
+
+
+def fletcher_sums(data: bytes) -> tuple[int, int]:
+    """RFC 905 B.4's check, done here and not by the library: both sums
+    of a correctly checksummed field are 0 modulo 255."""
+    c0 = c1 = 0
+    for byte in data:
+        c0 = (c0 + byte) % 255
+        c1 = (c1 + c0) % 255
+    return c0, c1
+
+
+class TestFletcherChecksum:
+    def placed(self, data: bytes, offset: int) -> bytes:
+        field = fletcher_checksum(data, offset).to_bytes(2, "big")
+        return data[:offset] + field + data[offset + 2 :]
+
+    @pytest.mark.parametrize(
+        "data,offset",
+        [
+            (b"\x01\x02\x00\x00\x03", 2),
+            (bytes(range(1, 40)), 0),
+            (bytes(range(200, 256)) * 3, 17),
+            (b"\xff" * 9, 7),
+            (bytes(range(256)), 254),
+        ],
+    )
+    def test_the_field_zeroes_both_sums(self, data, offset):
+        assert fletcher_sums(self.placed(data, offset)) == (0, 0)
+
+    def test_the_field_bytes_are_read_as_zero(self):
+        data = bytes(range(10, 30))
+        clobbered = data[:6] + b"\xab\xcd" + data[8:]
+        assert fletcher_checksum(data, 6) == fletcher_checksum(clobbered, 6)
+
+    def test_zero_is_reported_as_255(self):
+        """RFC 905 B.3: a computed X or Y of 0 is sent as 255, so the
+        field never holds a zero byte. Worked by hand: over 01 [X Y] 02,
+        C0 = 3 and C1 = 6 with the field zeroed, so X = (2 * 3 - 6) mod
+        255 = 0, sent as 255, and Y = 510 - 3 - 255 = 252; over
+        02 [X Y] 01, C0 = 3 and C1 = 9, so X = (2 * 3 - 9) mod 255 =
+        252 and Y = (510 - 3 - 252) mod 255 = 0, sent as 255."""
+        assert fletcher_checksum(b"\x01\x00\x00\x02", 1) == 0xFFFC
+        assert fletcher_checksum(b"\x02\x00\x00\x01", 1) == 0xFCFF
+        assert fletcher_checksum(bytes(10), 4) == 0xFFFF
+
+    def test_known_values(self):
+        # Over 01 02 [X Y] 03: C0 = 6, C1 = 16, X = (2 * 6 - 16) mod
+        # 255 = 251, Y = (510 - 6 - 251) mod 255 = 253.
+        assert fletcher_checksum(b"\x01\x02\x00\x00\x03", 2) == 0xFBFD
+        # Over 05 [X Y]: C0 = 5, C1 = 15, X = (1 * 5 - 15) mod 255 =
+        # 245, Y = (510 - 5 - 245) mod 255 = 5.
+        assert fletcher_checksum(b"\x05\x00\x00", 1) == 0xF505
+        # Over [X Y] 07: C0 = C1 = 7, X = (2 * 7 - 7) = 7,
+        # Y = (510 - 7 - 7) mod 255 = 241.
+        assert fletcher_checksum(b"\x00\x00\x07", 0) == 0x07F1
+
+    def test_memoryview_input(self):
+        data = bytes(range(1, 30))
+        assert fletcher_checksum(memoryview(data), 3) == fletcher_checksum(
+            data, 3
+        )
+
+
+class TestLSAChecksum:
+    """Each LSA's LS Checksum: Fletcher over the LSA but its LS Age (RFC
+    2328 §12.1.7)."""
+
+    def lsas(self) -> list[OSPFLSA]:
+        return [lsa for ospf in ospf_packets() for lsa in ospf.lsas or ()]
+
+    def test_every_captured_lsa_recomputes(self):
+        lsas = self.lsas()
+        assert len(lsas) == 18
+        assert {lsa.header.ls_type for lsa in lsas} == {1, 2, 5}
+        for lsa in lsas:
+            assert lsa_checksum(lsa) == lsa.header.ls_checksum
+            assert verify_lsa(lsa)
+            assert fletcher_sums(bytes(lsa)[2:]) == (0, 0)
+
+    def test_ls_age_is_excluded(self):
+        lsa = self.lsas()[0]
+        aged = OSPFLSA(replace(lsa.header, ls_age=3600), lsa.body)
+        assert lsa_checksum(aged) == lsa_checksum(lsa)
+        assert verify_lsa(aged)
+
+    def test_the_checksum_field_is_excluded(self):
+        lsa = self.lsas()[0]
+        blank = OSPFLSA(replace(lsa.header, ls_checksum=0), lsa.body)
+        assert lsa_checksum(blank) == lsa.header.ls_checksum
+        assert not verify_lsa(blank)
+
+    def test_a_flipped_body_bit_is_detected(self):
+        lsa = self.lsas()[0]
+        flipped = bytes([lsa.body[0] ^ 0x01]) + lsa.body[1:]
+        assert not verify_lsa(OSPFLSA(lsa.header, flipped))
+
+    def test_a_flipped_header_bit_is_detected(self):
+        lsa = self.lsas()[0]
+        flipped = replace(lsa.header, options=lsa.header.options ^ 0x01)
+        assert not verify_lsa(OSPFLSA(flipped, lsa.body))

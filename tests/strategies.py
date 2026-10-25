@@ -24,6 +24,8 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    OSPF,
+    OSPFLSA,
     SCTP,
     VLAN,
     VXLAN,
@@ -36,6 +38,10 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
     Protocol,
     SCTPChunk,
 )
@@ -337,6 +343,106 @@ def ah_headers(draw: st.DrawFn, cls: type[AH] = AH) -> AH:
     )
 
 
+def _u(bits: int) -> st.SearchStrategy[int]:
+    return st.integers(0, (1 << bits) - 1)
+
+
+@st.composite
+def ospf_lsa_headers(draw: st.DrawFn, length: int = 20) -> OSPFLSAHeader:
+    """An LSA header declaring ``length`` bytes."""
+    return OSPFLSAHeader(
+        ls_age=draw(_u(16)),
+        options=draw(_u(8)),
+        ls_type=draw(_u(8)),
+        link_state_id=draw(ipv4_strings()),
+        advertising_router=draw(ipv4_strings()),
+        ls_sequence_number=draw(_u(32)),
+        ls_checksum=draw(_u(16)),
+        length=length,
+    )
+
+
+@st.composite
+def ospf_lsas(draw: st.DrawFn) -> OSPFLSA:
+    body = draw(st.binary(max_size=24))
+    return OSPFLSA(draw(ospf_lsa_headers(20 + len(body))), body)
+
+
+@st.composite
+def _ospf_bodies(draw: st.DrawFn, type_: int) -> bytes:
+    """A body with message ``type_``'s framing, built from the records
+    its accessor returns, so it is one decode accepts."""
+    headers = st.lists(ospf_lsa_headers(), max_size=3).map(tuple)
+    if type_ == 1:
+        return bytes(
+            OSPFHello(
+                network_mask=draw(ipv4_strings()),
+                hello_interval=draw(_u(16)),
+                options=draw(_u(8)),
+                router_priority=draw(_u(8)),
+                router_dead_interval=draw(_u(32)),
+                designated_router=draw(ipv4_strings()),
+                backup_designated_router=draw(ipv4_strings()),
+                neighbors=tuple(draw(st.lists(ipv4_strings(), max_size=4))),
+            )
+        )
+    if type_ == 2:
+        return bytes(
+            OSPFDatabaseDescription(
+                interface_mtu=draw(_u(16)),
+                options=draw(_u(8)),
+                flags=draw(_u(8)),
+                dd_sequence_number=draw(_u(32)),
+                lsa_headers=draw(headers),
+            )
+        )
+    if type_ == 3:
+        requests = draw(
+            st.lists(
+                st.builds(
+                    OSPFLSRequest, _u(32), ipv4_strings(), ipv4_strings()
+                ),
+                max_size=3,
+            )
+        )
+        return b"".join(map(bytes, requests))
+    if type_ == 4:
+        lsas = draw(st.lists(ospf_lsas(), max_size=3))
+        return len(lsas).to_bytes(4, "big") + b"".join(map(bytes, lsas))
+    if type_ == 5:
+        return b"".join(map(bytes, draw(headers)))
+    return draw(st.binary(max_size=_MAX_BLOB))
+
+
+@st.composite
+def ospf_packets(draw: st.DrawFn) -> OSPF:
+    # packet_length / body and au_type / authentication / auth_trailer
+    # are OSPF's interdependent groups: the length is computed from the
+    # body, which is built with its type's framing, and under AuType 2
+    # the trailer is drawn to the size Auth Data Len declares.
+    type_ = draw(st.sampled_from([1, 2, 3, 4, 5, 0, 6, 255]))
+    body = draw(_ospf_bodies(type_))
+    au_type = draw(st.sampled_from([0, 1, 2, 3]))
+    authentication = draw(st.binary(min_size=8, max_size=8))
+    trailer = (
+        draw(st.binary(min_size=authentication[3], max_size=authentication[3]))
+        if au_type == 2
+        else b""
+    )
+    return OSPF(
+        version=2,
+        type=type_,
+        packet_length=24 + len(body),
+        router_id=draw(ipv4_strings()),
+        area_id=draw(ipv4_strings()),
+        checksum=draw(_u(16)),
+        au_type=au_type,
+        authentication=authentication,
+        body=body,
+        auth_trailer=trailer,
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -489,4 +595,5 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "AHv6": ah_headers(AHv6),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
+    "OSPF": ospf_packets(),
 }

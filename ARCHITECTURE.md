@@ -290,6 +290,7 @@ flowchart LR
   AH6 -->|6| T
   AH6 -->|17| U
   AH6 -->|50| ESP
+  I4 -->|89| OSPF[OSPFv2]
   U -->|4789| VX[VXLAN]
   VX -->|always| E
 ```
@@ -331,7 +332,10 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
 is SCTP — no collisions; 51 is AH in both, decoded by a class of each
-family's own).
+family's own). 89 is the exception: it is OSPF in both families, but
+OSPFv2 (RFC 2328) after IPv4 and OSPFv3 (RFC 5340), a different wire
+format, after IPv6, and this library decodes only OSPFv2, so `OSPF` is
+reached from IPv4 alone.
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -393,8 +397,20 @@ key the child already owns. That works the other way round too: a
 third party replacing protocol 51 in `ip.proto` (`override=True`)
 changes IPv4 dispatch only, and must register in `ip.proto.v6` as well
 to reach IPv6. `_defaults.FAMILY_SPECIFIC_NUMBERS` names the numbers
-wired this way, and the tests hold the two tables to differing at
-those keys alone.
+wired this way, and the tests hold the two tables to differing only at
+those keys, the IPv6-only numbers and the IPv4-only one below.
+
+A child can also own a key with no class. Protocol 89 is OSPFv2 in
+`ip.proto` and would be inherited into `ip.proto.v6`, where it means
+OSPFv3, so every OSPFv3 packet would fail to decode as OSPFv2; instead
+the defaults withhold 89 from `ip.proto.v6` (`_defaults.IPV4_ONLY_NUMBERS`)
+before registering `OSPF` in `ip.proto`. A withheld key is skipped by
+inheritance as an override is, so an IPv6 packet with next header 89
+ends its walk at the IPv6 header, as it did before `OSPF` existed, and
+a later write to `ip.proto` does not reach it; an OSPFv3 decoder
+registered directly in `ip.proto.v6` fills it. `OSPF.decode()` also
+rejects any version but 2, for a caller who sends it OSPFv3 on purpose
+(`start=` or `decode_as`).
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its
@@ -575,6 +591,16 @@ contract" above): otherwise Ethernet's padding would land inside the
 CRC's span, and a packet under 46 bytes from a real NIC would fail to
 verify.
 
+OSPF carries two checksums. The packet's is the internet checksum of
+the whole packet but its 64-bit Authentication field, with no
+pseudo-header, and `compute()` covers only the packet's own bytes, so
+an RFC 5613 LLS block after it never enters; under cryptographic
+authentication none is computed (the digest protects the packet), so
+`compute()` raises, `verify()` returns `True` and `with_checksums()`
+leaves the field alone. Each LSA's LS Checksum is an ISO 8473 Fletcher
+checksum of the LSA but its LS Age; an LSA is not a layer, so it has
+`lsa_checksum()`/`verify_lsa()` of its own, on `fletcher_checksum()`.
+
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.
 
@@ -592,7 +618,7 @@ src/netprotocols/
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify
+│                   compute, verify, OSPF's LSA Fletcher checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
@@ -600,6 +626,7 @@ src/netprotocols/
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),
+│                   ospf.py (OSPFv2: OSPF + its message records),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table

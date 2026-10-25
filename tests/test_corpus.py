@@ -16,6 +16,7 @@ from netprotocols import (
     ARP,
     DNS,
     ESP,
+    OSPF,
     SCTP,
     TCP,
     UDP,
@@ -105,6 +106,7 @@ class TestCorpusCoverage:
             ESP,
             AH,
             VXLAN,
+            OSPF,
         } <= seen
 
     def test_arp_covers_both_operations(self):

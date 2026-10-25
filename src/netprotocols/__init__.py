@@ -31,6 +31,14 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.ospf import (
+    OSPF,
+    OSPFLSA,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
+)
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
@@ -99,6 +107,8 @@ __all__ = [
     "HTTP",
     "IGMP",
     "MAX_DEPTH",
+    "OSPF",
+    "OSPFLSA",
     "SCTP",
     "TCP",
     "UDP",
@@ -140,6 +150,10 @@ __all__ = [
     "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
+    "OSPFDatabaseDescription",
+    "OSPFHello",
+    "OSPFLSAHeader",
+    "OSPFLSRequest",
     "Packet",
     "Protocol",
     "ProtocolError",

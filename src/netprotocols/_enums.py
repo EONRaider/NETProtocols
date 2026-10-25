@@ -56,6 +56,7 @@ class IPProtocol(IntEnum):
     AH = 0x33
     IPV6_ICMP = 0x3A
     IPV6_DSTOPTS = 0x3C
+    OSPF = 0x59
     SCTP = 0x84
 
     @property
@@ -78,6 +79,7 @@ _IP_PROTOCOL_NAMES = {
     IPProtocol.AH: "AH",
     IPProtocol.IPV6_ICMP: "IPv6-ICMP",
     IPProtocol.IPV6_DSTOPTS: "IPv6 Destination Options",
+    IPProtocol.OSPF: "OSPF",
     IPProtocol.SCTP: "SCTP",
 }
 

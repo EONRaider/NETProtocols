@@ -26,6 +26,7 @@ this file (mutmut's, for one).
 """
 
 import contextlib
+import struct
 import sys
 
 import pytest
@@ -42,6 +43,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    OSPF,
     SCTP,
     TCP,
     UDP,
@@ -70,6 +72,7 @@ from strategies import (
     http_context_responses,
     http_messages,
     http_wire,
+    ospf_packets,
     sctp_chunks,
     sctp_headers,
 )
@@ -100,6 +103,7 @@ ALL_PROTOCOLS = (
     AHv6,
     HTTP,
     VXLAN,
+    OSPF,
 )
 
 
@@ -549,6 +553,82 @@ class TestSCTPChunkAccessorSafety:
         sctp = SCTP.decode(bytes(12) + raw)
         assert sctp.chunks == raw
         assert list(sctp.parsed_chunks) == chunks
+
+
+def _read_every_ospf_accessor(ospf: OSPF) -> None:
+    """Read every accessor and display helper, checking the records
+    re-encode to the body they came from."""
+    for name in (
+        "type_name",
+        "au_type_name",
+        "checksum_hex_str",
+        "key_id",
+        "auth_data_len",
+        "crypto_sequence_number",
+    ):
+        getattr(ospf, name)
+    message = ospf.hello or ospf.database_description
+    if message is not None:
+        assert bytes(message) == ospf.body
+        _ = message.options_str
+    if ospf.database_description is not None:
+        _ = ospf.database_description.flags_str
+    for request in ospf.ls_requests or ():
+        assert request.ls_type_name
+    if ospf.lsas is not None:
+        raw = len(ospf.lsas).to_bytes(4, "big")
+        assert raw + b"".join(map(bytes, ospf.lsas)) == ospf.body
+    headers = [lsa.header for lsa in ospf.lsas or ()]
+    headers += ospf.ls_acknowledgments or ()
+    for header in headers:
+        assert header.ls_type_name
+        _ = header.options_str, header.ls_checksum_hex_str
+        _ = header.ls_sequence_number_hex_str
+
+
+#: OSPF-shaped buffers: a version-2 header with a plausible Packet
+#: Length, then bytes from a small alphabet, so that bodies with their
+#: framing, broken LSA counts and lengths, and cut digests all turn up
+#: far more often than in free bytes.
+_ospf_like = st.builds(
+    lambda type_, au_type, auth_len, tail, slack: (
+        struct.pack("!BBH", 2, type_, 24 + len(tail) - slack)
+        + bytes(10)
+        + struct.pack("!H", au_type)
+        + bytes(3)
+        + bytes([auth_len])
+        + bytes(4)
+        + tail
+    ),
+    st.integers(0, 6),
+    st.sampled_from([0, 1, 2]),
+    st.sampled_from([0, 4, 16]),
+    st.lists(st.sampled_from([0, 0, 1, 2, 4, 20, 24, 0xFF]), max_size=96).map(
+        bytes
+    ),
+    st.integers(0, 8),
+)
+
+
+class TestOSPFAccessorSafety:
+    """decode() checks each message's framing, so no accessor of a
+    decoded OSPF packet may raise, and the packet round-trips exactly
+    the bytes it consumed."""
+
+    @given(data=st.one_of(fuzz_input, _ospf_like))
+    def test_decoded_packets(self, data: bytes) -> None:
+        try:
+            ospf = OSPF.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(ospf) == data[: ospf.header_len]
+        assert OSPF.decode(bytes(ospf)) == ospf
+        _read_every_ospf_accessor(ospf)
+
+    @given(ospf=ospf_packets())
+    def test_built_packets(self, ospf: OSPF) -> None:
+        _read_every_ospf_accessor(ospf)
+        assert OSPF.decode(bytes(ospf) + b"\xde\xad") == ospf
 
 
 def _read_every_accessor(msg: HTTP) -> None:

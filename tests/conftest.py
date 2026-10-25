@@ -174,6 +174,16 @@ def raw_sctp_packet() -> bytes:
 
 
 @pytest.fixture
+def raw_ospf_hello() -> bytes:
+    """OSPFv2 Hello from tests/fixtures/ospf.pcap (AuType 0): router
+    10.0.0.1, area 0, DR 10.9.83.1, one neighbor (10.0.0.2)."""
+    return bytes.fromhex(
+        "020100300a000001000000008bac00000000000000000000"
+        "ffffff000002020a000000080a095301000000000a000002"
+    )
+
+
+@pytest.fixture
 def raw_esp_packet() -> bytes:
     """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
     NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request

@@ -59,6 +59,15 @@ IPV6_ONLY_NUMBERS = frozenset(
 #: Destination Options (RFC 8200 §4.1) would stop dead.
 FAMILY_SPECIFIC_NUMBERS = frozenset({IPProtocol.AH})
 
+#: Protocol numbers this library decodes after IPv4 alone: the
+#: ``ip.proto`` entry is withheld from ``ip.proto.v6``, which would
+#: otherwise inherit it. IPv4's protocol 89 is OSPFv2 (RFC 2328) and
+#: IPv6's is OSPFv3 (RFC 5340), whose header and messages differ, and
+#: this library has no OSPFv3 class: inherited, the entry would make
+#: every OSPFv3 packet fail to decode as OSPFv2, where without it the
+#: walk ends cleanly at the IPv6 header.
+IPV4_ONLY_NUMBERS = frozenset({IPProtocol.OSPF})
+
 
 def install(registry: Registry) -> None:
     """Register every built-in decoder on ``registry``.
@@ -80,6 +89,7 @@ def install(registry: Registry) -> None:
         IPv6HopByHopOptions,
         IPv6Routing,
     )
+    from netprotocols.layer3.ospf import OSPF
     from netprotocols.layer4.sctp import SCTP
     from netprotocols.layer4.tcp import TCP
     from netprotocols.layer4.udp import UDP
@@ -121,6 +131,11 @@ def install(registry: Registry) -> None:
     # conflict with it).
     add(TABLE_IP_PROTO_V6, IPProtocol.AH, AHv6)
     add(TABLE_IP_PROTO, IPProtocol.AH, AH)
+
+    # IPv4 chain only — see IPV4_ONLY_NUMBERS. Withheld from the v6
+    # table first, so the ip.proto entry is not inherited into it.
+    registry._withhold(TABLE_IP_PROTO_V6, IPProtocol.OSPF)
+    add(TABLE_IP_PROTO, IPProtocol.OSPF, OSPF)
 
     # IPv6 chain only — see IPV6_ONLY_NUMBERS.
     add(TABLE_IP_PROTO_V6, IPProtocol.HOPOPT, IPv6HopByHopOptions)

@@ -43,6 +43,14 @@ also shadows an inherited key: protocol 51 is ``AH`` in ``ip.proto``
 but ``AHv6`` in ``ip.proto.v6``, so that what follows AH dispatches in
 its own family's table.
 
+A child can also own a key with no class at all: the defaults withhold
+protocol 89 from ``ip.proto.v6``, because IPv4's protocol 89 is OSPFv2
+and IPv6's is OSPFv3, a different wire format, so ``OSPF`` is
+registered in ``ip.proto`` and an IPv6 packet with next header 89 ends
+its walk at the IPv6 header. A withheld key behaves like an override
+that maps to nothing: a write to the parent does not reach it, and a
+registration made directly in the child fills it as usual.
+
 Inheritance is resolved **when you register, not when you look up**: a
 write to a parent table is copied into every child that has not
 overridden the key. Dispatch therefore stays a single ``dict.get`` on a
@@ -166,7 +174,7 @@ class Registry:
     ``Registry()`` starts empty.
     """
 
-    __slots__ = ("_own", "_tables")
+    __slots__ = ("_own", "_tables", "_withheld")
 
     def __init__(self) -> None:
         #: Flattened lookup tables — inherited entries already merged in.
@@ -182,6 +190,9 @@ class Registry:
         self._own: dict[str, dict[int, type[Protocol]]] = {
             name: {} for name in TABLES
         }
+        #: Keys each table owns with no class: inheritance skips them
+        #: as it skips an override (see :meth:`_withhold`).
+        self._withheld: dict[str, set[int]] = {name: set() for name in TABLES}
 
     @classmethod
     def from_defaults(cls) -> Registry:
@@ -263,8 +274,28 @@ class Registry:
         """
         self._tables[table][key] = protocol
         for child in _CHILDREN[table]:
-            if key not in self._own[child]:
+            if key not in self._own[child] and key not in self._withheld[child]:
                 self._publish(child, key, protocol)
+
+    def _withhold(self, table: str, key: int) -> None:
+        """Make ``key`` in ``table`` dispatch to nothing, and stay that
+        way when its parent table registers the key.
+
+        For a number one IP family must not inherit from the other: the
+        defaults withhold OSPF's 89 from ``ip.proto.v6``, where it means
+        OSPFv3. A registration made directly in ``table`` still fills
+        the key, since that is a deliberate choice for this table.
+        A class already registered directly in ``table`` stands, so
+        withholding is idempotent and never undoes a deliberate entry.
+        Private: the defaults are its only caller.
+
+        :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+        """
+        entries = self.table(table)
+        if key in self._own[table]:
+            return
+        entries.pop(key, None)
+        self._withheld[table].add(key)
 
     def derive(
         self,
@@ -288,6 +319,7 @@ class Registry:
         for name in TABLES:
             child._tables[name] = dict(self._tables[name])
             child._own[name] = dict(self._own[name])
+            child._withheld[name] = set(self._withheld[name])
         for table, entries in (overrides or {}).items():
             for key, protocol in entries.items():
                 child.register(table, key, protocol, override=True)
