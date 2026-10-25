@@ -829,8 +829,35 @@ class TestOpen:
         msg = BGP.decode(message(1, body))
         assert msg.extended_optional_parameters is True
         assert msg.optional_parameters == (
-            BGPOptionalParameter(2, capabilities),
+            BGPOptionalParameter(2, capabilities, extended_length=True),
         )
+
+    @pytest.mark.parametrize("extended", [False, True], ids=["4271", "9072"])
+    def test_parameters_re_encode_to_their_bytes(self, extended):
+        """Each parameter's bytes, joined, are the OPEN's parameters.
+
+        In RFC 4271's encoding they start at body offset 10; in RFC
+        9072's, after the 0xff marker and the 2-byte length, at 13.
+        """
+        params = [(2, b"\x01\x04\x00\x01\x00\x01"), (7, b""), (1, b"\xaa")]
+        width = 2 if extended else 1
+        raw = b"".join(
+            bytes([t]) + len(v).to_bytes(width, "big") + v for t, v in params
+        )
+        if extended:
+            body = (
+                struct.pack("!BHH4sB", 4, 65001, 90, bytes(4), 255)
+                + b"\xff"
+                + len(raw).to_bytes(2, "big")
+                + raw
+            )
+        else:
+            body = open_body(raw)
+        msg = BGP.decode(message(1, body))
+        decoded = msg.optional_parameters
+        assert [p.extended_length for p in decoded] == [extended] * 3
+        assert b"".join(bytes(p) for p in decoded) == raw
+        assert body[13 if extended else 10 :] == raw
 
     def test_a_0xff_after_an_empty_parameters_length_is_not_extended(self):
         """RFC 9072's marker needs a nonzero Non-Ext OP Len before it.
@@ -1105,6 +1132,33 @@ class TestPrefixAndAttributeConstruction:
         with pytest.raises(InvalidFieldError) as caught:
             BGPPathAttribute(**kwargs)
         assert caught.value.field == field
+
+    @pytest.mark.parametrize(
+        "kwargs,field",
+        [
+            ({"type": 256}, "type"),
+            ({"type": -1}, "type"),
+            ({"type": 2, "value": bytes(256)}, "value"),
+            (
+                {"type": 2, "value": bytes(0x10000), "extended_length": True},
+                "value",
+            ),
+        ],
+    )
+    def test_optional_parameter_checks(self, kwargs, field):
+        """A parameter must fit its type and its length's width."""
+        with pytest.raises(InvalidFieldError) as caught:
+            BGPOptionalParameter(**kwargs)
+        assert caught.value.field == field
+
+    def test_optional_parameter_wire_form(self):
+        """A parameter serializes with a one- or two-byte length."""
+        assert bytes(BGPOptionalParameter(2, b"\xaa")) == b"\x02\x01\xaa"
+        extended = BGPOptionalParameter(2, bytes(256), extended_length=True)
+        assert bytes(extended) == b"\x02\x01\x00" + bytes(256)
+        assert BGPOptionalParameter(2, b"\xaa") != BGPOptionalParameter(
+            2, b"\xaa", extended_length=True
+        )
 
     def test_attribute_wire_form(self):
         """An attribute serializes with a one- or two-byte length."""

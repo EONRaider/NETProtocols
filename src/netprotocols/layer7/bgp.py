@@ -576,10 +576,55 @@ class BGPOptionalParameter:
     :param value: Parameter Value, kept raw. A Capabilities value is a
         list of capability TLVs (4-byte AS numbers, multiprotocol,
         route refresh, ...), not decoded further.
+    :param extended_length: Whether the Parameter Length is two bytes
+        rather than one. The enclosing OPEN chooses that for all its
+        parameters (RFC 9072's encoding, signalled by a Non-Ext OP Type
+        of 255; see :attr:`BGP.extended_optional_parameters`), and each
+        parameter records it, as :meth:`BGP.decode` sets it.
+
+    ``bytes(parameter)`` is the on-wire form, the Parameter Length one
+    or two bytes by :attr:`extended_length`, so a parameter without it
+    holds at most 255 bytes.
     """
 
     type: int
     value: bytes = b""
+    extended_length: bool = False
+
+    def __post_init__(self) -> None:
+        """Check the type fits and the value fits its length's width.
+
+        :raises InvalidFieldError: either does not.
+        """
+        if not 0 <= self.type <= 0xFF:
+            raise InvalidFieldError(
+                f"BGP optional parameter type must be within 0-255, "
+                f"got {self.type}",
+                protocol=type(self),
+                field="type",
+                expected="0-255",
+                actual=self.type,
+            )
+        limit = 0xFFFF if self.extended_length else 0xFF
+        if len(self.value) > limit:
+            raise InvalidFieldError(
+                f"BGP optional parameter value of {len(self.value)} bytes "
+                f"exceeds the {limit} its "
+                f"{2 if self.extended_length else 1}-byte length can say",
+                protocol=type(self),
+                field="value",
+                expected=f"<={limit} bytes",
+                actual=len(self.value),
+            )
+
+    def __bytes__(self) -> bytes:
+        """Serialize to the on-wire TLV, sized by :attr:`extended_length`."""
+        width = 2 if self.extended_length else 1
+        return (
+            bytes([self.type])
+            + len(self.value).to_bytes(width, "big")
+            + self.value
+        )
 
     @property
     def type_name(self) -> str:
@@ -676,7 +721,9 @@ def _walk_parameters(
                 base + cursor,
             )
         yield BGPOptionalParameter(
-            type=raw[cursor], value=raw[start : start + length]
+            type=raw[cursor],
+            value=raw[start : start + length],
+            extended_length=width == 2,
         )
         cursor = start + length
 
