@@ -25,6 +25,7 @@ from netprotocols import (
     IPv4,
     IPv6,
     IPv6Fragment,
+    OSPFLSAHeader,
     Packet,
     SCTPChunk,
     compute,
@@ -880,6 +881,33 @@ class TestFletcherChecksum:
             data, 3
         )
 
+    @pytest.mark.parametrize(
+        "data,offset", [(b"ab", 0), (b"abc", 0), (b"abc", 1)]
+    )
+    def test_the_field_may_sit_at_either_end(self, data, offset):
+        """Accept the field at offset 0 and at len(data) - 2."""
+        assert fletcher_sums(self.placed(data, offset)) == (0, 0)
+
+    @pytest.mark.parametrize(
+        "data,offset",
+        [
+            (b"", 0),
+            (b"", 14),
+            (b"a", 0),
+            (b"abc", 2),
+            (b"abc", 5),
+            (b"abcd", -1),
+        ],
+    )
+    def test_a_field_outside_the_data_raises(self, data, offset):
+        """Raise ValueError for a field that does not lie in the data."""
+        with pytest.raises(ValueError) as excinfo:
+            fletcher_checksum(data, offset)
+        assert str(excinfo.value) == (
+            f"a 2-byte checksum field at offset {offset} does not fit in "
+            f"{len(data)} bytes"
+        )
+
 
 class TestLSAChecksum:
     """Each LSA's LS Checksum: Fletcher over the LSA but its LS Age (RFC
@@ -918,3 +946,58 @@ class TestLSAChecksum:
         lsa = self.lsas()[0]
         flipped = replace(lsa.header, options=lsa.header.options ^ 0x01)
         assert not verify_lsa(OSPFLSA(flipped, lsa.body))
+
+    def lsa(self, body: bytes, checksum: int | None = None) -> OSPFLSA:
+        """Build an LSA around ``body``.
+
+        It is correctly checksummed unless a ``checksum`` is given.
+        """
+        header = OSPFLSAHeader(
+            ls_age=1,
+            options=2,
+            ls_type=1,
+            link_state_id="10.0.0.1",
+            advertising_router="10.0.0.1",
+            ls_sequence_number=0x80000001,
+            ls_checksum=0,
+            length=20 + len(body),
+        )
+        lsa = OSPFLSA(header, body)
+        if checksum is None:
+            checksum = lsa_checksum(lsa)
+        return OSPFLSA(replace(header, ls_checksum=checksum), body)
+
+    def test_a_zero_byte_verifies_as_255(self):
+        """Verify a zero checksum byte where the generator writes 0xff.
+
+        RFC 905 B.4 checks the sums, not the field: 0x00 and 0xff are
+        equal modulo 255, so the 0x31ff this LSA generates verifies
+        stored as 0x3100 too.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        assert lsa.header.ls_checksum == 0x31FF
+        assert verify_lsa(lsa)
+        assert verify_lsa(self.lsa(lsa.body, 0x3100))
+        assert not verify_lsa(self.lsa(lsa.body, 0x3101))
+
+    def test_swapped_adjacent_bytes_are_detected(self):
+        """Reject two swapped adjacent bytes.
+
+        The swap leaves C0 at 0 and moves C1 alone, so a check of C0 by
+        itself would pass it.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        swapped = self.lsa(b"\x01\x03\x02\x16", lsa.header.ls_checksum)
+        assert fletcher_sums(bytes(swapped)[2:])[0] == 0
+        assert not verify_lsa(swapped)
+
+    def test_a_c1_preserving_change_is_detected(self):
+        """Reject a change that leaves C1 at 0.
+
+        Adding 1 to the second-to-last byte and taking 2 from the last
+        moves C0 alone, so a check of C1 by itself would pass it.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        changed = self.lsa(b"\x01\x02\x04\x14", lsa.header.ls_checksum)
+        assert fletcher_sums(bytes(changed)[2:])[1] == 0
+        assert not verify_lsa(changed)

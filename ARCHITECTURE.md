@@ -595,11 +595,14 @@ OSPF carries two checksums. The packet's is the internet checksum of
 the whole packet but its 64-bit Authentication field, with no
 pseudo-header, and `compute()` covers only the packet's own bytes, so
 an RFC 5613 LLS block after it never enters; under cryptographic
-authentication none is computed (the digest protects the packet), so
-`compute()` raises, `verify()` returns `True` and `with_checksums()`
-leaves the field alone. Each LSA's LS Checksum is an ISO 8473 Fletcher
-checksum of the LSA but its LS Age; an LSA is not a layer, so it has
-`lsa_checksum()`/`verify_lsa()` of its own, on `fletcher_checksum()`.
+authentication (AuType 2, or 3 from RFC 7474) none is computed (the
+digest protects the packet), so `compute()` raises, `verify()` returns
+`True` and `with_checksums()` leaves the field alone. Each LSA's LS
+Checksum is an ISO 8473 Fletcher checksum of the LSA but its LS Age;
+an LSA is not a layer, so it has functions of its own:
+`lsa_checksum()` generates the field with `fletcher_checksum()`, and
+`verify_lsa()` checks it the way RFC 905 B.4 does, by both running sums
+being zero, so it does not depend on how the field was generated.
 
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.

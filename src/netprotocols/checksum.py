@@ -115,6 +115,18 @@ def crc32c(data: bytes | memoryview) -> int:
     return crc ^ 0xFFFFFFFF
 
 
+def _fletcher_sums(data: bytes) -> tuple[int, int]:
+    """Return the ISO 8473 running sums ``C0`` and ``C1`` of ``data``.
+
+    Both are taken modulo 255 (RFC 905 B.3.3, B.4.2).
+    """
+    c0 = c1 = 0
+    for byte in data:
+        c0 = (c0 + byte) % 255
+        c1 = (c1 + c0) % 255
+    return c0, c1
+
+
 def fletcher_checksum(data: bytes | memoryview, offset: int) -> int:
     """Compute the ISO 8473 Fletcher checksum field for ``data``.
 
@@ -127,13 +139,18 @@ def fletcher_checksum(data: bytes | memoryview, offset: int) -> int:
     standing for zero, as RFC 905 B.3 says, so the result never has a
     zero byte. OSPF's LS Checksum is this over an LSA from byte 2, its
     LS Age excluded (see :func:`lsa_checksum`).
+
+    :raises ValueError: if the two-byte field at ``offset`` does not
+        lie inside ``data``: ``offset`` must be ``0`` to
+        ``len(data) - 2``.
     """
     field = bytes(data)
-    field = field[:offset] + b"\x00\x00" + field[offset + 2 :]
-    c0 = c1 = 0
-    for byte in field:
-        c0 = (c0 + byte) % 255
-        c1 = (c1 + c0) % 255
+    if not 0 <= offset <= len(field) - 2:
+        raise ValueError(
+            f"a 2-byte checksum field at offset {offset} does not fit in "
+            f"{len(field)} bytes"
+        )
+    c0, c1 = _fletcher_sums(field[:offset] + b"\x00\x00" + field[offset + 2 :])
     x = ((len(field) - offset - 1) * c0 - c1) % 255 or 255
     y = (510 - c0 - x) % 255 or 255
     return x << 8 | y
@@ -154,8 +171,15 @@ def lsa_checksum(lsa: OSPFLSA) -> int:
 
 
 def verify_lsa(lsa: OSPFLSA) -> bool:
-    """Whether ``lsa``'s LS Checksum matches a recomputation."""
-    return lsa_checksum(lsa) == lsa.header.ls_checksum
+    """Whether ``lsa``'s LS Checksum checks.
+
+    That is RFC 905 B.4's check over the LSA but its LS Age, the
+    checksum in place: both running sums must be ``0`` modulo 255. It
+    does not compare the field with :func:`lsa_checksum`, which reports
+    a zero ``X`` or ``Y`` as ``255``: the check accepts either form,
+    ``0x00`` and ``0xff`` being equal modulo 255.
+    """
+    return _fletcher_sums(bytes(lsa)[2:]) == (0, 0)
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
