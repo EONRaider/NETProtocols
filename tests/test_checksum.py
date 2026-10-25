@@ -342,6 +342,14 @@ class TestSCTPChecksum:
         assert filled.checksum == compute(built)
 
 
+def hex_id(value):
+    """Name a bytes parameter by its hex digits, which every shell and
+    mutmut's node-id round trip keep intact."""
+    if isinstance(value, bytes):
+        return (value.hex() if len(value) <= 16 else f"{len(value)}B") or "0B"
+    return None
+
+
 def cdp_oracle(data: bytes) -> int:
     """Return CDP's checksum of ``data``, built as Wireshark builds it.
 
@@ -395,6 +403,7 @@ class TestCDPChecksum:
             b"\x80\x00\x80\x00\x7f",
             bytes(range(256)) + b"\xc3",
         ],
+        ids=hex_id,
     )
     def test_the_sum_matches_wiresharks_form(self, data):
         """Odd and even lengths (1 and 3 mod 4, 0 and 2), final bytes on
@@ -412,6 +421,7 @@ class TestCDPChecksum:
             (b"\xff\xff\xff", 0x0001),
             (b"\x12\x34", 0xEDCB),
         ],
+        ids=hex_id,
     )
     def test_pinned_values(self, data, expected):
         """Values worked by hand: ``0x81`` adds ``0xFF80``, so ``00 7f
@@ -466,7 +476,7 @@ class TestCDPChecksum:
         assert not verify(replace(cdp, tlvs=(*cdp.tlvs[:-1], changed)))
 
     @pytest.mark.parametrize(
-        "value", [b"ab", b"abc", b"ab\x80", b"ab\xa9"], ids=str
+        "value", [b"ab", b"abc", b"ab\x80", b"ab\xa9"], ids=hex_id
     )
     def test_with_checksums_fills_a_built_packet(self, value):
         """An odd PDU ending at or past 0x80 too, through the walk."""
