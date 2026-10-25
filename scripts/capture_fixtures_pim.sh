@@ -272,7 +272,13 @@ def kind_of(frame):
         return "register-stop"
     if msg_type != 3:
         return None
-    (group, joined, pruned), = join_prune(body)
+    group_sets = join_prune(body)
+    if len(group_sets) != 1:
+        # pimd may aggregate several groups into one Join/Prune; every
+        # kind below has one group set, so such a message is skipped
+        # (WANTED and the composition check still demand each kind).
+        return None
+    (group, joined, pruned), = group_sets
     WC_RPT, RPT, SPT = 0x07, 0x05, 0x04
     if group == G2 and joined == ((WC_RPT, R1),) and not pruned:
         return "join-star-g2"
