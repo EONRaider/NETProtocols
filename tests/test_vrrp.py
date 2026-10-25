@@ -233,6 +233,10 @@ class TestDecodeV2:
         assert vrrp.max_adver_int is None
         assert vrrp.checksum_hex_str == "0x5af6"
 
+    def test_a_short_checksum_is_zero_padded(self, raw_vrrpv2_advert):
+        vrrp = replace(VRRP.decode(raw_vrrpv2_advert), checksum=0x0ABC)
+        assert vrrp.checksum_hex_str == "0x0abc"
+
     def test_the_header_is_the_whole_message(self, raw_vrrpv2_advert):
         # 8 fixed bytes, two 4-byte addresses, 8 bytes of auth data.
         assert VRRP.decode(raw_vrrpv2_advert).header_len == 24
@@ -265,6 +269,9 @@ class TestDecodeV2:
         assert vrrp.auth_type_name == "No Authentication"
         assert vrrp.auth_data == bytes(8)
         assert vrrp.header_len == 20
+        # Auth Type 0 and Adver Int 1: the interval is the low byte.
+        assert vrrp.adver_int == 1
+        assert vrrp.advertisement_interval == 1.0
 
     @pytest.mark.parametrize(
         "auth_type,name",
@@ -278,6 +285,7 @@ class TestDecodeV2:
         assert vrrp.auth_type == auth_type
         assert vrrp.auth_type_name == name
         assert vrrp.adver_int == 1
+        assert vrrp.advertisement_interval == 1.0
 
 
 class TestDecodeV3:
@@ -641,6 +649,22 @@ class TestChecker:
         frame = bytearray(self.FRAMES[9])
         frame[14 + 20 + 3] += 1
         assert self.check(bytes(frame)) == ["vrrp-length"]
+
+    @pytest.mark.parametrize("index", [0, 9])
+    def test_an_ip_payload_longer_than_the_message_fails(self, index):
+        """Fail four bytes inside the IPv4 datagram after the message.
+
+        Total Length grows by 4 and the IPv4 header checksum is
+        recomputed, so only the VRRP length check can fire; zeros leave
+        a ones'-complement sum unchanged, so the checksum alone would
+        not catch them in VRRPv2.
+        """
+        frame = bytearray(self.FRAMES[index])
+        total_length = struct.unpack_from("!H", frame, 16)[0]
+        struct.pack_into("!H", frame, 16, total_length + 4)
+        frame[24:26] = b"\x00\x00"
+        struct.pack_into("!H", frame, 24, ones_complement(bytes(frame[14:34])))
+        assert self.check(bytes(frame) + bytes(4)) == ["vrrp-length"]
 
     def test_an_unknown_version_fails(self):
         frame = bytearray(self.FRAMES[9])

@@ -413,6 +413,20 @@ class TestVRRPChecksum:
                 vrrp.checksum
             )
 
+    def test_a_zero_sum_is_sent_as_zero(self):
+        """Return ``0x0000`` for a message whose checksum is zero.
+
+        VRRP has no UDP-style ``0x0000 → 0xFFFF`` substitution. The last
+        authentication-data word of this VRRPv2 message was chosen to
+        make its checksum zero.
+        """
+        raw = bytes.fromhex("2133c802010100000a0914330a0914346e702d767272caf6")
+        assert ones_complement(raw) == 0x0000
+        vrrp = VRRP.decode(raw)
+        assert compute(vrrp) == 0x0000
+        assert verify(vrrp)
+        assert not verify(replace(vrrp, checksum=0xFFFF))
+
     def test_payload_is_ignored(self):
         """Nothing after the message is part of it: padding passed as
         ``payload`` (as with_checksums() passes its own) cannot reach
