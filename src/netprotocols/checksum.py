@@ -161,6 +161,32 @@ def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     return field
 
 
+def _transport_checksum(
+    layer: ICMPv6 | TCP | UDP, ip: IPv4 | IPv6 | None, payload: bytes
+) -> int:
+    """The checksums behind a pseudo-header built from ``ip``: ICMPv6,
+    TCP and UDP, the last with its zero substitution."""
+    enclosing = _require_ip(layer, ip)
+    if isinstance(layer, ICMPv6):
+        segment = _zeroed(bytes(layer), 2) + payload
+        return internet_checksum(
+            _pseudo_header(enclosing, IPProtocol.IPV6_ICMP, len(segment))
+            + segment
+        )
+    if isinstance(layer, TCP):
+        segment = _zeroed(bytes(layer), 16) + payload
+        return internet_checksum(
+            _pseudo_header(enclosing, IPProtocol.TCP, len(segment)) + segment
+        )
+    datagram = _zeroed(bytes(layer), 6) + payload
+    raw = internet_checksum(
+        _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
+    )
+    # UDP-only transmit rule: 0 means "no checksum", so a computed
+    # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
+    return raw or 0xFFFF
+
+
 def compute(
     layer: Protocol,
     *,
@@ -200,28 +226,8 @@ def compute(
         return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):
         return _sctp_checksum(layer, payload)
-    if isinstance(layer, ICMPv6):
-        enclosing = _require_ip(layer, ip)
-        segment = _zeroed(bytes(layer), 2) + payload
-        return internet_checksum(
-            _pseudo_header(enclosing, IPProtocol.IPV6_ICMP, len(segment))
-            + segment
-        )
-    if isinstance(layer, TCP):
-        enclosing = _require_ip(layer, ip)
-        segment = _zeroed(bytes(layer), 16) + payload
-        return internet_checksum(
-            _pseudo_header(enclosing, IPProtocol.TCP, len(segment)) + segment
-        )
-    if isinstance(layer, UDP):
-        enclosing = _require_ip(layer, ip)
-        datagram = _zeroed(bytes(layer), 6) + payload
-        raw = internet_checksum(
-            _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
-        )
-        # UDP-only transmit rule: 0 means "no checksum", so a computed
-        # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
-        return raw or 0xFFFF
+    if isinstance(layer, (ICMPv6, TCP, UDP)):
+        return _transport_checksum(layer, ip, payload)
     raise InvalidFieldError(
         f"{type(layer).__name__} has no checksum field to compute",
         protocol=type(layer),
