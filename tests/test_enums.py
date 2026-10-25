@@ -23,3 +23,7 @@ class TestEnumCompleteness:
 
     def test_routing_protocol_display_names(self):
         assert IPProtocol.OSPF.display_name == "OSPF"
+
+    def test_vrrp_display_name(self):
+        assert IPProtocol.VRRP == 112
+        assert IPProtocol.VRRP.display_name == "VRRP"

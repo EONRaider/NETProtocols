@@ -181,6 +181,7 @@ class Packet:
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
         from netprotocols.layer3.ip import IPv4, IPv6
         from netprotocols.layer3.ospf import OSPF
+        from netprotocols.layer3.vrrp import VRRP
         from netprotocols.layer4.sctp import SCTP
         from netprotocols.layer4.tcp import TCP
         from netprotocols.layer4.udp import UDP
@@ -189,7 +190,7 @@ class Packet:
         trailing = payload
         for index in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[index]
-            if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4)):
+            if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4, VRRP)):
                 enclosing = next(
                     (
                         candidate

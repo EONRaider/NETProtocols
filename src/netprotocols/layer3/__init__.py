@@ -19,6 +19,7 @@ from netprotocols.layer3.ospf import (
     OSPFLSAHeader,
     OSPFLSRequest,
 )
+from netprotocols.layer3.vrrp import VRRP, VRRPv6
 
 __all__ = [
     "AH",
@@ -27,6 +28,7 @@ __all__ = [
     "IGMP",
     "OSPF",
     "OSPFLSA",
+    "VRRP",
     "AHv6",
     "ICMPv4",
     "ICMPv6",
@@ -44,4 +46,5 @@ __all__ = [
     "OSPFHello",
     "OSPFLSAHeader",
     "OSPFLSRequest",
+    "VRRPv6",
 ]

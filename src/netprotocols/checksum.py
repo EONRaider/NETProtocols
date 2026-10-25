@@ -21,6 +21,22 @@ of the LSA but its LS Age (RFC 2328 §12.1.7, RFC 905 Annex B). An LSA
 is not a layer, so that one has functions of its own:
 :func:`lsa_checksum` and :func:`verify_lsa`.
 
+VRRP's internet checksum depends on its version: VRRPv2's covers the
+message alone (RFC 3768 §5.3.8), VRRPv3's adds an IP pseudo-header.
+Over IPv6 that is RFC 5798 §5.2.8's rule. Over IPv4 it is a reading,
+not the text: §5.2.8 cites only the pseudo-header of RFC 2460 §8.1,
+which is IPv6's, and RFC 9568 §5.2.8, which obsoletes RFC 5798 without
+otherwise changing the wire format, has the IPv4 sum cover the message
+alone (its §1.1 calls that a clarification). :func:`compute` adds the
+IPv4 pseudo-header too, as keepalived does by default: keepalived
+2.2.8 sends it, multicast and unicast alike
+(``tests/fixtures/vrrp.pcap``). keepalived 2.2.8's keepalived.conf(5)
+says some manufacturers (e.g. Cisco) read §5.2.8 as IPv6-only, and
+its ``v3_checksum_as_v2`` option leaves the IPv4 pseudo-header out;
+keepalived 2.3.0's adds Juniper, and says most open-source
+implementations, tcpdump and Wireshark among them, include it.
+:func:`verify` returns ``False`` for an advert checksummed without it.
+
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
 and nothing checks ``IPv4.total_length`` against the payload you pass.
@@ -43,6 +59,7 @@ from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer3.ospf import OSPF, OSPFLSA
+from netprotocols.layer3.vrrp import VRRP
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
@@ -280,6 +297,39 @@ def _ospf_checksum(layer: OSPF) -> int:
     )
 
 
+def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
+    """UDP header plus payload behind the pseudo-header, whose length is
+    ``layer.length`` (RFC 768)."""
+    enclosing = _require_ip(layer, ip)
+    datagram = _zeroed(bytes(layer), 6) + payload
+    raw = internet_checksum(
+        _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
+    )
+    # UDP-only transmit rule: 0 means "no checksum", so a computed
+    # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
+    return raw or 0xFFFF
+
+
+def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
+    """Return VRRP's checksum, over the message with bytes 6-7 zeroed.
+
+    VRRPv2 sums the message alone (RFC 3768 §5.3.8). VRRPv3 puts the
+    pseudo-header of ``ip``, with protocol 112 and the message's
+    length, in front of it, over IPv4 as over IPv6: RFC 5798 §5.2.8
+    gives the IPv6 one, the IPv4 one is keepalived's default, and RFC
+    9568 §5.2.8 leaves it out (see the module docstring). The message
+    is ``bytes(layer)``, never what follows it, so Ethernet padding
+    cannot reach the sum.
+    """
+    message = _zeroed(bytes(layer), 6)
+    if layer.version == 2:
+        return internet_checksum(message)
+    enclosing = _require_ip(layer, ip)
+    return internet_checksum(
+        _pseudo_header(enclosing, IPProtocol.VRRP, len(message)) + message
+    )
+
+
 def _pseudo_header_checksum(
     layer: Protocol, ip: IPv4 | IPv6 | None, payload: bytes
 ) -> int | None:
@@ -302,14 +352,7 @@ def _pseudo_header_checksum(
             _pseudo_header(enclosing, IPProtocol.TCP, len(segment)) + segment
         )
     if isinstance(layer, UDP):
-        enclosing = _require_ip(layer, ip)
-        datagram = _zeroed(bytes(layer), 6) + payload
-        raw = internet_checksum(
-            _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
-        )
-        # UDP-only transmit rule: 0 means "no checksum", so a computed
-        # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
-        return raw or 0xFFFF
+        return _udp_checksum(layer, ip, payload)
     return None
 
 
@@ -330,17 +373,23 @@ def compute(
         built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
         its chunks included, with no pseudo-header (``ip`` ignored),
         returned as the field's big-endian reading of the CRC's
-        little-endian wire bytes (RFC 9260 Appendix A); ``OSPF`` covers
-        its own Packet Length bytes but the Authentication field, with
-        no pseudo-header (``ip`` and ``payload`` ignored, so an LLS
-        block after the packet never enters it), and raises under
+        little-endian wire bytes (RFC 9260 Appendix A); ``VRRP`` covers
+        the message alone in VRRPv2 and prepends the pseudo-header in
+        VRRPv3, over IPv4 too as keepalived does by default, though RFC
+        9568 §5.2.8 leaves it out there (see the module docstring),
+        with ``payload`` ignored either way; ``OSPF`` covers its own
+        Packet Length bytes but the Authentication field, with no
+        pseudo-header (``ip`` and ``payload`` ignored, so an LLS block
+        after the packet never enters it), and raises under
         cryptographic authentication, which computes none.
-    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
+    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6 and
+        VRRPv3.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
         packet, already carries its whole body in ``bytes(layer)``, so
         pass a ``payload`` only for bytes the layer object does not
-        itself hold.
+        itself hold. ``IGMP`` and ``VRRP`` ignore it: nothing after
+        either message is part of it.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -358,6 +407,8 @@ def compute(
         return _sctp_checksum(layer, payload)
     if isinstance(layer, OSPF):
         return _ospf_checksum(layer)
+    if isinstance(layer, VRRP):
+        return _vrrp_checksum(layer, ip)
     transport = _pseudo_header_checksum(layer, ip, payload)
     if transport is not None:
         return transport

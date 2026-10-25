@@ -271,6 +271,47 @@ def _check_sctp(upper: bytes, stats: Counter) -> list[str]:
     return []
 
 
+#: VRRP's IP protocol number (RFC 3768 §5.2.4, RFC 5798 §5.1.1.4).
+_VRRP = 112
+
+
+def _check_vrrp(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter, *, ipv6: bool
+) -> list[str] | None:
+    """Validate a VRRP advertisement, the whole IP payload ``upper``.
+
+    Returns ``None`` when it is too short for the 8-byte fixed header.
+
+    The checksum covers the VRRP message, checksum field (bytes 6-7)
+    zeroed: alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
+    pseudo-header with protocol 112 in VRRPv3, over IPv4 as over IPv6.
+    RFC 5798 §5.2.8 cites only RFC 2460's pseudo-header, IPv6's; the
+    IPv4 one is keepalived's default. RFC 9568 §5.2.8's IPv4 form,
+    without the pseudo-header, is not accepted: the corpus's VRRPv3
+    adverts are all keepalived's default form. The message's length
+    follows from its version and address count (RFC 3768 §5.1: 8
+    bytes, the addresses, and 8 bytes of authentication data; RFC 5798
+    §5.1: no authentication data), and must be the IP payload's
+    exactly. VRRPv2 is defined for IPv4 alone.
+    """
+    if len(upper) < 8:
+        return None
+    version, count = upper[0] >> 4, upper[3]
+    if version not in ((3,) if ipv6 else (2, 3)):
+        return ["vrrp-version"]
+    stats[f"vrrpv{version}"] += 1
+    width = 16 if ipv6 else 4
+    if len(upper) != 8 + count * width + (8 if version == 2 else 0):
+        return ["vrrp-length"]
+    covered = upper[:6] + b"\x00\x00" + upper[8:]
+    if version == 3:
+        pseudo = pseudo_v6 if ipv6 else pseudo_v4
+        covered = pseudo(src, dst, _VRRP, len(upper)) + covered
+    if internet_checksum(covered) != struct.unpack_from("!H", upper, 6)[0]:
+        return ["vrrp-checksum"]
+    return []
+
+
 def _check_gre(
     src: bytes,
     dst: bytes,
@@ -340,9 +381,9 @@ def _check_transport_v4(
     strict: bool,
 ) -> list[str] | None:
     """Validate a transport carried directly over IPv4 (ICMP, IGMP,
-    TCP, UDP, SCTP), or return ``None`` when ``proto`` is none of them
-    or ``upper`` is too short for its header, leaving the tunnels and
-    the strict fallback to :func:`_check_upper_v4`."""
+    TCP, UDP, SCTP) or VRRP, or return ``None`` when ``proto`` is none
+    of them or ``upper`` is too short for its header, leaving the
+    tunnels and the strict fallback to :func:`_check_upper_v4`."""
     upper_len = len(upper)
     if proto == 1 and upper_len >= 8:
         return _check_icmpv4(upper, stats)
@@ -354,6 +395,8 @@ def _check_transport_v4(
         return _check_udp(src, dst, upper, stats, depth, strict=strict)
     if proto == 132 and upper_len >= 12:
         return _check_sctp(upper, stats)
+    if proto == _VRRP:
+        return _check_vrrp(src, dst, upper, stats, ipv6=False)
     return None
 
 
@@ -454,13 +497,31 @@ def _check_udp6(
 #: The IANA-assigned VXLAN destination port (RFC 7348 §5).
 _VXLAN_PORT = 4789
 
+#: RIP's port (RFC 2453 §3.9.1 for RIPv2, RFC 1058 §3.1 for RIPv1).
+_RIP_PORT = 520
+
 
 def _check_udp_payload(
     datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
-    """Validate what a UDP datagram tunnels, if anything: a VXLAN
-    payload (destination port 4789, RFC 7348 §5) is an 8-byte header
-    and then a whole Ethernet frame, validated in turn.
+    """Validate what a UDP datagram carries, where it is something this
+    checker can verify past the UDP checksum: a VXLAN tunnel (see
+    :func:`_check_vxlan`) or a RIPv2 message's keyed digest (see
+    :func:`_check_rip`)."""
+    src_port, dst_port = struct.unpack_from("!HH", datagram)
+    if dst_port == _VXLAN_PORT:
+        return _check_vxlan(datagram, stats, depth, strict=strict)
+    if _RIP_PORT in (src_port, dst_port):
+        return _check_rip(datagram, stats)
+    return []
+
+
+def _check_vxlan(
+    datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate a VXLAN payload (destination port 4789, RFC 7348 §5):
+    an 8-byte header and then a whole Ethernet frame, validated in
+    turn.
 
     The destination port alone decides which datagrams are peeled,
     which is deliberately stricter than the library's port selection
@@ -474,13 +535,70 @@ def _check_udp_payload(
     into a checker that must stay independent of it, and peeling a
     datagram that is not VXLAN would report its bytes as checksum
     failures; skipping one costs only the inner check."""
-    if struct.unpack_from("!H", datagram, 2)[0] != _VXLAN_PORT:
-        return []
     if len(datagram) < 8 + 8:
         stats["vxlan-truncated"] += 1
         return ["vxlan-truncated"] if strict else []
     stats["vxlan"] += 1
     return _check_ethernet(datagram[16:], stats, depth + 1, strict=strict)
+
+
+#: The keys of the corpus's RIPv2 cryptographic authentication (RFC
+#: 4822), by Key ID: the test passwords published in
+#: tests/fixtures/MANIFEST.md, as BIRD was configured with them.
+_RIP_SAS = {
+    1: ("keyed-md5", b"nprip-md5-key"),
+    2: ("hmac-sha256", b"nprip-sha256-key"),
+}
+
+#: RFC 4822 §2.5's Apad, the fill the Authentication Data holds while
+#: an HMAC-SHA digest is computed.
+_RIP_APAD = bytes.fromhex("878fe1f3")
+
+
+def _rip_digest(algorithm: str, key: bytes, covered: bytes) -> bytes:
+    """The Authentication Data of a RIPv2 message whose bytes up to and
+    including the trailer's 4-byte header are ``covered``: keyed MD5
+    over them and the key zero-padded to 16 bytes (RFC 4822 §2.4), or
+    HMAC-SHA-256 over them and Apad (§2.5). The published key is shorter
+    than L (32 bytes), so §2.5's Ko, the key zero-padded to L, gives the
+    same pads as standard HMAC's padding to B; they differ only for a
+    key longer than L and no longer than B, which §2.5 hashes."""
+    if algorithm == "keyed-md5":
+        # MD5 is the algorithm RFC 4822 §2.4 mandates; this only checks
+        # the digest the router sent, so it is not a security use.
+        return hashlib.md5(
+            covered + key.ljust(16, b"\x00"), usedforsecurity=False
+        ).digest()
+    return hmac.new(key, covered + _RIP_APAD * 8, hashlib.sha256).digest()
+
+
+def _check_rip(datagram: bytes, stats: Counter) -> list[str]:
+    """Verify a RIPv2 message's RFC 4822 digest, if it carries one.
+
+    The UDP checksum already covers every RIP byte; this checks the
+    digest on top of it. A message is cryptographically authenticated
+    when its first entry has AFI 0xFFFF and Authentication Type 3; its
+    RIPv2 Packet Length field is then the offset of the trailer, which
+    is the 4 bytes 0xFFFF 0x0001 and the digest, to the datagram's end.
+    Any other message (RIPv1, no authentication, a plain-text password)
+    has nothing to verify. A Key ID with no published key is a failure,
+    as an unknown IPsec SPI is (see :func:`_verify_icv`)."""
+    rip = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["rip"] += 1
+    if len(rip) < 24 or rip[4:8] != b"\xff\xff\x00\x03":
+        return []
+    sa = _RIP_SAS.get(rip[10])
+    if sa is None:
+        return ["rip-unknown-sa"]
+    trailer = struct.unpack_from("!H", rip, 8)[0]
+    if rip[trailer : trailer + 4] != b"\xff\xff\x00\x01":
+        return ["rip-trailer"]
+    algorithm, key = sa
+    stats[f"rip-{algorithm}"] += 1
+    digest = _rip_digest(algorithm, key, rip[: trailer + 4])
+    if not hmac.compare_digest(digest, rip[trailer + 4 :]):
+        return [f"rip-{algorithm}"]
+    return []
 
 
 #: IP protocol numbers whose payload is a whole IP packet: 4 carries
@@ -703,7 +821,7 @@ def _check_transport_v6(
     strict: bool,
 ) -> list[str] | None:
     """The IPv6 counterpart of :func:`_check_transport_v4` (ICMPv6,
-    TCP, UDP, SCTP)."""
+    TCP, UDP, SCTP, VRRP)."""
     upper_len = len(upper)
     if next_header == 58 and upper_len >= 4:
         return _check_icmpv6(src, dst, upper, stats)
@@ -713,6 +831,8 @@ def _check_transport_v6(
         return _check_udp6(src, dst, upper, stats, depth, strict=strict)
     if next_header == 132 and upper_len >= 12:
         return _check_sctp(upper, stats)
+    if next_header == _VRRP:
+        return _check_vrrp(src, dst, upper, stats, ipv6=True)
     return None
 
 
@@ -761,9 +881,11 @@ def _check_l3(
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
     is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
     through VXLAN, whose payload is a whole Ethernet frame, and through
-    NULL-encrypted ESP and IPv4 AH after verifying the ICV; IPsec on an
-    SA whose key is not published fails, as does IPv6 AH or IPv4 AH
-    behind header options, whose ICV this cannot compute. Nesting
+    NULL-encrypted ESP and IPv4 AH after verifying the ICV, and checks a
+    RIPv2 message's RFC 4822 digest with its published key. IPsec on an
+    SA whose key is not published fails, as does RIP on a Key ID whose
+    key is not, and so do IPv6 AH and IPv4 AH behind header options,
+    whose ICV this cannot compute. Nesting
     deeper than ``_MAX_DEPTH`` fails. Under ``strict`` (anything an ESP
     or AH ICV vouched for, at any depth below it) a payload the checker
     cannot read fails too: an unknown protocol or EtherType, a header
