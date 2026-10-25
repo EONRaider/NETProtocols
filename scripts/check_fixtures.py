@@ -401,14 +401,16 @@ def _check_pim_register(
 def _check_null_register(
     inner: bytes, stats: Counter, *, strict: bool
 ) -> list[str] | None:
-    """Validate a Null-Register's dummy header where it is not an IP
-    packet to check like any other, else return ``None``. A dummy IPv4
-    header may carry a zero header checksum, which RFC 7761 §4.9.3 says
-    a receiver must not check; one that carries a checksum is checked
-    like any packet. A dummy IPv6 header is followed by a dummy PIM
-    header of version 0, not a PIM message, so it is checked by
+    """Validate a Null-Register's dummy header, or return ``None``.
+
+    ``None`` means it is an IP packet to check like any other. A dummy
+    IPv4 header may carry a zero header checksum, which RFC 7761 §4.9.3
+    says a receiver must not check; one that carries a checksum is
+    checked like any packet. A dummy IPv6 header is followed by a dummy
+    PIM header of version 0, not a PIM message, so it is checked by
     :func:`_check_null_register_v6` instead. The version nibble decides
-    which: bytes 10-11 are an IPv6 header's source address."""
+    which: bytes 10-11 are an IPv6 header's source address.
+    """
     version = inner[0] >> 4 if inner else None
     if version == 4 and len(inner) >= 20 and inner[10:12] == b"\x00\x00":
         stats["pim-null-register-unchecked"] += 1
@@ -421,14 +423,16 @@ def _check_null_register(
 def _check_null_register_v6(
     inner: bytes, stats: Counter, *, strict: bool
 ) -> list[str]:
-    """Validate an IPv6 Null-Register's dummy PIM header (RFC 7761
-    §4.9.3): the 4 bytes after the dummy IPv6 header, version, type and
+    """Validate an IPv6 Null-Register's dummy PIM header (RFC 7761 §4.9.3).
+
+    It is the 4 bytes after the dummy IPv6 header, version, type and
     reserved all zero, whose checksum covers them under the IPv6
     pseudo-header of the dummy header's source and group, upper-layer
     length 4 and next header 103. The RFC asks a receiver to check that
     checksum "if the dummy PIM header is present", and names nothing
     else to check. One that is absent has no checksum to check, like a
-    dummy IPv4 header's zero one; one cut short cannot be checked."""
+    dummy IPv4 header's zero one; one cut short cannot be checked.
+    """
     stats["pim-null-register-v6"] += 1
     dummy = inner[40:44]
     if not dummy:
