@@ -149,6 +149,46 @@ def _check_sctp(upper: bytes, stats: Counter) -> list[str]:
     return []
 
 
+#: VRRP's IP protocol number (RFC 3768 §5.2.4, RFC 5798 §5.1.1.4).
+_VRRP = 112
+
+
+def _check_vrrp(
+    src: bytes, dst: bytes, upper: bytes, stats: Counter, *, ipv6: bool
+) -> list[str] | None:
+    """Validate a VRRP advertisement, the whole IP payload ``upper``.
+
+    Returns ``None`` when it is too short for the 8-byte fixed header.
+
+    The checksum covers the VRRP message, checksum field (bytes 6-7)
+    zeroed: alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
+    pseudo-header with protocol 112 in VRRPv3, over IPv4 as over IPv6
+    (RFC 5798 §5.2.8). RFC 9568 §5.2.8's IPv4 form, without the
+    pseudo-header, is not accepted: the corpus's VRRPv3 adverts are
+    all RFC 5798's. The message's length follows from its version and
+    address count (RFC 3768 §5.1: 8 bytes, the addresses, and 8 bytes
+    of authentication data; RFC 5798 §5.1: no authentication data),
+    and must be the IP payload's exactly. VRRPv2 is defined for IPv4
+    alone.
+    """
+    if len(upper) < 8:
+        return None
+    version, count = upper[0] >> 4, upper[3]
+    if version not in ((3,) if ipv6 else (2, 3)):
+        return ["vrrp-version"]
+    stats[f"vrrpv{version}"] += 1
+    width = 16 if ipv6 else 4
+    if len(upper) != 8 + count * width + (8 if version == 2 else 0):
+        return ["vrrp-length"]
+    covered = upper[:6] + b"\x00\x00" + upper[8:]
+    if version == 3:
+        pseudo = pseudo_v6 if ipv6 else pseudo_v4
+        covered = pseudo(src, dst, _VRRP, len(upper)) + covered
+    if internet_checksum(covered) != struct.unpack_from("!H", upper, 6)[0]:
+        return ["vrrp-checksum"]
+    return []
+
+
 def _check_gre(
     src: bytes,
     dst: bytes,
@@ -218,9 +258,9 @@ def _check_transport_v4(
     strict: bool,
 ) -> list[str] | None:
     """Validate a transport carried directly over IPv4 (ICMP, IGMP,
-    TCP, UDP, SCTP), or return ``None`` when ``proto`` is none of them
-    or ``upper`` is too short for its header, leaving the tunnels and
-    the strict fallback to :func:`_check_upper_v4`."""
+    TCP, UDP, SCTP) or VRRP, or return ``None`` when ``proto`` is none
+    of them or ``upper`` is too short for its header, leaving the
+    tunnels and the strict fallback to :func:`_check_upper_v4`."""
     upper_len = len(upper)
     if proto == 1 and upper_len >= 8:
         return _check_icmpv4(upper, stats)
@@ -232,6 +272,8 @@ def _check_transport_v4(
         return _check_udp(src, dst, upper, stats, depth, strict=strict)
     if proto == 132 and upper_len >= 12:
         return _check_sctp(upper, stats)
+    if proto == _VRRP:
+        return _check_vrrp(src, dst, upper, stats, ipv6=False)
     return None
 
 
@@ -579,7 +621,7 @@ def _check_transport_v6(
     strict: bool,
 ) -> list[str] | None:
     """The IPv6 counterpart of :func:`_check_transport_v4` (ICMPv6,
-    TCP, UDP, SCTP)."""
+    TCP, UDP, SCTP, VRRP)."""
     upper_len = len(upper)
     if next_header == 58 and upper_len >= 4:
         return _check_icmpv6(src, dst, upper, stats)
@@ -589,6 +631,8 @@ def _check_transport_v6(
         return _check_udp6(src, dst, upper, stats, depth, strict=strict)
     if next_header == 132 and upper_len >= 12:
         return _check_sctp(upper, stats)
+    if next_header == _VRRP:
+        return _check_vrrp(src, dst, upper, stats, ipv6=True)
     return None
 
 

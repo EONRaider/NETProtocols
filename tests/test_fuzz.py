@@ -46,6 +46,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    VRRP,
     VXLAN,
     AHv6,
     DNSOverTCP,
@@ -64,6 +65,7 @@ from netprotocols import (
     ProtocolError,
     SCTPChunk,
     TCPOption,
+    VRRPv6,
 )
 from strategies import (
     ROUND_TRIP_STRATEGIES,
@@ -72,6 +74,7 @@ from strategies import (
     http_wire,
     sctp_chunks,
     sctp_headers,
+    vrrp_headers,
 )
 from test_corpus import walk
 
@@ -100,6 +103,8 @@ ALL_PROTOCOLS = (
     AHv6,
     HTTP,
     VXLAN,
+    VRRP,
+    VRRPv6,
 )
 
 
@@ -549,6 +554,52 @@ class TestSCTPChunkAccessorSafety:
         sctp = SCTP.decode(bytes(12) + raw)
         assert sctp.chunks == raw
         assert list(sctp.parsed_chunks) == chunks
+
+
+#: VRRP's display and per-version accessors, every one of which must
+#: answer on any decoded or constructed instance.
+_VRRP_ACCESSORS = (
+    "type_name",
+    "auth_type",
+    "auth_type_name",
+    "adver_int",
+    "reserved",
+    "max_adver_int",
+    "advertisement_interval",
+    "checksum_hex_str",
+    "header_len",
+)
+
+
+class TestVRRPAccessorSafety:
+    @given(data=fuzz_input)
+    def test_decoded_adverts_answer_every_accessor(self, data: bytes) -> None:
+        """Whatever decodes, every accessor answers without raising, and
+        exactly one of the two versions' interval fields is set."""
+        for cls in (VRRP, VRRPv6):
+            try:
+                vrrp = cls.decode(data)
+            except ProtocolError:
+                continue
+            for name in _VRRP_ACCESSORS:
+                getattr(vrrp, name)
+            assert (vrrp.adver_int is None) != (vrrp.max_adver_int is None)
+            assert bytes(vrrp) == data[: vrrp.header_len]
+
+    @pytest.mark.parametrize("cls", [VRRP, VRRPv6])
+    @given(data=st.data())
+    def test_trailing_bytes_stay_out_of_the_message(
+        self, cls: type[VRRP], data: st.DataObject
+    ) -> None:
+        """The version and count bound the message, so Ethernet's zero
+        padding (every length up to its 46-byte maximum) and a nonzero
+        trailer such as a 4-byte FCS are left undecoded."""
+        header = data.draw(vrrp_headers(cls))
+        wire = bytes(header)
+        for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
+            decoded = cls.decode(wire + trailer)
+            assert decoded == header, trailer
+            assert decoded.header_len == len(wire), trailer
 
 
 def _read_every_accessor(msg: HTTP) -> None:

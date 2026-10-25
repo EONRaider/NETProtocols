@@ -12,6 +12,17 @@ SCTP alone does not use the internet checksum: its packets carry a
 CRC32c (the Castagnoli CRC, also iSCSI's), computed by :func:`crc32c`
 over the whole packet with no pseudo-header.
 
+VRRP's internet checksum depends on its version: VRRPv2's covers the
+message alone (RFC 3768 §5.3.8), VRRPv3's adds the IP pseudo-header
+for both families (RFC 5798 §5.2.8). That is what :func:`compute`
+does, and what keepalived 2.2.8 sends by default, multicast and
+unicast alike (``tests/fixtures/vrrp.pcap``). Over IPv4 it is not the
+only practice: RFC 9568 §5.2.8, which obsoletes RFC 5798 without
+otherwise changing the wire format, leaves the pseudo-header out for
+IPv4, keepalived's manual says Cisco and Juniper do the same, and its
+``v3_checksum_as_v2`` option makes keepalived do so too. :func:`verify`
+returns ``False`` for an advert checksummed that way.
+
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
 and nothing checks ``IPv4.total_length`` against the payload you pass.
@@ -33,6 +44,7 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.vrrp import VRRP
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
@@ -161,6 +173,34 @@ def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     return field
 
 
+def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
+    """UDP header plus payload behind the pseudo-header, whose length is
+    ``layer.length`` (RFC 768)."""
+    enclosing = _require_ip(layer, ip)
+    datagram = _zeroed(bytes(layer), 6) + payload
+    raw = internet_checksum(
+        _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
+    )
+    # UDP-only transmit rule: 0 means "no checksum", so a computed
+    # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
+    return raw or 0xFFFF
+
+
+def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
+    """The whole VRRP message, checksum field (bytes 6-7) zeroed: alone
+    in VRRPv2 (RFC 3768 §5.3.8), behind the pseudo-header of ``ip``
+    with protocol 112 and the message's length in VRRPv3, over IPv4 as
+    over IPv6 (RFC 5798 §5.2.8). The message is ``bytes(layer)``, never
+    what follows it, so Ethernet padding cannot reach the sum."""
+    message = _zeroed(bytes(layer), 6)
+    if layer.version == 2:
+        return internet_checksum(message)
+    enclosing = _require_ip(layer, ip)
+    return internet_checksum(
+        _pseudo_header(enclosing, IPProtocol.VRRP, len(message)) + message
+    )
+
+
 def compute(
     layer: Protocol,
     *,
@@ -178,13 +218,17 @@ def compute(
         built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
         its chunks included, with no pseudo-header (``ip`` ignored),
         returned as the field's big-endian reading of the CRC's
-        little-endian wire bytes (RFC 9260 Appendix A).
-    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
+        little-endian wire bytes (RFC 9260 Appendix A); ``VRRP`` covers
+        the message alone in VRRPv2 and prepends the pseudo-header in
+        VRRPv3 (RFC 5798 §5.2.8), with ``payload`` ignored either way.
+    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6 and
+        VRRPv3.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
         packet, already carries its whole body in ``bytes(layer)``, so
         pass a ``payload`` only for bytes the layer object does not
-        itself hold.
+        itself hold. ``IGMP`` and ``VRRP`` ignore it: nothing after
+        either message is part of it.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -214,14 +258,9 @@ def compute(
             _pseudo_header(enclosing, IPProtocol.TCP, len(segment)) + segment
         )
     if isinstance(layer, UDP):
-        enclosing = _require_ip(layer, ip)
-        datagram = _zeroed(bytes(layer), 6) + payload
-        raw = internet_checksum(
-            _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
-        )
-        # UDP-only transmit rule: 0 means "no checksum", so a computed
-        # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
-        return raw or 0xFFFF
+        return _udp_checksum(layer, ip, payload)
+    if isinstance(layer, VRRP):
+        return _vrrp_checksum(layer, ip)
     raise InvalidFieldError(
         f"{type(layer).__name__} has no checksum field to compute",
         protocol=type(layer),
