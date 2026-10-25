@@ -232,6 +232,14 @@ def raw_vxlan_header() -> bytes:
 
 
 @pytest.fixture
+def raw_mpls_stack() -> bytes:
+    """A two-entry MPLS label stack in the shape of
+    tests/fixtures/mpls.pcap's: label 16001, then label 16002 with the
+    bottom of stack bit set, TTL 64 each."""
+    return bytes.fromhex("03e8104003e82140")
+
+
+@pytest.fixture
 def raw_rip_message() -> bytes:
     """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
     route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and

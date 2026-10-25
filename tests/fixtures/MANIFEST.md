@@ -10,21 +10,22 @@ verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
 digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 271 frames across 28
+frames routinely leave checksums to NIC offload. 279 frames across 29
 scenarios. Addresses are as-captured from the capture host's network.
 
-Fifteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Sixteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`, `lldp.pcap`) are captured separately by their own
-`scripts/capture_fixtures_*.sh` over purpose-built topologies — real kernel vlan devices, a DHCP
-server/client, a GRE tunnel, a DNS server queried over TCP, kernel
+`bgp.pcap`, `mpls.pcap`, `lldp.pcap`) are captured separately by their
+own `scripts/capture_fixtures_*.sh` over purpose-built topologies —
+real kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
 two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
-three BIRD speakers, and two lldpd LLDP agents — see their rows and
-the notes below.
+three BIRD speakers, MPLS label stacks built by a script around
+kernel-built IPv4 datagrams and sent through a raw socket, and two
+lldpd LLDP agents — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -52,6 +53,7 @@ the notes below.
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
+| `mpls.pcap` | 8 | MPLS label stacks (RFC 3032) over Ethernet: one label (`0x12345`) carrying an ICMPv4 echo; two labels (16001, 16002) carrying UDP; three labels (16001-16003, traffic classes 5/3/0) carrying an echo; an Entropy Label Indicator (7) and an entropy label (RFC 6790) carrying an echo; an IPv4 Explicit NULL bottom label (0) carrying a UDP datagram of 2 bytes of payload, zero padded to 60 bytes; an IPv6 Explicit NULL bottom label (2) carrying an IPv6 UDP datagram; EtherType `0x8848` to a multicast MAC carrying an echo; and an Ethernet pseudowire, a control word (RFC 4448 §4.6) and a whole Ethernet frame — `Ethernet→MPLS→IPv4→ICMPv4` / `→IPv4→UDP` / `→IPv6→UDP`, and `Ethernet→MPLS`, where the walk stops at the control word; **script-built label stacks around kernel-built IPv4 datagrams**, the IPv6 datagram script-built (see MPLS note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
@@ -185,6 +187,45 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   inner frame's checksums too. The outer source ports are the kernel's
   hash of each inner flow; none is a registered port. This file's echo
   and UDP frames are the deepest chains outside `bgp.pcap`, at 7 layers.
+
+- `mpls.pcap` was produced by `scripts/capture_fixtures_mpls.sh`. The
+  capture host's kernel has `CONFIG_MPLS_ROUTING` off (no
+  `/proc/sys/net/mpls`), so it can neither push nor forward a label,
+  and no daemon here sends MPLS; the frames are built by
+  `scripts/mpls_fixture_packets.py` and sent through an `AF_PACKET`
+  socket over a veth pair between two netns, offload disabled, then
+  captured on the far end. The capture is in two steps. First the
+  kernel sends two ICMP echo requests (`ping`) and two UDP datagrams
+  (40000 → 9999, to a listener) from A to B, captured inbound on B and
+  kept out of the corpus. Then the script wraps those datagrams and
+  sends the eight frames, and reads the capture back to confirm every
+  byte arrived as built. **What the script built: every outer
+  Ethernet header, every label stack entry, the 8 zero bytes padding
+  the Explicit NULL frame to 60 bytes, the pseudowire control word
+  (`00 00 00 01`: first nibble 0, sequence number 1), and the whole
+  IPv6 datagram under IPv6 Explicit NULL** (header, UDP header,
+  payload and UDP checksum: the host runs with IPv6 disabled). **What
+  the kernel built: every IPv4 datagram, its header and ICMP or UDP
+  checksum included, and, in the pseudowire frame, the whole Ethernet
+  frame after the control word**, which is the kernel's first captured
+  frame verbatim. The entropy label carries TTL 0, as RFC 6790 §4.2
+  requires; the multicast frame goes to `01:00:5e:00:00:01` under
+  EtherType `0x8848`, the case RFC 5332 §4 keeps it for. MPLS carries
+  no checksum. `check_fixtures` walks each stack to its bottom entry
+  and verifies the labelled packet's checksums, IPv4 and IPv6 alike,
+  choosing the family by the Explicit NULL label or the first nibble,
+  as the library does but in its own code, and reads the pseudowire's
+  payload as the Ethernet frame it is (an RFC 4448 pseudowire's payload
+  type is signalled, not encoded, and this one is Ethernet). A second
+  tcpdump captured the same eight frames with a 20-byte snap length as
+  `mpls/mpls_snaplen.pcap`, outside the corpus globs and the counts
+  above, as `bgp/bgp_session.pcap` is: its records are real truncation,
+  cut at byte 20, 2 bytes past each stack's first entry, so the six
+  stacks of two or three entries end after their first
+  (`TruncatedHeaderError` from `MPLS` at frame offset 18) and the two
+  one-entry stacks hand a 2-byte IPv4 header to `IPv4`. The capture
+  script checks that each record is the first 20 bytes of the
+  matching corpus frame; `tests/test_mpls.py` walks them.
 
 - `bgp.pcap` was produced by `scripts/capture_fixtures_bgp.sh`: three
   BIRD 2.14 instances in their own netns on one Linux bridge — A (AS

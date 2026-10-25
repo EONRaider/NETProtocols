@@ -19,6 +19,8 @@ class EtherType(IntEnum):
     VLAN_TAG_QINQ = 0x88A8
     VLAN_TAG_9100 = 0x9100
     IPV6 = 0x86DD
+    MPLS = 0x8847
+    MPLS_UPSTREAM_ASSIGNED = 0x8848
     LLDP = 0x88CC
 
     @property
@@ -33,6 +35,10 @@ _ETHERTYPE_NAMES = {
     EtherType.VLAN_TAG_QINQ: "802.1ad S-TAG (QinQ)",
     EtherType.VLAN_TAG_9100: "VLAN double tag (legacy)",
     EtherType.IPV6: "IPv6",
+    # IANA's names (ieee-802-numbers, fetched 2026-10-25): RFC 5332 §4
+    # retired 0x8848's original "MPLS multicast" meaning.
+    EtherType.MPLS: "MPLS",
+    EtherType.MPLS_UPSTREAM_ASSIGNED: "MPLS with upstream-assigned label",
     EtherType.LLDP: "LLDP",
 }
 

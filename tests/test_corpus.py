@@ -18,6 +18,7 @@ from netprotocols import (
     DNS,
     ESP,
     LLDP,
+    MPLS,
     OSPF,
     PIM,
     RIP,
@@ -117,6 +118,7 @@ class TestCorpusCoverage:
             VRRP,
             BGP,
             LLDP,
+            MPLS,
         } <= seen
 
     def test_arp_covers_both_operations(self):
