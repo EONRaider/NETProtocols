@@ -141,7 +141,7 @@ ip.proto                  → error: "IPv4" has no attribute
 |---|---|---|---|
 | 2 | Ethernet II / IEEE 802.3 | `Ethernet` | IEEE 802.3; the type/length field dispatches as an EtherType from 0x0600 and as an 802.3 Length (then LLC) up to 1500, which also bounds the walk's later layers |
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking; the inner type/length field reads as Ethernet's does |
-| 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized, never dispatched |
+| 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized (`is_raw_ipx`; the other fields are then IPX bytes), never dispatched |
 | 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |

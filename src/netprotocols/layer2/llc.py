@@ -37,14 +37,21 @@ XID and TEST) end the walk at the LLC layer.
 
 SNAP
 ----
-DSAP and SSAP 0xAA with a UI Control is the Subnetwork Access Protocol
-(IEEE Std 802, which the IEEE's LSAP listing cites for 0xAA, and RFC
-1042): a 5-byte :class:`SNAP` header, a 3-byte
-OUI and a 2-byte protocol identifier (PID), follows the LLC header. The
-default registry puts :class:`SNAP` at DSAP 0xAA in ``llc.dsap``, and
+DSAP and SSAP 0xAA are the Subnetwork Access Protocol's SAP (IEEE Std
+802, which the IEEE's LSAP listing cites for 0xAA, and RFC 1042): a
+5-byte :class:`SNAP` header, a 3-byte OUI and a 2-byte protocol
+identifier (PID), follows the LLC header. The default registry puts
+:class:`SNAP` at DSAP 0xAA in ``llc.dsap``, and
 :meth:`LLC.next_protocol` reaches that entry only for a frame whose
-SSAP is 0xAA too and whose Control is UI; XID or TEST on the SNAP SAP
-carries no SNAP header.
+SSAP is 0xAA too and whose Control is UI. That is this library's
+choice, not a rule that other Controls carry no SNAP header: it decodes
+a SNAP header only after a UI PDU, the format RFC 1042 sends IP and
+ARP in ("standard 802.2 LLC Type 1 Unnumbered Information format,
+control code 3"). Wireshark's ``packet-llc.c`` (master, read
+2026-10-25) reads a SNAP header after any AA/AA PDU whatever its
+Control, and HP's NIC-teaming heartbeats, its comments say, are SNAP
+in TEST frames; here such a frame ends the walk at the LLC layer, its
+SNAP header undecoded.
 
 The PID means what the OUI's owner assigns it to (RFC 9542 §3: "zz-zz
 is a protocol number, under that OUI, assigned by the OUI owner"), so
@@ -76,7 +83,13 @@ checksum that is always 0xFFFF, so its first two bytes read as DSAP
 0xFF (the global DSAP) and SSAP 0xFF. Such a frame decodes as an
 :class:`LLC` layer of 3 or 4 bytes that round-trips exactly,
 :attr:`LLC.is_raw_ipx` is ``True``, and :meth:`LLC.next_protocol`
-answers ``None``, whatever ``llc.dsap`` holds for 0xFF. Wireshark makes
+answers ``None``, whatever ``llc.dsap`` holds for 0xFF. The layer's
+other fields and accessors are then meaningless: ``control`` and
+``control_format`` read the IPX length's bytes (a 30-byte packet,
+``0x00 0x1E``, reads as the I-format Control ``0x1E00``), so
+``header_len`` covers the checksum and one or both length bytes, and
+the SAP names, :attr:`LLC.dsap_enum`, :attr:`LLC.is_group` and
+:attr:`LLC.is_response` describe the checksum's 0xFF 0xFF. Wireshark makes
 the same call, from the same two bytes; a real LLC PDU from SSAP 0xFF
 (a response from SAP 0xFE) to the global DSAP is not distinguishable
 from it.
@@ -264,8 +277,10 @@ class LLC(Protocol):
     def is_raw_ipx(self) -> bool:
         """Whether this is Novell "raw 802.3", not an LLC header.
 
-        DSAP and SSAP 0xFF are then an IPX checksum (see the module
-        docstring).
+        DSAP and SSAP 0xFF are then an IPX checksum, and the Control
+        the IPX length's high byte or both its bytes, so every other
+        field and accessor of this layer is meaningless for such a
+        frame (see the module docstring).
         """
         return self.dsap == 0xFF and self.ssap == 0xFF
 
@@ -300,8 +315,9 @@ class LLC(Protocol):
 
         ``None`` for a PDU that carries no upper-layer data (anything
         but I-format and UI), for Novell raw 802.3, and for DSAP 0xAA
-        unless the SSAP is 0xAA and the Control UI, which is what makes
-        a SNAP header follow (see the module docstring).
+        unless the SSAP is 0xAA and the Control UI, the one PDU after
+        which this library decodes a SNAP header (see the module
+        docstring).
         """
         if not self._dispatches:
             return None

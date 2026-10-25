@@ -155,6 +155,13 @@ def decode_frame(
         ``max_depth`` (strict mode only).
     :raises ProtocolError: any header failed to decode (strict mode
         only).
+    :raises UnknownTableError: ``decode_as`` names a table that is not
+        one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
+        says.
+    :raises InvalidRegistryKeyError: ``decode_as`` names a key outside
+        the range its table accepts, such as an ``ethertype`` key below
+        0x0600 (see "Key ranges" in :mod:`netprotocols.registry`),
+        whatever ``lax`` says.
     :raises ValueError: ``max_depth`` is below 1.
 
     Building the override registry costs a small copy, so a caller
@@ -188,7 +195,7 @@ def decode_frame(
             protocol = header.next_protocol(registry)
     except ProtocolError as error:
         # decode() raises with offset relative to the slice it was
-        # handed (data[cursor:]); rebase it to the whole frame here,
+        # handed (data[cursor:end]); rebase it to the whole frame here,
         # since this is the only code with the cursor to do it. Always
         # set, strict or lax, so a caller catching the re-raise still
         # gets a correct frame_offset.

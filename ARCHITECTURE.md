@@ -239,7 +239,10 @@ widens an earlier one; and a Length shorter than the LLC header leaves
 `LLC.decode()` too few bytes, so the walk raises
 `TruncatedHeaderError`. IPv4's, IPv6's and UDP's lengths are still not
 honoured (#235), so padding behind a short IPv4 packet in Ethernet II
-framing reaches its last layer as before. Called directly,
+framing reaches its last layer as before. A third-party tag header
+(an E-tag, a VN-tag) can answer `LLC` from its own `next_protocol()`,
+but can bound the PDU after it only through that private hook, pending
+#235. Called directly,
 `LLC.decode()` has no Length to go by and leaves the rest of its buffer
 to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s module docstring.

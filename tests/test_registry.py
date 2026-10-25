@@ -437,10 +437,16 @@ class TestKeyRanges:
             register_all(
                 TABLE_ETHERTYPE, (0x0800, 0x0026), Fake, registry=isolated
             )
+        # Not atomic: the key before the refused one stays registered.
+        assert isolated.get(TABLE_ETHERTYPE, 0x0800) is Fake
         with pytest.raises(InvalidRegistryKeyError):
             isolated.derive({TABLE_ETHERTYPE: {0x0026: Fake}})
         with pytest.raises(InvalidRegistryKeyError):
             decode_frame(bytes(14), decode_as={TABLE_ETHERTYPE: {38: Fake}})
+        with pytest.raises(InvalidRegistryKeyError):
+            decode_frame(
+                bytes(14), lax=True, decode_as={TABLE_ETHERTYPE: {38: Fake}}
+            )
 
     def test_the_other_tables_accept_any_key(self, registry):
         registry.register(TABLE_UDP_PORT, 0x10000, Fake)

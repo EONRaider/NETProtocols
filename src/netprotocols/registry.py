@@ -489,6 +489,16 @@ def register_all(
 
     For protocols that a single value cannot describe: a VLAN tag is any
     of three EtherTypes, DHCP answers on two ports.
+
+    The keys are registered one at a time, in order, and not atomically:
+    when one raises, as :meth:`Registry.register` describes, the keys
+    before it stay registered and the ones after it are not tried.
+
+    :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+    :raises InvalidRegistryKeyError: a key is outside the range
+        ``table`` accepts (see "Key ranges" in the module docstring).
+    :raises RegistryConflictError: a key is held by a different class
+        and ``override`` is false.
     """
     target = DEFAULT if registry is None else registry
     for key in keys:
