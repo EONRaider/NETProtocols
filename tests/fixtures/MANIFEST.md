@@ -445,9 +445,11 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   lengths, walks the CDP TLVs to the Length's end and verifies the CDP
   checksum over exactly that PDU (91 bytes in all three, odd: where RFC
   1071 pads a final byte into the high byte of a word, CDP's checksum
-  adds it as a signed octet, as the low byte when it is below 0x80 and
-  as its value less 0x100 when not; the third frame, ending in 0xA9, is
-  there to pin that, and lldpd's frames verify that way), and verifies
+  adds it as the low byte when it is below 0x80 and as 0xFF00 plus its
+  value less 1 when not, the form of lldpd's `frame_checksum()` in
+  src/daemon/frame.c and Wireshark's packet-cdp.c; the third frame,
+  ending in 0xA9, is there to pin that, and lldpd's frames verify that
+  way), and verifies
   the IPv4 and ICMP checksums inside RFC 1042 framing. veth does not
   pad, so the BPDUs and CDP frames carry no padding (the TCN is a
   21-byte frame); `tests/test_llc.py` appends padding and a 4-byte

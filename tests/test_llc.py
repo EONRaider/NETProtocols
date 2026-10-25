@@ -138,16 +138,29 @@ def cdp_checksum(data: bytes) -> int:
     """Return CDP's checksum of ``data``, written out here.
 
     Not taken from the library: RFC 1071's sum, but an odd final byte is
-    added as a signed octet, not padded into a last word's high byte.
+    not padded into a last word's high byte. It is added as the low
+    byte below 0x80, and from 0x80 as ``0xFF00 + v - 1``, lldpd
+    1.0.18's src/daemon/frame.c ("sum += 0xff << 8; sum += v - 1;")
+    and Wireshark's epan/dissectors/packet-cdp.c, which decrements both
+    bytes of the last word.
     """
     total = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
     if len(data) & 1:
-        total += data[-1] - (0x100 if data[-1] & 0x80 else 0)
+        v = data[-1]
+        total += (0xFF << 8) + v - 1 if v & 0x80 else v
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
+
+
+def cdp_pdu(*tlvs: bytes) -> bytes:
+    """Return the SNAP-framed CDPv2 PDU of ``tlvs``, checksum filled in."""
+    body = b"".join(tlvs)
+    checksum = cdp_checksum(b"\x02\xb4\x00\x00" + body)
+    cdp = b"\x02\xb4" + struct.pack("!H", checksum) + body
+    return b"\xaa\xaa\x03\x00\x00\x0c\x20\x00" + cdp
 
 
 def kinds(packet) -> list[type[Protocol]]:
@@ -185,6 +198,26 @@ class TestTypeOrLength:
         assert eth.length is None
         assert eth.next_protocol() is ARP
         assert Ethernet.decode(DST + SRC + b"\x06\x00").next_protocol() is None
+
+    def test_0x0600_is_the_first_ethertype(self):
+        """0x0600 dispatches through ``ethertype``; 0x05FF names nothing.
+
+        From Ethernet and from a VLAN tag alike.
+        """
+        registry = Registry.from_defaults().derive(
+            {TABLE_ETHERTYPE: {0x0600: WholeBuffer}}
+        )
+        tag = b"\x81\x00\x00\x1e"
+        for value, after in ((0x0600, [WholeBuffer]), (0x05FF, [])):
+            field = struct.pack("!H", value)
+            untagged = decode_frame(
+                DST + SRC + field + b"xyz", registry=registry
+            )
+            assert kinds(untagged) == [Ethernet, *after]
+            tagged = decode_frame(
+                DST + SRC + tag + field + b"xyz", registry=registry
+            )
+            assert kinds(tagged) == [Ethernet, VLAN, *after]
 
     def test_vlan_reads_its_inner_field_the_same_way(self):
         assert VLAN(0, 0, 30, 36).next_protocol() is LLC
@@ -258,6 +291,7 @@ class TestLLCHeader:
         with pytest.raises(TruncatedHeaderError) as excinfo:
             LLC.decode(b"\xf0\xf0\x00")
         assert excinfo.value.field == "control"
+        assert excinfo.value.offset == 2
         assert excinfo.value.expected == 4
         assert excinfo.value.actual == 3
 
@@ -369,7 +403,11 @@ class TestSNAPHeader:
 
     @pytest.mark.parametrize(
         "fields,field",
-        [({"oui": 1 << 24, "pid": 0}, "oui"), ({"oui": 0, "pid": -1}, "pid")],
+        [
+            ({"oui": 1 << 24, "pid": 0}, "oui"),
+            ({"oui": 0, "pid": -1}, "pid"),
+            ({"oui": 0, "pid": 0x10000}, "pid"),
+        ],
     )
     def test_the_constructor_rejects_what_does_not_fit(self, fields, field):
         with pytest.raises(InvalidFieldError) as excinfo:
@@ -490,6 +528,20 @@ class TestTheWalkBound:
         assert kinds(packet) == [Ethernet, VLAN, LLC, SNAP, ARP]
         assert bytes(packet) == TAGGED_ARP[:54]
 
+    def test_a_tagged_8023_pdu_reaches_its_decoder_exactly(self):
+        """The Length after a tag bounds the PDU on its own.
+
+        The outer field is the 0x8100 EtherType, so only VLAN's Length
+        keeps the padding and FCS from the decoder.
+        """
+        pdu = pdu_of(STP_CONFIG_A)
+        tag = b"\x81\x00\x00\x1e" + struct.pack("!H", len(pdu))
+        frame = DST + SRC + tag + pdu
+        packet = decode_frame(pad(frame) + FCS, decode_as=WHOLE)
+        assert kinds(packet) == [Ethernet, VLAN, LLC, WholeBuffer]
+        assert packet[WholeBuffer].body == pdu[3:]
+        assert packet.consumed == len(frame)
+
     def test_a_length_past_the_frame_bounds_nothing(self):
         """A frame a snap length cut decodes what was captured."""
         frame = DST + SRC + struct.pack("!H", 1500) + pdu_of(STP_CONFIG_A)
@@ -510,8 +562,9 @@ class TestTheWalkBound:
 
     def test_a_length_cutting_a_two_octet_control_raises(self):
         frame = pad(frame_8023(b"\xf0\xf0\x00\x00", 3))
-        with pytest.raises(TruncatedHeaderError):
+        with pytest.raises(TruncatedHeaderError) as excinfo:
             decode_frame(frame)
+        assert excinfo.value.frame_offset == 16
 
     def test_inside_vxlan_an_inner_length_bounds_the_inner_pdu(self):
         outer = pcap_frames(FIXTURES / "vxlan.pcap")[0]
@@ -614,12 +667,52 @@ class TestTheChecker:
             (frame_8023(b"\xff\xff\x00\x10" + bytes(26)), "ipx-length"),
             (frame_8023(b"\x42"), "llc-truncated"),
             (frame_8023(b"\xf0\xf0\x00"), "llc-truncated"),
+            (frame_8023(b"\x42\x42\x03" + bytes(34)), "stp-bpdu-malformed"),
+            (
+                frame_8023(b"\x42\x42\x03" + bytes(43)) + b"\x00",
+                "8023-trailer-not-padding",
+            ),
+            (frame_8023(cdp_pdu(b"\x00\x01\x00\x0a", b"abcd")), "cdp-tlvs"),
+            (frame_8023(cdp_pdu(b"\x00\x01\x00\x08", b"abcdXY")), "cdp-tlvs"),
         ],
-        ids=["tcn-type", "config-short", "ipx", "llc-short", "llc-control"],
+        ids=[
+            "tcn-type",
+            "config-short",
+            "ipx",
+            "llc-short",
+            "llc-control",
+            "config-34",
+            "46-padded",
+            "cdp-tlv-overrun",
+            "cdp-tail",
+        ],
     )
     def test_malformed_pdus_fail(self, check_fixtures, frame, failure):
         failures = check_fixtures.check_frame(frame, _counter())
         assert any(f.startswith(failure) for f in failures), failures
+
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            frame_8023(b"\x42\x42\x03" + bytes(35)),
+            frame_8023(b"\x42\x42\x03" + bytes(42)) + b"\x00",
+            frame_8023(cdp_pdu(b"\x00\x01\x00\x0a", b"abcdef")),
+        ],
+        ids=["config-35", "45-padded", "cdp-tlv"],
+    )
+    def test_the_boundary_cases_pass(self, check_fixtures, frame):
+        assert check_fixtures.check_frame(frame, _counter()) == []
+
+    def test_cdp_odd_byte_is_lldpds_form(self, check_fixtures):
+        """A final byte from 0x80 adds ``0xFF00 + v - 1`` (lldpd, Wireshark).
+
+        Adding ``v - 0x100`` instead agrees on the fixture's three
+        lldpd frames, but not here, where the running sum is that
+        small: it gives 0xFFFF.
+        """
+        data = b"\x00\x7f\x81"
+        assert check_fixtures._cdp_checksum(data) == 0
+        assert cdp_checksum(data) == 0
 
 
 def _counter():

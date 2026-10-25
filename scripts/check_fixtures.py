@@ -1122,9 +1122,13 @@ def _check_8023(
 
     The Length must fit in the frame, and anything after the PDU must
     be the zero padding a sender adds to a PDU shorter than the 46-byte
-    minimum payload; a longer PDU, or a nonzero byte there, fails. Only
-    the ``length`` bytes of the PDU are checked further, so padding
-    never enters a checksum."""
+    minimum payload; a longer PDU, or a nonzero byte there, fails. That
+    the padding brings the frame to exactly 60 bytes is not checked:
+    this sees only the bytes after the field, not how many came before
+    it (a tag, an enclosing tunnel), and a tagged frame may be padded to
+    60 or 64 bytes depending on where the tag was added. Only the
+    ``length`` bytes of the PDU are checked further, so padding never
+    enters a checksum."""
     if length > len(payload):
         return ["8023-length-exceeds-frame"]
     trailer = payload[length:]
@@ -1200,16 +1204,22 @@ def _cdp_checksum(data: bytes) -> int:
     """The internet checksum as CDP computes it.
 
     An odd final byte is not padded into the high-order byte of a last
-    word, as RFC 1071 does, but added as a signed octet: as the low byte
-    when below 0x80, and as its negative value (byte - 0x100) when not.
-    That is what lldpd's CDP frames verify with, on both sides of 0x80
-    (llc.pcap holds one of each).
+    word, as RFC 1071 does, but added as the low byte when below 0x80,
+    and when not as 0xFF00 plus the byte less 1: a sign-extended octet,
+    less 1 to compensate for Cisco's off-by-one. That is lldpd 1.0.18's
+    form, src/daemon/frame.c frame_checksum(), "sum += 0xff << 8;
+    sum += v - 1;", and Wireshark's, epan/dissectors/packet-cdp.c
+    (master 31bf0857, read 2026-10-25), which decrements both bytes of
+    the last word ("padded_buffer[data_length]--;
+    padded_buffer[data_length-1]--;"). lldpd's CDP frames verify with
+    it on both sides of 0x80 (llc.pcap holds one of each).
     """
     total = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
     if len(data) & 1:
-        total += data[-1] - (0x100 if data[-1] & 0x80 else 0)
+        v = data[-1]
+        total += (0xFF << 8) + v - 1 if v & 0x80 else v
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
