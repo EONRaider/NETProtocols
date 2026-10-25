@@ -197,6 +197,27 @@ cover. Past the 4-byte header it never raises either: a body its
 parser cannot read is kept whole, for `PIM.message` to report. See
 [`layer3/pim.py`](src/netprotocols/layer3/pim.py)'s module docstring.
 
+`RIP` has the same problem one layer up: its 20-byte entries fill the
+rest of the UDP datagram, and the walk does not trim to UDP's length
+either. It keeps the whole buffer after its 4-byte header, as ICMPv4
+and IGMP do, leaving no trailing bytes, so `bytes(RIP.decode(x)) == x`.
+Its accessors read whole entries, up to the RFC 4822 authentication
+trailer that the first entry's Packet Length locates (when the bytes
+there start as a trailer does, `0xFFFF 0x0001`), and report what
+is left, fewer than 20 bytes, as `remainder`: an entry a snap length
+cut, or a trailer such as an Ethernet FCS, which only the UDP length
+could tell apart. Past the header neither `decode()` nor any accessor
+raises. Ethernet's zero padding reaches only a message with no entries,
+since one entry already fills the minimum frame. See
+[`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
+
+`VRRP` has no length field either, but needs no walk: its version and
+address count give its exact length (8 bytes, the addresses, and
+VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
+header with a length field and leaves Ethernet's padding undecoded. It
+must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
+wire, and VRRPv3's pseudo-header carries the message's length.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -228,15 +249,19 @@ except ProtocolError as e:
     print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
 ```
 
-`offset` is relative to whatever buffer the error was found in: the
-`data` argument of a `decode()` call when `field` is `None` or names a
-fixed-header value, or the attribute `field` names when it's a raw
-`bytes` field parsed on demand (`options`, `body`, `sections`) — a TCP
-option error's `offset` is relative to `header.options`, not to the
-frame. `decode_frame` is the only code holding the cursor needed to
-rebase a layer's own offset to the whole frame, so it does — the
-result lands in `frame_offset`, left `None` by a bare
-`SomeClass.decode()` call with no frame to rebase against. A
+`offset` is relative to whatever buffer the error was found in. An
+error raised by `decode()` is relative to that call's `data` argument,
+whatever `field` names: OSPF's framing errors name `field="body"` (or
+`"auth_trailer"`) and still count from the start of the OSPF header,
+which is what lets `decode_frame` rebase them. An error raised later,
+by an accessor that parses a raw `bytes` attribute on demand
+(`options`, `body`, `sections`, `chunks`), is relative to that
+attribute — a TCP option error's `offset` is relative to
+`header.options`, an ICMPv6 NDP option's or an IGMPv3 group record's
+to `body`, not to the frame. `decode_frame` is the only code holding
+the cursor needed to rebase a layer's own offset to the whole frame,
+so it does — the result lands in `frame_offset`, left `None` by a
+bare `SomeClass.decode()` call with no frame to rebase against. A
 `__post_init__` validation error (values, not bytes) leaves `offset`
 `None` too; there is nothing to be positioned in. `HTTP` is the
 exception on both counts: its `field` names a grammar element
@@ -304,8 +329,13 @@ flowchart LR
   AH6 -->|6| T
   AH6 -->|17| U
   AH6 -->|50| ESP
+  I4 -->|89| OSPF[OSPFv2]
+  I4 -->|112| VR[VRRP]
+  I6 -->|112| VR6[VRRPv6]
+  X -->|112| VR6
   U -->|4789| VX[VXLAN]
   VX -->|always| E
+  U -->|520| R[RIP]
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -320,12 +350,15 @@ offset rule applies to fragmented IPv4.
 
 IPsec's AH chains the same way, through its own `next_header`, onward
 to anything the IP header before it could have carried (the diagram
-draws only the transport, ESP and extension-header edges). It is the
-one header that comes as a pair for that reason: `AH` after IPv4 and
-`AHv6` after IPv6 have one wire format but dispatch through their own
-family's table, so IPv4 → AH → `0` stops rather than conjuring a
-Hop-by-Hop layer, while IPv6 → AH → Destination Options — an order
-RFC 8200 §4.1 permits — keeps decoding. ESP, the other IPsec header,
+draws only the transport, ESP and extension-header edges). It comes as
+a pair for that reason: `AH` after IPv4 and `AHv6` after IPv6 have one
+wire format but dispatch through their own family's table, so IPv4 →
+AH → `0` stops rather than conjuring a Hop-by-Hop layer, while IPv6 →
+AH → Destination Options — an order RFC 8200 §4.1 permits — keeps
+decoding. VRRP is the other pair, for a different reason: it ends the
+walk, but its list of virtual addresses is 4 bytes an entry after IPv4
+and 16 after IPv6, which nothing in the VRRP header says, so `VRRP`
+reads the one and its subclass `VRRPv6` the other. ESP, the other IPsec header,
 ends the walk: what it carries is named only inside its protected
 trailer.
 
@@ -344,8 +377,12 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
-is SCTP, 103 is PIM — no collisions; 51 is AH in both, decoded by a
-class of each family's own).
+is SCTP, 103 is PIM — no collisions; 51 is AH and 112 is VRRP in
+both, each decoded by a class of each family's own). 89 is the
+exception: it is OSPF in both families, but OSPFv2 (RFC 2328) after
+IPv4 and OSPFv3 (RFC 5340), a different wire format, after IPv6, and
+this library decodes only OSPFv2, so `OSPF` is reached from IPv4
+alone.
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -393,7 +430,7 @@ field they dispatch on:
 `ip.proto.v6` **inherits** `ip.proto`: the two share a number space
 but not a table, because the four extension headers must be reachable
 only inside an IPv6 chain. Registering in `ip.proto` reaches both,
-except at a key `ip.proto.v6` owns itself (51, below); registering in
+except at a key `ip.proto.v6` owns itself (51 and 112, below); registering in
 `ip.proto.v6` reaches the v6 chain alone. Inheritance
 is resolved when you register, not when you look up, so the gating
 costs nothing on the hot path — an IPv4 packet with `protocol=0`
@@ -401,14 +438,27 @@ cannot conjure a Hop-by-Hop layer because the table it reads has no
 entry for `0`.
 
 A child's own registration also *shadows* the inherited entry, which
-is how AH's pair is wired: `AHv6` is registered in `ip.proto.v6` first,
-then `AH` in `ip.proto`, and the parent write is not inherited over a
+is how AH's and VRRP's pairs are wired: `AHv6` is registered in
+`ip.proto.v6` first, then `AH` in `ip.proto` (and `VRRPv6`, then
+`VRRP`, likewise), and the parent write is not inherited over a
 key the child already owns. That works the other way round too: a
-third party replacing protocol 51 in `ip.proto` (`override=True`)
+third party replacing protocol 51 or 112 in `ip.proto` (`override=True`)
 changes IPv4 dispatch only, and must register in `ip.proto.v6` as well
 to reach IPv6. `_defaults.FAMILY_SPECIFIC_NUMBERS` names the numbers
-wired this way, and the tests hold the two tables to differing at
-those keys alone.
+wired this way, and the tests hold the two tables to differing only at
+those keys, the IPv6-only numbers and the IPv4-only one below.
+
+A child can also own a key with no class. Protocol 89 is OSPFv2 in
+`ip.proto` and would be inherited into `ip.proto.v6`, where it means
+OSPFv3, so every OSPFv3 packet would fail to decode as OSPFv2; instead
+the defaults withhold 89 from `ip.proto.v6` (`_defaults.IPV4_ONLY_NUMBERS`)
+before registering `OSPF` in `ip.proto`. A withheld key is skipped by
+inheritance as an override is, so an IPv6 packet with next header 89
+ends its walk at the IPv6 header, as it did before `OSPF` existed, and
+a later write to `ip.proto` does not reach it; an OSPFv3 decoder
+registered directly in `ip.proto.v6` fills it. `OSPF.decode()` also
+rejects any version but 2, for a caller who sends it OSPFv3 on purpose
+(`start=` or `decode_as`).
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its
@@ -515,6 +565,20 @@ header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
 
+RIP on UDP 520 rejects the most, because two of its four header bytes
+have values no RIP message carries: `RIP.decode()` requires version 1
+or 2 and a nonzero command, which 510 of the 65,536 two-byte prefixes
+satisfy, so about 99.2% of random datagrams are rejected. Measured the
+same way, the walk stopped for about 99.2% in each case: the 300-byte
+payloads sent to 520, and the 0-600 byte ones unpadded and padded, the
+differences between them within sampling noise; an empty datagram
+padded to the minimum is rejected too, since the padding reads as
+version 0. It goes no further. The obsolete and extension commands
+(TraceOn, TraceOff, the triggered and update messages) decode, and so
+does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
+tells a receiver to ignore but a decoder should show. Past the header,
+any 20 bytes are an entry.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -540,9 +604,12 @@ bytes instead.
 
 Every class also works in reverse. Constructors take the friendly
 forms (string addresses, integer fields) and validate some of them in
-`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6
-and DHCP do not, so a malformed address there fails only in
-`bytes()`), and IPv4's IHL and TCP's data offset must agree with
+`__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6,
+DHCP, VRRP and OSPF do not, so a malformed address there fails only
+in `bytes()`; for OSPF's `router_id`, `area_id` and its records'
+address fields, such as an LSA header's `advertising_router`, that
+is the `OSError` from `socket.inet_pton`), and IPv4's IHL and TCP's
+data offset must agree with
 `len(options)`. For a valid header, `bytes()` re-emits the exact
 on-wire form. Constructors do not check everything decode does, so
 some headers can be built that decode would never produce (see
@@ -584,11 +651,32 @@ one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
+VRRP's checksum is the internet checksum of the message alone in
+VRRPv2 and behind the IP pseudo-header in VRRPv3. RFC 5798 §5.2.8
+cites only IPv6's pseudo-header; adding IPv4's too is keepalived's
+default, and `compute()`'s. RFC 9568, which obsoletes RFC 5798, leaves
+it out over IPv4, and `verify()` returns `False` for an advert
+checksummed that way.
 
 That is also why `SCTP.decode()` bounds its own extent (see "The decode
 contract" above): otherwise Ethernet's padding would land inside the
 CRC's span, and a packet under 46 bytes from a real NIC would fail to
 verify.
+
+OSPF carries two checksums. The packet's is the internet checksum of
+the whole packet but its 64-bit Authentication field, with no
+pseudo-header, and `compute()` covers only the packet's own bytes, so
+an RFC 5613 LLS block after it never enters; under cryptographic
+authentication (AuType 2, or 3 from RFC 7474) none is computed (the
+digest protects the packet), so `compute()` raises, `verify()` returns
+`True` and `with_checksums()` leaves the field alone. Each LSA's LS
+Checksum is an ISO 8473 Fletcher checksum of the LSA but its LS Age;
+an LSA is not a layer, so it has functions of its own:
+`lsa_checksum()` generates the field with `fletcher_checksum()`, and
+`verify_lsa()` checks it the way RFC 905 B.4 does, by both running sums
+being zero, so a byte stored as `0x00` where the generator writes
+`0xff` passes; and, since RFC 2328 §12.1.7 says the field cannot be
+zero, it fails a field of `0x0000` even where those sums are zero.
 
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.
@@ -607,20 +695,24 @@ src/netprotocols/
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify
+│                   compute, verify, OSPF's LSA Fletcher checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
-│                   ah.py (IPsec AH: AH + AHv6), pim.py (PIM-SM),
+│                   ah.py (IPsec AH: AH + AHv6),
+│                   ospf.py (OSPFv2: OSPF + its message records),
+│                   pim.py (PIM-SM),
+│                   vrrp.py (VRRPv2/v3: VRRP + VRRPv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
-│                   and the HTTP codec class), vxlan.py
+│                   and the HTTP codec class), vxlan.py, rip.py
+│                   (RIPv1 + RIPv2)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

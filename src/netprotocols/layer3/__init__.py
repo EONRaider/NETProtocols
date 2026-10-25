@@ -11,6 +11,14 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.ospf import (
+    OSPF,
+    OSPFLSA,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
+)
 from netprotocols.layer3.pim import (
     PIM,
     PIMAssert,
@@ -25,13 +33,17 @@ from netprotocols.layer3.pim import (
     PIMRegister,
     PIMRegisterStop,
 )
+from netprotocols.layer3.vrrp import VRRP, VRRPv6
 
 __all__ = [
     "AH",
     "ESP",
     "GRE",
     "IGMP",
+    "OSPF",
+    "OSPFLSA",
     "PIM",
+    "VRRP",
     "AHv6",
     "ICMPv4",
     "ICMPv6",
@@ -45,6 +57,10 @@ __all__ = [
     "IPv6Option",
     "IPv6Routing",
     "NDPOption",
+    "OSPFDatabaseDescription",
+    "OSPFHello",
+    "OSPFLSAHeader",
+    "OSPFLSRequest",
     "PIMAssert",
     "PIMEncodedGroup",
     "PIMEncodedSource",
@@ -56,4 +72,5 @@ __all__ = [
     "PIMLANPruneDelay",
     "PIMRegister",
     "PIMRegisterStop",
+    "VRRPv6",
 ]

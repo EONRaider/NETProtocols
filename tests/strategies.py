@@ -24,9 +24,13 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    OSPF,
+    OSPFLSA,
     PIM,
+    RIP,
     SCTP,
     VLAN,
+    VRRP,
     VXLAN,
     AHv6,
     DNSOverTCP,
@@ -37,6 +41,10 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
     PIMAssert,
     PIMEncodedGroup,
     PIMEncodedSource,
@@ -49,6 +57,7 @@ from netprotocols import (
     PIMRegisterStop,
     Protocol,
     SCTPChunk,
+    VRRPv6,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
 
@@ -348,6 +357,132 @@ def ah_headers(draw: st.DrawFn, cls: type[AH] = AH) -> AH:
     )
 
 
+def _u(bits: int) -> st.SearchStrategy[int]:
+    return st.integers(0, (1 << bits) - 1)
+
+
+@st.composite
+def ospf_lsa_headers(draw: st.DrawFn, length: int = 20) -> OSPFLSAHeader:
+    """An LSA header declaring ``length`` bytes."""
+    return OSPFLSAHeader(
+        ls_age=draw(_u(16)),
+        options=draw(_u(8)),
+        ls_type=draw(_u(8)),
+        link_state_id=draw(ipv4_strings()),
+        advertising_router=draw(ipv4_strings()),
+        ls_sequence_number=draw(_u(32)),
+        ls_checksum=draw(_u(16)),
+        length=length,
+    )
+
+
+@st.composite
+def ospf_lsas(draw: st.DrawFn) -> OSPFLSA:
+    body = draw(st.binary(max_size=24))
+    return OSPFLSA(draw(ospf_lsa_headers(20 + len(body))), body)
+
+
+@st.composite
+def _ospf_bodies(draw: st.DrawFn, type_: int) -> bytes:
+    """A body with message ``type_``'s framing, built from the records
+    its accessor returns, so it is one decode accepts."""
+    headers = st.lists(ospf_lsa_headers(), max_size=3).map(tuple)
+    if type_ == 1:
+        return bytes(
+            OSPFHello(
+                network_mask=draw(ipv4_strings()),
+                hello_interval=draw(_u(16)),
+                options=draw(_u(8)),
+                router_priority=draw(_u(8)),
+                router_dead_interval=draw(_u(32)),
+                designated_router=draw(ipv4_strings()),
+                backup_designated_router=draw(ipv4_strings()),
+                neighbors=tuple(draw(st.lists(ipv4_strings(), max_size=4))),
+            )
+        )
+    if type_ == 2:
+        return bytes(
+            OSPFDatabaseDescription(
+                interface_mtu=draw(_u(16)),
+                options=draw(_u(8)),
+                flags=draw(_u(8)),
+                dd_sequence_number=draw(_u(32)),
+                lsa_headers=draw(headers),
+            )
+        )
+    if type_ == 3:
+        requests = draw(
+            st.lists(
+                st.builds(
+                    OSPFLSRequest, _u(32), ipv4_strings(), ipv4_strings()
+                ),
+                max_size=3,
+            )
+        )
+        return b"".join(map(bytes, requests))
+    if type_ == 4:
+        lsas = draw(st.lists(ospf_lsas(), max_size=3))
+        return len(lsas).to_bytes(4, "big") + b"".join(map(bytes, lsas))
+    if type_ == 5:
+        return b"".join(map(bytes, draw(headers)))
+    return draw(st.binary(max_size=_MAX_BLOB))
+
+
+@st.composite
+def ospf_packets(draw: st.DrawFn) -> OSPF:
+    # packet_length / body and au_type / authentication / auth_trailer
+    # are OSPF's interdependent groups: the length is computed from the
+    # body, which is built with its type's framing, and under AuType 2
+    # and 3 the trailer is drawn to the size Auth Data Len declares.
+    type_ = draw(st.sampled_from([1, 2, 3, 4, 5, 0, 6, 255]))
+    body = draw(_ospf_bodies(type_))
+    au_type = draw(st.sampled_from([0, 1, 2, 3, 4]))
+    authentication = draw(st.binary(min_size=8, max_size=8))
+    trailer = (
+        draw(st.binary(min_size=authentication[3], max_size=authentication[3]))
+        if au_type in (2, 3)
+        else b""
+    )
+    return OSPF(
+        version=2,
+        type=type_,
+        packet_length=24 + len(body),
+        router_id=draw(ipv4_strings()),
+        area_id=draw(ipv4_strings()),
+        checksum=draw(_u(16)),
+        instance_id=draw(_u(8)),
+        au_type=au_type,
+        authentication=authentication,
+        body=body,
+        auth_trailer=trailer,
+    )
+
+
+@st.composite
+def vrrp_headers(draw: st.DrawFn, cls: type[VRRP] = VRRP) -> VRRP:
+    # version / count_ip_addrs / addresses / auth_data are VRRP's
+    # interdependent fields: the version decides whether 8 bytes of
+    # authentication data follow, and the count must be the number of
+    # addresses, each in the family's own string form. VRRPv6 carries
+    # VRRPv3 alone.
+    version = draw(st.sampled_from(sorted(cls._versions)))
+    addresses = draw(
+        st.lists(ipv6_strings() if cls._ipv6 else ipv4_strings(), max_size=8)
+    )
+    auth_len = 8 if version == 2 else 0
+    return cls(
+        version=version,
+        type=draw(st.integers(0, 0x0F)),
+        vrid=draw(st.integers(0, 0xFF)),
+        priority=draw(st.integers(0, 0xFF)),
+        count_ip_addrs=len(addresses),
+        adver_word=draw(st.integers(0, 0xFFFF)),
+        checksum=draw(st.integers(0, 0xFFFF)),
+        addresses=tuple(addresses),
+        auth_data=draw(st.binary(min_size=auth_len, max_size=auth_len)),
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -473,6 +608,20 @@ def http_wire(draw: st.DrawFn) -> bytes:
         raw[position] = draw(st.sampled_from(b"\r\n :;,0aZ\x00\t\xff"))
     cut = draw(st.integers(min_value=0, max_value=len(raw)))
     return bytes(raw[:cut]) if draw(st.booleans()) else bytes(raw)
+
+
+@st.composite
+def rip_messages(draw: st.DrawFn) -> RIP:
+    # The body is kept raw whatever it holds, so it is drawn as free
+    # bytes, any length: whole entries, a trailer, a remainder. decode()
+    # rejects a version other than 1 or 2 and command 0 (the
+    # constructor does not; test_rip.py covers those).
+    return RIP(
+        command=draw(st.integers(1, 0xFF)),
+        version=draw(st.sampled_from([1, 2])),
+        reserved=draw(st.integers(0, 0xFFFF)),
+        body=draw(st.binary(max_size=_MAX_BLOB * 2)),
+    )
 
 
 @st.composite
@@ -605,6 +754,10 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "ESP": esp_packets(),
     "AH": ah_headers(AH),
     "AHv6": ah_headers(AHv6),
+    "VRRP": vrrp_headers(VRRP),
+    "VRRPv6": vrrp_headers(VRRPv6),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
+    "OSPF": ospf_packets(),
+    "RIP": rip_messages(),
 }

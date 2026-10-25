@@ -4,22 +4,26 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, PIM, SCTP's CRC32c; fragment slices carry no
+pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, the OSPF packet
+checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
-as does every IPsec ICV, with the test keys published below. Frames
+as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
+digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 153 frames across 23
+frames routinely leave checksums to NIC offload. 246 frames across 26
 scenarios. Addresses are as-captured from the capture host's network.
 
-Ten scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Thirteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`, `pim.pcap`) are captured separately by their own
-`scripts/capture_fixtures_*.sh` over purpose-built topologies — real
-kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
-queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
-a userspace SCTP association, IPsec ESP and AH built by a script
-and sent through raw sockets, and two FRR PIM-SM routers — see their
-rows and the notes below.
+`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`) are
+captured separately by their own `scripts/capture_fixtures_*.sh` over
+purpose-built topologies — real kernel vlan devices, a DHCP
+server/client, a GRE tunnel, a DNS server queried over TCP, kernel
+IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
+association, IPsec ESP and AH built by a script and sent through raw
+sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
+two FRR OSPF routers, and two FRR PIM-SM routers — see their rows and
+the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -44,7 +48,10 @@ rows and the notes below.
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
+| `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
+| `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
+| `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -176,6 +183,86 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   hash of each inner flow; none is a registered port. This file's echo
   and UDP frames are the corpus's deepest chains, at 7 layers.
 
+- `vrrp.pcap` was produced by `scripts/capture_fixtures_vrrp.sh`:
+  keepalived 2.2.8 in two netns over a veth pair, run through four
+  segments (one VRID each, see the row above), captured on B's side.
+  The script asks ethtool to turn offload off first but, like the
+  other capture scripts, does not check that it did; what is
+  guaranteed is that `check_fixtures` verifies every IPv4 header
+  checksum and VRRP checksum in the file. **What keepalived built:
+  the whole IPv4 datagram but its header checksum** — it sends
+  through a raw socket with `IP_HDRINCL` (TOS `0xc0`, TTL 255, its
+  own identification counter), and `strace`, run once while
+  developing the script, showed it handing the kernel a zero header
+  checksum for the kernel to fill — plus every byte of the VRRP
+  message, checksum included.
+  **What the kernel built:** the IPv4 header checksum and the Ethernet
+  header. A master advertises once per interval for as long as it
+  runs, so the script drives each segment by watching the capture,
+  then keeps a fixed selection: each router's first two adverts with a
+  nonzero priority in each segment, and its priority-0 advert; the gaps
+  this leaves in the identification counters are adverts it dropped.
+  It asserts the kept frames' composition exactly. `check_fixtures`
+  verifies every VRRP checksum: the message alone for VRRPv2 (RFC 3768
+  §5.3.8), behind the IPv4 pseudo-header for VRRPv3 — with the real
+  destination, so for VRID 54 the unicast peer's address rather than
+  `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
+  only RFC 2460's pseudo-header, which is IPv6's. keepalived's
+  `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
+  leave the IPv4 pseudo-header out, and such an advert fails both
+  `check_fixtures` and `verify()`. It also requires each message's
+  length, from its version and count, to be the IP payload's exactly.
+  veth does not pad a short frame, so none of these frames carries
+  Ethernet padding (they are 46-58 bytes); `tests/test_vrrp.py` pads
+  them to 60 bytes, and appends a 4-byte trailer, to show the walk
+  leaves both undecoded. The kernel has no IPv6, so VRRPv3 over IPv6
+  is covered by constructed frames in `tests/test_vrrp.py`, with
+  checksums computed there and checked by `check_fixtures` too.
+
+- `ospf.pcap` was produced by `scripts/capture_fixtures_ospf.sh`: FRR
+  8.4's `zebra` and `ospfd` in each of two netns over a veth pair, with
+  2 s hello and 8 s dead intervals; router A (router ID 10.0.0.1,
+  priority 10) also redistributes a connected /32, 192.0.2.1, so it
+  originates an AS-external LSA. For each AuType the daemons are started
+  fresh, A first and alone until it has elected itself Designated
+  Router, off the capture; then the capture starts and B comes up, so
+  the whole adjacency (2-Way, the Database Description exchange, the
+  requests, the flooding and its acknowledgments) is captured within
+  seconds of B's first Hello, and the capture stops once both routers
+  are Full with all four LSAs in both databases, before any daemon is
+  stopped. The three
+  captures are concatenated, AuType 0, 1, 2 in that order. **What
+  ospfd built: every OSPF byte** — header, messages, the packet
+  checksum, every LSA and its LS checksum, and the MD5 digest. **What
+  the kernel built:** the IPv4 header (TOS `0xc0`, TTL 1, to
+  224.0.0.5 or the neighbor) and the Ethernet header. Both directions
+  were captured on B's side of the veth pair with offload disabled; all
+  of those checksums are computed in software (OSPF's in userspace).
+  `check_fixtures` verifies the IPv4 header checksums, the OSPF packet
+  checksum of every AuType 0 and 1 packet (the internet checksum of the
+  packet but its Authentication field, RFC 2328 §D.4.1), the published
+  password of every AuType 1 packet, the keyed-MD5 digest (RFC 2328
+  §D.4.3) of every AuType 2 packet, whose packet checksum must be zero,
+  with the published key, and every LSA's Fletcher checksum (RFC 2328
+  §12.1.7) in its own verification form. ospfd sent no Link-Local
+  Signaling (RFC 5613): no Hello or Database Description sets the L bit,
+  and every IP payload is exactly Packet Length (plus the 16-byte digest
+  under MD5), which the script asserts. Bytes after a packet (LLS,
+  Ethernet padding, an FCS) and OSPFv3 over IPv6 (the kernel had no
+  IPv6) are covered by constructed frames in `tests/test_ospf.py`. How
+  B's two router LSAs are packed into updates varied between runs (one
+  update, or one each); this capture has them together.
+
+### OSPF test secrets
+
+Published for the same reason as the IPsec keys below. Also hard-coded,
+independently, in `scripts/check_fixtures.py` and `tests/test_ospf.py`.
+
+| AuType | Secret |
+|---|---|
+| 1, simple password | `NPospf1` (NUL-padded to the 8-byte field) |
+| 2, keyed MD5, Key ID 1 | `NETProtocols-md5` |
+
 ### IPsec test keys
 
 Published so anyone can verify the captures: these keys protect
@@ -267,6 +354,53 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   capture holds an Assert, Bootstrap, Candidate-RP-Advertisement or
   Graft: `tests/test_pim.py` builds an Assert and Graft messages, and
   decodes the other types with their body kept raw.
+
+- `rip.pcap` was produced by `scripts/capture_fixtures_rip.sh`: two
+  BIRD 2.14 daemons, one per netns over a veth pair, each exporting
+  three static blackhole routes (and, over RIPv2, its connected
+  10.9.52.0/24) with a 5-second update timer, run once per scenario
+  with tcpdump on 10.9.52.1's side of the pair and offload disabled on
+  both ends. **BIRD built every RIP byte**, the authentication entries
+  and trailers included; **the kernel built the UDP header** (its
+  checksum computed in software, and verified by `check_fixtures`),
+  **the IPv4 header and the Ethernet header**. Updates follow at times
+  a capture cannot pin down, so the script captures each scenario whole
+  and keeps a fixed selection, asserting it exactly: per scenario, each
+  router's first Request and first Response, and in the RIPv2 scenario
+  10.9.52.1's first Response whose whole-second pcap timestamp is 6 or
+  more past the scenario's first captured frame's, hence more than 5 s
+  after it (not necessarily the first Response more than 5 s after),
+  past its 5-second update timer: a whole-table update, carrying the
+  peer's routes back poisoned. BIRD sends a RIPv1 router only classful
+  networks, so the v1 routes are a class A, B and C network and the
+  connected /24 is not advertised. In the RFC 4822 scenarios BIRD fills
+  in Auth Data Len as 20 for keyed MD5, counting the trailer's 4-byte
+  header with the 16-byte digest, and as 32 for HMAC-SHA-256, the digest
+  alone, as the RFC says; `tests/test_rip.py` pins both. The sequence
+  numbers of the Responses come from BIRD's clock, so a re-capture
+  differs in them, the digests, the IPv4 identification and the
+  timestamps. Everything here is IPv4: RIP has no IPv6 form (RIPng,
+  RFC 2080, is a separate protocol on UDP 521, not decoded), and veth
+  does not pad, so no frame carries Ethernet padding or an FCS;
+  `tests/test_rip.py` appends a 4-byte trailer to every frame and cuts
+  one inside an entry to cover both.
+
+### RIP test keys
+
+Published so anyone can verify the captures: these passwords protect
+nothing. `check_fixtures` verifies every keyed-MD5 digest (MD5 over the
+message up to and including the trailer's header, then the key
+zero-padded to 16 bytes, RFC 4822 §2.4) and every HMAC-SHA-256 digest
+(over the same bytes followed by the Apad `0x878FE1F3` repeated over
+the digest's length, §2.5), keyed by Key ID; the keys are also
+hard-coded, independently, in `scripts/check_fixtures.py` and
+`tests/test_rip.py`.
+
+| Scenario | Authentication | Key ID | Password |
+|---|---|---|---|
+| plaintext | plain-text password (type 2) | — | `nprip-pw` |
+| md5 | keyed MD5 (type 3) | 1 | `nprip-md5-key` |
+| sha256 | HMAC-SHA-256 (type 3) | 2 | `nprip-sha256-key` |
 
 ## HTTP captures (`tests/fixtures/http/`)
 

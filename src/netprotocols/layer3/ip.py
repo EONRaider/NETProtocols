@@ -43,14 +43,14 @@ __all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 #: The flat ``ip.proto`` and ``ip.proto.v6`` dispatch tables of the
 #: default registry, bound once at import. The v6 table inherits the
-#: other, adds the four extension headers, and holds its own entry for
-#: AH (51), ``AHv6``, where IPv4's holds ``AH``
-#: (``_defaults.FAMILY_SPECIFIC_NUMBERS``). So the per-family gating is
-#: the tables' shape rather than a test on the hot path: an IPv4 packet
-#: with ``protocol=0`` cannot conjure a Hop-by-Hop layer because the
-#: table it reads has no entry for 0. Registering mutates these dicts
-#: in place, so the references stay live — see
-#: :mod:`netprotocols.registry`.
+#: other, adds the four extension headers, and holds its own entries
+#: for AH (51), ``AHv6``, and VRRP (112), ``VRRPv6``, where IPv4's holds
+#: ``AH`` and ``VRRP`` (``_defaults.FAMILY_SPECIFIC_NUMBERS``). So the
+#: per-family gating is the tables' shape rather than a test on the
+#: hot path: an IPv4 packet with ``protocol=0`` cannot conjure a
+#: Hop-by-Hop layer because the table it reads has no entry for 0.
+#: Registering mutates these dicts in place, so the references stay
+#: live — see :mod:`netprotocols.registry`.
 _IPV4_PROTOCOL_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(
     TABLE_IP_PROTO
 )
@@ -68,9 +68,10 @@ def _ip_protocol_class(
     ``next_header`` (the values are disjoint), so the two dispatch
     through tables that share their entries — but the IPv6 extension
     headers live in the v6 table alone and are handed out only when the
-    caller is part of an IPv6 chain (``ipv6=True``), and protocol 51
-    names a different class in each (``AH``/``AHv6``), so that AH keeps
-    dispatching in its own family's chain.
+    caller is part of an IPv6 chain (``ipv6=True``), and protocols 51
+    and 112 name a different class in each: ``AH``/``AHv6``, so that AH
+    keeps dispatching in its own family's chain, and ``VRRP``/``VRRPv6``,
+    so that VRRP reads its addresses at its own family's width.
     """
     if registry is None:
         table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES

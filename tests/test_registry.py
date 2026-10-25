@@ -6,6 +6,7 @@ import pytest
 from netprotocols import DNS, SCTP, TCP, UDP, Ethernet, IPv4, IPv6, Protocol
 from netprotocols._defaults import (
     FAMILY_SPECIFIC_NUMBERS,
+    IPV4_ONLY_NUMBERS,
     IPV6_ONLY_NUMBERS,
     install,
 )
@@ -161,11 +162,49 @@ class TestTableInheritance:
             assert registry.get(TABLE_IP_PROTO_V6, number) is not None
 
     def test_the_v6_table_is_the_base_table_plus_the_v6_only_numbers(self):
+        """...less the IPv4-only numbers, which it withholds."""
         registry = Registry()
         install(registry)
         base = registry.table(TABLE_IP_PROTO)
         v6 = registry.table(TABLE_IP_PROTO_V6)
         assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
+        # Pinned literally, like FAMILY_SPECIFIC_NUMBERS below.
+        assert set(IPV4_ONLY_NUMBERS) == {89}
+        assert set(base) - set(v6) == set(IPV4_ONLY_NUMBERS)
+
+    def test_a_withheld_key_is_not_inherited(self, registry):
+        """A withheld key owns no class: a parent write skips it, as it
+        skips an override, and a direct registration fills it."""
+        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        registry.register(TABLE_IP_PROTO, 253, Fake)
+        assert registry.get(TABLE_IP_PROTO, 253) is Fake
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is None
+        registry.register(TABLE_IP_PROTO_V6, 253, OtherFake)
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is OtherFake
+
+    def test_withholding_removes_an_inherited_entry(self, registry):
+        registry.register(TABLE_IP_PROTO, 253, Fake)
+        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is None
+        assert registry.get(TABLE_IP_PROTO, 253) is Fake
+
+    def test_withholding_leaves_a_direct_registration_alone(self, registry):
+        registry.register(TABLE_IP_PROTO_V6, 253, OtherFake)
+        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is OtherFake
+
+    def test_withholding_an_unknown_table_raises(self, registry):
+        with pytest.raises(UnknownTableError):
+            registry._withhold("ip.proto.v7", 89)
+
+    def test_a_derived_registry_copies_what_is_withheld(self, registry):
+        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        child = registry.derive({TABLE_IP_PROTO: {253: Fake}})
+        assert child.get(TABLE_IP_PROTO_V6, 253) is None
+        # ...independently: withholding in the child leaves the parent.
+        child._withhold(TABLE_IP_PROTO_V6, 254)
+        registry.register(TABLE_IP_PROTO, 254, Fake)
+        assert registry.get(TABLE_IP_PROTO_V6, 254) is Fake
 
     def test_shared_numbers_differ_only_where_the_family_matters(self):
         """Every number both tables hold names the same class, except
@@ -174,12 +213,12 @@ class TestTableInheritance:
         # comparison below trusts it: pinned literally, so widening it
         # (and with it what this test allows) is a deliberate change
         # here, not a side effect of editing _defaults.
-        assert set(FAMILY_SPECIFIC_NUMBERS) == {51}
+        assert set(FAMILY_SPECIFIC_NUMBERS) == {51, 112}  # AH, VRRP
         registry = Registry()
         install(registry)
         base = registry.table(TABLE_IP_PROTO)
         v6 = registry.table(TABLE_IP_PROTO_V6)
-        differing = {n for n in base if v6[n] is not base[n]}
+        differing = {n for n in base if n in v6 and v6[n] is not base[n]}
         assert differing == set(FAMILY_SPECIFIC_NUMBERS)
         for number in FAMILY_SPECIFIC_NUMBERS:
             assert issubclass(v6[number], base[number])
@@ -308,7 +347,11 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 50).__name__ == "ESP"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 50).__name__ == "ESP"
         assert DEFAULT.get(TABLE_IP_PROTO, 51).__name__ == "AH"
+        assert DEFAULT.get(TABLE_IP_PROTO, 112).__name__ == "VRRP"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 112).__name__ == "VRRPv6"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 51).__name__ == "AHv6"
+        assert DEFAULT.get(TABLE_IP_PROTO, 89).__name__ == "OSPF"
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS

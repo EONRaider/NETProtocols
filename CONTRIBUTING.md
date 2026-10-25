@@ -39,14 +39,14 @@ is 80; Markdown is excluded from linting.
 src/netprotocols/
   _base.py        the Protocol base class and the decode contract
   _enums.py       EtherType / IPProtocol / ARP* registries + display names
-  checksum.py     RFC 1071 internet checksum, SCTP's CRC32c,
-                  compute()/verify()
+  checksum.py     RFC 1071 internet checksum, SCTP's CRC32c, the
+                  Fletcher checksum of OSPF's LSAs, compute()/verify()
   packet.py       Packet: an ordered stack of headers, with_checksums()
   layer2/         Ethernet, VLAN, ARP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
-                  GRE, IPsec ESP and AH, PIM
+                  GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)
-  layer7/         DNS, DHCP, HTTP, VXLAN
+  layer7/         DNS, DHCP, HTTP, VXLAN, RIP
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
 scripts/          fixture capture + validation

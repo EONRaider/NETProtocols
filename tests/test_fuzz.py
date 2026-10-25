@@ -26,13 +26,14 @@ this file (mutmut's, for one).
 """
 
 import contextlib
+import struct
 import sys
 
 import pytest
-from hypothesis import given
+from hypothesis import event, given
 from hypothesis import strategies as st
 
-from conftest import corpus_frames
+from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     AH,
     ARP,
@@ -42,11 +43,14 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    OSPF,
     PIM,
+    RIP,
     SCTP,
     TCP,
     UDP,
     VLAN,
+    VRRP,
     VXLAN,
     AHv6,
     DNSOverTCP,
@@ -66,17 +70,22 @@ from netprotocols import (
     PIMRegister,
     Protocol,
     ProtocolError,
+    RIPAuthentication,
+    RIPEntry,
     SCTPChunk,
     TCPOption,
+    VRRPv6,
 )
 from strategies import (
     ROUND_TRIP_STRATEGIES,
     http_context_responses,
     http_messages,
     http_wire,
+    ospf_packets,
     pim_headers,
     sctp_chunks,
     sctp_headers,
+    vrrp_headers,
 )
 from test_corpus import walk
 
@@ -106,6 +115,10 @@ ALL_PROTOCOLS = (
     AHv6,
     HTTP,
     VXLAN,
+    OSPF,
+    RIP,
+    VRRP,
+    VRRPv6,
 )
 
 
@@ -555,6 +568,204 @@ class TestSCTPChunkAccessorSafety:
         sctp = SCTP.decode(bytes(12) + raw)
         assert sctp.chunks == raw
         assert list(sctp.parsed_chunks) == chunks
+
+
+def _read_every_ospf_accessor(ospf: OSPF) -> None:
+    """Read every accessor and display helper, checking the records
+    re-encode to the body they came from."""
+    for name in (
+        "type_name",
+        "au_type_name",
+        "checksum_hex_str",
+        "key_id",
+        "auth_data_len",
+        "crypto_sequence_number",
+    ):
+        getattr(ospf, name)
+    message = ospf.hello or ospf.database_description
+    if message is not None:
+        assert bytes(message) == ospf.body
+        _ = message.options_str
+    if ospf.database_description is not None:
+        _ = ospf.database_description.flags_str
+    for request in ospf.ls_requests or ():
+        assert request.ls_type_name
+    if ospf.lsas is not None:
+        raw = len(ospf.lsas).to_bytes(4, "big")
+        assert raw + b"".join(map(bytes, ospf.lsas)) == ospf.body
+    headers = [lsa.header for lsa in ospf.lsas or ()]
+    headers += ospf.ls_acknowledgments or ()
+    for header in headers:
+        assert header.ls_type_name
+        _ = header.options_str, header.ls_checksum_hex_str
+        _ = header.ls_sequence_number_hex_str
+
+
+#: OSPF-shaped buffers: a version-2 header with a plausible Packet
+#: Length, then bytes from a small alphabet, so that bodies with their
+#: framing, broken LSA counts and lengths, and cut digests all turn up
+#: far more often than in free bytes.
+_ospf_like = st.builds(
+    lambda type_, instance_id, au_type, auth_len, tail, slack: (
+        struct.pack("!BBH", 2, type_, 24 + len(tail) - slack)
+        + bytes(10)
+        + struct.pack("!BB", instance_id, au_type)
+        + bytes(3)
+        + bytes([auth_len])
+        + bytes(4)
+        + tail
+    ),
+    st.integers(0, 6),
+    st.sampled_from([0, 1, 255]),
+    st.sampled_from([0, 1, 2, 3]),
+    st.sampled_from([0, 4, 8, 16]),
+    st.lists(st.sampled_from([0, 0, 1, 2, 4, 20, 24, 0xFF]), max_size=96).map(
+        bytes
+    ),
+    st.integers(0, 8),
+)
+
+
+class TestOSPFAccessorSafety:
+    """decode() checks each message's framing, so no accessor of a
+    decoded OSPF packet may raise, and the packet round-trips exactly
+    the bytes it consumed."""
+
+    @given(data=st.one_of(fuzz_input, _ospf_like))
+    def test_decoded_packets(self, data: bytes) -> None:
+        try:
+            ospf = OSPF.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(ospf) == data[: ospf.header_len]
+        assert OSPF.decode(bytes(ospf)) == ospf
+        _read_every_ospf_accessor(ospf)
+
+    @given(ospf=ospf_packets())
+    def test_built_packets(self, ospf: OSPF) -> None:
+        _read_every_ospf_accessor(ospf)
+        assert OSPF.decode(bytes(ospf) + b"\xde\xad") == ospf
+
+
+#: Bytes from a small alphabet, so AFI 0xFFFF, authentication type 3,
+#: plausible Packet Lengths and remainders turn up far more often than
+#: in free bytes. Led by a header decode accepts.
+_rip_like = st.tuples(
+    st.sampled_from([b"\x01\x01\x00\x00", b"\x02\x02\x00\x00"]),
+    st.lists(
+        st.sampled_from([0, 0, 0x18, 0x2C, 0x40, 0xFF, 0xFF, 1, 2, 3]),
+        max_size=120,
+    ).map(bytes),
+).map(b"".join)
+
+
+#: The captured RIP messages, every one past its UDP header.
+_RIP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "rip.pcap")]
+
+
+@st.composite
+def _rip_seeded(draw: st.DrawFn) -> bytes:
+    """A captured RIP message, a few body bytes changed, cut anywhere
+    past the header and followed by nothing, an FCS-like 4 bytes or up
+    to 23 more: the authentication entries, a trailer located by a
+    real Packet Length, and remainders, which free bytes rarely
+    reach."""
+    raw = bytearray(draw(st.sampled_from(_RIP_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(4, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(4, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+class TestRIPAccessorSafety:
+    @given(data=st.one_of(_rip_seeded(), _rip_like, fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only on the 4-byte header (too short, a
+        version other than 1 or 2, command 0) and keeps every byte
+        after it; the accessors never raise, and the entries, the
+        trailer and the remainder they report tile the body exactly."""
+        try:
+            rip = RIP.decode(data)
+        except ProtocolError:
+            assert len(data) < 4 or data[1] not in (1, 2) or data[0] == 0
+            return
+        assert bytes(rip) == data
+        assert RIP.decode(bytes(rip)) == rip
+        assert rip.command_name
+        entries = rip.entries
+        trailer = rip.authentication_trailer
+        assert trailer is None or b"\xff\xff\x00\x01".startswith(trailer[:4])
+        tiled = b"".join(bytes(entry) for entry in entries)
+        tiled += rip.remainder + (trailer if trailer is not None else b"")
+        assert tiled == rip.body
+        assert len(rip.remainder) < 20
+        assert rip.routes == tuple(
+            e for e in entries if isinstance(e, RIPEntry)
+        )
+        for entry in entries:
+            if isinstance(entry, RIPAuthentication):
+                assert entry.auth_type_name
+                _ = (entry.password, entry.packet_length, entry.key_id)
+                _ = (entry.auth_data_len, entry.sequence_number)
+            else:
+                assert entry.afi_name
+        auth = rip.authentication
+        assert auth is None or entries[0] == auth
+        event(f"RIP authentication type: {auth and auth.auth_type}")
+        event(f"RIP trailer located: {trailer is not None}")
+        event(f"RIP remainder: {bool(rip.remainder)}")
+
+
+#: VRRP's display and per-version accessors, every one of which must
+#: answer on any decoded or constructed instance.
+_VRRP_ACCESSORS = (
+    "type_name",
+    "auth_type",
+    "auth_type_name",
+    "adver_int",
+    "reserved",
+    "max_adver_int",
+    "advertisement_interval",
+    "checksum_hex_str",
+    "header_len",
+)
+
+
+class TestVRRPAccessorSafety:
+    @given(data=fuzz_input)
+    def test_decoded_adverts_answer_every_accessor(self, data: bytes) -> None:
+        """Whatever decodes, every accessor answers without raising, and
+        exactly one of the two versions' interval fields is set."""
+        for cls in (VRRP, VRRPv6):
+            try:
+                vrrp = cls.decode(data)
+            except ProtocolError:
+                continue
+            for name in _VRRP_ACCESSORS:
+                getattr(vrrp, name)
+            assert (vrrp.adver_int is None) != (vrrp.max_adver_int is None)
+            assert bytes(vrrp) == data[: vrrp.header_len]
+
+    @pytest.mark.parametrize("cls", [VRRP, VRRPv6])
+    @given(data=st.data())
+    def test_trailing_bytes_stay_out_of_the_message(
+        self, cls: type[VRRP], data: st.DataObject
+    ) -> None:
+        """The version and count bound the message, so Ethernet's zero
+        padding (every length up to its 46-byte maximum) and a nonzero
+        trailer such as a 4-byte FCS are left undecoded."""
+        header = data.draw(vrrp_headers(cls))
+        wire = bytes(header)
+        for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
+            decoded = cls.decode(wire + trailer)
+            assert decoded == header, trailer
+            assert decoded.header_len == len(wire), trailer
 
 
 #: A PIM header (version 2, each type) and then bytes from a small

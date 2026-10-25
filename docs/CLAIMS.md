@@ -826,11 +826,14 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:70-75` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 140
-frames**, across 22 scenarios captured with tcpdump over real kernel
+frame[cursor:cursor+layer.header_len]` for **every layer of all 246
+frames**, across 26 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
-association, and script-built IPsec ESP and AH. Every frame's
-checksums (SCTP's CRC32c included), and every ESP and AH ICV, verify
+association, keepalived VRRP routers, BIRD RIP routers, FRR OSPF and
+PIM-SM routers, and script-built IPsec ESP and AH. Every frame's
+checksums (SCTP's CRC32c, VRRP's, PIM's, and OSPF's packet and LSA
+checksums included),
+every ESP and AH ICV, and every RIPv2 and OSPF keyed-MD5 digest verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
@@ -838,14 +841,17 @@ internally (`scripts/check_fixtures.py`).
 
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
-that six TLV/name accessors never hang, that `HTTP`'s accessors never
-raise at all, and that `bytes(decode(x)) == x` is Hypothesis-generated
-for **all 24** protocols, up from 4. `tests/strategies.py` holds one
+that six TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
+`RIP`'s and `OSPF`'s accessors never raise at all, and that
+`bytes(decode(x)) == x` is Hypothesis-generated for **all 29**
+protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 20 without a hand-written one (#97 added the first
+property over the 25 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
-`AHv6` the 18th and 19th, `SCTP` the 20th). Reproduce:
+`AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
+21st and 22nd, `RIP` the 23rd, `OSPF` the 24th, `PIM`
+the 25th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -868,8 +874,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,939 statements, 1 missed (99.96%; re-measured 2026-10-24, after
-SCTP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+3,887 statements, 1 missed (99.97%; re-measured 2026-10-25, after
+PIM, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a

@@ -71,6 +71,16 @@ structure: its counts and encoded addresses, or, for a Hello, a walk of
 its options that leaves a zero tail where the next option would start.
 Past its 4-byte header it never raises: a body its parser cannot read
 is kept whole. See :mod:`netprotocols.layer3.pim`.
+
+``RIP`` is the port-dispatched case: its entries fill the UDP datagram,
+which the walk does not trim to UDP's length either. It keeps the whole
+buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
+report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
+instead of raising. See :mod:`netprotocols.layer7.rip`.
+
+``VRRP`` has no length field either, but its version and address count
+give its exact length, so step 3 holds as for a header with one: the
+padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
 """
 
 from __future__ import annotations

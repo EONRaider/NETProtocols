@@ -13,10 +13,13 @@ from netprotocols import (
     ARP,
     GRE,
     IGMP,
+    OSPF,
+    OSPFLSA,
     PIM,
     SCTP,
     TCP,
     UDP,
+    VRRP,
     Ethernet,
     ICMPv4,
     ICMPv6,
@@ -24,14 +27,26 @@ from netprotocols import (
     IPv4,
     IPv6,
     IPv6Fragment,
+    OSPFLSAHeader,
     Packet,
+    ProtocolError,
     SCTPChunk,
+    VRRPv6,
     compute,
     crc32c,
+    decode_frame,
     internet_checksum,
     verify,
 )
+from netprotocols.checksum import fletcher_checksum, lsa_checksum, verify_lsa
 from test_corpus import walk
+from test_vrrp import (
+    V6_GROUP,
+    V6_SRC,
+    ones_complement,
+    v3_checksum_v4,
+    v6_message,
+)
 
 CORPUS = corpus_frames()
 
@@ -316,6 +331,137 @@ class TestSCTPChecksum:
         assert isinstance(filled, SCTP)
         assert verify(filled)
         assert filled.checksum == compute(built)
+
+
+class TestVRRPChecksum:
+    """The VRRP arm: the whole message, checksum field (bytes 6-7)
+    zeroed — alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
+    pseudo-header in VRRPv3 (over IPv6 RFC 5798 §5.2.8, over IPv4
+    keepalived's default). Every expected value is
+    the wire's (keepalived computed the corpus's) or this suite's own
+    sum (``test_vrrp.ones_complement``)."""
+
+    FRAMES = pcap_frames(FIXTURES / "vrrp.pcap")
+
+    def advert(self, index: int) -> tuple[VRRP, IPv4]:
+        frame = self.FRAMES[index]
+        return VRRP.decode(frame[34:]), IPv4.decode(frame[14:])
+
+    def v6(self) -> tuple[VRRPv6, IPv6]:
+        message = v6_message()
+        ip = IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=len(message),
+            next_header=112,
+            hop_limit=255,
+            src=V6_SRC,
+            dst=V6_GROUP,
+        )
+        return VRRPv6.decode(message), ip
+
+    def test_the_corpus_covers_both_versions(self):
+        versions = [self.advert(i)[0].version for i in range(len(self.FRAMES))]
+        assert set(versions) == {2, 3}
+
+    def test_every_captured_advert_recomputes(self):
+        for index in range(len(self.FRAMES)):
+            vrrp, ip = self.advert(index)
+            assert compute(vrrp, ip=ip) == vrrp.checksum, index
+            assert verify(vrrp, ip=ip), index
+
+    def test_vrrpv2_has_no_pseudo_header(self):
+        """VRRPv2 needs no IP layer, and any one given changes nothing."""
+        vrrp, ip = self.advert(0)
+        assert vrrp.version == 2
+        assert compute(vrrp) == vrrp.checksum == 0x5AF6
+        assert compute(vrrp, ip=replace(ip, src="192.0.2.99")) == 0x5AF6
+        raw = bytes(vrrp)
+        assert ones_complement(raw[:6] + b"\x00\x00" + raw[8:]) == 0x5AF6
+
+    def test_vrrpv3_needs_the_ip_layer(self):
+        vrrp, _ = self.advert(9)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(vrrp)
+        err = excinfo.value
+        assert err.protocol is VRRP
+        assert err.field == "checksum"
+
+    def test_vrrpv3_covers_the_ipv4_pseudo_header(self):
+        """Protocol 112, the message's own length, and both addresses:
+        a unicast advert's real destination, not the multicast group."""
+        vrrp, ip = self.advert(15)
+        assert ip.dst == "10.9.20.2"
+        expected = v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+        assert compute(vrrp, ip=ip) == expected == vrrp.checksum
+        assert compute(vrrp, ip=replace(ip, dst="224.0.0.18")) != expected
+        assert compute(vrrp, ip=replace(ip, src="10.9.20.9")) != expected
+
+    def test_vrrpv3_covers_the_ipv6_pseudo_header(self):
+        vrrp, ip = self.v6()
+        assert compute(vrrp, ip=ip) == vrrp.checksum
+        assert verify(vrrp, ip=ip)
+        assert not verify(vrrp, ip=replace(ip, src="fe80::2"))
+
+    def test_the_rfc_9568_ipv4_form_does_not_verify(self):
+        """RFC 9568 §5.2.8 leaves the pseudo-header out over IPv4;
+        compute() follows keepalived's default, so such an advert fails
+        verify()."""
+        vrrp, ip = self.advert(9)
+        raw = bytes(vrrp)
+        without = ones_complement(raw[:6] + b"\x00\x00" + raw[8:])
+        assert without != vrrp.checksum
+        assert not verify(replace(vrrp, checksum=without), ip=ip)
+
+    def test_the_checksum_field_is_excluded(self):
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            assert compute(replace(vrrp, checksum=0xFFFF), ip=ip) == (
+                vrrp.checksum
+            )
+
+    def test_a_zero_sum_is_sent_as_zero(self):
+        """Return ``0x0000`` for a message whose checksum is zero.
+
+        VRRP has no UDP-style ``0x0000 → 0xFFFF`` substitution. The last
+        authentication-data word of this VRRPv2 message was chosen to
+        make its checksum zero.
+        """
+        raw = bytes.fromhex("2133c802010100000a0914330a0914346e702d767272caf6")
+        assert ones_complement(raw) == 0x0000
+        vrrp = VRRP.decode(raw)
+        assert compute(vrrp) == 0x0000
+        assert verify(vrrp)
+        assert not verify(replace(vrrp, checksum=0xFFFF))
+
+    def test_payload_is_ignored(self):
+        """Nothing after the message is part of it: padding passed as
+        ``payload`` (as with_checksums() passes its own) cannot reach
+        the sum."""
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            assert compute(vrrp, ip=ip, payload=b"\x01\x02") == vrrp.checksum
+            assert verify(vrrp, ip=ip, payload=b"\x01\x02")
+
+    def test_a_flipped_bit_is_detected(self):
+        for index in (0, 9):
+            vrrp, ip = self.advert(index)
+            raw = bytes(vrrp)
+            for position in (0, 3, 5, 8, len(raw) - 1):
+                flipped = bytearray(raw)
+                flipped[position] ^= 0x01
+                try:
+                    corrupted = VRRP.decode(bytes(flipped))
+                except ProtocolError:
+                    continue  # a flipped version or count no longer decodes
+                assert not verify(corrupted, ip=ip), (index, position)
+
+    def test_with_checksums_fills_both_families(self):
+        for vrrp, ip in (self.advert(3), self.advert(16), self.v6()):
+            stale = replace(vrrp, checksum=0)
+            (_, filled) = Packet(ip, stale).with_checksums().layers
+            assert filled.checksum == vrrp.checksum
 
 
 class TestGREChecksum:
@@ -718,3 +864,424 @@ class TestPacketWithChecksums:
         )
         packet = Packet(eth, arp)
         assert bytes(packet.with_checksums()) == bytes(packet)
+
+
+def ospf_packets() -> list[OSPF]:
+    return [walk(frame)[0][2] for frame in pcap_frames(FIXTURES / "ospf.pcap")]
+
+
+def ospf_instance_1_md5_frame() -> bytes:
+    """Return a captured AuType 2 frame moved to Instance ID 1.
+
+    RFC 6549 §2 puts the Instance ID in header byte 14.
+
+    The digest covers header byte 14, so it is recomputed with the
+    published key (tests/fixtures/MANIFEST.md); the IPv4 header is
+    untouched.
+    """
+    import hashlib
+
+    frame = bytearray(pcap_frames(FIXTURES / "ospf.pcap")[37])
+    frame[34 + 14] = 1
+    length = int.from_bytes(frame[36:38], "big")
+    packet = bytes(frame[34 : 34 + length])
+    # RFC 2328 Appendix D mandates MD5; this recomputes a router's digest.
+    digest = hashlib.md5(
+        packet + b"NETProtocols-md5", usedforsecurity=False
+    ).digest()
+    frame[34 + length :] = digest
+    return bytes(frame)
+
+
+def ospf_extended(**fields) -> OSPF:
+    """Return an AuType 3 Hello (RFC 7474 §3).
+
+    Its 28-byte trailer is the 8-byte sequence number, then a 20-byte
+    digest.
+    """
+    values = {
+        "au_type": 3,
+        "authentication": b"\x00\x00\x00\x1c" + (7).to_bytes(4, "big"),
+        "auth_trailer": bytes(range(28)),
+    }
+    values.update(fields)
+    return ospf_hello(**values)
+
+
+def ospf_hello(**fields) -> OSPF:
+    body = bytes.fromhex("ffffff00000a0201000000280a0953010a0953020a000002")
+    values = {
+        "version": 2,
+        "type": 1,
+        "packet_length": 24 + len(body),
+        "router_id": "10.0.0.1",
+        "area_id": "0.0.0.1",
+        "checksum": 0,
+        "instance_id": 0,
+        "au_type": 0,
+        "authentication": bytes(8),
+        "body": body,
+    }
+    values.update(fields)
+    return OSPF(**values)
+
+
+class TestOSPFChecksum:
+    """The packet checksum: the internet checksum of the whole packet
+    but the Authentication field (RFC 2328 §D.4.1), none under
+    cryptographic authentication (§D.4.3)."""
+
+    def test_every_captured_packet_recomputes(self):
+        packets = ospf_packets()
+        checksummed = [p for p in packets if p.au_type != 2]
+        assert {p.au_type for p in checksummed} == {0, 1}
+        assert len(checksummed) == 36
+        for ospf in checksummed:
+            assert compute(ospf) == ospf.checksum
+            assert verify(ospf)
+
+    def test_the_sum_is_over_the_packet_without_its_authentication(self):
+        ospf = ospf_hello(checksum=0x1234, authentication=b"password")
+        wire = bytes(ospf)
+        covered = wire[:12] + b"\x00\x00" + wire[14:16] + wire[24:]
+        assert compute(ospf) == internet_checksum(covered)
+
+    def test_the_authentication_field_is_excluded(self):
+        ospf = ospf_hello(au_type=1, authentication=b"NPospf1\x00")
+        other = replace(ospf, authentication=b"\xff" * 8)
+        assert compute(ospf) == compute(other)
+
+    def test_the_checksum_field_is_excluded(self):
+        assert compute(ospf_hello(checksum=0xBEEF)) == compute(ospf_hello())
+
+    def test_the_free_header_fields_are_covered(self):
+        """Change the checksum with each freely settable header field.
+
+        Those are Type, Router ID, Area ID, Instance ID and AuType.
+        Version and Packet Length cannot be changed alone (only 2
+        constructs, and the length must match the body); the body is
+        tested below.
+        """
+        base = compute(ospf_hello())
+        for changed in (
+            ospf_hello(router_id="10.0.0.2"),
+            ospf_hello(area_id="0.0.0.2"),
+            ospf_hello(instance_id=1),
+            ospf_hello(au_type=1),
+            ospf_hello(type=6),
+        ):
+            assert compute(changed) != base
+
+    def test_ip_and_payload_are_ignored(self):
+        """An LLS block after the packet is passed as payload by
+        with_checksums(); the checksum must not cover it."""
+        ospf = ospf_hello()
+        assert compute(ospf, payload=b"\x00\x00\x00\x03lls!") == compute(ospf)
+
+    def test_a_flipped_body_bit_is_detected(self):
+        ospf = replace(ospf_hello(), checksum=compute(ospf_hello()))
+        assert verify(ospf)
+        flipped = bytearray(ospf.body)
+        flipped[-1] ^= 0x01
+        assert not verify(replace(ospf, body=bytes(flipped)))
+
+    def test_cryptographic_authentication_computes_none(self):
+        ospf = ospf_packets()[-1]
+        assert ospf.au_type == 2
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(ospf)
+        err = excinfo.value
+        assert err.protocol is OSPF
+        assert err.field == "checksum"
+        assert str(err) == (
+            "An OSPF packet under cryptographic authentication (AuType 2) "
+            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)"
+        )
+
+    @pytest.mark.parametrize("checksum", [0, 1, 0xFFFF])
+    def test_cryptographic_authentication_verifies_vacuously(self, checksum):
+        ospf = replace(ospf_packets()[-1], checksum=checksum)
+        assert verify(ospf)
+
+    def test_extended_sequence_numbers_compute_none(self):
+        """Compute no checksum under AuType 3 either.
+
+        RFC 7474 §5 keeps RFC 5709 §3.1's process, which keeps RFC 2328
+        §D.4.3 step 2.
+        """
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(ospf_extended())
+        assert str(excinfo.value) == (
+            "An OSPF packet under cryptographic authentication (AuType 3) "
+            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)"
+        )
+
+    @pytest.mark.parametrize("checksum", [0, 0x1234])
+    def test_extended_sequence_numbers_verify_vacuously(self, checksum):
+        """Verify any checksum under AuType 3."""
+        assert verify(ospf_extended(checksum=checksum))
+
+    def test_with_checksums_leaves_extended_sequence_numbers_alone(self):
+        """Leave the checksum field alone under AuType 3."""
+        ospf = ospf_extended(checksum=0x1234)
+        packet = Packet(Ethernet.decode(bytes(14)), ospf)
+        assert packet.with_checksums()[OSPF].checksum == 0x1234
+
+    @pytest.mark.parametrize("au_type", [0, 1, 4])
+    def test_only_au_types_2_and_3_are_spared(self, au_type):
+        """Compute, verify and fill the checksum under any other AuType."""
+        ospf = ospf_hello(au_type=au_type, checksum=0x1234)
+        assert compute(ospf) != 0x1234
+        assert not verify(ospf)
+        packet = Packet(Ethernet.decode(bytes(14)), ospf)
+        assert packet.with_checksums()[OSPF].checksum == compute(ospf)
+
+    def test_a_nonzero_instance_id_keeps_cryptographic_authentication(self):
+        """Keep AuType 2 cryptographic under Instance ID 1.
+
+        RFC 6549 §2 makes AuType byte 15 alone, so Instance ID 1 does
+        not turn AuType 2 into 258. The digest stays in the layer,
+        verify() passes it, and with_checksums() leaves its zero
+        checksum alone, which the digest covers.
+        """
+        frame = ospf_instance_1_md5_frame()
+        packet = decode_frame(frame)
+        ospf = packet[OSPF]
+        assert (ospf.instance_id, ospf.au_type) == (1, 2)
+        assert verify(ospf)
+        assert bytes(packet.with_checksums()) == frame
+
+    def test_a_nonzero_instance_id_under_au_type_0_is_checksummed(self):
+        """Cover the Instance ID in the AuType 0 checksum."""
+        frame = pcap_frames(FIXTURES / "ospf.pcap")[1]
+        packet = decode_frame(frame)
+        moved = replace(packet[OSPF], instance_id=1)
+        rebuilt = Packet(packet[0], packet[IPv4], moved).with_checksums()
+        assert rebuilt[OSPF].instance_id == 1
+        assert rebuilt[OSPF].checksum != packet[OSPF].checksum
+        assert verify(rebuilt[OSPF])
+
+    def test_with_checksums_fills_a_built_packet(self):
+        frame = pcap_frames(FIXTURES / "ospf.pcap")[1]
+        packet = decode_frame(frame)
+        blank = Packet(
+            packet[0],
+            replace(packet[IPv4], checksum=0),
+            replace(packet[OSPF], checksum=0),
+        )
+        assert blank.with_checksums() == packet
+        assert bytes(blank.with_checksums()) == frame
+
+    def test_with_checksums_leaves_cryptographic_packets_alone(self):
+        for frame in pcap_frames(FIXTURES / "ospf.pcap")[36:]:
+            packet = decode_frame(frame)
+            assert packet[OSPF].checksum == 0
+            blank = Packet(
+                packet[0], replace(packet[IPv4], checksum=0), packet[OSPF]
+            )
+            assert blank.with_checksums() == packet
+
+
+def fletcher_sums(data: bytes) -> tuple[int, int]:
+    """Return RFC 905 B.4's running sums, reimplemented here.
+
+    Both are 0 modulo 255 over a correctly checksummed field. verify_lsa
+    makes the same check, and also rejects a zero LS Checksum; this copy
+    keeps the tests from trusting the library's sums.
+    """
+    c0 = c1 = 0
+    for byte in data:
+        c0 = (c0 + byte) % 255
+        c1 = (c1 + c0) % 255
+    return c0, c1
+
+
+class TestFletcherChecksum:
+    def placed(self, data: bytes, offset: int) -> bytes:
+        field = fletcher_checksum(data, offset).to_bytes(2, "big")
+        return data[:offset] + field + data[offset + 2 :]
+
+    @pytest.mark.parametrize(
+        "data,offset",
+        [
+            (b"\x01\x02\x00\x00\x03", 2),
+            (bytes(range(1, 40)), 0),
+            (bytes(range(200, 256)) * 3, 17),
+            (b"\xff" * 9, 7),
+            (bytes(range(256)), 254),
+        ],
+    )
+    def test_the_field_zeroes_both_sums(self, data, offset):
+        assert fletcher_sums(self.placed(data, offset)) == (0, 0)
+
+    def test_the_field_bytes_are_read_as_zero(self):
+        data = bytes(range(10, 30))
+        clobbered = data[:6] + b"\xab\xcd" + data[8:]
+        assert fletcher_checksum(data, 6) == fletcher_checksum(clobbered, 6)
+
+    def test_zero_is_reported_as_255(self):
+        """A computed X or Y of 0 is sent as 255 (RFC 905 B.2(b) makes
+        them equal; RFC 1008 §7.2.1's code writes 255), so the field
+        never holds a zero byte. Worked by hand: over 01 [X Y] 02,
+        C0 = 3 and C1 = 6 with the field zeroed, so X = (2 * 3 - 6) mod
+        255 = 0, sent as 255, and Y = 510 - 3 - 255 = 252; over
+        02 [X Y] 01, C0 = 3 and C1 = 9, so X = (2 * 3 - 9) mod 255 =
+        252 and Y = (510 - 3 - 252) mod 255 = 0, sent as 255."""
+        assert fletcher_checksum(b"\x01\x00\x00\x02", 1) == 0xFFFC
+        assert fletcher_checksum(b"\x02\x00\x00\x01", 1) == 0xFCFF
+        assert fletcher_checksum(bytes(10), 4) == 0xFFFF
+
+    def test_known_values(self):
+        # Over 01 02 [X Y] 03: C0 = 6, C1 = 16, X = (2 * 6 - 16) mod
+        # 255 = 251, Y = (510 - 6 - 251) mod 255 = 253.
+        assert fletcher_checksum(b"\x01\x02\x00\x00\x03", 2) == 0xFBFD
+        # Over 05 [X Y]: C0 = 5, C1 = 15, X = (1 * 5 - 15) mod 255 =
+        # 245, Y = (510 - 5 - 245) mod 255 = 5.
+        assert fletcher_checksum(b"\x05\x00\x00", 1) == 0xF505
+        # Over [X Y] 07: C0 = C1 = 7, X = (2 * 7 - 7) = 7,
+        # Y = (510 - 7 - 7) mod 255 = 241.
+        assert fletcher_checksum(b"\x00\x00\x07", 0) == 0x07F1
+
+    def test_memoryview_input(self):
+        data = bytes(range(1, 30))
+        assert fletcher_checksum(memoryview(data), 3) == fletcher_checksum(
+            data, 3
+        )
+
+    @pytest.mark.parametrize(
+        "data,offset", [(b"ab", 0), (b"abc", 0), (b"abc", 1)]
+    )
+    def test_the_field_may_sit_at_either_end(self, data, offset):
+        """Accept the field at offset 0 and at len(data) - 2."""
+        assert fletcher_sums(self.placed(data, offset)) == (0, 0)
+
+    @pytest.mark.parametrize(
+        "data,offset",
+        [
+            (b"", 0),
+            (b"", 14),
+            (b"a", 0),
+            (b"abc", 2),
+            (b"abc", 5),
+            (b"abcd", -1),
+        ],
+    )
+    def test_a_field_outside_the_data_raises(self, data, offset):
+        """Raise ValueError for a field that does not lie in the data."""
+        with pytest.raises(ValueError) as excinfo:
+            fletcher_checksum(data, offset)
+        assert str(excinfo.value) == (
+            f"a 2-byte checksum field at offset {offset} does not fit in "
+            f"{len(data)} bytes"
+        )
+
+
+class TestLSAChecksum:
+    """Each LSA's LS Checksum: Fletcher over the LSA but its LS Age (RFC
+    2328 §12.1.7)."""
+
+    def lsas(self) -> list[OSPFLSA]:
+        return [lsa for ospf in ospf_packets() for lsa in ospf.lsas or ()]
+
+    def test_every_captured_lsa_recomputes(self):
+        lsas = self.lsas()
+        assert len(lsas) == 18
+        assert {lsa.header.ls_type for lsa in lsas} == {1, 2, 5}
+        for lsa in lsas:
+            assert lsa_checksum(lsa) == lsa.header.ls_checksum
+            assert verify_lsa(lsa)
+            assert fletcher_sums(bytes(lsa)[2:]) == (0, 0)
+
+    def test_ls_age_is_excluded(self):
+        lsa = self.lsas()[0]
+        aged = OSPFLSA(replace(lsa.header, ls_age=3600), lsa.body)
+        assert lsa_checksum(aged) == lsa_checksum(lsa)
+        assert verify_lsa(aged)
+
+    def test_the_checksum_field_is_excluded(self):
+        lsa = self.lsas()[0]
+        blank = OSPFLSA(replace(lsa.header, ls_checksum=0), lsa.body)
+        assert lsa_checksum(blank) == lsa.header.ls_checksum
+        assert not verify_lsa(blank)
+
+    def test_a_flipped_body_bit_is_detected(self):
+        lsa = self.lsas()[0]
+        flipped = bytes([lsa.body[0] ^ 0x01]) + lsa.body[1:]
+        assert not verify_lsa(OSPFLSA(lsa.header, flipped))
+
+    def test_a_flipped_header_bit_is_detected(self):
+        lsa = self.lsas()[0]
+        flipped = replace(lsa.header, options=lsa.header.options ^ 0x01)
+        assert not verify_lsa(OSPFLSA(flipped, lsa.body))
+
+    def lsa(self, body: bytes, checksum: int | None = None) -> OSPFLSA:
+        """Build an LSA around ``body``.
+
+        It is correctly checksummed unless a ``checksum`` is given.
+        """
+        header = OSPFLSAHeader(
+            ls_age=1,
+            options=2,
+            ls_type=1,
+            link_state_id="10.0.0.1",
+            advertising_router="10.0.0.1",
+            ls_sequence_number=0x80000001,
+            ls_checksum=0,
+            length=20 + len(body),
+        )
+        lsa = OSPFLSA(header, body)
+        if checksum is None:
+            checksum = lsa_checksum(lsa)
+        return OSPFLSA(replace(header, ls_checksum=checksum), body)
+
+    def test_a_zero_byte_verifies_as_255(self):
+        """Verify a zero checksum byte where the generator writes 0xff.
+
+        RFC 905 B.4 checks the sums, not the field: 0x00 and 0xff are
+        equal modulo 255, so the 0x31ff this LSA generates verifies
+        stored as 0x3100 too.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        assert lsa.header.ls_checksum == 0x31FF
+        assert verify_lsa(lsa)
+        assert verify_lsa(self.lsa(lsa.body, 0x3100))
+        assert not verify_lsa(self.lsa(lsa.body, 0x3101))
+
+    def test_a_zero_checksum_fails_though_its_sums_are_zero(self):
+        """Reject an LS Checksum of 0x0000, which zeroes both sums here.
+
+        This LSA generates 0xffff, and 0x0000 is equal to it modulo
+        255, so RFC 905 B.4 alone would pass it; RFC 2328 §12.1.7 says
+        the field cannot be zero and calls a zero a checksum failure.
+        The zero rule is on the 16-bit value: one zero byte is fine.
+        """
+        lsa = self.lsa(bytes.fromhex("8a00c200"))
+        assert lsa.header.ls_checksum == 0xFFFF
+        assert verify_lsa(lsa)
+        assert verify_lsa(self.lsa(lsa.body, 0x00FF))
+        assert verify_lsa(self.lsa(lsa.body, 0xFF00))
+        zero = self.lsa(lsa.body, 0)
+        assert fletcher_sums(bytes(zero)[2:]) == (0, 0)
+        assert not verify_lsa(zero)
+
+    def test_swapped_adjacent_bytes_are_detected(self):
+        """Reject two swapped adjacent bytes.
+
+        The swap leaves C0 at 0 and moves C1 alone, so a check of C0 by
+        itself would pass it.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        swapped = self.lsa(b"\x01\x03\x02\x16", lsa.header.ls_checksum)
+        assert fletcher_sums(bytes(swapped)[2:])[0] == 0
+        assert not verify_lsa(swapped)
+
+    def test_a_c1_preserving_change_is_detected(self):
+        """Reject a change that leaves C1 at 0.
+
+        Adding 1 to the second-to-last byte and taking 2 from the last
+        moves C0 alone, so a check of C1 by itself would pass it.
+        """
+        lsa = self.lsa(b"\x01\x02\x03\x16")
+        changed = self.lsa(b"\x01\x02\x04\x14", lsa.header.ls_checksum)
+        assert fletcher_sums(bytes(changed)[2:])[1] == 0
+        assert not verify_lsa(changed)
