@@ -440,7 +440,11 @@ def _rip_digest(algorithm: str, key: bytes, covered: bytes) -> bytes:
     same pads as standard HMAC's padding to B; they differ only for a
     key longer than L and no longer than B, which §2.5 hashes."""
     if algorithm == "keyed-md5":
-        return hashlib.md5(covered + key.ljust(16, b"\x00")).digest()
+        # MD5 is the algorithm RFC 4822 §2.4 mandates; this only checks
+        # the digest the router sent, so it is not a security use.
+        return hashlib.md5(
+            covered + key.ljust(16, b"\x00"), usedforsecurity=False
+        ).digest()
     return hmac.new(key, covered + _RIP_APAD * 8, hashlib.sha256).digest()
 
 

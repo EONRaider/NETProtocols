@@ -260,7 +260,9 @@ class TestCapturedMessages:
         for index in MD5:
             rip = rip_of(index)
             covered = bytes(rip)[: rip.authentication.packet_length + 4]
-            digest = hashlib.md5(covered + MD5_KEY.ljust(16, b"\x00"))
+            digest = hashlib.md5(
+                covered + MD5_KEY.ljust(16, b"\x00"), usedforsecurity=False
+            )
             assert rip.authentication_trailer[4:] == digest.digest()
         for index in SHA256:
             rip = rip_of(index)
