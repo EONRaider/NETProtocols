@@ -221,8 +221,9 @@ def _cdp_sum(data: bytes) -> int:
     It is :func:`internet_checksum` with one exception: an odd final
     byte ``v`` is not padded into the high byte of a last word. It is
     the word's low byte when below 0x80, and from 0x80 the word is
-    ``0xFF00 + v - 1``: Cisco's code adds the byte sign-extended, and
-    then 1 less, to make up for an off-by-one in its folding. That is
+    ``0xFF00 + v - 1``: the byte sign-extended, less 1, which
+    packet-cdp.c's comment explains as Cisco's code adding the last
+    word as a signed number and compensating an off-by-one. That is
     lldpd 1.0.18's src/daemon/frame.c ``frame_checksum()`` ("sum +=
     0xff << 8; sum += v - 1;") and Wireshark's
     epan/dissectors/packet-cdp.c (commit 31bf0857, fetched 2026-10-25),

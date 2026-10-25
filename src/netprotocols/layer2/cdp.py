@@ -38,7 +38,9 @@ accessors read the common ones: :attr:`CDP.device_id`,
 :attr:`CDP.capability_names` (a 32-bit mask), and
 :attr:`CDP.addresses` and :attr:`CDP.management_addresses` (lists of
 :class:`CDPAddress`). Each reads the first TLV of its type and answers
-``None`` when there is none or its value is malformed; none raises.
+``None`` when there is none, or when its value is too short for a
+Capabilities mask or does not parse as an address list
+(:attr:`CDP.capability_names` answers ``()`` instead); none raises.
 
 Where a CDP PDU ends
 --------------------
