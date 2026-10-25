@@ -1224,9 +1224,10 @@ class TestIndependentChecker:
         register = PIMRegister(null_register=True, packet=packet)
         return ipv6_frame(PIM(type=1, body=bytes(register)))
 
-    #: Sources whose third and fourth bytes (the dummy IPv6 header's
-    #: bytes 10-11, an IPv4 header's checksum) are nonzero and zero.
-    NULL_REGISTER_SOURCES = ["2001:db8::10", "::1"]
+    #: Sources whose third and fourth bytes, which sit where an IPv4
+    #: header's checksum would (the dummy header's bytes 10-11), are
+    #: nonzero in the first and zero in the second.
+    NULL_REGISTER_SOURCES = ("2001:db8::10", "::1")
 
     @pytest.mark.parametrize("source_address", NULL_REGISTER_SOURCES)
     def test_an_ipv6_null_registers_dummy_pim_header_is_checked(

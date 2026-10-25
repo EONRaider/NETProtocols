@@ -3,10 +3,10 @@
 PIM rides directly on IPv4 or IPv6 as IP protocol 103 and never chains
 onward in a frame walk. Every message starts with the same 4-byte header
 (RFC 7761 §4.9): a version nibble (always 2), a type nibble, a reserved
-byte (RFC 9436's Flag Bits) and the checksum. :class:`PIM` models that header as fields and
-keeps the rest of the message raw in ``body``, the shape :class:`IGMP`
-uses; :attr:`PIM.message` dispatches on ``type`` to a parser that reads
-``body`` into a typed message:
+byte (RFC 9436's Flag Bits) and the checksum. :class:`PIM` models that
+header as fields and keeps the rest of the message raw in ``body``, the
+shape :class:`IGMP` uses; :attr:`PIM.message` dispatches on ``type`` to
+a parser that reads ``body`` into a typed message:
 
 * ``0`` Hello: :class:`PIMHello`, its option TLVs (§4.9.2) walked by the
   shared :func:`~netprotocols._tlv.walk_kind_length_value`;
