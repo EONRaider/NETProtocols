@@ -161,9 +161,9 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
             [] if internet_checksum(covered) == wire else ["ospf-checksum"]
         )
         if au_type == 1:
-            stats["ospf-simple-password"] += 1
+            stats["ospf-simple-auth"] += 1
             if authentication != _OSPF_SIMPLE_PASSWORD:
-                failures.append("ospf-password")
+                failures.append("ospf-simple-auth-mismatch")
         return failures
     if au_type != 2:
         # Unverifiable here, AuType 3 too: no published key, no HMAC-SHA.

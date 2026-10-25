@@ -1114,7 +1114,7 @@ class TestCheckerCatchesTampering:
     def test_a_wrong_password_fails(self, checker):
         """Fail a password that is not the published one."""
         assert self.check(checker, self.flip(FRAMES[18], 34 + 16)) == [
-            "ospf-password"
+            "ospf-simple-auth-mismatch"
         ]
 
     def test_a_flipped_lsa_body_byte_fails_its_fletcher_checksum(self, checker):
