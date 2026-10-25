@@ -275,6 +275,10 @@ def _check_upper_v4(
         return _check_esp(ip_header, upper, stats, depth, ipv6=False)
     if proto == 51:
         return _check_ah(ip_header, upper, stats, depth)
+    if proto == _PIM:
+        return _check_pim(
+            src, dst, upper, stats, depth, ipv6=False, strict=strict
+        )
     return [f"unchecked-protocol-{proto}"] if strict else []
 
 
@@ -325,6 +329,74 @@ def _check_udp6(
     if computed != struct.unpack_from("!H", upper, 6)[0]:
         failures.append("udp6-checksum")
     return failures + _check_udp_payload(upper, stats, depth, strict=strict)
+
+
+#: PIM's IP protocol number (RFC 7761 §4.9) and its Register type, the
+#: one message whose checksum covers only the first 8 bytes (§4.9.3).
+_PIM = 103
+_PIM_REGISTER = 1
+
+
+def _pim_sum(src: bytes, dst: bytes, covered: bytes, *, ipv6: bool) -> int:
+    # RFC 7761 §4.9: over IPv6 the pseudo-header goes in front, its
+    # length the covered length; over IPv4 there is none.
+    if ipv6:
+        covered = pseudo_v6(src, dst, _PIM, len(covered)) + covered
+    return internet_checksum(covered)
+
+
+def _check_pim(
+    src: bytes,
+    dst: bytes,
+    upper: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    ipv6: bool,
+    strict: bool = False,
+) -> list[str]:
+    """Validate a PIM message: its checksum over the whole message, or
+    over a Register's first 8 bytes. A Register summed over the whole
+    message passes too, which RFC 7761 §4.9.3 asks receivers to accept;
+    its encapsulated packet is then validated in turn."""
+    if len(upper) < 4:
+        stats["pim-truncated"] += 1
+        return ["unchecked-pim-truncated"] if strict else []
+    stats["pim"] += 1
+    if upper[0] >> 4 != 2:
+        return ["pim-version"]
+    wire = struct.unpack_from("!H", upper, 2)[0]
+    zeroed = upper[:2] + b"\x00\x00" + upper[4:]
+    if upper[0] & 0x0F != _PIM_REGISTER:
+        if _pim_sum(src, dst, zeroed, ipv6=ipv6) != wire:
+            return ["pim-checksum"]
+        return []
+    stats["pim-register"] += 1
+    if wire not in (
+        _pim_sum(src, dst, zeroed[:8], ipv6=ipv6),
+        _pim_sum(src, dst, zeroed, ipv6=ipv6),
+    ):
+        return ["pim-checksum"]
+    return _check_pim_register(upper, stats, depth, strict=strict)
+
+
+def _check_pim_register(
+    upper: bytes, stats: Counter, depth: int, *, strict: bool
+) -> list[str]:
+    """Validate the packet a PIM Register encapsulates, from its IP
+    header. A Null-Register's dummy IPv4 header may carry a zero header
+    checksum, which RFC 7761 §4.9.3 says a receiver must not check; one
+    that carries a checksum is checked like any packet."""
+    if len(upper) < 8:
+        stats["pim-register-truncated"] += 1
+        return ["unchecked-pim-register-truncated"] if strict else []
+    inner = upper[8:]
+    null_register = bool(upper[4] & 0x40)
+    if null_register and len(inner) >= 20 and inner[10:12] == b"\x00\x00":
+        stats["pim-null-register-unchecked"] += 1
+        return []
+    ethertype = 0x86DD if inner[:1] and inner[0] >> 4 == 6 else 0x0800
+    return _check_l3(ethertype, inner, stats, depth + 1, strict=strict)
 
 
 #: The IANA-assigned VXLAN destination port (RFC 7348 §5).
@@ -622,6 +694,10 @@ def _check_upper_v6(
         # does fails rather than passing unverified.
         stats["ah"] += 1
         return ["ah-ipv6-unverified"]
+    if next_header == _PIM:
+        return _check_pim(
+            src, dst, upper, stats, depth, ipv6=True, strict=strict
+        )
     return [f"unchecked-protocol-{next_header}"] if strict else []
 
 

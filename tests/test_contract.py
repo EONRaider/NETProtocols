@@ -8,6 +8,7 @@ from netprotocols import (
     ARP,
     ESP,
     HTTP,
+    PIM,
     SCTP,
     TCP,
     UDP,
@@ -35,6 +36,7 @@ class TestTruncation:
             (TCP, "raw_tcp_header_with_options"),
             (UDP, "raw_udp_header"),
             (SCTP, "raw_sctp_packet"),
+            (PIM, "raw_pim_join_prune"),
             (ICMPv4, "raw_icmpv4_echo_request"),
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
@@ -94,6 +96,26 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_pim_leaves_a_trailer_after_a_bounded_message(
+        self, raw_pim_join_prune, lax
+    ):
+        """PIM has no length field either: a Join/Prune ends where its
+        counts say, so a trailer is left undecoded."""
+        raw = raw_pim_join_prune + b"\xde\xad\xbe\xef"
+        packet = decode_frame(raw, start=PIM, lax=lax)
+        assert [type(layer) for layer in packet] == [PIM]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw_pim_join_prune
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_pim_keeps_a_cut_message(self, raw_pim_join_prune, lax):
+        raw = raw_pim_join_prune[:20]
+        packet = decode_frame(raw, start=PIM, lax=lax)
+        assert [type(layer) for layer in packet] == [PIM]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw
 
 
 class TestDecodeInputs:

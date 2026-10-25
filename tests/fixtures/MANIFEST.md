@@ -4,21 +4,22 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
+pseudo-header, ICMPv4/v6, PIM, SCTP's CRC32c; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 140 frames across 22
+frames routinely leave checksums to NIC offload. 153 frames across 23
 scenarios. Addresses are as-captured from the capture host's network.
 
-Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Ten scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`) are captured separately by their own
+`sctp.pcap`, `pim.pcap`) are captured separately by their own
 `scripts/capture_fixtures_*.sh` over purpose-built topologies — real
 kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
-a userspace SCTP association, and IPsec ESP and AH built by a script
-and sent through raw sockets — see their rows and the notes below.
+a userspace SCTP association, IPsec ESP and AH built by a script
+and sent through raw sockets, and two FRR PIM-SM routers — see their
+rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -44,6 +45,7 @@ and sent through raw sockets — see their rows and the notes below.
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
+| `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind (see PIM note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -218,6 +220,40 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   trailer; `tests/test_sctp.py` pads them by hand to cover a real NIC's.
   The kernel had no IPv6, so SCTP over IPv6 is covered by constructed
   frames in `tests/test_sctp.py`.
+
+- `pim.pcap` was produced by `scripts/capture_fixtures_pim.sh`: four
+  netns in a line over three veth pairs — a multicast source, two FRR
+  8.4 routers (zebra + pimd, R1 `10.184.12.1` with a secondary
+  `10.184.13.1` on the captured link, R2 `10.184.12.2`) and a receiver
+  that joins two groups from a socket with `IP_ADD_MEMBERSHIP` (IGMPv3,
+  `ip igmp` on R2's receiver-facing interface). Static RPs are on
+  opposite routers — R2 for `239.184.0.1`, R1 for `239.184.0.2` — so
+  both a (*,G) tree and a Register exchange cross the R1–R2 link, where
+  tcpdump captured `ip proto 103` on R1's side. `ip pim
+  register-suppress-time 15` brings R1's Null-Register probe inside the
+  capture. The receiver then leaves (R2 prunes), and R2's pimd is
+  stopped (its goodbye Hello). Hello and Join/Prune timers make the raw
+  capture's frame count vary, so the script keeps the first frame of
+  each of the 13 kinds it names and fails unless it saw all of them;
+  the committed file is that selection. **pimd built every PIM
+  message**, checksum included; **the kernel built the outer IPv4
+  headers**. FRR sums a Register's checksum over its first 8 bytes
+  only, as RFC 7761 §4.9.3 specifies; `check_fixtures` accepts that or
+  the whole-message form the RFC asks receivers to accept too. The data
+  Register's encapsulated packet is the source's datagram as R1
+  received it (IPv4 header and UDP checksum built by the source's
+  kernel), and `check_fixtures` verifies it too. The Null-Register's
+  dummy IPv4 header carries a zero header checksum, which RFC 7761
+  §4.9.3 says a receiver must not check, so `check_fixtures` counts it
+  as `pim-null-register-unchecked`. veth does not pad frames, and the
+  shortest here (the Register-Stop, a 38-byte datagram) would get 8
+  bytes of zero padding from a real NIC; `tests/test_pim.py` appends
+  padding and a 4-byte trailer by hand. The kernel had no IPv6, so PIM
+  over IPv6 is covered by constructed frames in `tests/test_pim.py`,
+  their pseudo-header checksums computed there independently. No
+  capture holds an Assert, Bootstrap, Candidate-RP-Advertisement or
+  Graft: `tests/test_pim.py` builds an Assert and Graft messages, and
+  decodes the other types with their body kept raw.
 
 ## HTTP captures (`tests/fixtures/http/`)
 

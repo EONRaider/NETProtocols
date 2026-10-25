@@ -51,8 +51,8 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 140-frame corpus
-of real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 2.4.0 corpus
+of real captured traffic, 140 frames (CPython 3.12.3, x86-64 Linux; re-measured for
 2.4.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
 number below, its reproduction command, and its caveats):
 
@@ -153,6 +153,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 3 | IPsec ESP | `ESP` | RFC 4303, IP protocol 50; SPI and sequence number decoded, the protected remainder kept as opaque `ciphertext` — the chain ends here by design, since without the Security Association nothing says where the Next Header is |
 | 3 | IPsec AH | `AH`, `AHv6` | RFC 4302, IP protocol 51; fixed fields decoded and the ICV kept raw (never verified), then the payload chains onward by `next_header` through the outer IP family's table — `AHv6`, an `AH` subclass, is what IPv6 dispatches to |
+| 3 | PIM-SM | `PIM` | RFC 7761, IP protocol 103 from IPv4 and IPv6; common header + message-type dispatch: Hello options, Register (encapsulated packet decodable), Register-Stop, Join/Prune (also Graft/Graft-Ack), Assert parsed on demand; other types kept raw; checksum compute/verify, IPv6 pseudo-header included |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |
@@ -433,7 +434,7 @@ raw = bytes(frame)  # ready for a raw socket
 
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
-checksum, and SCTP's CRC32c via `crc32c()`), and
+checksum, PIM's included, and SCTP's CRC32c via `crc32c()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 
 ## Display helpers
@@ -512,7 +513,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-140-frame corpus of real captured traffic across 22 scenarios
+153-frame corpus of real captured traffic across 23 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

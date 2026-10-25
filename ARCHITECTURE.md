@@ -185,6 +185,17 @@ read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
 [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
 
+`PIM` has no length either, and bounds itself by its own structure:
+a Join/Prune, Register-Stop or Assert ends where its counts and
+encoded addresses say, so anything after it is left undecoded, and a
+Hello, whose options run to the end of the message, leaves a run of
+zero bytes where the next option would start, as SCTP leaves one where
+a chunk would. A Register's encapsulated packet runs to the end of the
+buffer, which its checksum, over the first 8 bytes only, does not
+cover. Past the 4-byte header it never raises either: a body its
+parser cannot read is kept whole, for `PIM.message` to report. See
+[`layer3/pim.py`](src/netprotocols/layer3/pim.py)'s module docstring.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -263,10 +274,12 @@ flowchart LR
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
   I4 -->|132| S[SCTP]
+  I4 -->|103| P[PIM]
   I6 -->|58| IC6[ICMPv6]
   I6 -->|6| T
   I6 -->|17| U
   I6 -->|132| S
+  I6 -->|103| P
   I4 -->|4| I4
   I4 -->|41| I6
   I6 -->|4| I4
@@ -330,8 +343,8 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
-is SCTP — no collisions; 51 is AH in both, decoded by a class of each
-family's own).
+is SCTP, 103 is PIM — no collisions; 51 is AH in both, decoded by a
+class of each family's own).
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -562,7 +575,8 @@ verbatim** — exactly what you want when faithfully re-encoding
 captured traffic. Computing and verifying them is explicit, via
 `netprotocols.checksum`: `compute()`/`verify()` handle the IPv4 header
 checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
-pseudo-headers, and `Packet.with_checksums(payload)` fills a whole
+pseudo-headers, PIM (the pseudo-header over IPv6 only, a Register's
+first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
 stack before sending. (The RFC 768 subtlety lives where it belongs:
 the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
@@ -585,7 +599,7 @@ src/netprotocols/
 ├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
-│                   options TLV walker
+│                   options and PIM Hello options TLV walker
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
 ├── walk.py         decode_frame(): the shipped chain walker
@@ -599,7 +613,7 @@ src/netprotocols/
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
-│                   ah.py (IPsec AH: AH + AHv6),
+│                   ah.py (IPsec AH: AH + AHv6), pim.py (PIM-SM),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
 ├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table

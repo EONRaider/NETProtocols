@@ -33,6 +33,7 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.pim import PIM
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
@@ -161,6 +162,58 @@ def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     return field
 
 
+#: The PIM Register message type, whose checksum covers only the PIM
+#: header and the 4-byte Register header after it (RFC 7761 §4.9.3).
+_PIM_REGISTER = 1
+_PIM_REGISTER_HEADER_LEN = 8
+
+
+def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
+    """The PIM message bytes the checksum covers, checksum field (bytes
+    2-3) zeroed: the whole message, or a Register's first 8 bytes (RFC
+    7761 §4.9.3). ``ip`` is required, since only the family says
+    whether a pseudo-header goes in front."""
+    if ip is None:
+        raise InvalidFieldError(
+            "Computing a PIM checksum requires the enclosing IPv4/IPv6 "
+            "layer (over IPv6 its pseudo-header covers the addresses)",
+            protocol=type(layer),
+            field="checksum",
+        )
+    message = _zeroed(bytes(layer), 2)
+    if layer.type == _PIM_REGISTER:
+        return message[:_PIM_REGISTER_HEADER_LEN]
+    return message
+
+
+def _pim_sum(covered: bytes, ip: IPv4 | IPv6 | None) -> int:
+    """The internet checksum over ``covered``, behind the IPv6
+    pseudo-header (next header 103, the covered length) when ``ip`` is
+    IPv6, alone over IPv4 (RFC 7761 §4.9)."""
+    if isinstance(ip, IPv6):
+        covered = _pseudo_header(ip, IPProtocol.PIM, len(covered)) + covered
+    return internet_checksum(covered)
+
+
+def _pim_checksum(layer: PIM, ip: IPv4 | IPv6 | None) -> int:
+    """The PIM checksum: the internet checksum over the message, or over
+    a Register's first 8 bytes, with the IPv6 pseudo-header in front
+    over IPv6, whose length is then the covered length (RFC 7761
+    §4.9)."""
+    return _pim_sum(_pim_covered(layer, ip), ip)
+
+
+def _verify_pim(layer: PIM, ip: IPv4 | IPv6 | None) -> bool:
+    """Verify a PIM checksum. A Register's is also accepted computed
+    over the whole message, encapsulated packet included, as RFC 7761
+    §4.9.3 asks for interoperability with senders that sum it all."""
+    if layer.checksum == _pim_checksum(layer, ip):
+        return True
+    if layer.type != _PIM_REGISTER:
+        return False
+    return layer.checksum == _pim_sum(_zeroed(bytes(layer), 2), ip)
+
+
 def _transport_checksum(
     layer: ICMPv6 | TCP | UDP, ip: IPv4 | IPv6 | None, payload: bytes
 ) -> int:
@@ -204,13 +257,17 @@ def compute(
         built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
         its chunks included, with no pseudo-header (``ip`` ignored),
         returned as the field's big-endian reading of the CRC's
-        little-endian wire bytes (RFC 9260 Appendix A).
-    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6.
+        little-endian wire bytes (RFC 9260 Appendix A); ``PIM`` covers
+        the whole message, or only the first 8 bytes of a Register
+        (RFC 7761 §4.9.3), behind the IPv6 pseudo-header over IPv6 and
+        alone over IPv4 (``payload`` ignored).
+    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6, and
+        for PIM, whose coverage depends on the family.
     :param payload: The bytes following ``layer`` on the wire. A decoded
-        ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
-        packet, already carries its whole body in ``bytes(layer)``, so
-        pass a ``payload`` only for bytes the layer object does not
-        itself hold.
+        ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
+        ``SCTP`` packet, already carries its whole body in
+        ``bytes(layer)``, so pass a ``payload`` only for bytes the layer
+        object does not itself hold.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -226,6 +283,8 @@ def compute(
         return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):
         return _sctp_checksum(layer, payload)
+    if isinstance(layer, PIM):
+        return _pim_checksum(layer, ip)
     if isinstance(layer, (ICMPv6, TCP, UDP)):
         return _transport_checksum(layer, ip, payload)
     raise InvalidFieldError(
@@ -247,7 +306,10 @@ def verify(
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
     invalid). A GRE header whose Checksum-Present bit is clear carries
     no checksum at all (RFC 2784 §2.5) and likewise verifies as True —
-    a frame cannot fail a checksum it does not have.
+    a frame cannot fail a checksum it does not have. A PIM Register
+    verifies with its checksum over its first 8 bytes, as RFC 7761
+    §4.9.3 computes it, or over the whole message, as it asks a
+    receiver to accept too.
     """
     if (
         isinstance(layer, UDP)
@@ -257,5 +319,7 @@ def verify(
         return True
     if isinstance(layer, GRE) and not layer.checksum_present:
         return True
+    if isinstance(layer, PIM):
+        return _verify_pim(layer, ip)
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire

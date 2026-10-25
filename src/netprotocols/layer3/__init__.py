@@ -11,12 +11,27 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.pim import (
+    PIM,
+    PIMAssert,
+    PIMEncodedGroup,
+    PIMEncodedSource,
+    PIMEncodedUnicast,
+    PIMGroupSet,
+    PIMHello,
+    PIMHelloOption,
+    PIMJoinPrune,
+    PIMLANPruneDelay,
+    PIMRegister,
+    PIMRegisterStop,
+)
 
 __all__ = [
     "AH",
     "ESP",
     "GRE",
     "IGMP",
+    "PIM",
     "AHv6",
     "ICMPv4",
     "ICMPv6",
@@ -30,4 +45,15 @@ __all__ = [
     "IPv6Option",
     "IPv6Routing",
     "NDPOption",
+    "PIMAssert",
+    "PIMEncodedGroup",
+    "PIMEncodedSource",
+    "PIMEncodedUnicast",
+    "PIMGroupSet",
+    "PIMHello",
+    "PIMHelloOption",
+    "PIMJoinPrune",
+    "PIMLANPruneDelay",
+    "PIMRegister",
+    "PIMRegisterStop",
 ]

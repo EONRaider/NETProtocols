@@ -31,6 +31,20 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.pim import (
+    PIM,
+    PIMAssert,
+    PIMEncodedGroup,
+    PIMEncodedSource,
+    PIMEncodedUnicast,
+    PIMGroupSet,
+    PIMHello,
+    PIMHelloOption,
+    PIMJoinPrune,
+    PIMLANPruneDelay,
+    PIMRegister,
+    PIMRegisterStop,
+)
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
@@ -99,6 +113,7 @@ __all__ = [
     "HTTP",
     "IGMP",
     "MAX_DEPTH",
+    "PIM",
     "SCTP",
     "TCP",
     "UDP",
@@ -140,6 +155,17 @@ __all__ = [
     "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
+    "PIMAssert",
+    "PIMEncodedGroup",
+    "PIMEncodedSource",
+    "PIMEncodedUnicast",
+    "PIMGroupSet",
+    "PIMHello",
+    "PIMHelloOption",
+    "PIMJoinPrune",
+    "PIMLANPruneDelay",
+    "PIMRegister",
+    "PIMRegisterStop",
     "Packet",
     "Protocol",
     "ProtocolError",

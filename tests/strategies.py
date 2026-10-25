@@ -24,6 +24,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    PIM,
     SCTP,
     VLAN,
     VXLAN,
@@ -36,6 +37,16 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    PIMAssert,
+    PIMEncodedGroup,
+    PIMEncodedSource,
+    PIMEncodedUnicast,
+    PIMGroupSet,
+    PIMHello,
+    PIMHelloOption,
+    PIMJoinPrune,
+    PIMRegister,
+    PIMRegisterStop,
     Protocol,
     SCTPChunk,
 )
@@ -464,6 +475,112 @@ def http_wire(draw: st.DrawFn) -> bytes:
     return bytes(raw[:cut]) if draw(st.booleans()) else bytes(raw)
 
 
+@st.composite
+def pim_family_addresses(draw: st.DrawFn) -> tuple[int, str]:
+    """A PIM address family and an address of it (RFC 7761 §4.9.1)."""
+    if draw(st.booleans()):
+        return 1, draw(ipv4_strings())
+    return 2, draw(ipv6_strings())
+
+
+@st.composite
+def pim_encoded_unicasts(draw: st.DrawFn) -> PIMEncodedUnicast:
+    family, address = draw(pim_family_addresses())
+    return PIMEncodedUnicast(family, 0, address)
+
+
+@st.composite
+def pim_encoded_groups(draw: st.DrawFn) -> PIMEncodedGroup:
+    family, address = draw(pim_family_addresses())
+    return PIMEncodedGroup(
+        family,
+        0,
+        draw(st.integers(0, 0xFF)),
+        draw(st.integers(0, 0xFF)),
+        address,
+    )
+
+
+@st.composite
+def pim_encoded_sources(draw: st.DrawFn) -> PIMEncodedSource:
+    family, address = draw(pim_family_addresses())
+    return PIMEncodedSource(
+        family,
+        0,
+        draw(st.integers(0, 0xFF)),
+        draw(st.integers(0, 0xFF)),
+        address,
+    )
+
+
+@st.composite
+def pim_hello_options(draw: st.DrawFn) -> PIMHelloOption:
+    # Type 0 is left out: an empty option of type 0 ending the message
+    # is all zero bytes, which decode() takes for padding.
+    return PIMHelloOption(
+        draw(st.integers(1, 0xFFFF)), draw(st.binary(max_size=_MAX_BLOB))
+    )
+
+
+@st.composite
+def pim_join_prunes(draw: st.DrawFn) -> PIMJoinPrune:
+    sources = st.lists(pim_encoded_sources(), max_size=3).map(tuple)
+    groups = st.builds(PIMGroupSet, pim_encoded_groups(), sources, sources)
+    return PIMJoinPrune(
+        draw(pim_encoded_unicasts()),
+        draw(st.integers(0, 0xFFFF)),
+        tuple(draw(st.lists(groups, max_size=3))),
+        draw(st.integers(0, 0xFF)),
+    )
+
+
+#: The PIM message types with a typed message, and the strategy for
+#: one; any other type keeps its body raw.
+_PIM_MESSAGES: dict[int, st.SearchStrategy[object]] = {
+    0: st.lists(pim_hello_options(), max_size=4).map(
+        lambda options: PIMHello(tuple(options))
+    ),
+    1: st.builds(
+        PIMRegister,
+        st.booleans(),
+        st.booleans(),
+        st.integers(0, 0x3FFFFFFF),
+        st.binary(max_size=_MAX_BLOB),
+    ),
+    2: st.builds(PIMRegisterStop, pim_encoded_groups(), pim_encoded_unicasts()),
+    3: pim_join_prunes(),
+    5: st.builds(
+        PIMAssert,
+        pim_encoded_groups(),
+        pim_encoded_unicasts(),
+        st.booleans(),
+        st.integers(0, 0x7FFFFFFF),
+        st.integers(0, 0xFFFFFFFF),
+    ),
+    6: pim_join_prunes(),
+    7: pim_join_prunes(),
+}
+
+
+@st.composite
+def pim_headers(draw: st.DrawFn) -> PIM:
+    # A typed message's body is built from the message, so it ends where
+    # its own structure does; decode() leaves anything past that, and a
+    # Hello's zero tail, undecoded, so free bytes would not round-trip.
+    type_ = draw(st.integers(0, 0x0F))
+    strategy = _PIM_MESSAGES.get(type_)
+    if strategy is None:
+        body = draw(st.binary(max_size=_MAX_BLOB))
+    else:
+        body = bytes(draw(strategy))  # type: ignore[call-overload]
+    return PIM(
+        type=type_,
+        reserved=draw(st.integers(0, 0xFF)),
+        checksum=draw(st.integers(0, 0xFFFF)),
+        body=body,
+    )
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -484,6 +601,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
     "SCTP": sctp_headers(),
+    "PIM": pim_headers(),
     "ESP": esp_packets(),
     "AH": ah_headers(AH),
     "AHv6": ah_headers(AHv6),

@@ -174,6 +174,16 @@ def raw_sctp_packet() -> bytes:
 
 
 @pytest.fixture
+def raw_pim_join_prune() -> bytes:
+    """PIM Join/Prune from tests/fixtures/pim.pcap: R2's (*,G) Join for
+    239.184.0.2 towards R1, the RP (one group set, one joined source
+    with the S, W and R bits)."""
+    return bytes.fromhex(
+        "2300b4be01000ab80c01000100d201000020efb8000200010000010007200ab80c01"
+    )
+
+
+@pytest.fixture
 def raw_esp_packet() -> bytes:
     """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
     NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request
