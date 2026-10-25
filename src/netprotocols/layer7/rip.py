@@ -56,7 +56,10 @@ then split that body without raising:
   from the offset the RIPv2 Packet Length field gives to the end of the
   body, when they start with the trailer's ``0xFFFF 0x0001`` (or as
   much of it as a cut capture kept); otherwise the body is read as
-  entries, so a wrong Packet Length cannot hide routes as a trailer.
+  entries, so a route can never start the trailer. A Packet Length
+  that points at ``0xFFFF 0x0001`` bytes with entries after them still
+  folds those entries into the trailer, which RFC 4822 puts last and
+  which nothing in the message bounds reliably.
   It is not sized by Auth Data Len, which senders fill in two
   ways: the digest's own length, as RFC 4822 says, or that plus the
   trailer's 4-byte header. BIRD 2.14 does each: the corpus's keyed-MD5
@@ -153,7 +156,9 @@ _COMMAND_NAMES: dict[int, str] = {
     11: "Update Acknowledge",
 }
 
-#: Address Family Identifiers (IANA "RIP Address Family Identifiers").
+#: Address Family Identifiers: short forms of the entries in IANA's
+#: "RIP Address Family Identifiers" ("assigned but, unspecified" and
+#: "Authentication present" for 0 and 0xFFFF).
 #: AFI 0 asks for the whole table when it is a Request's only entry,
 #: with metric 16 (RFC 2453 §3.9.1).
 _AFI_NAMES: dict[int, str] = {

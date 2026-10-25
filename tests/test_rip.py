@@ -444,6 +444,20 @@ class TestPacketLength:
         tiled = b"".join(bytes(e) for e in rip.entries) + rip.remainder
         assert tiled == head + tail
 
+    def test_entries_after_the_trailer_header_are_the_trailers(self):
+        """Read everything from a real trailer header on as the trailer.
+
+        RFC 4822 puts the trailer last, so a Packet Length that points
+        at ``0xFFFF 0x0001`` before a route folds the route into it.
+        """
+        trailer = b"\xff\xff\x00\x01" + bytes(16) + entry("198.51.100.0")
+        rip = RIP.decode(
+            b"\x02\x02\x00\x00" + crypto_auth(44) + entry() + trailer
+        )
+        assert rip.authentication_trailer == trailer
+        assert [r.address for r in rip.routes] == ["192.0.2.0"]
+        assert rip.remainder == b""
+
     def test_the_widest_cryptographic_fields(self):
         """Read every type 3 field unsigned, its widest value included."""
         auth = RIPAuthentication(3, b"\xff" * 8 + bytes(8))
