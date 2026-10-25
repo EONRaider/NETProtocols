@@ -6,6 +6,7 @@ import pytest
 from netprotocols import (
     AH,
     ARP,
+    BGP,
     ESP,
     HTTP,
     OSPF,
@@ -48,6 +49,7 @@ class TestTruncation:
             (RIP, "raw_rip_message"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
+            (BGP, "raw_bgp_keepalive"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
@@ -82,6 +84,13 @@ class TestTruncation:
         lying = raw_ospf_hello[:2] + b"\xff\xff" + raw_ospf_hello[4:]
         with pytest.raises(TruncatedHeaderError):
             OSPF.decode(lying)
+
+    def test_lying_bgp_length_raises(self, raw_bgp_keepalive):
+        """An UPDATE whose Length claims 4096 bytes on a 23-byte
+        buffer: a message the segment cut, not a malformed one."""
+        lying = raw_bgp_keepalive[:16] + b"\x10\x00\x02" + bytes(4)
+        with pytest.raises(TruncatedHeaderError):
+            BGP.decode(lying)
 
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):

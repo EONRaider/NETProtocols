@@ -81,6 +81,16 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
+
+Decode context in ``next_protocol``
+-----------------------------------
+``BGP`` is the one header whose ``next_protocol()`` answers from what
+``decode()`` saw rather than from a wire field, and names the next
+message beside it rather than a class for its payload: whether the
+bytes after the message begin another one in the same TCP segment.
+``decode()`` records that on the instance in a ``compare=False`` field,
+outside its comparison and hash. Steps 1-3 above hold for it unchanged.
+See :mod:`netprotocols.layer7.bgp`.
 """
 
 from __future__ import annotations

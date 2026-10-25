@@ -10,20 +10,20 @@ verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
 digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 246 frames across 26
+frames routinely leave checksums to NIC offload. 265 frames across 27
 scenarios. Addresses are as-captured from the capture host's network.
 
-Thirteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Fourteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`) are
-captured separately by their own `scripts/capture_fixtures_*.sh` over
-purpose-built topologies — real kernel vlan devices, a DHCP
+`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
+`bgp.pcap`) are captured separately by their own
+`scripts/capture_fixtures_*.sh` over purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
-two FRR OSPF routers, and two FRR PIM-SM routers — see their rows and
-the notes below.
+two FRR OSPF routers, two FRR PIM-SM routers, and BGP sessions between
+three BIRD speakers — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -50,6 +50,7 @@ the notes below.
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
+| `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
@@ -181,7 +182,32 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   peels the VXLAN header on destination port 4789 and verifies the
   inner frame's checksums too. The outer source ports are the kernel's
   hash of each inner flow; none is a registered port. This file's echo
-  and UDP frames are the corpus's deepest chains, at 7 layers.
+  and UDP frames are the deepest chains outside `bgp.pcap`, at 7 layers.
+
+- `bgp.pcap` was produced by `scripts/capture_fixtures_bgp.sh`: three
+  BIRD 2.14 instances in their own netns on one Linux bridge — A (AS
+  65001) with an eBGP session to B (AS 65002) and an iBGP session to C
+  (AS 65001) — captured on the bridge, so both sessions and both
+  directions are in one file. Offload (checksum, TSO, GSO, GRO) was
+  disabled on every veth end first, so the kernel computed every TCP
+  checksum and no segment exceeds the 1460-byte MSS; `check_fixtures`
+  verifies them all. **What BIRD built: every BGP message** (the TCP
+  payload); **what the kernel built: the Ethernet, IPv4 and TCP
+  headers.** A originates five prefixes of different lengths (/24 to
+  /32), each with its own MED, B two with a MED and 600 /24s without
+  one, C one; then A withdraws its five and shuts both sessions down
+  with an RFC 9003 shutdown communication. Both speakers advertised
+  4-byte AS numbers (RFC 6793), so every AS_PATH carries 4-byte ones.
+  The script writes every frame to `bgp/bgp_session.pcap` (see below)
+  and keeps here only the frames whose payload is a whole number of
+  complete messages — of those carrying nothing but a KEEPALIVE, only
+  the first in each direction of each session — since a bare ACK or a
+  segment that starts or ends inside a message does not walk cleanly.
+  It checks what each direction's reassembled stream announced and
+  withdrew, prefix by prefix, before writing either file. The busiest
+  segment carries 7 UPDATEs, a 10-layer chain and the corpus's deepest.
+  The kernel had no IPv6, so BGP over IPv6 is covered by constructed
+  frames in `tests/test_bgp.py`.
 
 - `vrrp.pcap` was produced by `scripts/capture_fixtures_vrrp.sh`:
   keepalived 2.2.8 in two netns over a veth pair, run through four
@@ -433,6 +459,20 @@ opened; `tests/test_http.py` reassembles them again through
 curl cannot pipeline (libcurl's `CURLMOPT_PIPELINING` has no effect for
 HTTP/1.1 since 7.62.0), hence the socket client for 07. The streams
 also seed `tests/fuzz/fuzz_http_decode.py`.
+
+## BGP session capture (`tests/fixtures/bgp/`)
+
+Outside the corpus on purpose, like the HTTP captures above: none of
+the counts above include it. `bgp_session.pcap` (94 frames, every TCP
+checksum verified by `check_fixtures`) is every frame of the session
+`bgp.pcap` was cut from, the handshakes, bare ACKs, FINs and
+KEEPALIVE-only segments included. Its point is the segments a
+per-segment walk cannot decode whole: frame 31 holds two complete
+UPDATEs and the first 332 bytes of a 1063-byte third, which frame 33
+finishes; frames 34-35 and 86-87 each split one UPDATE (2090 and 2430
+bytes) between them. `tests/test_bgp.py` walks those strictly and in
+lax mode, and reassembles each direction's stream to check it is
+nothing but whole messages.
 
 ## Provenance note
 

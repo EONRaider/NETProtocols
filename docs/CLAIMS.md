@@ -826,11 +826,11 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:70-75` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 246
-frames**, across 26 scenarios captured with tcpdump over real kernel
+frame[cursor:cursor+layer.header_len]` for **every layer of all 265
+frames**, across 27 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
-association, keepalived VRRP routers, BIRD RIP routers, FRR OSPF and
-PIM-SM routers, and script-built IPsec ESP and AH. Every frame's
+association, keepalived VRRP routers, BIRD RIP routers and BGP
+speakers, FRR OSPF and PIM-SM routers, and script-built IPsec ESP and AH. Every frame's
 checksums (SCTP's CRC32c, VRRP's, PIM's, and OSPF's packet and LSA
 checksums included),
 every ESP and AH ICV, and every RIPv2 and OSPF keyed-MD5 digest verify
@@ -843,15 +843,15 @@ Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that six TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
 `RIP`'s and `OSPF`'s accessors never raise at all, and that
-`bytes(decode(x)) == x` is Hypothesis-generated for **all 29**
+`bytes(decode(x)) == x` is Hypothesis-generated for **all 30**
 protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 25 without a hand-written one (#97 added the first
+property over the 26 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
 `AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
 21st and 22nd, `RIP` the 23rd, `OSPF` the 24th, `PIM`
-the 25th). Reproduce:
+the 25th, `BGP` the 26th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -874,8 +874,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-3,887 statements, 1 missed (99.97%; re-measured 2026-10-25, after
-PIM, and the miss is still `Packet.__eq__`'s `NotImplemented`
+4,205 statements, 1 missed (99.98%; re-measured 2026-10-25, after
+BGP, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
@@ -1002,10 +1002,19 @@ eight lines:
 
 - **Bounded depth.** `max_depth` (default 32) raises
   `MaxDepthExceededError`. Chains already terminated — every header
-  validates its own declared length — so this bounds *cost*, not
-  correctness: a crafted frame cannot turn one walk into thousands of
-  decodes. Corpus maximum is 7 layers (an ICMP echo tunnelled
-  through VXLAN).
+  validates its own declared length — so for nested headers this
+  bounds *cost*, not correctness: a crafted frame cannot turn one walk
+  into thousands of decodes. BGP is the exception (#185): each message
+  in a TCP segment is a layer, so a valid segment of more than 29
+  messages — 30 one-prefix UPDATEs fit in a 1448-byte segment, and
+  GRO, TSO, loopback and jumbo frames make segments far larger —
+  exceeds the default, and the strict walk raises on valid traffic
+  (lax stops short). There the caller raises `max_depth` or walks on
+  with `decode_frame(frame[packet.consumed:], start=BGP)`
+  (`layer7/bgp.py`'s module docstring; tested in `tests/test_bgp.py`'s
+  `TestMaxDepth`). Corpus maximum is 10 layers (a TCP segment carrying
+  7 BGP messages, one layer each); 7 for nested headers (an ICMP echo
+  tunnelled through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make
   you name the class and hand-roll the rest.

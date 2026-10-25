@@ -54,6 +54,10 @@ and it never pairs a request with its response, so desyncs that need
 both — an early response, or `Expect: 100-continue` — are out of reach
 until request/response pairing exists.
 
+`BGP` is port-dispatched and decodes the messages one TCP segment
+holds; reassembling the stream, and the segment-overlap tricks that
+come with it, are the caller's in the same way.
+
 Vulnerabilities in third-party tooling used only in CI (linters, type
 checkers, the build backend) are out of scope for this policy --
 please report those upstream instead.

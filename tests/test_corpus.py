@@ -14,6 +14,7 @@ from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     AH,
     ARP,
+    BGP,
     DNS,
     ESP,
     OSPF,
@@ -113,6 +114,7 @@ class TestCorpusCoverage:
             OSPF,
             RIP,
             VRRP,
+            BGP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

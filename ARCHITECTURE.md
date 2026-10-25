@@ -286,6 +286,22 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
+`BGP` is the one exception, and it answers from decode context rather
+than from a wire field. A BGP message carries no payload: a TCP segment
+can hold several messages back to back, each decoded as its own layer,
+so `BGP.next_protocol()` names the next message *beside* it — `BGP`
+when the bytes after this message begin another one, `None` when they
+do not. Only those bytes can say which, and `next_protocol()` is handed
+none, so `decode()` records the answer on the instance in a field kept
+out of the dataclass's comparison and hash (`compare=False`, the
+mechanism `HTTP` uses for its `_message` parse cache). Two equal
+messages compare equal however they were found, and can still chain
+differently. The rules of the decode contract hold for it unchanged;
+see *Port-based dispatch is best-effort* below,
+[`_base.py`](src/netprotocols/_base.py)'s *Decode context in
+next_protocol*, and
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+
 ```mermaid
 flowchart LR
   E[Ethernet] -->|0x0806| A[ARP]
@@ -336,6 +352,8 @@ flowchart LR
   U -->|4789| VX[VXLAN]
   VX -->|always| E
   U -->|520| R[RIP]
+  T -->|179| BGP[BGP message]
+  BGP -->|another message in the segment| BGP
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -579,6 +597,40 @@ does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
 tells a receiver to ignore but a decoder should show. Past the header,
 any 20 bytes are an entry.
 
+BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
+every message opens with a 16-byte Marker of all ones, which random
+bytes match once in 2^128, and then a Length and Type whose bounds
+depend on each other (§6.1). Measured the same way, over 10,000 random
+300-byte payloads and 10,000 of uniformly random length 0-600, padded
+or not, every walk to port 179 ended with `stopped_by` set and none
+decoded a BGP layer; with the Marker forced to all ones, the Length and
+Type checks alone still rejected 9,998 to 10,000 of 10,000 random
+300-byte payloads (`random.Random` seeds 0-4). What the port cannot tell the decoder is where a message
+starts: TCP cuts its byte stream where it likes, so a segment can hold
+several messages, the tail of one, or the head of the next. Each
+message decodes as one `BGP` layer, and `BGP.next_protocol()` answers
+`BGP` while another message begins in the same segment. It is handed no
+bytes, so `BGP.decode()` records the answer on the instance, in a field
+outside its comparison and hash (see *Walking a frame* above). A
+segment that ends inside a message raises `TruncatedHeaderError` at
+that message (lax mode keeps the ones before it); one that begins
+inside a message fails the Marker check, or raises
+`TruncatedHeaderError` if it is shorter than a header; a bare ACK, like
+one on port 53, sends an empty payload into the decoder. A segment of many small messages is a deep
+chain, and here `max_depth` bounds correctness, not just cost: the
+default leaves room for 29 messages after Ethernet, IPv4 and TCP, and
+valid segments hold more. A 1448-byte one holds 76 KEEPALIVEs or 30
+one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
+loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
+strict walk raises `MaxDepthExceededError` on valid traffic and a lax
+one stops with `stopped_by` set and `consumed` short of the frame. A
+larger `max_depth` or a second walk,
+`decode_frame(frame[packet.consumed:], start=BGP)`, decodes the rest;
+the busiest segment of the captured session in the corpus, taken with
+offload off, carries 7. Reassembling
+the stream is the caller's, as it is for `HTTP` below: see
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -712,7 +764,7 @@ src/netprotocols/
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
 │                   and the HTTP codec class), vxlan.py, rip.py
-│                   (RIPv1 + RIPv2)
+│                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
