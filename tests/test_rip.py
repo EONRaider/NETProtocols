@@ -458,16 +458,6 @@ class TestPacketLength:
         assert [r.address for r in rip.routes] == ["192.0.2.0"]
         assert rip.remainder == b""
 
-    def test_the_widest_cryptographic_fields(self):
-        """Read every type 3 field unsigned, its widest value included."""
-        auth = RIPAuthentication(3, b"\xff" * 8 + bytes(8))
-        assert (
-            auth.packet_length,
-            auth.key_id,
-            auth.auth_data_len,
-            auth.sequence_number,
-        ) == (0xFFFF, 0xFF, 0xFF, 0xFFFFFFFF)
-
     def test_a_trailer_that_is_not_a_multiple_of_twenty(self):
         """A 36-byte HMAC-SHA-256 trailer is located by Packet Length."""
         trailer = b"\xff\xff\x00\x01" + bytes(range(32))
@@ -525,6 +515,20 @@ class TestPacketLength:
         assert isinstance(rip.entries[1], RIPAuthentication)
         assert rip.entries[1].password == b"pw"
         assert len(rip.routes) == 1
+
+
+class TestAuthenticationEntries:
+    """Read an authentication entry's fields and name its type."""
+
+    def test_the_widest_cryptographic_fields(self):
+        """Read every type 3 field unsigned, its widest value included."""
+        auth = RIPAuthentication(3, b"\xff" * 8 + bytes(8))
+        assert (
+            auth.packet_length,
+            auth.key_id,
+            auth.auth_data_len,
+            auth.sequence_number,
+        ) == (0xFFFF, 0xFF, 0xFF, 0xFFFFFFFF)
 
     def test_a_first_entry_with_afi_0xff00_is_a_route(self):
         """Authenticate only with AFI 0xFFFF, both bytes of it."""
