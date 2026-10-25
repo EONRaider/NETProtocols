@@ -384,7 +384,8 @@ class TestRegistryGating:
         """The gating is baked into the tables: the v6 table is the
         base one plus the extension-header numbers, and nothing else —
         apart from the family-specific numbers (AH), which both tables
-        hold but through a class of each family's own.
+        hold but through a class of each family's own, and the IPv4-only
+        numbers (OSPF), which the v6 table withholds.
 
         Stated over the *built-in* registrations on a clean registry —
         once third parties can register into ``ip.proto.v6`` directly
@@ -393,6 +394,7 @@ class TestRegistryGating:
         """
         from netprotocols._defaults import (
             FAMILY_SPECIFIC_NUMBERS,
+            IPV4_ONLY_NUMBERS,
             IPV6_ONLY_NUMBERS,
             install,
         )
@@ -409,7 +411,10 @@ class TestRegistryGating:
 
         assert base
         assert set(v6) - set(base) == set(IPV6_ONLY_NUMBERS)
+        assert set(base) - set(v6) == set(IPV4_ONLY_NUMBERS)
         for number, protocol in base.items():
+            if number in IPV4_ONLY_NUMBERS:
+                continue
             if number in FAMILY_SPECIFIC_NUMBERS:
                 assert v6[number] is not protocol
             else:

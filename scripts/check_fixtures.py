@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate the internal checksum consistency of captured fixture pcaps.
 
-Deliberately standalone (stdlib only, its own RFC 1071 and CRC32c
-implementations, its own minimal parsers): it must be able to
+Deliberately standalone (stdlib only, its own RFC 1071, CRC32c and
+Fletcher implementations, its own minimal parsers): it must be able to
 disqualify a capture even if netprotocols itself has a bug, and later
 it cross-validates the library's checksum module (plan item L-2) with
 an independent implementation.
@@ -42,6 +42,25 @@ def crc32c(data: bytes) -> int:
         for _ in range(8):
             crc = (crc >> 1) ^ (_CRC32C_POLY if crc & 1 else 0)
     return crc ^ 0xFFFFFFFF
+
+
+def fletcher_verifies(data: bytes, offset: int) -> bool:
+    """Check ``data`` against the ISO 8473 Fletcher checksum it carries.
+
+    The checksum is the two bytes at ``offset``. With it in place, both
+    running sums must be ``0`` modulo 255 (RFC 905 Annex B.4), and the
+    field must not be ``0x0000``: RFC 2328 §12.1.7 forbids a zero LS
+    Checksum and counts one as a failure, though B.4's sums can come
+    out zero over it. The library's ``verify_lsa`` makes the same
+    check; this is its own implementation, sharing no code with it.
+    """
+    if data[offset : offset + 2] == b"\x00\x00":
+        return False
+    c0 = c1 = 0
+    for byte in data:
+        c0 = (c0 + byte) % 255
+        c1 = (c1 + c0) % 255
+    return c0 == 0 and c1 == 0
 
 
 def read_pcap(path: Path):
@@ -93,6 +112,109 @@ def _check_igmp(upper: bytes, stats: Counter) -> list[str]:
     ):
         return ["igmp-checksum"]
     return []
+
+
+#: The corpus's OSPF test secrets, published in tests/fixtures/MANIFEST.md:
+#: the AuType 1 password, NUL-padded to the 8-byte field, and the AuType
+#: 2 keyed-MD5 keys by Key ID.
+_OSPF_SIMPLE_PASSWORD = b"NPospf1\x00"
+_OSPF_MD5_KEYS = {1: b"NETProtocols-md5"}
+_OSPF_MD5_LEN = 16
+
+
+def _check_ospf(upper: bytes, stats: Counter) -> list[str]:
+    # OSPFv2 (RFC 2328 §A.3.1): a 24-byte header whose Packet Length
+    # bounds the packet, then (AuType 2) the digest after it.
+    stats["ospf"] += 1
+    if len(upper) < 24:
+        return ["ospf-truncated"]
+    version, kind, length = struct.unpack_from("!BBH", upper, 0)
+    if version != 2 or not 24 <= length <= len(upper):
+        return ["ospf-header"]
+    packet = upper[:length]
+    failures = _check_ospf_auth(upper, packet, stats)
+    if kind == 4:
+        failures += _check_ospf_lsas(packet[24:], stats)
+    return failures
+
+
+def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
+    """Check an OSPF packet's checksum, password or digest.
+
+    The packet checksum under AuType 0 and 1 (the internet checksum of
+    the packet but its Authentication field, RFC 2328 §D.4.1), the
+    published password under AuType 1, or the keyed-MD5 digest under
+    AuType 2 (§D.4.3: MD5 over the packet and the key NUL-padded to 16
+    bytes; the packet checksum is not computed and must be zero).
+    AuType is header byte 15: RFC 6549 §2 made byte 14 the Instance ID.
+    Any other AuType fails as ``ospf-autype-N``, AuType 3 (RFC 7474)
+    included: its HMAC-SHA digest needs a key the corpus does not
+    publish and an HMAC-SHA check this checker does not have, so it
+    cannot be verified, and an unverifiable frame must not pass.
+    """
+    au_type = packet[15]
+    wire = struct.unpack_from("!H", packet, 12)[0]
+    authentication = packet[16:24]
+    if au_type in (0, 1):
+        covered = packet[:12] + b"\x00\x00" + packet[14:16] + packet[24:]
+        failures = (
+            [] if internet_checksum(covered) == wire else ["ospf-checksum"]
+        )
+        if au_type == 1:
+            stats["ospf-simple-auth"] += 1
+            if authentication != _OSPF_SIMPLE_PASSWORD:
+                failures.append("ospf-simple-auth-mismatch")
+        return failures
+    if au_type != 2:
+        # Unverifiable here, AuType 3 too: no published key, no HMAC-SHA.
+        return [f"ospf-autype-{au_type}"]
+    return _check_ospf_md5(upper, packet, wire, stats)
+
+
+def _check_ospf_md5(
+    upper: bytes, packet: bytes, wire: int, stats: Counter
+) -> list[str]:
+    stats["ospf-md5"] += 1
+    authentication = packet[16:24]
+    key = _OSPF_MD5_KEYS.get(authentication[2])
+    if key is None or authentication[3] != _OSPF_MD5_LEN:
+        return ["ospf-unknown-key"]
+    digest = upper[len(packet) : len(packet) + _OSPF_MD5_LEN]
+    # RFC 2328 Appendix D mandates MD5; this only verifies the router's digest.
+    expected = hashlib.md5(
+        packet + key.ljust(16, b"\x00"), usedforsecurity=False
+    ).digest()
+    failures = [] if wire == 0 else ["ospf-checksum"]
+    if not hmac.compare_digest(digest, expected):
+        failures.append("ospf-md5-digest")
+    return failures
+
+
+def _check_ospf_lsas(body: bytes, stats: Counter) -> list[str]:
+    """Check every LSA's LS Checksum in a Link State Update's body.
+
+    Fletcher over the LSA but its 2-byte LS Age (RFC 2328 §12.1.7).
+    Only updates carry whole LSAs; Database Descriptions and
+    acknowledgments carry headers alone, which their checksum does not
+    cover.
+    """
+    if len(body) < 4:
+        return ["ospf-lsa-length"]
+    cursor = 4
+    failures: list[str] = []
+    for _ in range(struct.unpack_from("!I", body, 0)[0]):
+        if len(body) - cursor < 20:
+            return [*failures, "ospf-lsa-length"]
+        length = struct.unpack_from("!H", body, cursor + 18)[0]
+        if length < 20 or cursor + length > len(body):
+            return [*failures, "ospf-lsa-length"]
+        stats["ospf-lsa"] += 1
+        lsa = body[cursor + 2 : cursor + length]
+        # LS Checksum: header bytes 16-17, 14-15 once LS Age is cut.
+        if not fletcher_verifies(lsa, 14):
+            failures.append("ospf-lsa-checksum")
+        cursor += length
+    return failures
 
 
 def _check_tcp(
@@ -318,6 +440,8 @@ def _check_upper_v4(
         return _check_esp(ip_header, upper, stats, depth, ipv6=False)
     if proto == 51:
         return _check_ah(ip_header, upper, stats, depth)
+    if proto == 89:
+        return _check_ospf(upper, stats)
     return [f"unchecked-protocol-{proto}"] if strict else []
 
 

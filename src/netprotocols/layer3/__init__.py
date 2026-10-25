@@ -11,6 +11,14 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.ospf import (
+    OSPF,
+    OSPFLSA,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
+)
 from netprotocols.layer3.vrrp import VRRP, VRRPv6
 
 __all__ = [
@@ -18,6 +26,8 @@ __all__ = [
     "ESP",
     "GRE",
     "IGMP",
+    "OSPF",
+    "OSPFLSA",
     "VRRP",
     "AHv6",
     "ICMPv4",
@@ -32,5 +42,9 @@ __all__ = [
     "IPv6Option",
     "IPv6Routing",
     "NDPOption",
+    "OSPFDatabaseDescription",
+    "OSPFHello",
+    "OSPFLSAHeader",
+    "OSPFLSRequest",
     "VRRPv6",
 ]

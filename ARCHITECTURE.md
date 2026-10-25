@@ -237,15 +237,19 @@ except ProtocolError as e:
     print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
 ```
 
-`offset` is relative to whatever buffer the error was found in: the
-`data` argument of a `decode()` call when `field` is `None` or names a
-fixed-header value, or the attribute `field` names when it's a raw
-`bytes` field parsed on demand (`options`, `body`, `sections`) — a TCP
-option error's `offset` is relative to `header.options`, not to the
-frame. `decode_frame` is the only code holding the cursor needed to
-rebase a layer's own offset to the whole frame, so it does — the
-result lands in `frame_offset`, left `None` by a bare
-`SomeClass.decode()` call with no frame to rebase against. A
+`offset` is relative to whatever buffer the error was found in. An
+error raised by `decode()` is relative to that call's `data` argument,
+whatever `field` names: OSPF's framing errors name `field="body"` (or
+`"auth_trailer"`) and still count from the start of the OSPF header,
+which is what lets `decode_frame` rebase them. An error raised later,
+by an accessor that parses a raw `bytes` attribute on demand
+(`options`, `body`, `sections`, `chunks`), is relative to that
+attribute — a TCP option error's `offset` is relative to
+`header.options`, an ICMPv6 NDP option's or an IGMPv3 group record's
+to `body`, not to the frame. `decode_frame` is the only code holding
+the cursor needed to rebase a layer's own offset to the whole frame,
+so it does — the result lands in `frame_offset`, left `None` by a
+bare `SomeClass.decode()` call with no frame to rebase against. A
 `__post_init__` validation error (values, not bytes) leaves `offset`
 `None` too; there is nothing to be positioned in. `HTTP` is the
 exception on both counts: its `field` names a grammar element
@@ -311,6 +315,7 @@ flowchart LR
   AH6 -->|6| T
   AH6 -->|17| U
   AH6 -->|50| ESP
+  I4 -->|89| OSPF[OSPFv2]
   I4 -->|112| VR[VRRP]
   I6 -->|112| VR6[VRRPv6]
   X -->|112| VR6
@@ -359,7 +364,10 @@ Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
 is SCTP — no collisions; 51 is AH and 112 is VRRP in both, each
-decoded by a class of each family's own).
+decoded by a class of each family's own). 89 is the exception: it is
+OSPF in both families, but OSPFv2 (RFC 2328) after IPv4 and OSPFv3
+(RFC 5340), a different wire format, after IPv6, and this library
+decodes only OSPFv2, so `OSPF` is reached from IPv4 alone.
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -422,8 +430,20 @@ key the child already owns. That works the other way round too: a
 third party replacing protocol 51 or 112 in `ip.proto` (`override=True`)
 changes IPv4 dispatch only, and must register in `ip.proto.v6` as well
 to reach IPv6. `_defaults.FAMILY_SPECIFIC_NUMBERS` names the numbers
-wired this way, and the tests hold the two tables to differing at
-those keys alone.
+wired this way, and the tests hold the two tables to differing only at
+those keys, the IPv6-only numbers and the IPv4-only one below.
+
+A child can also own a key with no class. Protocol 89 is OSPFv2 in
+`ip.proto` and would be inherited into `ip.proto.v6`, where it means
+OSPFv3, so every OSPFv3 packet would fail to decode as OSPFv2; instead
+the defaults withhold 89 from `ip.proto.v6` (`_defaults.IPV4_ONLY_NUMBERS`)
+before registering `OSPF` in `ip.proto`. A withheld key is skipped by
+inheritance as an override is, so an IPv6 packet with next header 89
+ends its walk at the IPv6 header, as it did before `OSPF` existed, and
+a later write to `ip.proto` does not reach it; an OSPFv3 decoder
+registered directly in `ip.proto.v6` fills it. `OSPF.decode()` also
+rejects any version but 2, for a caller who sends it OSPFv3 on purpose
+(`start=` or `decode_as`).
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its
@@ -570,8 +590,11 @@ bytes instead.
 Every class also works in reverse. Constructors take the friendly
 forms (string addresses, integer fields) and validate some of them in
 `__post_init__`: Ethernet, ARP and IPv4 check address formats (IPv6,
-DHCP and VRRP do not, so a malformed address there fails only in
-`bytes()`), and IPv4's IHL and TCP's data offset must agree with
+DHCP, VRRP and OSPF do not, so a malformed address there fails only
+in `bytes()`; for OSPF's `router_id`, `area_id` and its records'
+address fields, such as an LSA header's `advertising_router`, that
+is the `OSError` from `socket.inet_pton`), and IPv4's IHL and TCP's
+data offset must agree with
 `len(options)`. For a valid header, `bytes()` re-emits the exact
 on-wire form. Constructors do not check everything decode does, so
 some headers can be built that decode would never produce (see
@@ -624,6 +647,21 @@ contract" above): otherwise Ethernet's padding would land inside the
 CRC's span, and a packet under 46 bytes from a real NIC would fail to
 verify.
 
+OSPF carries two checksums. The packet's is the internet checksum of
+the whole packet but its 64-bit Authentication field, with no
+pseudo-header, and `compute()` covers only the packet's own bytes, so
+an RFC 5613 LLS block after it never enters; under cryptographic
+authentication (AuType 2, or 3 from RFC 7474) none is computed (the
+digest protects the packet), so `compute()` raises, `verify()` returns
+`True` and `with_checksums()` leaves the field alone. Each LSA's LS
+Checksum is an ISO 8473 Fletcher checksum of the LSA but its LS Age;
+an LSA is not a layer, so it has functions of its own:
+`lsa_checksum()` generates the field with `fletcher_checksum()`, and
+`verify_lsa()` checks it the way RFC 905 B.4 does, by both running sums
+being zero, so a byte stored as `0x00` where the generator writes
+`0xff` passes; and, since RFC 2328 §12.1.7 says the field cannot be
+zero, it fails a field of `0x0000` even where those sums are zero.
+
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.
 
@@ -641,7 +679,7 @@ src/netprotocols/
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify
+│                   compute, verify, OSPF's LSA Fletcher checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
@@ -649,6 +687,7 @@ src/netprotocols/
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),
+│                   ospf.py (OSPFv2: OSPF + its message records),
 │                   vrrp.py (VRRPv2/v3: VRRP + VRRPv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)

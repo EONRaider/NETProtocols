@@ -180,6 +180,7 @@ class Packet:
         from netprotocols.checksum import compute
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
         from netprotocols.layer3.ip import IPv4, IPv6
+        from netprotocols.layer3.ospf import OSPF
         from netprotocols.layer3.vrrp import VRRP
         from netprotocols.layer4.sctp import SCTP
         from netprotocols.layer4.tcp import TCP
@@ -202,7 +203,10 @@ class Packet:
                     layer,
                     checksum=compute(layer, ip=enclosing, payload=trailing),
                 )
-            elif isinstance(layer, IPv4):
+            elif isinstance(layer, IPv4) or (
+                isinstance(layer, OSPF)
+                and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
+            ):
                 layer = replace(layer, checksum=compute(layer))
             rebuilt.append(layer)
             trailing = bytes(layer) + trailing

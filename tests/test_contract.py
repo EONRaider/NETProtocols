@@ -8,6 +8,7 @@ from netprotocols import (
     ARP,
     ESP,
     HTTP,
+    OSPF,
     RIP,
     SCTP,
     TCP,
@@ -41,6 +42,7 @@ class TestTruncation:
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
             (VXLAN, "raw_vxlan_header"),
+            (OSPF, "raw_ospf_hello"),
             (RIP, "raw_rip_message"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
@@ -71,6 +73,13 @@ class TestTruncation:
         lying = raw_ah_header[:1] + b"\xff" + raw_ah_header[2:]
         with pytest.raises(TruncatedHeaderError):
             AH.decode(lying)
+
+    def test_lying_ospf_packet_length_raises(self, raw_ospf_hello):
+        """A Packet Length of 0xffff claims a 65535-byte packet on a
+        48-byte buffer."""
+        lying = raw_ospf_hello[:2] + b"\xff\xff" + raw_ospf_hello[4:]
+        with pytest.raises(TruncatedHeaderError):
+            OSPF.decode(lying)
 
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):
