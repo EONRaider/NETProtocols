@@ -90,6 +90,7 @@ class TestCorpusFiguresInDocs:
             "vxlan.py",
             "ipv6_ext.py",
             "_tlv.py",
+            "sctp.py",
         ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:

@@ -151,16 +151,39 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
-**Text framing is the one variation.** `HTTP` has no fixed portion to
-unpack: `decode()` scans for the empty line that ends the head, then
-for the end the head's framing gives the body, so rule 1 is a scan
-rather than an unpack and `header_len` covers the whole message, not a
-`_struct` size. Its `decode()` also takes keyword-only context the
-bytes cannot carry — `request_method` (a response to `HEAD`, or a 2xx
-to `CONNECT`, has no body whatever its headers say) and `closed` (the
-buffer ends where the connection did) — and `request_method` is stored,
-but normalized: kept only when it changes the framing, so two messages
-with equal bytes and equal framing compare equal.
+**Two protocols vary this.** The first is text framing. `HTTP` has no
+fixed portion to unpack: `decode()` scans for the empty line that ends
+the head, then for the end the head's framing gives the body, so rule 1
+is a scan rather than an unpack and `header_len` covers the whole
+message, not a `_struct` size. Its `decode()` also takes keyword-only
+context the bytes cannot carry — `request_method` (a response to `HEAD`,
+or a 2xx to `CONNECT`, has no body whatever its headers say) and
+`closed` (the buffer ends where the connection did) — and
+`request_method` is stored, but normalized: kept only when it changes
+the framing, so two messages with equal bytes and equal framing compare
+equal.
+
+The second is `SCTP`. Like ICMPv4, ICMPv6 and IGMP it has no length of
+its own: the packet is the whole IP payload, and the walk does not trim
+a frame to the IP header's declared length. Those three keep the whole
+buffer, Ethernet's zero padding included: ICMPv4's and IGMP's internet
+checksum is unchanged by appended zero bytes, and an IPv6 frame carrying
+ICMPv6 is never short enough to be padded. SCTP's CRC32c does change
+when zero bytes are appended, so `decode()` walks the chunk headers to
+find where the packet ends and leaves a run of zero bytes where the next
+chunk would start undecoded, since that cannot begin a chunk and is what
+an Ethernet sender normally pads a short frame with. Rule 3 holds for
+those zeros; any other trailing bytes become part of the packet. Past
+the 12-byte common header `decode()` never raises, like the three it
+resembles: a remainder the walk cannot parse — a chunk cut by a snap
+length, an IP fragment or an ICMP error's quote, or a nonzero trailer
+such as an Ethernet FCS, which cannot be told from a broken chunk — is
+kept verbatim in `chunks`, the ports and verification tag still decode,
+and `verify()` returns `False`. `parsed_chunks` raises only when the
+remainder does not walk: a trailer that happens to (an FCS whose bytes
+read as a chunk header) parses as a phantom chunk, so `verify()` is the
+reliable signal. See
+[`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
@@ -239,9 +262,11 @@ flowchart LR
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
+  I4 -->|132| S[SCTP]
   I6 -->|58| IC6[ICMPv6]
   I6 -->|6| T
   I6 -->|17| U
+  I6 -->|132| S
   I4 -->|4| I4
   I4 -->|41| I6
   I6 -->|4| I4
@@ -253,6 +278,7 @@ flowchart LR
   X -->|58| IC6
   X -->|6| T
   X -->|17| U
+  X -->|132| S
   X -->|50| ESP
   I4 -->|51| AH[AH]
   AH -->|6| T
@@ -303,9 +329,9 @@ The numbers on the arrows are the wire values — EtherTypes out of
 Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
-space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP — no
-collisions; 51 is AH in both, decoded by a class of each family's
-own).
+space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
+is SCTP — no collisions; 51 is AH in both, decoded by a class of each
+family's own).
 
 A complete frame walk is a five-line loop — which is exactly why it
 ships as [`decode_frame()`](src/netprotocols/walk.py) rather than as
@@ -538,7 +564,16 @@ captured traffic. Computing and verifying them is explicit, via
 checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
 pseudo-headers, and `Packet.with_checksums(payload)` fills a whole
 stack before sending. (The RFC 768 subtlety lives where it belongs:
-the `0x0000 → 0xFFFF` substitution applies to UDP alone.)
+the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
+one transport that does not use the internet checksum: its CRC32c
+(`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
+pseudo-header, and goes on the wire least significant byte first, so
+`compute()` returns it byte-swapped to match the field as decoded.
+
+That is also why `SCTP.decode()` bounds its own extent (see "The decode
+contract" above): otherwise Ethernet's padding would land inside the
+CRC's span, and a packet under 46 bytes from a real NIC would fail to
+verify.
 
 `Packet` is the thin composition layer: it holds an ordered tuple of
 headers and `bytes(packet)` joins them, ready for a raw socket.
@@ -556,7 +591,8 @@ src/netprotocols/
 ├── walk.py         decode_frame(): the shipped chain walker
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
-├── checksum.py     RFC 1071: internet_checksum, compute, verify
+├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
+│                   compute, verify
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
@@ -566,7 +602,8 @@ src/netprotocols/
 │                   ah.py (IPsec AH: AH + AHv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
 │                   Destination Options)
-├── layer4/         tcp.py, udp.py, _ports.py (port-table dispatch)
+├── layer4/         tcp.py, udp.py, sctp.py, _ports.py (port-table
+│                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
 │                   and the HTTP codec class), vxlan.py
 └── utils/          validators (mac.py, ipv4.py), exceptions.py

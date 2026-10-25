@@ -42,6 +42,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    SCTP,
     TCP,
     UDP,
     VLAN,
@@ -61,6 +62,7 @@ from netprotocols import (
     Packet,
     Protocol,
     ProtocolError,
+    SCTPChunk,
     TCPOption,
 )
 from strategies import (
@@ -68,6 +70,8 @@ from strategies import (
     http_context_responses,
     http_messages,
     http_wire,
+    sctp_chunks,
+    sctp_headers,
 )
 from test_corpus import walk
 
@@ -86,6 +90,7 @@ ALL_PROTOCOLS = (
     IGMP,
     TCP,
     UDP,
+    SCTP,
     DNS,
     DNSOverTCP,
     DHCP,
@@ -476,6 +481,74 @@ class TestTCPOptionAccessorSafety:
                 for option in tcp.parsed_options:
                     assert option.kind_name
                     _ = option.value
+
+
+#: Bytes from a small alphabet, so chunk lengths of 4, 8 and below 4,
+#: zero tails and cut chunks turn up far more often than in free bytes.
+_sctp_like = st.lists(
+    st.sampled_from([0, 0, 0, 1, 3, 4, 5, 8, 0xFF]), max_size=96
+).map(bytes)
+
+
+class TestSCTPChunkAccessorSafety:
+    @given(data=st.one_of(fuzz_input, _sctp_like))
+    def test_decode_never_raises_past_the_common_header(
+        self, data: bytes
+    ) -> None:
+        """Past the 12-byte common header decode() keeps whatever it
+        cannot walk, so it raises only on a shorter buffer. It leaves
+        undecoded nothing but a zero tail, round-trips exactly the
+        bytes it consumed, and the accessor raises only ProtocolError,
+        and only when decode() kept an unwalkable remainder."""
+        if len(data) < 12:
+            with pytest.raises(ProtocolError):
+                SCTP.decode(data)
+            return
+        sctp = SCTP.decode(data)
+        assert bytes(sctp) == data[: sctp.header_len]
+        assert not any(data[sctp.header_len :])
+        assert SCTP.decode(bytes(sctp)) == sctp
+        try:
+            chunks = sctp.parsed_chunks
+        except ProtocolError:
+            assert sctp.header_len == len(data)
+            return
+        for chunk in chunks:
+            assert chunk.type_name
+            _ = chunk.flags_str
+            assert 0 <= chunk.unrecognized_action <= 3
+
+    @given(header=sctp_headers())
+    def test_zero_padding_after_a_packet_is_left_undecoded(
+        self, header: SCTP
+    ) -> None:
+        """A well-formed packet followed by Ethernet's zero padding
+        decodes to exactly the packet: the zero-tail trim, which the
+        free-byte property above rarely reaches. Every padding length up
+        to Ethernet's 46-byte maximum is tried rather than drawn, so the
+        1-3 byte remainders (too short for a chunk header) are always
+        covered whatever the seed."""
+        wire = bytes(header)
+        for padding in range(47):
+            sctp = SCTP.decode(wire + bytes(padding))
+            assert sctp == header, padding
+            assert sctp.header_len == len(wire), padding
+
+    @given(header=sctp_headers())
+    def test_a_nonzero_trailer_is_kept(self, header: SCTP) -> None:
+        """Anything but zeros after the packet (an FCS, say) cannot be
+        told from a broken chunk, so decode() keeps it all, after any
+        number of zeros."""
+        for padding in range(47):
+            data = bytes(header) + bytes(padding) + b"\x01"
+            assert SCTP.decode(data).header_len == len(data), padding
+
+    @given(chunks=st.lists(sctp_chunks(), max_size=6))
+    def test_built_chunks_parse_back(self, chunks: list[SCTPChunk]) -> None:
+        raw = b"".join(bytes(chunk) for chunk in chunks)
+        sctp = SCTP.decode(bytes(12) + raw)
+        assert sctp.chunks == raw
+        assert list(sctp.parsed_chunks) == chunks
 
 
 def _read_every_accessor(msg: HTTP) -> None:

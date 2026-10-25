@@ -48,6 +48,23 @@ ending the head and for the end the head's framing gives the body, and
 ``header_len`` covers the whole message rather than a ``_struct``
 size, so it must be overridden (step 1 above is a scan, not an
 unpack).
+
+Protocols without a length field
+--------------------------------
+``ICMPv4``, ``ICMPv6``, ``IGMP`` and ``SCTP`` carry no length of their
+own: each is the whole IP payload, and the chain walk does not trim a
+frame to the IP header's declared length. The first three keep the whole
+buffer, so an Ethernet frame's zero padding lands in their ``body``
+(only in IPv4's: an IPv6 frame carrying ICMPv6 is never short enough to
+be padded), and the internet checksum ICMPv4 and IGMP carry is unchanged
+by appended zero bytes. ``SCTP``'s CRC32c is not, so its ``decode()``
+walks the chunk headers to find where the packet ends and leaves a run
+of zero bytes where the next chunk would start undecoded: step 3 holds
+for those zeros, while any other trailing bytes become part of the
+packet. Like the other three, it never raises past its fixed portion:
+a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
+stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
+report. See :mod:`netprotocols.layer4.sctp`.
 """
 
 from __future__ import annotations

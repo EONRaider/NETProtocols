@@ -24,6 +24,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    SCTP,
     VLAN,
     VXLAN,
     AHv6,
@@ -36,6 +37,7 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Protocol,
+    SCTPChunk,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
 
@@ -275,6 +277,30 @@ def gre_headers(draw: st.DrawFn) -> GRE:
 
 
 @st.composite
+def sctp_chunks(draw: st.DrawFn) -> SCTPChunk:
+    return SCTPChunk(
+        type=draw(st.integers(0, 0xFF)),
+        flags=draw(st.integers(0, 0xFF)),
+        value=draw(st.binary(max_size=_MAX_BLOB)),
+    )
+
+
+@st.composite
+def sctp_headers(draw: st.DrawFn) -> SCTP:
+    # chunks is built from whole, padded chunks rather than drawn as
+    # free bytes: decode() leaves a zero tail where a chunk would start
+    # undecoded, so free bytes ending in one would not round-trip.
+    chunks = draw(st.lists(sctp_chunks(), max_size=4))
+    return SCTP(
+        src_port=draw(st.integers(0, 0xFFFF)),
+        dst_port=draw(st.integers(0, 0xFFFF)),
+        verification_tag=draw(st.integers(0, 0xFFFFFFFF)),
+        checksum=draw(st.integers(0, 0xFFFFFFFF)),
+        chunks=b"".join(bytes(chunk) for chunk in chunks),
+    )
+
+
+@st.composite
 def esp_packets(draw: st.DrawFn) -> ESP:
     # Everything past the SPI and sequence number is opaque, so any
     # bytes at all — including none — are a valid remainder.
@@ -457,6 +483,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "DNSOverTCP": dns_over_tcp_headers(),
     "DHCP": dhcp_headers(),
     "GRE": gre_headers(),
+    "SCTP": sctp_headers(),
     "ESP": esp_packets(),
     "AH": ah_headers(AH),
     "AHv6": ah_headers(AHv6),

@@ -80,6 +80,7 @@ def install(registry: Registry) -> None:
         IPv6HopByHopOptions,
         IPv6Routing,
     )
+    from netprotocols.layer4.sctp import SCTP
     from netprotocols.layer4.tcp import TCP
     from netprotocols.layer4.udp import UDP
     from netprotocols.layer7.dhcp import DHCP
@@ -101,6 +102,7 @@ def install(registry: Registry) -> None:
     add(TABLE_IP_PROTO, IPProtocol.UDP, UDP)
     add(TABLE_IP_PROTO, IPProtocol.GRE, GRE)
     add(TABLE_IP_PROTO, IPProtocol.IPV6_ICMP, ICMPv6)
+    add(TABLE_IP_PROTO, IPProtocol.SCTP, SCTP)
 
     # IP-in-IP has no header of its own: protocol 4 (RFC 2003, RFC 2473)
     # or 41 (RFC 4213, RFC 2473) says the payload is a whole IPv4 or

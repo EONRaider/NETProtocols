@@ -2,8 +2,10 @@ from dataclasses import replace
 
 import pytest
 
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     AH,
+    SCTP,
     TCP,
     UDP,
     AHv6,
@@ -71,6 +73,12 @@ def make_udp(src_port: int, dst_port: int) -> UDP:
     return UDP(src_port=src_port, dst_port=dst_port, length=8, checksum=0)
 
 
+def make_sctp(src_port: int, dst_port: int) -> SCTP:
+    return SCTP(
+        src_port=src_port, dst_port=dst_port, verification_tag=0, checksum=0
+    )
+
+
 class TestFlowKeyFunction:
     def test_both_directions_of_a_tcp_conversation_are_equal(self):
         """The core contract: request and reply key identically, and the
@@ -113,9 +121,23 @@ class TestFlowKeyFunction:
         )
 
     @pytest.mark.parametrize(
+        "make_ip,client,server",
+        [
+            (make_ipv4, "10.0.0.1", "10.0.0.2"),
+            (make_ipv6, "2001:db8::1", "2001:db8::2"),
+        ],
+        ids=["ipv4", "ipv6"],
+    )
+    def test_sctp_works(self, make_ip, client, server):
+        """SCTP has ports, so it keys like TCP and UDP."""
+        request = flow_key(make_sctp(54770, 7), ip=make_ip(client, server, 132))
+        reply = flow_key(make_sctp(7, 54770), ip=make_ip(server, client, 132))
+        assert request == reply == FlowKey(client, server, 54770, 7, 132)
+
+    @pytest.mark.parametrize(
         ("transport", "number"),
-        [(make_tcp(1, 2), 6), (make_udp(1, 2), 17)],
-        ids=["tcp", "udp"],
+        [(make_tcp(1, 2), 6), (make_udp(1, 2), 17), (make_sctp(1, 2), 132)],
+        ids=["tcp", "udp", "sctp"],
     )
     @pytest.mark.parametrize(
         "ip",
@@ -208,6 +230,16 @@ class TestPacketFlowKey:
     def test_missing_ip_layer_returns_none(self):
         packet = Packet(make_tcp(1, 2))
         assert packet.flow_key() is None
+
+    def test_a_decoded_sctp_association_keys_both_directions_alike(self):
+        frames = pcap_frames(FIXTURES / "sctp.pcap")
+        init, init_ack = decode_frame(frames[0]), decode_frame(frames[1])
+        key = init.flow_key()
+        assert key == init_ack.flow_key()
+        assert key == FlowKey("10.9.10.1", "10.9.10.2", 54770, 7, 132)
+        assert all(
+            decode_frame(frame).flow_key() == key for frame in frames[:15]
+        )
 
     def test_icmp_packet_returns_none(self):
         icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00" * 4)

@@ -125,8 +125,8 @@ class Packet:
     def flow_key(self) -> FlowKey | None:
         """The canonical :class:`~netprotocols.flow.FlowKey` for this
         packet's conversation, found by walking :attr:`layers` for the
-        first TCP/UDP layer and the IPv4/IPv6 header nearest before it,
-        and delegating to :func:`~netprotocols.flow.flow_key`.
+        first TCP/UDP/SCTP layer and the IPv4/IPv6 header nearest
+        before it, and delegating to :func:`~netprotocols.flow.flow_key`.
 
         Nearest, not first: a tunnel (IP-in-IP, GRE, IPsec tunnel mode)
         stacks an outer IP header whose addresses are the tunnel's
@@ -143,8 +143,8 @@ class Packet:
         the IP header before it.
 
         ``None`` if either layer is missing — a packet with no
-        transport layer, or a bare TCP/UDP segment built without an IP
-        header before it — and ``None`` for a transport layer with no
+        transport layer, or a bare TCP/UDP/SCTP header built without an
+        IP header before it — and ``None`` for a transport layer with no
         ports to key on (ICMP; see :func:`~netprotocols.flow.flow_key`).
         """
         from netprotocols.flow import _TRANSPORTS
@@ -180,6 +180,7 @@ class Packet:
         from netprotocols.checksum import compute
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
         from netprotocols.layer3.ip import IPv4, IPv6
+        from netprotocols.layer4.sctp import SCTP
         from netprotocols.layer4.tcp import TCP
         from netprotocols.layer4.udp import UDP
 
@@ -187,7 +188,7 @@ class Packet:
         trailing = payload
         for index in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[index]
-            if isinstance(layer, (TCP, UDP, ICMPv6, ICMPv4)):
+            if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4)):
                 enclosing = next(
                     (
                         candidate

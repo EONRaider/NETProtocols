@@ -1,16 +1,19 @@
 """Checksum computation and verification, held to the wire by the
 real-capture corpus: every checksummed inbound frame must recompute to
-its captured value."""
+its captured value. SCTP's CRC32c is tested here too, not in
+test_sctp.py, because this file is in the mutation audit's test
+selection (pyproject.toml's [tool.mutmut])."""
 
 from dataclasses import replace
 
 import pytest
 
-from conftest import corpus_frames
+from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     ARP,
     GRE,
     IGMP,
+    SCTP,
     TCP,
     UDP,
     Ethernet,
@@ -21,7 +24,9 @@ from netprotocols import (
     IPv6,
     IPv6Fragment,
     Packet,
+    SCTPChunk,
     compute,
+    crc32c,
     internet_checksum,
     verify,
 )
@@ -62,7 +67,9 @@ def transport_cases():
             if isinstance(layer, (IPv4, IPv6)):
                 ip, ip_start = layer, offset
             offset += layer.header_len
-            if ip is None or not isinstance(layer, (TCP, UDP, ICMPv4, ICMPv6)):
+            if ip is None or not isinstance(
+                layer, (TCP, UDP, SCTP, ICMPv4, ICMPv6)
+            ):
                 continue
             # The wire payload ends at the IP datagram's declared length.
             if isinstance(ip, IPv4):
@@ -92,9 +99,9 @@ CHECKSUMMED = [case for case in CASES if case not in UNCHECKSUMMED]
 
 
 class TestCorpusChecksums:
-    def test_corpus_offers_all_five_checksum_cases(self):
+    def test_corpus_offers_every_transport_checksum_case(self):
         kinds = {type(transport) for _, transport, _, _ in CHECKSUMMED}
-        assert {TCP, UDP, ICMPv4, ICMPv6} <= kinds
+        assert {TCP, UDP, SCTP, ICMPv4, ICMPv6} <= kinds
         assert any(isinstance(ip, IPv4) for _, _, ip, _ in CHECKSUMMED)
         assert any(isinstance(ip, IPv6) for _, _, ip, _ in CHECKSUMMED)
 
@@ -181,6 +188,133 @@ class TestCorpusChecksums:
             payload[:-1] + bytes([payload[-1] ^ 0xFF]) if payload else b"\x01"
         )
         assert not verify(transport, ip=ip, payload=corrupted)
+
+
+class TestCRC32c:
+    """The primitive, pinned to published vectors: the CRC catalogue's
+    check value, and RFC 3720 Appendix B.4 (which prints each CRC as
+    the bytes iSCSI sends, least significant first)."""
+
+    @pytest.mark.parametrize(
+        "data,wire",
+        [
+            (bytes(32), "aa36918a"),
+            (b"\xff" * 32, "43aba862"),
+            (bytes(range(32)), "4e79dd46"),
+            (bytes(range(31, -1, -1)), "5cdb3f11"),
+            (
+                bytes.fromhex(
+                    "01c00000000000000000000000000000"
+                    "14000000000004000000001400000018"
+                    "28000000000000000200000000000000"
+                ),
+                "563a96d9",
+            ),
+        ],
+        ids=["zeros", "ones", "incrementing", "decrementing", "iscsi-read"],
+    )
+    def test_rfc_3720_vectors(self, data, wire):
+        assert crc32c(data).to_bytes(4, "little").hex() == wire
+
+    def test_check_value(self):
+        assert crc32c(b"123456789") == 0xE3069283
+
+    def test_empty_input(self):
+        assert crc32c(b"") == 0
+
+    def test_every_single_byte(self):
+        """One byte reaches one table entry, so this pins all 256
+        against a bit-at-a-time reference."""
+
+        def reference(data: bytes) -> int:
+            crc = 0xFFFFFFFF
+            for byte in data:
+                crc ^= byte
+                for _ in range(8):
+                    crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+            return crc ^ 0xFFFFFFFF
+
+        for byte in range(256):
+            assert crc32c(bytes([byte])) == reference(bytes([byte]))
+
+    def test_memoryview_input(self):
+        assert crc32c(memoryview(b"123456789")) == 0xE3069283
+
+    def test_is_not_the_ieee_crc(self):
+        import zlib
+
+        assert crc32c(b"123456789") != zlib.crc32(b"123456789")
+
+
+class TestSCTPChecksum:
+    """The SCTP arm: CRC32c over the whole packet with the checksum
+    field zeroed, no pseudo-header, the CRC sent least significant byte
+    first (RFC 9260 Appendix A)."""
+
+    FRAMES = pcap_frames(FIXTURES / "sctp.pcap")
+
+    def sctp(self, index: int) -> SCTP:
+        return SCTP.decode(self.FRAMES[index][34:])
+
+    def test_the_field_is_the_crc_byte_swapped(self):
+        """COOKIE ACK from the capture: the wire bytes are the CRC in
+        little-endian order, so the big-endian field reads it swapped."""
+        cookie_ack = self.sctp(3)
+        raw = bytes(cookie_ack)
+        assert raw[8:12] == bytes.fromhex("b283dbc1")
+        crc = crc32c(raw[:8] + bytes(4) + raw[12:])
+        assert crc == 0xC1DB83B2
+        assert compute(cookie_ack) == 0xB283DBC1 == cookie_ack.checksum
+        assert verify(cookie_ack)
+
+    def test_every_captured_packet_recomputes(self):
+        for index in range(len(self.FRAMES)):
+            sctp = self.sctp(index)
+            assert compute(sctp) == sctp.checksum
+
+    def test_the_enclosing_ip_is_ignored(self):
+        sctp = self.sctp(0)
+        ip = IPv4.decode(self.FRAMES[0][14:])
+        assert compute(sctp, ip=ip) == compute(sctp)
+
+    def test_payload_extends_the_covered_bytes(self):
+        """Bytes outside the layer object are covered when passed as
+        ``payload``, as for the other arms."""
+        sctp = self.sctp(4)
+        head = SCTP(
+            src_port=sctp.src_port,
+            dst_port=sctp.dst_port,
+            verification_tag=sctp.verification_tag,
+            checksum=sctp.checksum,
+        )
+        assert compute(head, payload=sctp.chunks) == sctp.checksum
+        assert verify(head, payload=sctp.chunks)
+        assert not verify(head)
+
+    def test_the_checksum_field_is_excluded(self):
+        sctp = self.sctp(5)
+        assert compute(replace(sctp, checksum=0xFFFFFFFF)) == sctp.checksum
+
+    def test_a_flipped_bit_is_detected(self):
+        sctp = self.sctp(5)
+        for position in (0, 7, 12, len(bytes(sctp)) - 1):
+            raw = bytearray(bytes(sctp))
+            raw[position] ^= 0x01
+            assert not verify(SCTP.decode(bytes(raw)))
+
+    def test_with_checksums_fills_a_built_packet(self):
+        chunks = bytes(SCTPChunk(type=0, flags=3, value=b"\x00" * 12 + b"hi"))
+        built = SCTP(
+            src_port=1,
+            dst_port=2,
+            verification_tag=3,
+            checksum=0,
+            chunks=chunks,
+        )
+        (filled,) = Packet(built).with_checksums().layers
+        assert isinstance(filled, SCTP)
+        assert verify(filled)
+        assert filled.checksum == compute(built)
 
 
 class TestGREChecksum:
@@ -395,8 +529,6 @@ class TestChecksumRules:
         assert compute(icmp) == compute(icmp, payload=b"")
 
     def test_verify_payload_defaults_to_empty_bytes(self):
-        from dataclasses import replace
-
         icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00" * 4)
         filled = replace(icmp, checksum=compute(icmp))
         assert verify(filled)
@@ -435,8 +567,6 @@ class TestPacketWithChecksums:
     def test_round_trip_matches_corpus_frame(self):
         """Rebuild a corpus frame's stack with zeroed checksums; after
         with_checksums() it must be byte-identical to the wire."""
-        from dataclasses import replace
-
         name_frame = next(
             (name, frame) for name, _, frame in CORPUS if name == "udp_dns.pcap"
         )

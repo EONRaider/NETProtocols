@@ -152,6 +152,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | IPsec AH | `AH`, `AHv6` | RFC 4302, IP protocol 51; fixed fields decoded and the ICV kept raw (never verified), then the payload chains onward by `next_header` through the outer IP family's table — `AHv6`, an `AH` subclass, is what IPv6 dispatches to |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
+| 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
@@ -275,8 +276,8 @@ exception in this library belongs to.
 
 `Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,
 for a header pair that never went through `decode_frame`) returns a
-canonical, direction-independent key for a TCP/UDP conversation — both
-directions of one flow produce the same key:
+canonical, direction-independent key for a TCP, UDP or SCTP
+conversation — both directions of one flow produce the same key:
 
 ```python
 request = decode_frame(client_to_server_frame)
@@ -285,7 +286,7 @@ assert request.flow_key() == reply.flow_key()
 ```
 
 It returns `None`, not an error, when there is nothing to key on: no
-enclosing IP layer, no TCP/UDP layer, or a transport layer without
+enclosing IP layer, no TCP/UDP/SCTP layer, or a transport layer without
 ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
 convention for message types that have none).
 
@@ -428,7 +429,8 @@ raw = bytes(frame)  # ready for a raw socket
 ```
 
 Checksums are computed and verified on request — never silently:
-`compute()`/`verify()` in `netprotocols.checksum`, and
+`compute()`/`verify()` in `netprotocols.checksum` (the internet
+checksum, and SCTP's CRC32c via `crc32c()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 
 ## Display helpers
@@ -500,7 +502,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-124-frame corpus of real captured traffic across 21 scenarios
+140-frame corpus of real captured traffic across 22 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

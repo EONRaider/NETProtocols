@@ -1,22 +1,22 @@
 """Canonical, direction-independent flow identification.
 
-:func:`flow_key` folds a TCP/UDP segment and its enclosing IPv4/IPv6
-header into a :class:`FlowKey` that is identical for both directions of
-one conversation — a request and its reply produce the same key,
-regardless of which one you feed in, because the two ``(address,
-port)`` endpoints are always emitted in the same (lexicographically
-smaller first) order::
+:func:`flow_key` folds a TCP, UDP or SCTP header and its enclosing
+IPv4/IPv6 header into a :class:`FlowKey` that is identical for both
+directions of one conversation — a request and its reply produce the
+same key, regardless of which one you feed in, because the two
+``(address, port)`` endpoints are always emitted in the same
+(lexicographically smaller first) order::
 
     >>> flow_key(tcp_syn, ip=ip_header) == flow_key(tcp_syn_ack, ip=ip_header)
     True
 
 There is no port-slot convention invented for protocols that don't have
-ports: a transport layer other than TCP/UDP (ICMP, for instance) has no
-flow to key, so both :func:`flow_key` and :meth:`Packet.flow_key
-<netprotocols.packet.Packet.flow_key>` return ``None`` for it rather
-than raising or stuffing type/code into a port field — the same
-"``None``, not an exception" contract this library already uses for an
-accessor that doesn't apply (the NDP accessors in
+ports: a transport layer other than TCP, UDP and SCTP (ICMP, for
+instance) has no flow to key, so both :func:`flow_key` and
+:meth:`Packet.flow_key <netprotocols.packet.Packet.flow_key>` return
+``None`` for it rather than raising or stuffing type/code into a port
+field — the same "``None``, not an exception" contract this library
+already uses for an accessor that doesn't apply (the NDP accessors in
 :mod:`netprotocols.layer3.icmp`, ``Packet.get``).
 """
 
@@ -28,6 +28,7 @@ from typing import NamedTuple
 from netprotocols._base import Protocol
 from netprotocols._enums import IPProtocol
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
 from netprotocols.utils.exceptions import InvalidFieldError
@@ -54,6 +55,7 @@ class _PortedLayer(typing.Protocol):
 _TRANSPORT_PROTOCOLS: dict[type[_PortedLayer], int] = {
     TCP: IPProtocol.TCP.value,
     UDP: IPProtocol.UDP.value,
+    SCTP: IPProtocol.SCTP.value,
 }
 _TRANSPORTS = tuple(_TRANSPORT_PROTOCOLS)
 
@@ -74,9 +76,10 @@ class FlowKey(NamedTuple):
     :param port_a: The port paired with ``addr_a``.
     :param port_b: The port paired with ``addr_b``.
     :param protocol: The IP protocol number of the transport layer:
-        ``6`` for TCP, ``17`` for UDP. It names the transport itself,
-        so it is the same whether the segment follows its IP header
-        directly or behind IPv6 extension headers or IPsec AH, where
+        ``6`` for TCP, ``17`` for UDP, ``132`` for SCTP. It names the
+        transport itself, so it is the same whether the segment follows
+        its IP header directly or behind IPv6 extension headers or
+        IPsec AH, where
         the IP header's own ``protocol`` / ``next_header`` names the
         first of those instead.
     """
@@ -91,24 +94,24 @@ class FlowKey(NamedTuple):
 def flow_key(
     layer: Protocol, *, ip: IPv4 | IPv6 | None = None
 ) -> FlowKey | None:
-    """The canonical :class:`FlowKey` for a TCP/UDP segment.
+    """The canonical :class:`FlowKey` for a TCP, UDP or SCTP header.
 
     :param layer: The transport layer. Anything other than
-        :class:`~netprotocols.TCP` / :class:`~netprotocols.UDP` (an
-        ICMP message, for instance) has no ports to key on and returns
-        ``None`` — this is not an error, just a layer this function
-        does not apply to.
+        :class:`~netprotocols.TCP` / :class:`~netprotocols.UDP` /
+        :class:`~netprotocols.SCTP` (an ICMP message, for instance) has
+        no ports to key on and returns ``None`` — this is not an error,
+        just a layer this function does not apply to.
     :param ip: The enclosing :class:`~netprotocols.IPv4` /
         :class:`~netprotocols.IPv6` header, keyword-only. Required
-        when ``layer`` is TCP/UDP, since the addresses come from it.
-        Only its addresses are read: the protocol number is
+        when ``layer`` is TCP/UDP/SCTP, since the addresses come from
+        it. Only its addresses are read: the protocol number is
         ``layer``'s own, so headers between ``ip`` and ``layer`` (IPv6
         extension headers, AH) do not change it. They can change the
         addresses' meaning: behind an IPv6 Routing header with segments
         left, ``ip.dst`` is the next segment rather than the final
         destination (RFC 8200 §8.1), so the two directions of a
         source-routed flow may key differently.
-    :raises InvalidFieldError: ``layer`` is TCP/UDP but ``ip`` is
+    :raises InvalidFieldError: ``layer`` is TCP/UDP/SCTP but ``ip`` is
         ``None``.
     """
     if not isinstance(layer, _TRANSPORTS):

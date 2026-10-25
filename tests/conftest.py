@@ -167,6 +167,13 @@ def raw_udp_header() -> bytes:
 
 
 @pytest.fixture
+def raw_sctp_packet() -> bytes:
+    """SCTP COOKIE ACK, from tests/fixtures/sctp.pcap: the common header
+    and one 4-byte chunk."""
+    return b"\x00\x07\xd5\xf2\xff\x09\xba\x55\xb2\x83\xdb\xc1\x0b\x00\x00\x04"
+
+
+@pytest.fixture
 def raw_esp_packet() -> bytes:
     """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
     NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request

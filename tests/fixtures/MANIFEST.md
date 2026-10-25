@@ -4,21 +4,21 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6; fragment slices carry no verifiable
-upper-layer checksum — it spans the reassembled datagram), as does
-every IPsec ICV, with the test keys published below. Frames used
-as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 124 frames across 21
+pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
+verifiable upper-layer checksum — it spans the reassembled datagram),
+as does every IPsec ICV, with the test keys published below. Frames
+used as checksum ground truth were captured **inbound only** — outbound
+frames routinely leave checksums to NIC offload. 140 frames across 22
 scenarios. Addresses are as-captured from the capture host's network.
 
-Eight scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`) are
-captured separately by their own `scripts/capture_fixtures_*.sh` over
-purpose-built topologies — real kernel vlan devices, a DHCP
-server/client, a GRE tunnel, a DNS server queried over TCP, kernel
-IP-in-IP encapsulation, a kernel VXLAN tunnel, and IPsec ESP and AH
-built by a script and sent through raw sockets — see their rows and the
-notes below.
+Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
+`sctp.pcap`) are captured separately by their own
+`scripts/capture_fixtures_*.sh` over purpose-built topologies — real
+kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
+queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
+a userspace SCTP association, and IPsec ESP and AH built by a script
+and sent through raw sockets — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -43,6 +43,7 @@ notes below.
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
+| `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -190,6 +191,33 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
 | `0x20000001` | AH | transport | `8eaa03a41a3b08f31a67f3a4b7fd78a2bf3d963a97b0af5a104301ef8fbff685` |
 | `0x20000002` | AH | tunnel | `d2142153fb758a3f698e45720e2af765b2ada021d70ac1bcbde1f5bc38514fd1` |
 | `0x20000003` | AH | transport, over the bundled ESP | `008a9a220d8c1bf5edec1838a724b588364c08314bf93206985e776c385e1c7a` |
+
+- `sctp.pcap` was produced by `scripts/capture_fixtures_sctp.sh`: the
+  capture host's kernel has no SCTP, so the association is between
+  usrsctp's example `client` and `echo_server` (Ubuntu's
+  `libusrsctp-examples`, usrsctp 0.9.5.0) in two netns over a veth
+  pair, running without UDP encapsulation. usrsctp then sends through
+  a raw IPv4 socket with `IP_HDRINCL`, so for frames 1-15 **usrsctp
+  built the IPv4 header and the whole SCTP packet**, CRC32c included,
+  and the kernel filled in the IPv4 total length and header checksum
+  (and the identification on the INIT and INIT ACK, where usrsctp left
+  it zero). The client sent one line, idled 45 s so each end sent a
+  HEARTBEAT, and closed. Frame 16, the unknown chunk (type 63, under a
+  verification tag no association uses), was **built by the script**,
+  CRC32c included, and sent through a raw protocol-132 socket without
+  `IP_HDRINCL`, so **the kernel built its IPv4 header**. The server
+  discards it without reply: the type's high bits say so (RFC 9260
+  §3.2), and usrsctp's examples set its `sctp_blackhole` sysctl, so
+  they never answer an out-of-the-blue packet with an ABORT; ABORT is
+  covered by constructed chunks in `tests/test_sctp.py`. Both
+  directions were captured on the server's side of the veth pair,
+  which is sound here: offload was disabled and every checksum in the
+  file is computed in software (the CRC32c in userspace), and
+  `check_fixtures` verifies all of them. veth does not pad frames to
+  Ethernet's 60-byte minimum, so the short packets here carry no
+  trailer; `tests/test_sctp.py` pads them by hand to cover a real NIC's.
+  The kernel had no IPv6, so SCTP over IPv6 is covered by constructed
+  frames in `tests/test_sctp.py`.
 
 ## HTTP captures (`tests/fixtures/http/`)
 
