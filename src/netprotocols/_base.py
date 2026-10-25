@@ -69,10 +69,12 @@ report. See :mod:`netprotocols.layer4.sctp`.
 Decode context in ``next_protocol``
 -----------------------------------
 ``BGP`` is the one header whose ``next_protocol()`` answers from what
-``decode()`` saw rather than from a wire field: whether the bytes after
-the message begin another one in the same TCP segment. ``decode()``
-records that on the instance outside its comparison and hash. See
-:mod:`netprotocols.layer7.bgp`.
+``decode()`` saw rather than from a wire field, and names the next
+message beside it rather than a class for its payload: whether the
+bytes after the message begin another one in the same TCP segment.
+``decode()`` records that on the instance in a ``compare=False`` field,
+outside its comparison and hash. Steps 1-3 above hold for it unchanged.
+See :mod:`netprotocols.layer7.bgp`.
 """
 
 from __future__ import annotations

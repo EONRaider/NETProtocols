@@ -151,7 +151,7 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
-**Three protocols vary this.** The first is text framing. `HTTP` has no
+**Two protocols vary this.** The first is text framing. `HTTP` has no
 fixed portion to unpack: `decode()` scans for the empty line that ends
 the head, then for the end the head's framing gives the body, so rule 1
 is a scan rather than an unpack and `header_len` covers the whole
@@ -184,16 +184,6 @@ remainder does not walk: a trailer that happens to (an FCS whose bytes
 read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
 [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
-
-The third is `BGP`, the one header whose `next_protocol()` answers from
-decode context rather than from a wire field. A TCP segment can carry
-several BGP messages, each decoded as a layer, and only the bytes after
-a message say whether another follows; `next_protocol()` is handed no
-bytes, so `decode()` records the answer on the instance, outside its
-comparison and hash. Two equal messages compare equal however they were
-found, and can still chain differently. See *Port-based dispatch is
-best-effort* below and
-[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
@@ -258,6 +248,22 @@ clear — ESP's Next Header sits in its protected trailer, encrypted
 unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
+
+`BGP` is the one exception, and it answers from decode context rather
+than from a wire field. A BGP message carries no payload: a TCP segment
+can hold several messages back to back, each decoded as its own layer,
+so `BGP.next_protocol()` names the next message *beside* it — `BGP`
+when the bytes after this message begin another one, `None` when they
+do not. Only those bytes can say which, and `next_protocol()` is handed
+none, so `decode()` records the answer on the instance in a field kept
+out of the dataclass's comparison and hash (`compare=False`, the
+mechanism `HTTP` uses for its `_message` parse cache). Two equal
+messages compare equal however they were found, and can still chain
+differently. The rules of the decode contract hold for it unchanged;
+see *Port-based dispatch is best-effort* below,
+[`_base.py`](src/netprotocols/_base.py)'s *Decode context in
+next_protocol*, and
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 
 ```mermaid
 flowchart LR
@@ -526,12 +532,12 @@ starts: TCP cuts its byte stream where it likes, so a segment can hold
 several messages, the tail of one, or the head of the next. Each
 message decodes as one `BGP` layer, and `BGP.next_protocol()` answers
 `BGP` while another message begins in the same segment. It is handed no
-bytes, so `BGP.decode()` records the answer on the instance, outside
-its comparison and hash, like `HTTP`'s decode context. A segment that
-ends inside a message raises `TruncatedHeaderError` at that message
-(lax mode keeps the ones before it); one that begins inside a message
-fails the Marker check; a bare ACK, like one on port 53, sends an empty
-payload into the decoder. A segment of many small messages is a deep
+bytes, so `BGP.decode()` records the answer on the instance, in a field
+outside its comparison and hash (see *Walking a frame* above). A
+segment that ends inside a message raises `TruncatedHeaderError` at
+that message (lax mode keeps the ones before it); one that begins
+inside a message fails the Marker check; a bare ACK, like one on port
+53, sends an empty payload into the decoder. A segment of many small messages is a deep
 chain — a 1448-byte one holds 76 KEEPALIVEs, 79 layers with Ethernet,
 IPv4 and TCP — so `max_depth` stops it unless raised; the busiest
 segment of the captured session in the corpus carries 7. Reassembling
