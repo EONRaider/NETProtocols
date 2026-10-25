@@ -303,8 +303,10 @@ for number, frame in enumerate(frames, 1):
     version, kind, length = struct.unpack_from("!BBH", ospf)
     assert version == 2, f"frame {number} is OSPF version {version}"
     au_type = ospf[15]  # byte 14 is the Instance ID (RFC 6549 §2)
-    trailer = ospf[19] if au_type == 2 else 0
-    # Nothing after the packet but the digest: no LLS block (RFC 5613).
+    # AuType 2 and 3 (RFC 7474) put an Auth Data Len trailer after the
+    # packet, the library's OSPF.CRYPTOGRAPHIC_AU_TYPES.
+    trailer = ospf[19] if au_type in (2, 3) else 0
+    # Nothing after the packet but that trailer: no LLS block (RFC 5613).
     assert len(ospf) == length + trailer, f"frame {number} carries extra data"
     if kind in (1, 2):
         options = ospf[24 + 6] if kind == 1 else ospf[24 + 2]

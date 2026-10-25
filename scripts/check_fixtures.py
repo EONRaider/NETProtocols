@@ -147,6 +147,10 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
     AuType 2 (§D.4.3: MD5 over the packet and the key NUL-padded to 16
     bytes; the packet checksum is not computed and must be zero).
     AuType is header byte 15: RFC 6549 §2 made byte 14 the Instance ID.
+    Any other AuType fails as ``ospf-autype-N``, AuType 3 (RFC 7474)
+    included: its HMAC-SHA digest needs a key the corpus does not
+    publish and an HMAC-SHA check this checker does not have, so it
+    cannot be verified, and an unverifiable frame must not pass.
     """
     au_type = packet[15]
     wire = struct.unpack_from("!H", packet, 12)[0]
@@ -162,6 +166,7 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
                 failures.append("ospf-password")
         return failures
     if au_type != 2:
+        # Unverifiable here, AuType 3 too: no published key, no HMAC-SHA.
         return [f"ospf-autype-{au_type}"]
     return _check_ospf_md5(upper, packet, wire, stats)
 
