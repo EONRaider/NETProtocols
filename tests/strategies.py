@@ -419,14 +419,14 @@ def ospf_packets(draw: st.DrawFn) -> OSPF:
     # packet_length / body and au_type / authentication / auth_trailer
     # are OSPF's interdependent groups: the length is computed from the
     # body, which is built with its type's framing, and under AuType 2
-    # the trailer is drawn to the size Auth Data Len declares.
+    # and 3 the trailer is drawn to the size Auth Data Len declares.
     type_ = draw(st.sampled_from([1, 2, 3, 4, 5, 0, 6, 255]))
     body = draw(_ospf_bodies(type_))
-    au_type = draw(st.sampled_from([0, 1, 2, 3]))
+    au_type = draw(st.sampled_from([0, 1, 2, 3, 4]))
     authentication = draw(st.binary(min_size=8, max_size=8))
     trailer = (
         draw(st.binary(min_size=authentication[3], max_size=authentication[3]))
-        if au_type == 2
+        if au_type in (2, 3)
         else b""
     )
     return OSPF(
@@ -436,6 +436,7 @@ def ospf_packets(draw: st.DrawFn) -> OSPF:
         router_id=draw(ipv4_strings()),
         area_id=draw(ipv4_strings()),
         checksum=draw(_u(16)),
+        instance_id=draw(_u(8)),
         au_type=au_type,
         authentication=authentication,
         body=body,

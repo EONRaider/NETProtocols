@@ -610,6 +610,41 @@ def ospf_packets() -> list[OSPF]:
     return [walk(frame)[0][2] for frame in pcap_frames(FIXTURES / "ospf.pcap")]
 
 
+def ospf_instance_1_md5_frame() -> bytes:
+    """Return a captured AuType 2 frame moved to Instance ID 1.
+
+    RFC 6549 §2 puts the Instance ID in header byte 14.
+
+    The digest covers header byte 14, so it is recomputed with the
+    published key (tests/fixtures/MANIFEST.md); the IPv4 header is
+    untouched.
+    """
+    import hashlib
+
+    frame = bytearray(pcap_frames(FIXTURES / "ospf.pcap")[37])
+    frame[34 + 14] = 1
+    length = int.from_bytes(frame[36:38], "big")
+    packet = bytes(frame[34 : 34 + length])
+    digest = hashlib.md5(packet + b"NETProtocols-md5").digest()
+    frame[34 + length :] = digest
+    return bytes(frame)
+
+
+def ospf_extended(**fields) -> OSPF:
+    """Return an AuType 3 Hello (RFC 7474 §3).
+
+    Its 28-byte trailer is the 8-byte sequence number, then a 20-byte
+    digest.
+    """
+    values = {
+        "au_type": 3,
+        "authentication": b"\x00\x00\x00\x1c" + (7).to_bytes(4, "big"),
+        "auth_trailer": bytes(range(28)),
+    }
+    values.update(fields)
+    return ospf_hello(**values)
+
+
 def ospf_hello(**fields) -> OSPF:
     body = bytes.fromhex("ffffff00000a0201000000280a0953010a0953020a000002")
     values = {
@@ -619,6 +654,7 @@ def ospf_hello(**fields) -> OSPF:
         "router_id": "10.0.0.1",
         "area_id": "0.0.0.1",
         "checksum": 0,
+        "instance_id": 0,
         "au_type": 0,
         "authentication": bytes(8),
         "body": body,
@@ -655,11 +691,19 @@ class TestOSPFChecksum:
     def test_the_checksum_field_is_excluded(self):
         assert compute(ospf_hello(checksum=0xBEEF)) == compute(ospf_hello())
 
-    def test_every_other_header_byte_is_covered(self):
+    def test_the_free_header_fields_are_covered(self):
+        """Change the checksum with each freely settable header field.
+
+        Those are Type, Router ID, Area ID, Instance ID and AuType.
+        Version and Packet Length cannot be changed alone (only 2
+        constructs, and the length must match the body); the body is
+        tested below.
+        """
         base = compute(ospf_hello())
         for changed in (
             ospf_hello(router_id="10.0.0.2"),
             ospf_hello(area_id="0.0.0.2"),
+            ospf_hello(instance_id=1),
             ospf_hello(au_type=1),
             ospf_hello(type=6),
         ):
@@ -695,6 +739,64 @@ class TestOSPFChecksum:
     def test_cryptographic_authentication_verifies_vacuously(self, checksum):
         ospf = replace(ospf_packets()[-1], checksum=checksum)
         assert verify(ospf)
+
+    def test_extended_sequence_numbers_compute_none(self):
+        """Compute no checksum under AuType 3 either.
+
+        RFC 7474 §5 keeps RFC 5709 §3.1's process, which keeps RFC 2328
+        §D.4.3 step 2.
+        """
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(ospf_extended())
+        assert str(excinfo.value) == (
+            "An OSPF packet under cryptographic authentication (AuType 3) "
+            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)"
+        )
+
+    @pytest.mark.parametrize("checksum", [0, 0x1234])
+    def test_extended_sequence_numbers_verify_vacuously(self, checksum):
+        """Verify any checksum under AuType 3."""
+        assert verify(ospf_extended(checksum=checksum))
+
+    def test_with_checksums_leaves_extended_sequence_numbers_alone(self):
+        """Leave the checksum field alone under AuType 3."""
+        ospf = ospf_extended(checksum=0x1234)
+        packet = Packet(Ethernet.decode(bytes(14)), ospf)
+        assert packet.with_checksums()[OSPF].checksum == 0x1234
+
+    @pytest.mark.parametrize("au_type", [0, 1, 4])
+    def test_only_au_types_2_and_3_are_spared(self, au_type):
+        """Compute, verify and fill the checksum under any other AuType."""
+        ospf = ospf_hello(au_type=au_type, checksum=0x1234)
+        assert compute(ospf) != 0x1234
+        assert not verify(ospf)
+        packet = Packet(Ethernet.decode(bytes(14)), ospf)
+        assert packet.with_checksums()[OSPF].checksum == compute(ospf)
+
+    def test_a_nonzero_instance_id_keeps_cryptographic_authentication(self):
+        """Keep AuType 2 cryptographic under Instance ID 1.
+
+        RFC 6549 §2 makes AuType byte 15 alone, so Instance ID 1 does
+        not turn AuType 2 into 258. The digest stays in the layer,
+        verify() passes it, and with_checksums() leaves its zero
+        checksum alone, which the digest covers.
+        """
+        frame = ospf_instance_1_md5_frame()
+        packet = decode_frame(frame)
+        ospf = packet[OSPF]
+        assert (ospf.instance_id, ospf.au_type) == (1, 2)
+        assert verify(ospf)
+        assert bytes(packet.with_checksums()) == frame
+
+    def test_a_nonzero_instance_id_under_au_type_0_is_checksummed(self):
+        """Cover the Instance ID in the AuType 0 checksum."""
+        frame = pcap_frames(FIXTURES / "ospf.pcap")[1]
+        packet = decode_frame(frame)
+        moved = replace(packet[OSPF], instance_id=1)
+        rebuilt = Packet(packet[0], packet[IPv4], moved).with_checksums()
+        assert rebuilt[OSPF].instance_id == 1
+        assert rebuilt[OSPF].checksum != packet[OSPF].checksum
+        assert verify(rebuilt[OSPF])
 
     def test_with_checksums_fills_a_built_packet(self):
         frame = pcap_frames(FIXTURES / "ospf.pcap")[1]

@@ -141,8 +141,9 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
     published password under AuType 1, or the keyed-MD5 digest under
     AuType 2 (§D.4.3: MD5 over the packet and the key NUL-padded to 16
     bytes; the packet checksum is not computed and must be zero).
+    AuType is header byte 15: RFC 6549 §2 made byte 14 the Instance ID.
     """
-    au_type = struct.unpack_from("!H", packet, 14)[0]
+    au_type = packet[15]
     wire = struct.unpack_from("!H", packet, 12)[0]
     authentication = packet[16:24]
     if au_type in (0, 1):

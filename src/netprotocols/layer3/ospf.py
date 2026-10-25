@@ -2,9 +2,12 @@
 
 OSPF is the link-state interior gateway protocol, IP protocol 89. Every
 packet starts with the same 24-byte header (RFC 2328 §A.3.1): Version,
-Type, Packet Length, Router ID, Area ID, Checksum, AuType and the 64-bit
-Authentication field. The Type names one of five messages, whose body
-follows the header:
+Type, Packet Length, Router ID, Area ID, Checksum, Instance ID, AuType
+and the 64-bit Authentication field. RFC 6549 §2 (which updates RFC
+2328) split the original 16-bit AuType into an 8-bit Instance ID and
+an 8-bit AuType "without any change in meaning", so a packet of the
+base instance (Instance ID ``0``) reads the same either way. The Type
+names one of five messages, whose body follows the header:
 
 * ``1`` Hello (§A.3.2): :attr:`OSPF.hello`
 * ``2`` Database Description (§A.3.3): :attr:`OSPF.database_description`
@@ -52,9 +55,13 @@ verified by
 and body are exactly that many bytes. Under cryptographic
 authentication (AuType 2, RFC 2328 §D.4.3) the message digest follows,
 outside Packet Length; its size is the Auth Data Len byte of the
-Authentication field, and it is kept in :attr:`OSPF.auth_trailer`, so
-``header_len`` is Packet Length plus the digest and ``bytes(OSPF.decode(x))
-== x[:header_len]``. Nothing after that is consumed. The chain walk does
+Authentication field, and it is kept in :attr:`OSPF.auth_trailer`.
+AuType 3, cryptographic authentication with extended sequence numbers
+(RFC 7474), is laid out the same way: the 64-bit sequence number and
+then the digest follow the packet, and Auth Data Len counts both (RFC
+7474 §2, §3), so they are its ``auth_trailer``. So ``header_len`` is
+Packet Length plus the trailer, and ``bytes(OSPF.decode(x)) ==
+x[:header_len]``. Nothing after that is consumed. The chain walk does
 not trim a frame to the IP header's length, so what may follow is an
 Ethernet frame's padding or FCS, or an RFC 5613 Link-Local Signaling
 block, which a router appends to a Hello or Database Description when
@@ -98,6 +105,11 @@ __all__ = [
 
 #: The only OSPF version this module decodes (RFC 2328 §A.3.1).
 _VERSION = 2
+
+#: Cryptographic authentication with extended sequence numbers (RFC
+#: 7474 §3), whose trailer opens with a 64-bit sequence number.
+_AU_TYPE_EXTENDED = 3
+_EXTENDED_SEQUENCE_SIZE = 8
 
 _HELLO_TYPE = 1
 _DATABASE_DESCRIPTION_TYPE = 2
@@ -468,20 +480,27 @@ class OSPF(Protocol):
         Authentication field (RFC 2328 §D.4.1), carried verbatim; ``0``
         under cryptographic authentication, which does not compute it.
         Compute and verify it with :mod:`netprotocols.checksum`.
-    :param au_type: The authentication type (RFC 2328 Appendix D):
-        ``0`` none, ``1`` simple password, ``2`` cryptographic (see
-        :attr:`au_type_name`).
+    :param instance_id: The OSPFv2 instance the packet belongs to (RFC
+        6549 §2), header byte 14: ``0`` is the base IPv4 unicast
+        instance, and the only one before RFC 6549.
+    :param au_type: The authentication type (RFC 2328 Appendix D),
+        header byte 15: ``0`` none, ``1`` simple password, ``2``
+        cryptographic, ``3`` cryptographic with extended sequence
+        numbers (RFC 7474) (see :attr:`au_type_name`).
     :param authentication: The 64-bit Authentication field, raw: zero
-        or anything under AuType 0, the password under AuType 1, and
-        under AuType 2 a reserved zero word, the Key ID, Auth Data Len
-        and the cryptographic sequence number (see :attr:`key_id`,
-        :attr:`auth_data_len` and :attr:`crypto_sequence_number`).
+        or anything under AuType 0, the password under AuType 1, under
+        AuType 2 a reserved zero word, the Key ID, Auth Data Len and
+        the cryptographic sequence number, and under AuType 3 three
+        zero bytes, Auth Data Len and a 32-bit Key ID (RFC 7474 §3)
+        (see :attr:`key_id`, :attr:`auth_data_len` and
+        :attr:`crypto_sequence_number`).
     :param body: The message after the header, ``packet_length - 24``
         bytes, kept raw and parsed by the accessor for its type. It must
         have that message's framing (see the module docstring).
     :param auth_trailer: Under AuType 2, the message digest that follows
-        the packet, exactly :attr:`auth_data_len` bytes; empty under any
-        other AuType.
+        the packet, and under AuType 3 the 64-bit sequence number and
+        the digest: exactly :attr:`auth_data_len` bytes either way;
+        empty under any other AuType.
 
     :raises InvalidFieldError: if ``version`` is not 2, ``packet_length``
         disagrees with ``body``, ``authentication`` is not 8 bytes,
@@ -495,17 +514,19 @@ class OSPF(Protocol):
     router_id: str
     area_id: str
     checksum: int
+    instance_id: int
     au_type: int
     authentication: bytes
     body: bytes = b""
     auth_trailer: bytes = b""
 
-    _struct: ClassVar[Struct] = Struct("!BBH4s4sHH8s")
+    _struct: ClassVar[Struct] = Struct("!BBH4s4sHBB8s")
 
-    #: The cryptographic authentication type (RFC 2328 §D.4.3), whose
-    #: digest follows the packet and whose packet checksum is not
-    #: computed.
-    AU_TYPE_CRYPTOGRAPHIC: ClassVar[int] = 2
+    #: The cryptographic authentication types, whose trailer follows the
+    #: packet and whose packet checksum is not computed: ``2`` (RFC 2328
+    #: §D.4.3) and ``3``, which changes only the sequence number and
+    #: the Authentication field's layout (RFC 7474 §3, §5).
+    CRYPTOGRAPHIC_AU_TYPES: ClassVar[frozenset[int]] = frozenset({2, 3})
 
     type_names: ClassVar[dict[int, str]] = {
         _HELLO_TYPE: "Hello",
@@ -519,6 +540,7 @@ class OSPF(Protocol):
         0: "Null",
         1: "Simple Password",
         2: "Cryptographic",
+        3: "Cryptographic with Extended Sequence Numbers",
     }
 
     def __post_init__(self) -> None:
@@ -576,12 +598,12 @@ class OSPF(Protocol):
 
     @classmethod
     def _trailer_len(cls, au_type: int, authentication: bytes) -> int:
-        """Return the size of the digest after the packet.
+        """Return the size of the trailer after the packet.
 
         That is the Auth Data Len byte under cryptographic
         authentication, and nothing otherwise.
         """
-        if au_type == cls.AU_TYPE_CRYPTOGRAPHIC:
+        if au_type in cls.CRYPTOGRAPHIC_AU_TYPES:
             return authentication[3]
         return 0
 
@@ -637,6 +659,7 @@ class OSPF(Protocol):
             router_id,
             area_id,
             checksum,
+            instance_id,
             au_type,
             authentication,
         ) = cls._unpack_fixed(data)
@@ -681,6 +704,7 @@ class OSPF(Protocol):
             router_id=bytes_to_ipv4(router_id),
             area_id=bytes_to_ipv4(area_id),
             checksum=checksum,
+            instance_id=instance_id,
             au_type=au_type,
             authentication=authentication,
             body=body,
@@ -697,6 +721,7 @@ class OSPF(Protocol):
                 ipv4_to_bytes(self.router_id),
                 ipv4_to_bytes(self.area_id),
                 self.checksum,
+                self.instance_id,
                 self.au_type,
                 self.authentication,
             )
@@ -733,21 +758,26 @@ class OSPF(Protocol):
 
     @property
     def _cryptographic(self) -> bool:
-        return self.au_type == self.AU_TYPE_CRYPTOGRAPHIC
+        return self.au_type in self.CRYPTOGRAPHIC_AU_TYPES
 
     @property
     def key_id(self) -> int | None:
-        """The Key ID of the key that made the digest (RFC 2328 §D.3).
+        """The Key ID of the key that made the digest.
 
-        ``None`` unless the AuType is 2.
+        The 8-bit Key ID under AuType 2 (RFC 2328 §D.3), the 32-bit one
+        in the Authentication field's last four bytes under AuType 3
+        (RFC 7474 §3). ``None`` under any other AuType.
         """
+        if self.au_type == _AU_TYPE_EXTENDED:
+            return int.from_bytes(self.authentication[4:], "big")
         return self.authentication[2] if self._cryptographic else None
 
     @property
     def auth_data_len(self) -> int | None:
-        """The digest's length in bytes, ``16`` for keyed MD5.
+        """The trailer's length in bytes, ``16`` for keyed MD5.
 
-        ``None`` unless the AuType is 2.
+        Under AuType 3 it counts the 8-byte sequence number as well as
+        the digest (RFC 7474 §2). ``None`` unless the AuType is 2 or 3.
         """
         return self.authentication[3] if self._cryptographic else None
 
@@ -755,9 +785,17 @@ class OSPF(Protocol):
     def crypto_sequence_number(self) -> int | None:
         """The cryptographic sequence number, which guards against replay.
 
-        It never decreases (RFC 2328 §D.3). ``None`` unless the AuType
-        is 2.
+        It never decreases (RFC 2328 §D.3): the Authentication field's
+        last 32 bits under AuType 2, and under AuType 3 the 64 bits
+        that open the trailer, boot count then packet counter (RFC
+        7474 §2, §3), or ``None`` if the trailer is shorter than that.
+        ``None`` under any other AuType.
         """
+        if self.au_type == _AU_TYPE_EXTENDED:
+            if len(self.auth_trailer) < _EXTENDED_SEQUENCE_SIZE:
+                return None
+            sequence = self.auth_trailer[:_EXTENDED_SEQUENCE_SIZE]
+            return int.from_bytes(sequence, "big")
         if not self._cryptographic:
             return None
         return int.from_bytes(self.authentication[4:], "big")

@@ -591,18 +591,19 @@ def _read_every_ospf_accessor(ospf: OSPF) -> None:
 #: framing, broken LSA counts and lengths, and cut digests all turn up
 #: far more often than in free bytes.
 _ospf_like = st.builds(
-    lambda type_, au_type, auth_len, tail, slack: (
+    lambda type_, instance_id, au_type, auth_len, tail, slack: (
         struct.pack("!BBH", 2, type_, 24 + len(tail) - slack)
         + bytes(10)
-        + struct.pack("!H", au_type)
+        + struct.pack("!BB", instance_id, au_type)
         + bytes(3)
         + bytes([auth_len])
         + bytes(4)
         + tail
     ),
     st.integers(0, 6),
-    st.sampled_from([0, 1, 2]),
-    st.sampled_from([0, 4, 16]),
+    st.sampled_from([0, 1, 255]),
+    st.sampled_from([0, 1, 2, 3]),
+    st.sampled_from([0, 4, 8, 16]),
     st.lists(st.sampled_from([0, 0, 1, 2, 4, 20, 24, 0xFF]), max_size=96).map(
         bytes
     ),

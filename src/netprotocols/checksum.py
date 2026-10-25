@@ -228,13 +228,16 @@ def _ospf_checksum(layer: OSPF) -> int:
     The whole packet, checksum field (bytes 12-13) zeroed and the
     8-byte Authentication field (bytes 16-23) left out (RFC 2328
     §D.4.1); no pseudo-header. ``bytes(layer)`` is exactly Packet
-    Length bytes here: only cryptographic authentication appends a
-    digest, and it computes no checksum (§D.4.3).
+    Length bytes here: only cryptographic authentication (AuType 2 or
+    3) appends a trailer, and it computes no checksum (RFC 2328
+    §D.4.3 step 2, which RFC 7474 §5, through RFC 5709 §3.1, leaves
+    unchanged for AuType 3).
     """
-    if layer.au_type == OSPF.AU_TYPE_CRYPTOGRAPHIC:
+    if layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES:
         raise InvalidFieldError(
-            "An OSPF packet under cryptographic authentication (AuType 2) "
-            "carries no checksum; its digest protects it (RFC 2328 §D.4.3)",
+            f"An OSPF packet under cryptographic authentication (AuType "
+            f"{layer.au_type}) carries no checksum; its digest protects it "
+            f"(RFC 2328 §D.4.3)",
             protocol=type(layer),
             field="checksum",
         )
@@ -345,8 +348,9 @@ def verify(
     invalid). A GRE header whose Checksum-Present bit is clear carries
     no checksum at all (RFC 2784 §2.5) and likewise verifies as True —
     a frame cannot fail a checksum it does not have — as does an OSPF
-    packet under cryptographic authentication (RFC 2328 §D.4.3), whose
-    digest this library cannot check without the key.
+    packet under cryptographic authentication (AuType 2 or 3, RFC 2328
+    §D.4.3, RFC 7474 §5), whose digest this library cannot check
+    without the key.
     """
     if (
         isinstance(layer, UDP)
@@ -356,7 +360,7 @@ def verify(
         return True
     if isinstance(layer, GRE) and not layer.checksum_present:
         return True
-    if isinstance(layer, OSPF) and layer.au_type == OSPF.AU_TYPE_CRYPTOGRAPHIC:
+    if isinstance(layer, OSPF) and layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES:
         return True
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire

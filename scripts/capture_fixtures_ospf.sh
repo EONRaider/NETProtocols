@@ -291,7 +291,7 @@ for number, frame in enumerate(frames, 1):
     ospf = ip[ihl:total]
     version, kind, length = struct.unpack_from("!BBH", ospf)
     assert version == 2, f"frame {number} is OSPF version {version}"
-    au_type = struct.unpack_from("!H", ospf, 14)[0]
+    au_type = ospf[15]  # byte 14 is the Instance ID (RFC 6549 §2)
     trailer = ospf[19] if au_type == 2 else 0
     # Nothing after the packet but the digest: no LLS block (RFC 5613).
     assert len(ospf) == length + trailer, f"frame {number} carries extra data"

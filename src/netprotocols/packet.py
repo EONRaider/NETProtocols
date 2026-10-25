@@ -204,7 +204,7 @@ class Packet:
                 )
             elif isinstance(layer, IPv4) or (
                 isinstance(layer, OSPF)
-                and layer.au_type != OSPF.AU_TYPE_CRYPTOGRAPHIC
+                and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):
                 layer = replace(layer, checksum=compute(layer))
             rebuilt.append(layer)

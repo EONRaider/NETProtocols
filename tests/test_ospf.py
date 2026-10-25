@@ -71,6 +71,7 @@ def make_ospf(type_: int, body: bytes = b"", **fields) -> OSPF:
         "router_id": "10.0.0.1",
         "area_id": "0.0.0.0",
         "checksum": 0,
+        "instance_id": 0,
         "au_type": 0,
         "authentication": bytes(8),
         "body": body,
@@ -229,6 +230,7 @@ class TestHeader:
         assert ospf.area_id == "0.0.0.0"
         assert ospf.checksum == 0x8BAC
         assert ospf.checksum_hex_str == "0x8bac"
+        assert ospf.instance_id == 0
         assert ospf.au_type == 0
         assert ospf.au_type_name == "Null"
         assert ospf.authentication == bytes(8)
@@ -569,6 +571,86 @@ class TestAuthentication:
         assert error.offset == 48
         assert (error.expected, error.actual) == (64, 63)
 
+    def instance_1_md5(self) -> bytes:
+        """Return FRAMES[37] moved to Instance ID 1, digest recomputed."""
+        import hashlib
+
+        frame = bytearray(FRAMES[37])
+        frame[34 + 14] = 1
+        length = int.from_bytes(frame[36:38], "big")
+        packet = bytes(frame[34 : 34 + length])
+        frame[34 + length :] = hashlib.md5(packet + MD5_KEY).digest()
+        return bytes(frame)
+
+    def test_the_instance_id_is_byte_14_and_au_type_byte_15(self):
+        """Read Instance ID and AuType as one byte each (RFC 6549 §2)."""
+        frame = self.instance_1_md5()
+        ospf = decode_frame(frame)[OSPF]
+        assert ospf.instance_id == 1
+        assert ospf.au_type == 2
+        assert ospf.au_type_name == "Cryptographic"
+        assert ospf.key_id == 1
+        assert ospf.auth_trailer == frame[-16:]
+        assert ospf.header_len == ospf.packet_length + 16 == len(frame) - 34
+        assert bytes(ospf) == frame[34:]
+        assert OSPF.decode(bytes(ospf)) == ospf
+
+    @pytest.mark.parametrize("instance_id", [1, 2, 255])
+    def test_an_instance_id_round_trips_under_every_au_type(self, instance_id):
+        """Keep the Instance ID apart from the AuType through a round trip."""
+        ospf = make_ospf(3, instance_id=instance_id, au_type=1)
+        raw = bytes(ospf)
+        assert raw[14:16] == bytes([instance_id, 1])
+        assert OSPF.decode(raw) == ospf
+        assert OSPF.decode(raw).au_type_name == "Simple Password"
+
+    def extended(self, **fields) -> OSPF:
+        """Return an AuType 3 request (RFC 7474 §3).
+
+        Key ID 0x01020304, and a 28-byte trailer: the 64-bit sequence
+        number, then a 20-byte digest.
+        """
+        values = {
+            "au_type": 3,
+            "authentication": b"\x00\x00\x00\x1c\x01\x02\x03\x04",
+            "auth_trailer": (5 << 32 | 9).to_bytes(8, "big") + bytes(20),
+        }
+        values.update(fields)
+        return make_ospf(3, **values)
+
+    def test_extended_sequence_numbers_take_their_trailer(self):
+        """Take AuType 3's sequence number and digest into the layer."""
+        ospf = self.extended()
+        assert ospf.au_type_name == (
+            "Cryptographic with Extended Sequence Numbers"
+        )
+        assert ospf.auth_data_len == 28
+        assert ospf.header_len == 24 + 28
+        assert ospf.key_id == 0x01020304
+        assert ospf.crypto_sequence_number == 5 << 32 | 9
+        assert OSPF.decode(bytes(ospf) + b"\xff") == ospf
+
+    def test_a_trailer_too_short_for_the_sequence_number(self):
+        """Answer None for a sequence number the trailer cannot hold."""
+        ospf = self.extended(
+            authentication=b"\x00\x00\x00\x07" + bytes(4),
+            auth_trailer=bytes(7),
+        )
+        assert ospf.crypto_sequence_number is None
+        assert ospf.key_id == 0
+        eight = self.extended(
+            authentication=b"\x00\x00\x00\x08" + bytes(4),
+            auth_trailer=b"\x00" * 7 + b"\x01",
+        )
+        assert eight.crypto_sequence_number == 1
+
+    def test_a_cut_extended_trailer_raises(self):
+        """Raise on an AuType 3 trailer the buffer cuts short."""
+        raw = bytes(self.extended())
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            OSPF.decode(raw[:-1])
+        assert excinfo.value.field == "auth_trailer"
+
     def test_auth_data_len_sizes_the_trailer(self):
         """Size the trailer by Auth Data Len, not by MD5's 16."""
         authentication = b"\x00\x00\x03\x14" + bytes(4)  # 20 bytes
@@ -816,9 +898,20 @@ class TestConstruction:
         assert error.field == "auth_trailer"
         assert (error.expected, error.actual) == (16, 1)
 
-    @pytest.mark.parametrize("au_type", [0, 1])
+    def test_the_trailer_is_auth_data_len_bytes_under_au_type_3(self):
+        """Refuse a trailer of the wrong size under AuType 3."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            make_ospf(
+                3,
+                au_type=3,
+                authentication=b"\x00\x00\x00\x1c" + bytes(4),
+                auth_trailer=bytes(20),
+            )
+        assert (excinfo.value.expected, excinfo.value.actual) == (28, 20)
+
+    @pytest.mark.parametrize("au_type", [0, 1, 4])
     def test_no_trailer_without_cryptographic_authentication(self, au_type):
-        """Refuse a trailer under AuType 0 and 1."""
+        """Refuse a trailer under AuType 0, 1 and an unknown one."""
         with pytest.raises(InvalidFieldError) as excinfo:
             make_ospf(
                 3,
@@ -1003,6 +1096,20 @@ class TestCheckerCatchesTampering:
         damaged = decode_frame(self.flip(frame, 34 + 48))
         restored = damaged.with_checksums()
         assert self.check(checker, bytes(restored)) == ["ospf-lsa-checksum"]
+
+    def test_a_nonzero_instance_id_passes(self, checker):
+        """Pass a valid AuType 2 frame with Instance ID 1 (RFC 6549 §2)."""
+        frame = TestAuthentication().instance_1_md5()
+        assert self.check(checker, frame) == []
+        stats = Counter()
+        checker.check_frame(frame, stats)
+        assert stats["ospf-md5"] == 1
+
+    def test_a_nonzero_instance_id_passes_under_au_type_0(self, checker):
+        """Pass a checksummed AuType 0 frame with Instance ID 7."""
+        frame = v4_frame(make_ospf(1, hello_body(), instance_id=7))
+        assert frame[34 + 14 : 34 + 16] == b"\x07\x00"
+        assert self.check(checker, frame) == []
 
     def test_a_flipped_md5_digest_fails(self, checker):
         """Fail a flipped digest byte."""
