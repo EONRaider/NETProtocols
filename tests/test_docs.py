@@ -11,14 +11,21 @@ cannot catch is prose drifting away from it.
 """
 
 import doctest
+import inspect
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
 
+import netprotocols.registry as registry_module
 from conftest import FIXTURES, corpus_frames
-from netprotocols import HTTP, HTTPDisposition, HTTPFraming
-from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE
+from netprotocols import HTTP, HTTPDisposition, HTTPFraming, Protocol
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_ETHERTYPE,
+    TABLE_IP_PROTO,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = FIXTURES / "MANIFEST.md"
@@ -204,12 +211,38 @@ class TestReadmeHTTPExamples:
             assert runner.summarize().failed == 0, block
 
 
+class _Experiment(Protocol):
+    """Stand in for the class registry.py's examples did not write."""
+
+
+def _registry_examples() -> list[str]:
+    """Return the ``register()`` examples in registry.py's docstrings.
+
+    The module docstring shows one; :func:`register`'s shows two.
+    """
+    blocks = []
+    for doc in (registry_module.__doc__, registry_module.register.__doc__):
+        literal = re.findall(
+            r"::\n\n((?:(?: {4}.*)?\n)+)", inspect.cleandoc(doc or "")
+        )
+        blocks += [textwrap.dedent(block) for block in literal]
+    return [
+        block
+        for block in blocks
+        if re.search(r'register\("(ethertype|ip\.proto)"', block)
+    ]
+
+
 class TestRegisterExample:
-    """The ``@register`` example README.md, ARCHITECTURE.md and
-    docs/CLAIMS.md show, run as written. It must claim an EtherType no
-    built-in decoder holds, or it raises RegistryConflictError: it used
-    0x8847 until MPLS shipped (#187), and now uses 0x88B5, IEEE 802's
-    Local Experimental EtherType."""
+    """Run the documented ``register()`` examples as written.
+
+    README.md, ARCHITECTURE.md and docs/CLAIMS.md show one each, and
+    registry.py's docstrings three. Each must claim a key no built-in
+    decoder holds, or it raises RegistryConflictError: the EtherType
+    was 0x8847 until MPLS shipped (#187), and is now 0x88B5, IEEE 802's
+    Local Experimental EtherType; the IP protocol is 253, reserved for
+    experimentation (RFC 3692).
+    """
 
     @pytest.mark.parametrize(
         "path", [README, ARCHITECTURE, CLAIMS], ids=lambda p: p.name
@@ -233,3 +266,30 @@ class TestRegisterExample:
             )
         finally:
             DEFAULT.table(TABLE_ETHERTYPE).pop(0x88B5, None)
+
+    def test_the_registry_py_examples_register_on_free_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Register each registry.py example in a copy of the defaults."""
+        examples = _registry_examples()
+        assert len(examples) == 3
+        for code in examples:
+            # register() reads the module's DEFAULT when called, so a
+            # copy of the real one keeps the examples out of it.
+            fresh = DEFAULT.derive()
+            monkeypatch.setattr(registry_module, "DEFAULT", fresh)
+            namespace: dict[str, object] = {
+                "Protocol": Protocol,
+                "register": registry_module.register,
+                "Experiment": _Experiment,
+            }
+            exec(code, namespace)
+            expected = {}
+            if '@register("ethertype", 0x88B5)' in code:
+                expected[TABLE_ETHERTYPE, 0x88B5] = namespace["Telemetry"]
+            if 'register("ip.proto", 253, Experiment)' in code:
+                expected[TABLE_IP_PROTO, 253] = _Experiment
+            assert expected
+            for (table, key), cls in expected.items():
+                assert DEFAULT.get(table, key) is None
+                assert fresh.get(table, key) is cls

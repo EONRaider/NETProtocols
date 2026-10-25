@@ -198,9 +198,9 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   (40000 → 9999, to a listener) from A to B, captured inbound on B and
   kept out of the corpus. Then the script wraps those datagrams and
   sends the eight frames, and reads the capture back to confirm every
-  byte arrived as built. **What the script built: every Ethernet
-  header, every label stack entry, the 8 zero bytes padding the
-  Explicit NULL frame to 60 bytes, the pseudowire control word
+  byte arrived as built. **What the script built: every outer
+  Ethernet header, every label stack entry, the 8 zero bytes padding
+  the Explicit NULL frame to 60 bytes, the pseudowire control word
   (`00 00 00 01`: first nibble 0, sequence number 1), and the whole
   IPv6 datagram under IPv6 Explicit NULL** (header, UDP header,
   payload and UDP checksum: the host runs with IPv6 disabled). **What
@@ -219,10 +219,10 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   tcpdump captured the same eight frames with a 20-byte snap length as
   `mpls/mpls_snaplen.pcap`, outside the corpus globs and the counts
   above, as `bgp/bgp_session.pcap` is: its records are real truncation,
-  cut 4 bytes into each label stack, so the six stacks of two or three
-  entries end after their first (`TruncatedHeaderError` from `MPLS` at
-  frame offset 18) and the two one-entry stacks hand a 2-byte IPv4
-  header to `IPv4`. The capture script checks that each record is the
+  cut at byte 20, 2 bytes past each stack's first entry, so the six
+  stacks of two or three entries end after their first
+  (`TruncatedHeaderError` from `MPLS` at frame offset 18) and the two
+  one-entry stacks hand a 2-byte IPv4 header to `IPv4`. The capture script checks that each record is the
   first 20 bytes of the matching corpus frame; `tests/test_mpls.py`
   walks them.
 

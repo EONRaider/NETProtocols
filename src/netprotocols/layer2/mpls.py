@@ -141,7 +141,7 @@ _SPECIAL_PURPOSE_NAMES: dict[int, str] = {
     15: "Extension Label (XL)",  # RFC 7274, RFC 9017
 }
 
-#: Labels 0-15 are special-purpose (RFC 3032 §2.1, RFC 7274 §2).
+#: Labels 0-15 are special-purpose (RFC 3032 §2.1, RFC 7274 §1).
 _SPECIAL_PURPOSE_LIMIT = 16
 
 #: Bottom labels that settle what follows the stack (see the module
@@ -231,7 +231,12 @@ class MPLSLabel:
 
     @property
     def is_special_purpose(self) -> bool:
-        """Whether the label is one of the reserved values ``0``-``15``."""
+        """Whether the label is one of the reserved values ``0``-``15``.
+
+        This judges the entry alone, so it cannot tell that the entry
+        after an Extension Label (15) is an Extended Special-Purpose
+        Label (RFC 7274 §3.1).
+        """
         return self.label < _SPECIAL_PURPOSE_LIMIT
 
     @property
@@ -240,7 +245,10 @@ class MPLSLabel:
 
         For example ``"IPv4 Explicit NULL Label"`` for label 0;
         ``None`` for an ordinary label and for the unassigned values 5-6
-        and 8-12.
+        and 8-12. This reads the entry alone, so the entry after an
+        Extension Label (15), an Extended Special-Purpose Label (RFC
+        7274 §3.1), is named from the base registry, not the extended
+        one, or ``None``.
         """
         return _SPECIAL_PURPOSE_NAMES.get(self.label)
 

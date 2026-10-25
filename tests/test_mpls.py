@@ -917,18 +917,67 @@ class TestIndependentChecker:
 
     @pytest.mark.parametrize(
         "labels,payload",
-        [((13,), b"\x10\x00\x00\x07"), ((100,), b"\x50"), ((100,), b"")],
-        ids=["gal", "nibble-5", "empty"],
+        [
+            ((13,), b"\x10\x00\x00\x07"),
+            ((13,), icmp_packet()),
+            ((14,), icmp_packet()),
+            ((100,), b"\x50"),
+            ((100,), b""),
+        ],
+        ids=[
+            "gal",
+            "gal-over-ipv4",
+            "oam-alert-over-ipv4",
+            "nibble-5",
+            "empty",
+        ],
     )
     def test_a_payload_it_cannot_name_is_unread_unless_strict(
         self, labels, payload
     ):
-        """GAL, an unknown nibble or nothing: unread, or strict-failed."""
+        """GAL, an unknown nibble or nothing: unread, or strict-failed.
+
+        A GAL or OAM Alert bottom label stops the walk even over an
+        IPv4 packet, whose nibble alone would name IPv4.
+        """
         frame = labelled(payload, *labels)
         failures, stats = self.check(frame)
         assert (failures, stats["mpls-unchecked-payload"]) == ([], 1)
+        assert "ipv4" not in stats
         strict = self.checker._check_mpls(frame[14:], Counter(), 0, strict=True)
         assert strict == ["unchecked-mpls-payload"]
+
+    @pytest.mark.parametrize("tc", [0, 7])
+    def test_ipv4_explicit_null_outranks_an_ipv6_nibble(self, tc):
+        """Read what label 0 carries as IPv4, whatever its first nibble.
+
+        An IPv6 packet under it fails the IPv4 header check (IHL 0)
+        rather than verifying as IPv6. Traffic class 7 sets the bit
+        just below the label, which a shift one bit short reads as
+        label 1.
+        """
+        frame = (
+            bytes(ethernet(0x8847))
+            + entry(0, bottom=1, tc=tc)
+            + icmpv6_packet()
+        )
+        assert self.check(frame) == (["ipv4-ihl"], {"mpls-stack": 1})
+
+    def test_ipv6_explicit_null_outranks_an_ipv4_nibble(self):
+        """Read what label 2 carries as IPv6, never as IPv4."""
+        frame = bytes(ethernet(0x8847)) + entry(2, bottom=1) + icmp_packet()
+        assert self.check(frame) == ([], {"mpls-stack": 1, "ipv6": 1})
+
+    def test_an_ordinary_bottom_label_defers_to_the_nibble(self):
+        """Read IPv4 by its nibble under label 1, the Router Alert.
+
+        A shift one bit short reads label 1 as 2, IPv6 Explicit NULL.
+        """
+        frame = bytes(ethernet(0x8847)) + entry(1, bottom=1) + icmp_packet()
+        assert self.check(frame) == (
+            [],
+            {"mpls-stack": 1, "ipv4": 1, "icmpv4": 1},
+        )
 
     def test_mpls_in_gre_is_read_through(self):
         """GRE's Protocol Type reaches the checker's MPLS walk too."""
