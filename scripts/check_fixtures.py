@@ -1084,7 +1084,149 @@ def _check_ethernet(
         ethertype = struct.unpack_from("!H", payload, 2)[0]
         payload = payload[4:]
 
-    return _check_l3(ethertype, payload, stats, depth, strict=strict)
+    return _check_type_or_length(
+        ethertype, payload, stats, depth, strict=strict
+    )
+
+
+def _check_type_or_length(
+    value: int,
+    payload: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
+) -> list[str]:
+    """Validate what an Ethernet or VLAN Length/Type field names.
+
+    IEEE 802.3 Clause 3.2.6: 0x0600 or more is an EtherType, 1500 or
+    less the length of an 802.2 LLC PDU (see :func:`_check_8023`), and
+    the values between are undefined, so there is nothing to check."""
+    if value >= 0x0600:
+        return _check_l3(value, payload, stats, depth, strict=strict)
+    if value <= 1500:
+        return _check_8023(value, payload, stats, depth, strict=strict)
+    stats["type-undefined"] += 1
+    return [f"unchecked-type-{value}"] if strict else []
+
+
+def _check_8023(
+    length: int,
+    payload: bytes,
+    stats: Counter,
+    depth: int,
+    *,
+    strict: bool = False,
+) -> list[str]:
+    """Validate an 802.3 Length against the frame, then the LLC PDU.
+
+    The Length must fit in the frame, and anything after the PDU must
+    be the zero padding a sender adds to a PDU shorter than the 46-byte
+    minimum payload; a longer PDU, or a nonzero byte there, fails. Only
+    the ``length`` bytes of the PDU are checked further, so padding
+    never enters a checksum."""
+    if length > len(payload):
+        return ["8023-length-exceeds-frame"]
+    trailer = payload[length:]
+    if trailer and (any(trailer) or length >= 46):
+        return ["8023-trailer-not-padding"]
+    stats["8023"] += 1
+    if trailer:
+        stats["8023-padded"] += 1
+    return _check_llc(payload[:length], stats, depth, strict=strict)
+
+
+#: The two OUIs under which a SNAP PID is an EtherType: RFC 1042's and
+#: IEEE 802.1H's bridge-tunnel OUI.
+_ETHERTYPE_OUIS = (b"\x00\x00\x00", b"\x00\x00\xf8")
+
+#: CDP's SNAP OUI (Cisco) and PID.
+_CDP_SNAP = b"\x00\x00\x0c\x20\x00"
+
+
+def _check_llc(
+    pdu: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate an 802.2 LLC PDU: its Control field fits (1 octet when
+    the two low bits are 11, else 2), then SNAP (DSAP 0xAA), an 802.1D
+    BPDU (DSAP 0x42) or a Novell raw 802.3 IPX packet (0xFFFF where the
+    DSAP and SSAP would be), whose IPX length must be the PDU's."""
+    if pdu[:2] == b"\xff\xff":
+        stats["ipx-raw"] += 1
+        if len(pdu) < 4 or struct.unpack_from("!H", pdu, 2)[0] != len(pdu):
+            return ["ipx-length-mismatch"]
+        return []
+    if len(pdu) < 3 or len(pdu) < (3 if pdu[2] & 0x03 == 0x03 else 4):
+        return ["llc-truncated"]
+    stats["llc"] += 1
+    if pdu[0] == 0xAA:
+        return _check_snap(pdu, stats, depth, strict=strict)
+    if pdu[0] == 0x42:
+        return _check_bpdu(pdu[3:], stats)
+    stats[f"llc-dsap-0x{pdu[0]:02x}"] += 1
+    return [f"unchecked-llc-dsap-0x{pdu[0]:02x}"] if strict else []
+
+
+def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
+    """Validate an 802.1D BPDU's framing: Protocol Identifier 0, and as
+    long as its type needs, 35 bytes for a Configuration BPDU (type
+    0x00) and 4 for a Topology Change Notification (type 0x80)."""
+    needed = {0x00: 35, 0x80: 4}.get(bpdu[3] if len(bpdu) > 3 else -1)
+    if bpdu[:2] != b"\x00\x00" or needed is None or len(bpdu) < needed:
+        return ["stp-bpdu-malformed"]
+    stats["stp-bpdu"] += 1
+    return []
+
+
+def _check_snap(
+    pdu: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate a SNAP PDU: SSAP 0xAA, a UI Control, then a 3-byte OUI
+    and 2-byte PID. Under OUI 00-00-00 or 00-00-F8 the PID is an
+    EtherType, checked as one; under Cisco's, PID 0x2000 is CDP."""
+    if len(pdu) < 8 or pdu[1] != 0xAA or pdu[2] != 0x03:
+        return ["snap-malformed"]
+    stats["snap"] += 1
+    oui, pid = pdu[3:6], struct.unpack_from("!H", pdu, 6)[0]
+    if oui in _ETHERTYPE_OUIS:
+        return _check_l3(pid, pdu[8:], stats, depth + 1, strict=strict)
+    if pdu[3:8] == _CDP_SNAP:
+        return _check_cdp(pdu[8:], stats)
+    stats[f"snap-{oui.hex()}-0x{pid:04x}"] += 1
+    return [f"unchecked-snap-{oui.hex()}-0x{pid:04x}"] if strict else []
+
+
+def _cdp_checksum(data: bytes) -> int:
+    """The internet checksum as CDP computes it (lldpd's
+    ``frame_checksum`` with ``cisco`` set): an odd final byte is added
+    as the low-order byte of a last word, not the high-order one RFC
+    1071 pads it into."""
+    total = sum(
+        word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
+    )
+    if len(data) & 1:
+        total += data[-1]
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return ~total & 0xFFFF
+
+
+def _check_cdp(pdu: bytes, stats: Counter) -> list[str]:
+    """Validate a CDP PDU (version 1 or 2): its TLVs, each at least 4
+    bytes long, end exactly where the 802.3 Length ends the PDU, and
+    its checksum, over exactly those bytes, verifies."""
+    if len(pdu) < 4 or pdu[0] not in (1, 2):
+        return ["cdp-malformed"]
+    offset = 4
+    while offset + 4 <= len(pdu):
+        tlv_length = struct.unpack_from("!H", pdu, offset + 2)[0]
+        if tlv_length < 4:
+            return ["cdp-malformed"]
+        offset += tlv_length
+    if offset != len(pdu):
+        return ["cdp-tlvs-overrun"]
+    stats[f"cdpv{pdu[0]}"] += 1
+    return [] if _cdp_checksum(pdu) == 0 else ["cdp-checksum"]
 
 
 def main() -> int:
