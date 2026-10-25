@@ -141,10 +141,12 @@ def decode_frame(
         payload or an ICMP error's quoted packet.
     :param max_depth: Maximum number of headers to decode before
         raising :class:`~netprotocols.MaxDepthExceededError`.
-    :param lax: When true, a :class:`~netprotocols.ProtocolError` ends
-        the walk instead of propagating, and is reported on the
-        returned packet's ``stopped_by``. Strict decoding of each
-        individual header is unchanged.
+    :param lax: When true, a :class:`~netprotocols.ProtocolError`
+        raised while walking the chain ends the walk instead of
+        propagating, and is reported on the returned packet's
+        ``stopped_by``. An error in ``decode_as`` is raised before the
+        walk begins, whatever this says (see below). Strict decoding of
+        each individual header is unchanged.
     :param registry: Dispatch tables to resolve ``next_protocol()``
         against. Defaults to the process-wide registry.
     :param decode_as: Per-call decoder overrides, keyed by table then by

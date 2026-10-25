@@ -195,10 +195,13 @@ class UnknownTableError(ProtocolError):
 class InvalidRegistryKeyError(ProtocolError):
     """A registration named a key its table's wire field cannot carry.
 
-    Raised for an ``ethertype`` key below 0x0600, which an Ethernet
-    header reads as an 802.3 Length or an undefined value rather than an
-    EtherType, and for an ``llc.dsap`` or ``llc.snap`` key wider than the
-    field it is read from. See "Key ranges" in the module docstring.
+    Raised for an ``ethertype`` key outside 0x0600-0xFFFF: a key below
+    0x0600 is a value an Ethernet header reads as an 802.3 Length or an
+    undefined value rather than an EtherType, and one above 0xFFFF, or
+    negative, fits no 16-bit field. Raised too for an ``llc.dsap`` key
+    outside 0-0xFF and an ``llc.snap`` key outside 0 to 2**40 - 1 (a
+    negative key included), the values the fields they are read from
+    can carry. See "Key ranges" in the module docstring.
     """
 
 
