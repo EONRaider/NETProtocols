@@ -34,6 +34,14 @@
 # stops with an error; whatever was captured by then is left in
 # tests/fixtures/staging for inspection and must not be folded in.
 #
+# A second tcpdump on B captures the same eight frames with a 20-byte
+# snap length, as tests/fixtures/staging/mpls/mpls_snaplen.pcap: real
+# truncation, cut 2 bytes past a stack's first entry. It goes in
+# tests/fixtures/mpls/, outside the corpus's non-recursive *.pcap globs,
+# because a cut frame is not one decode_frame() walks cleanly in strict
+# mode. The script checks that each of its records is the first 20
+# bytes of the matching full frame.
+#
 # veth is a purely local link, so tx/rx offload is disabled first
 # (ethtool -K) to keep every checksum computed in software.
 
@@ -48,7 +56,7 @@ for tool in ip tcpdump ping python3 ethtool; do
 done
 
 OUT="tests/fixtures/staging"
-mkdir -p "$OUT"
+mkdir -p "$OUT/mpls"
 PACKETS="scripts/mpls_fixture_packets.py"
 NSA=npmplsa
 NSB=npmplsb
@@ -56,12 +64,18 @@ A=npmplsva
 B=npmplsvb
 WORK=""
 TCPDUMP_PID=""
+SNAP_PID=""
 LISTENER_PID=""
 stop_tcpdump() {
     if [[ -n $TCPDUMP_PID ]]; then
         kill -INT "$TCPDUMP_PID" 2>/dev/null || true
         wait "$TCPDUMP_PID" 2>/dev/null || true
         TCPDUMP_PID=""
+    fi
+    if [[ -n $SNAP_PID ]]; then
+        kill -INT "$SNAP_PID" 2>/dev/null || true
+        wait "$SNAP_PID" 2>/dev/null || true
+        SNAP_PID=""
     fi
 }
 cleanup() {
@@ -141,6 +155,10 @@ echo "[>] step 2: the labelled frames, built in A, captured on B"
 ip netns exec "$NSB" tcpdump -i "$B" -w "$OUT/mpls.pcap" --immediate-mode -U -q \
     'ether proto 0x8847 or ether proto 0x8848' >/dev/null 2>&1 &
 TCPDUMP_PID=$!
+ip netns exec "$NSB" tcpdump -i "$B" -s 20 -w "$OUT/mpls/mpls_snaplen.pcap" \
+    --immediate-mode -U -q 'ether proto 0x8847 or ether proto 0x8848' \
+    >/dev/null 2>&1 &
+SNAP_PID=$!
 sleep 1
 ip netns exec "$NSA" python3 "$PACKETS" send "$WORK/inner.pcap" "$A" "$WORK/mpls.sent"
 sleep 1
@@ -149,7 +167,7 @@ python3 "$PACKETS" compare "$OUT/mpls.pcap" "$WORK/mpls.sent" ||
     fail "the captured frames differ from the frames the script built."
 
 echo "[*] Checking the capture holds exactly the expected frames..."
-python3 - "$OUT/mpls.pcap" <<'PY'
+python3 - "$OUT/mpls.pcap" "$OUT/mpls/mpls_snaplen.pcap" <<'PY'
 import struct
 import sys
 from collections import Counter
@@ -200,6 +218,29 @@ expected = Counter({
 if seen != expected:
     sys.exit(f"[!] Unexpected capture: {dict(seen)}, expected {dict(expected)}")
 print(f"[+] {sum(seen.values())} frames, as expected.")
+
+
+def records(path):
+    """(incl_len, orig_len, bytes) of each record of a pcap."""
+    raw = open(path, "rb").read()
+    order = "<" if raw[:4] in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1") else ">"
+    out, at = [], 24
+    while at + 16 <= len(raw):
+        incl, orig = struct.unpack_from(order + "II", raw, at + 8)
+        out.append((incl, orig, raw[at + 16 : at + 16 + incl]))
+        at += 16 + incl
+    if at != len(raw):
+        sys.exit(f"{path}: {len(raw) - at} stray bytes after the last record")
+    return out
+
+
+full, cut = records(sys.argv[1]), records(sys.argv[2])
+if len(cut) != len(full):
+    sys.exit(f"[!] {len(cut)} cut frames for {len(full)} full ones")
+for (_, length, frame), (incl, orig, data) in zip(full, cut):
+    if (incl, orig, data) != (20, length, frame[:20]):
+        sys.exit("[!] a cut frame is not the first 20 bytes of its frame")
+print(f"[+] {len(cut)} frames cut at 20 bytes, as expected.")
 PY
 
 echo
@@ -214,4 +255,5 @@ fi
 
 echo
 echo "[i] Expect 8 MPLS frames (mpls-stack x8) and zero checksum failures."
-echo "    Fold tests/fixtures/staging/mpls.pcap into tests/fixtures/."
+echo "    Fold tests/fixtures/staging/mpls.pcap into tests/fixtures/ and"
+echo "    tests/fixtures/staging/mpls/mpls_snaplen.pcap into tests/fixtures/mpls/."

@@ -1015,9 +1015,11 @@ def _check_upper_v6(
 def _check_arp(
     payload: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
-    """Count an ARP packet, which carries no checksum; under strict, at
-    least insist on the 28-byte Ethernet/IPv4 form rather than vouching
-    for a stub."""
+    """Count an ARP packet, which carries no checksum.
+
+    Under strict, at least insist on the 28-byte Ethernet/IPv4 form
+    rather than vouching for a stub.
+    """
     stats["arp"] += 1
     if strict and len(payload) < 28:
         return ["unchecked-ethertype-0x0806"]
@@ -1036,9 +1038,11 @@ _MPLS_NIBBLES = {4: 0x0800, 6: 0x86DD}
 
 
 def _mpls_stack_end(payload: bytes) -> tuple[int, int] | None:
-    """Find the end of an MPLS label stack: the offset just past the
-    entry with its Bottom of Stack bit set, and that entry's label, or
-    ``None`` when the bytes end first."""
+    """Find the end of an MPLS label stack.
+
+    Return the offset just past the entry with its Bottom of Stack bit
+    set, and that entry's label, or ``None`` when the bytes end first.
+    """
     for offset in range(0, len(payload) - 3, 4):
         word = struct.unpack_from("!I", payload, offset)[0]
         if word & 0x100:

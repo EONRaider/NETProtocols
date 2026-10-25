@@ -254,7 +254,8 @@ class MPLS(Protocol):
     what :meth:`decode` produces, so ``MPLS.decode(bytes(stack)) ==
     stack`` for every stack that can be built.
 
-    :param labels: The label stack entries, top of the stack first.
+    :param labels: The label stack entries, top of the stack first; any
+        iterable of them, kept as a tuple.
     :raises InvalidFieldError: the stack is empty or its S bits are not
         set on the last entry alone (``field`` ``"labels"``).
     """
@@ -275,6 +276,10 @@ class MPLS(Protocol):
 
         :raises InvalidFieldError: it is empty, or an S bit is misplaced.
         """
+        # Any iterable of entries is accepted and kept as a tuple, so a
+        # stack built from a list still compares equal to its decode and
+        # stays hashable.
+        object.__setattr__(self, "labels", tuple(self.labels))
         if not self.labels:
             raise InvalidFieldError(
                 "MPLS label stack must hold at least one entry",

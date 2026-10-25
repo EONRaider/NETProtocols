@@ -295,6 +295,17 @@ class TestConstruction:
         assert MPLS.decode(bytes(mpls)) == mpls
         assert bytes(mpls) == b"".join(map(bytes, labels))
 
+    def test_a_stack_built_from_a_list_is_kept_as_a_tuple(self):
+        """Keep any iterable of entries as a hashable tuple."""
+        labels = [
+            MPLSLabel(label=16, traffic_class=0, bottom_of_stack=0, ttl=9),
+            MPLSLabel(label=17, traffic_class=0, bottom_of_stack=1, ttl=9),
+        ]
+        mpls = MPLS(labels=labels)
+        assert type(mpls.labels) is tuple
+        assert MPLS.decode(bytes(mpls)) == mpls
+        assert hash(mpls) == hash(MPLS(labels=tuple(labels)))
+
     def test_positional_patterns_bind_the_stack(self):
         """Match a stack with positional patterns."""
         match built(100, 0):
@@ -768,6 +779,53 @@ class TestCorpusMPLS:
                 # The datagram's own payload: not the padding after it.
                 trailing = trailing[: packet[UDP].length - 8]
             assert packet.with_checksums(trailing) == packet
+
+
+class TestCapturedTruncation:
+    """The same eight frames captured with a 20-byte snap length.
+
+    tests/fixtures/mpls/mpls_snaplen.pcap sits outside the corpus globs,
+    as bgp/bgp_session.pcap does: a cut frame does not walk cleanly in
+    strict mode. Byte 18 is 4 bytes into the label stack, so a stack of
+    two or three entries is cut after its first, and a one-entry stack
+    is whole but its IPv4 header is cut to 2 bytes.
+    """
+
+    FRAMES = pcap_frames(FIXTURES / "mpls" / "mpls_snaplen.pcap")
+
+    def test_each_record_is_a_cut_corpus_frame(self):
+        """Hold each record to the first 20 bytes of its corpus frame."""
+        assert [len(frame) for frame in self.FRAMES] == [20] * 8
+        assert [f[:20] for f in TestCorpusMPLS.FRAMES] == self.FRAMES
+
+    @pytest.mark.parametrize("index", [1, 2, 3, 4, 5, 7])
+    def test_a_cut_stack_raises_at_its_missing_entry(self, index):
+        """Raise at the second entry, 18 bytes into the frame."""
+        frame = self.FRAMES[index]
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            decode_frame(frame)
+        error = excinfo.value
+        assert error.protocol is MPLS
+        assert (error.field, error.offset, error.frame_offset) == (
+            "labels",
+            4,
+            18,
+        )
+        packet = decode_frame(frame, lax=True)
+        assert kinds(packet) == [Ethernet]
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
+
+    @pytest.mark.parametrize("index", [0, 6])
+    def test_a_whole_stack_hands_the_cut_to_ipv4(self, index):
+        """Decode a one-entry stack whole; IPv4 raises at byte 18."""
+        frame = self.FRAMES[index]
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            decode_frame(frame)
+        assert excinfo.value.protocol is IPv4
+        assert excinfo.value.frame_offset == 18
+        packet = decode_frame(frame, lax=True)
+        assert kinds(packet) == [Ethernet, MPLS]
+        assert packet[MPLS].payload_ethertype is EtherType.IPV4
 
 
 def _load_checker() -> ModuleType:
