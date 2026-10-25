@@ -105,18 +105,40 @@ cut message and raise; that is one value in 2**32.
 Each message is one layer, so a segment of many small messages makes a
 deep chain: Ethernet, IPv4 and TCP are three layers, and the walk's
 default ``max_depth`` of :data:`~netprotocols.MAX_DEPTH` (32) leaves
-room for 29 messages. A 1460-byte MSS segment with TCP timestamps
-carries 1448 bytes, which is 76 KEEPALIVEs (19 bytes each) and the
-start of a 77th, or about 26 of the 55-byte single-prefix UPDATEs the
-corpus's session carries; the busiest segment in the corpus carries 7
-messages. A strict walk of a longer chain raises
-:class:`~netprotocols.MaxDepthExceededError`. No segment of 1460
-bytes or fewer holds more than 76 whole messages, so in an untagged
+room for 29 messages. Valid traffic carries more. A 1460-byte MSS
+segment with TCP timestamps carries 1448 bytes: 76 KEEPALIVEs (19
+bytes each) and the start of a 77th, or 30 of the 47-byte UPDATEs that
+announce one /24 with only ORIGIN, a one-AS AS_PATH and NEXT_HOP. A
+capture taken with GRO or TSO on, over loopback, or on a jumbo-frame
+link holds segments larger than the MSS, up to the 65,495 bytes of TCP
+payload an IPv4 packet can carry (3,447 KEEPALIVEs), so no fixed depth
+covers every segment. Past the limit a strict walk raises
+:class:`~netprotocols.MaxDepthExceededError` on valid traffic, and a
+lax one stops with ``packet.stopped_by`` set to that error and
+``packet.consumed`` short of the frame. The corpus, captured with
+offload off, never reaches it: its busiest segment carries 7 messages.
+
+There are two ways past the limit. One is a larger ``max_depth``: three
+more than the segment's whole messages decodes them all in an untagged
 Ethernet, IPv4 and TCP frame (add one for each VLAN tag or IPv6
-extension header) ``max_depth=79`` decodes a segment of 76 whole
-messages, and ``max_depth=80`` reaches the cut 77th that may follow
+extension header), and one more again reaches a cut message after
 them, which then raises :class:`~netprotocols.TruncatedHeaderError`
-instead.
+instead; so ``max_depth=79`` decodes 76 whole KEEPALIVEs. The other,
+which needs no bound on the segment, is to carry on where the walk
+stopped. The error's ``protocol`` is :class:`BGP` when the next layer
+is another message, and ``packet.consumed`` in lax mode, or the
+error's ``frame_offset`` in strict mode, is where that message starts::
+
+    packet = decode_frame(frame, lax=True)
+    messages = [layer for layer in packet if isinstance(layer, BGP)]
+    rest = frame[packet.consumed :]
+    while (
+        isinstance(packet.stopped_by, MaxDepthExceededError)
+        and packet.stopped_by.protocol is BGP
+    ):
+        packet = decode_frame(rest, start=BGP, lax=True)
+        messages.extend(packet)
+        rest = rest[packet.consumed :]
 
 Out of scope
 ------------

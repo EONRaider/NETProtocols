@@ -996,10 +996,18 @@ eight lines:
 
 - **Bounded depth.** `max_depth` (default 32) raises
   `MaxDepthExceededError`. Chains already terminated — every header
-  validates its own declared length — so this bounds *cost*, not
-  correctness: a crafted frame cannot turn one walk into thousands of
-  decodes. Corpus maximum is 10 layers (a TCP segment carrying 7
-  BGP messages, one layer each); 7 for nested headers (an ICMP echo
+  validates its own declared length — so for nested headers this
+  bounds *cost*, not correctness: a crafted frame cannot turn one walk
+  into thousands of decodes. BGP is the exception (#185): each message
+  in a TCP segment is a layer, so a valid segment of more than 29
+  messages — 30 one-prefix UPDATEs fit in a 1448-byte segment, and
+  GRO, TSO, loopback and jumbo frames make segments far larger —
+  exceeds the default, and the strict walk raises on valid traffic
+  (lax stops short). There the caller raises `max_depth` or walks on
+  with `decode_frame(frame[packet.consumed:], start=BGP)`
+  (`layer7/bgp.py`'s module docstring; tested in `tests/test_bgp.py`'s
+  `TestMaxDepth`). Corpus maximum is 10 layers (a TCP segment carrying
+  7 BGP messages, one layer each); 7 for nested headers (an ICMP echo
   tunnelled through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make

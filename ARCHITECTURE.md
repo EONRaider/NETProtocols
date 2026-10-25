@@ -538,9 +538,17 @@ segment that ends inside a message raises `TruncatedHeaderError` at
 that message (lax mode keeps the ones before it); one that begins
 inside a message fails the Marker check; a bare ACK, like one on port
 53, sends an empty payload into the decoder. A segment of many small messages is a deep
-chain — a 1448-byte one holds 76 KEEPALIVEs, 79 layers with Ethernet,
-IPv4 and TCP — so `max_depth` stops it unless raised; the busiest
-segment of the captured session in the corpus carries 7. Reassembling
+chain, and here `max_depth` bounds correctness, not just cost: the
+default leaves room for 29 messages after Ethernet, IPv4 and TCP, and
+valid segments hold more. A 1448-byte one holds 76 KEEPALIVEs or 30
+one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
+loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
+strict walk raises `MaxDepthExceededError` on valid traffic and a lax
+one stops with `stopped_by` set and `consumed` short of the frame. A
+larger `max_depth` or a second walk,
+`decode_frame(frame[packet.consumed:], start=BGP)`, decodes the rest;
+the busiest segment of the captured session in the corpus, taken with
+offload off, carries 7. Reassembling
 the stream is the caller's, as it is for `HTTP` below: see
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 

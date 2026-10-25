@@ -645,6 +645,21 @@ class TestTrailingBytes:
         assert len(bgp_layers(packet)) == 1
 
 
+def one_prefix_update(index: int) -> bytes:
+    """A 47-byte eBGP UPDATE announcing ``10.0.<index>.0/24``.
+
+    Only ORIGIN, a one-AS AS_PATH and NEXT_HOP: about the smallest
+    announcement of one /24 a speaker sends.
+    """
+    attributes = (
+        bytes([0x40, 1, 1, 0])
+        + bytes([0x40, 2, 6, 2, 1])
+        + (65001).to_bytes(4, "big")
+        + bytes([0x40, 3, 4, 192, 0, 2, 1])
+    )
+    return update(attributes=attributes, nlri=bytes([24, 10, 0, index]))
+
+
 class TestMaxDepth:
     """Segments of many messages against ``max_depth``.
 
@@ -653,6 +668,60 @@ class TestMaxDepth:
     """
 
     SEGMENT = KEEPALIVE * 76 + MARKER[:4]
+
+    def test_thirty_one_prefix_updates_exceed_the_default(self):
+        """30 one-prefix UPDATEs fit in 1448 bytes and exceed MAX_DEPTH.
+
+        Valid traffic: strict raises, lax stops short of the frame.
+        """
+        segment = b"".join(one_prefix_update(i) for i in range(30))
+        assert len(one_prefix_update(0)) == 47
+        assert len(segment) <= 1448
+        raw = frame(segment)
+        stop_at = 54 + 29 * 47  # frame(): a TCP header without options
+        with pytest.raises(MaxDepthExceededError) as caught:
+            decode_frame(raw)
+        assert caught.value.protocol is BGP
+        assert caught.value.frame_offset == stop_at
+        packet = decode_frame(raw, lax=True)
+        assert len(bgp_layers(packet)) == 29
+        assert isinstance(packet.stopped_by, MaxDepthExceededError)
+        assert packet.consumed == stop_at < len(raw)
+
+    def test_walking_on_from_where_the_walk_stopped(self):
+        """The module docstring's loop decodes a 40-message segment.
+
+        Each walk from ``packet.consumed`` with ``start=BGP`` takes up
+        to 32 more messages, until one ends cleanly.
+        """
+        raw = frame(b"".join(one_prefix_update(i) for i in range(40)))
+        packet = decode_frame(raw, lax=True)
+        messages = [layer for layer in packet if isinstance(layer, BGP)]
+        rest = raw[packet.consumed :]
+        walks = 1
+        while (
+            isinstance(packet.stopped_by, MaxDepthExceededError)
+            and packet.stopped_by.protocol is BGP
+        ):
+            packet = decode_frame(rest, start=BGP, lax=True)
+            messages.extend(packet)
+            rest = rest[packet.consumed :]
+            walks += 1
+        assert walks == 2
+        assert packet.stopped_by is None
+        assert rest == b""
+        assert [str(msg.nlri[0]) for msg in messages] == [
+            f"10.0.{i}.0/24" for i in range(40)
+        ]
+
+    def test_walking_on_from_a_strict_error(self):
+        """In strict mode the error's frame_offset is where to walk on."""
+        raw = frame(b"".join(one_prefix_update(i) for i in range(40)))
+        with pytest.raises(MaxDepthExceededError) as caught:
+            decode_frame(raw)
+        rest = decode_frame(raw[caught.value.frame_offset :], start=BGP)
+        assert len(rest) == 40 - 29
+        assert str(rest[-1].nlri[0]) == "10.0.39.0/24"
 
     def test_the_default_depth_stops_the_walk(self):
         """MAX_DEPTH stops a segment of 76 KEEPALIVEs."""
