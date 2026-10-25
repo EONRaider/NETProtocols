@@ -2,7 +2,7 @@
 real-capture corpus: every checksummed inbound frame must recompute to
 its captured value. SCTP's CRC32c is tested here too, not in
 test_sctp.py, because this file is in the mutation audit's test
-selection (pyproject.toml's [tool.mutmut])."""
+selection (pyproject.toml's [tool.mutmut]); so is CDP's checksum."""
 
 from dataclasses import replace
 
@@ -11,12 +11,16 @@ import pytest
 from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     ARP,
+    CDP,
+    CDPTLV,
     GRE,
     IGMP,
+    LLC,
     OSPF,
     OSPFLSA,
     PIM,
     SCTP,
+    SNAP,
     TCP,
     UDP,
     VRRP,
@@ -38,7 +42,12 @@ from netprotocols import (
     internet_checksum,
     verify,
 )
-from netprotocols.checksum import fletcher_checksum, lsa_checksum, verify_lsa
+from netprotocols.checksum import (
+    _cdp_sum,
+    fletcher_checksum,
+    lsa_checksum,
+    verify_lsa,
+)
 from test_corpus import walk
 from test_vrrp import (
     V6_GROUP,
@@ -331,6 +340,151 @@ class TestSCTPChecksum:
         assert isinstance(filled, SCTP)
         assert verify(filled)
         assert filled.checksum == compute(built)
+
+
+def cdp_oracle(data: bytes) -> int:
+    """Return CDP's checksum of ``data``, built as Wireshark builds it.
+
+    Written out here, not taken from the library, and in the form of
+    epan/dissectors/packet-cdp.c rather than lldpd's: an odd PDU gets a
+    last word whose high byte is 0 and low byte the final byte, and when
+    that byte has its high bit set both bytes of the word are
+    decremented. The words are then summed as RFC 1071 sums them.
+    """
+    if len(data) % 2:
+        last = data[-1]
+        high, low = 0, last
+        if last & 0x80:
+            high, low = (high - 1) & 0xFF, low - 1
+        data = data[:-1] + bytes((high, low))
+    return ones_complement(data)
+
+
+#: The CDP frames of the LLC fixture: CDPv1, CDPv2, and a CDPv1 whose
+#: odd-length PDU ends in 0xA9.
+CDP_LAYERS = [
+    layer
+    for frame in pcap_frames(FIXTURES / "llc.pcap")
+    for layer in decode_frame(frame)
+    if isinstance(layer, CDP)
+]
+
+
+class TestCDPChecksum:
+    """CDP's internet checksum, its odd final byte summed Cisco's way."""
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            b"",
+            b"\x00",
+            b"\x01",
+            b"\x7f",
+            b"\x80",
+            b"\x81",
+            b"\xa9",
+            b"\xff",
+            b"\x12\x34",
+            b"\x12\x34\x01",
+            b"\x12\x34\x80",
+            b"\x00\x7f\x81",
+            b"\x00\x00\x00\x01",
+            b"\x02\xb4\x00\x00\x00\x01\x00\x05\xfe",
+            b"\xff\xff\xff",
+            b"\xff\xff" * 3 + b"\xff",
+            b"\x80\x00\x80\x00\x7f",
+            bytes(range(256)) + b"\xc3",
+        ],
+    )
+    def test_the_sum_matches_wiresharks_form(self, data):
+        """Odd and even lengths (1 and 3 mod 4, 0 and 2), final bytes on
+        both sides of 0x80, and sums that fold more than once."""
+        assert _cdp_sum(data) == cdp_oracle(data)
+
+    @pytest.mark.parametrize(
+        "data,expected",
+        [
+            (b"\x00\x7f\x81", 0x0000),
+            (b"\x01", 0xFFFE),
+            (b"\x7f", 0xFF80),
+            (b"\x80", 0x0080),
+            (b"\xff", 0x0001),
+            (b"\xff\xff\xff", 0x0001),
+            (b"\x12\x34", 0xEDCB),
+        ],
+    )
+    def test_pinned_values(self, data, expected):
+        """Values worked by hand: ``0x81`` adds ``0xFF80``, so ``00 7f
+        81`` sums to ``0xFFFF``; RFC 1071's padding would add ``0x8100``
+        and give ``0x7E80``."""
+        assert _cdp_sum(data) == expected
+
+    @pytest.mark.parametrize("last", [0x01, 0x7F, 0x80, 0xA9, 0xFF])
+    def test_an_odd_byte_is_not_rfc_1071s(self, last):
+        data = b"\x02\xb4\x00\x00" + bytes((last,))
+        assert _cdp_sum(data) != internet_checksum(data)
+
+    def test_an_even_pdu_is_rfc_1071s(self):
+        data = bytes(range(1, 41))
+        assert _cdp_sum(data) == internet_checksum(data)
+
+    def test_the_corpus_covers_both_versions_and_an_odd_byte(self):
+        """All three PDUs are 91 bytes: two end below 0x80, one above."""
+        assert [cdp.version for cdp in CDP_LAYERS] == [1, 2, 1]
+        assert [cdp.header_len for cdp in CDP_LAYERS] == [91, 91, 91]
+        assert [bytes(cdp)[-1] for cdp in CDP_LAYERS] == [0x63, 0x63, 0xA9]
+
+    @pytest.mark.parametrize("index", range(3), ids=["v1", "v2", "odd"])
+    def test_every_captured_pdu_recomputes(self, index):
+        cdp = CDP_LAYERS[index]
+        assert compute(cdp) == cdp.checksum
+        assert verify(cdp)
+        assert cdp_oracle(bytes(replace(cdp, checksum=0))) == cdp.checksum
+
+    def test_the_checksum_field_is_excluded(self):
+        cdp = CDP_LAYERS[2]
+        assert compute(replace(cdp, checksum=0x1234)) == cdp.checksum
+
+    def test_ip_and_payload_are_ignored(self):
+        cdp = CDP_LAYERS[0]
+        assert (
+            compute(
+                cdp,
+                ip=IPv4.decode(
+                    bytes.fromhex("450000140000000040000000c0000201c0000202")
+                ),
+                payload=b"\x01\x02\x03",
+            )
+            == cdp.checksum
+        )
+
+    @pytest.mark.parametrize("index", range(3), ids=["v1", "v2", "odd"])
+    def test_a_changed_byte_is_detected(self, index):
+        cdp = CDP_LAYERS[index]
+        tlv = cdp.tlvs[-1]
+        changed = CDPTLV(tlv.type, tlv.value[:-1] + bytes((tlv.value[-1] ^ 1,)))
+        assert not verify(replace(cdp, tlvs=(*cdp.tlvs[:-1], changed)))
+
+    @pytest.mark.parametrize(
+        "value", [b"ab", b"abc", b"ab\x80", b"ab\xa9"], ids=str
+    )
+    def test_with_checksums_fills_a_built_packet(self, value):
+        """An odd PDU ending at or past 0x80 too, through the walk."""
+        built = Packet(
+            Ethernet(
+                dst="01:00:0c:cc:cc:cc",
+                src="02:00:00:00:00:01",
+                ethertype=8 + 4 + 4 + len(value),
+            ),
+            LLC(dsap=0xAA, ssap=0xAA, control=0x03),
+            SNAP(oui=0x00000C, pid=0x2000),
+            CDP(version=2, ttl=180, tlvs=(CDPTLV(1, value),)),
+        )
+        filled = built.with_checksums()
+        cdp = filled[CDP]
+        assert cdp.checksum == cdp_oracle(bytes(built[CDP]))
+        assert verify(cdp)
+        assert decode_frame(bytes(filled)) == filled
 
 
 class TestVRRPChecksum:

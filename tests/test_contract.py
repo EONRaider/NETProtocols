@@ -7,6 +7,7 @@ from netprotocols import (
     AH,
     ARP,
     BGP,
+    CDP,
     ESP,
     HTTP,
     LLC,
@@ -54,6 +55,7 @@ class TestTruncation:
             (BGP, "raw_bgp_keepalive"),
             (LLC, "raw_llc_header"),
             (SNAP, "raw_snap_header"),
+            (CDP, "raw_cdp_header"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):

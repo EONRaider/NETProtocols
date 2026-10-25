@@ -246,6 +246,13 @@ def raw_snap_header() -> bytes:
 
 
 @pytest.fixture
+def raw_cdp_header() -> bytes:
+    """CDP header of the CDPv2 frame in tests/fixtures/llc.pcap: Version
+    2, TTL 4, Checksum 0xFCF3."""
+    return b"\x02\x04\xfc\xf3"
+
+
+@pytest.fixture
 def raw_rip_message() -> bytes:
     """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
     route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and

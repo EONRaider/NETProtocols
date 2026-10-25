@@ -38,6 +38,7 @@ from netprotocols import (
     AH,
     ARP,
     BGP,
+    CDP,
     DHCP,
     DNS,
     ESP,
@@ -86,6 +87,7 @@ from strategies import (
     ROUND_TRIP_STRATEGIES,
     bgp_path_attributes,
     bgp_prefixes,
+    cdp_pdus,
     http_context_responses,
     http_messages,
     http_wire,
@@ -102,6 +104,7 @@ ALL_PROTOCOLS = (
     VLAN,
     LLC,
     SNAP,
+    CDP,
     ARP,
     IPv4,
     IPv6,
@@ -967,6 +970,108 @@ class TestLLCProperties:
             if eth.length is not None:
                 assert packet.consumed <= 14 + eth.length
             event(f"layers: {len(packet)}")
+
+
+def _cdp_tlv(tlv_type: int, value: bytes) -> bytes:
+    """Return the on-wire CDP TLV, its Length counting its header."""
+    return struct.pack("!HH", tlv_type, 4 + len(value)) + value
+
+
+@st.composite
+def cdp_address_values(draw: st.DrawFn) -> bytes:
+    """An Addresses value: a count, then entries, often well formed,
+    sometimes cut short or followed by stray bytes."""
+    entries = b""
+    for _ in range(draw(st.integers(0, 3))):
+        protocol = draw(
+            st.sampled_from([b"\xcc", b"\xaa\xaa\x03\x00\x00\x00\x86\xdd"])
+            | st.binary(max_size=9)
+        )
+        address = draw(st.binary(min_size=4, max_size=4))
+        address = draw(st.just(address) | st.binary(max_size=17))
+        entries += (
+            bytes((draw(st.integers(0, 3)), len(protocol)))
+            + protocol
+            + len(address).to_bytes(2)
+            + address
+        )
+    count = draw(st.integers(0, 4) | st.integers(0, 0xFFFFFFFF))
+    value = count.to_bytes(4) + entries + draw(st.binary(max_size=3))
+    return value[: draw(st.integers(0, len(value)))]
+
+
+@st.composite
+def cdp_bodies(draw: st.DrawFn) -> bytes:
+    """A CDP header, TLVs of the types the accessors read (and others),
+    a few bytes changed now and then, and a trailer."""
+    tlvs = b""
+    for _ in range(draw(st.integers(0, 6))):
+        tlv_type = draw(
+            st.sampled_from([1, 2, 3, 4, 5, 6, 0x16]) | st.integers(0, 0xFFFF)
+        )
+        if tlv_type in (2, 0x16):
+            value = draw(cdp_address_values())
+        else:
+            value = draw(st.binary(max_size=12))
+        tlvs += _cdp_tlv(tlv_type, value)
+    data = bytearray(draw(st.binary(min_size=4, max_size=4)) + tlvs)
+    for _ in range(draw(st.integers(0, 2))):
+        position = draw(st.integers(0, len(data) - 1))
+        data[position] = draw(st.integers(0, 255))
+    trailer = draw(st.one_of(st.binary(max_size=8), st.just(bytes(8))))
+    return bytes(data) + trailer
+
+
+class TestCDPProperties:
+    @given(data=st.one_of(fuzz_input, cdp_bodies()))
+    def test_accessors_never_raise(self, data: bytes) -> None:
+        """Whatever decodes answers every accessor, and round-trips."""
+        try:
+            cdp = CDP.decode(data)
+        except ProtocolError:
+            return
+        _ = (
+            cdp.header_len,
+            cdp.checksum_hex_str,
+            cdp.device_id,
+            cdp.port_id,
+            cdp.software_version,
+            cdp.platform,
+            cdp.capabilities,
+            cdp.capability_names,
+            cdp.next_protocol(),
+        )
+        for tlv in cdp.tlvs:
+            _ = (tlv.type_name, tlv.length)
+        for addresses in (cdp.addresses, cdp.management_addresses):
+            event(f"addresses: {'none' if addresses is None else 'parsed'}")
+            for address in addresses or ():
+                _ = (address.ip, address.protocol_type_name, bytes(address))
+        assert bytes(cdp) == data[: cdp.header_len]
+        assert CDP.decode(bytes(cdp)) == cdp
+
+    @given(pdu=cdp_pdus())
+    def test_zero_padding_stays_out_of_the_pdu(self, pdu: CDP) -> None:
+        """Every length of padding Ethernet adds, up to 46 bytes, is
+        left undecoded by a standalone decode."""
+        wire = bytes(pdu)
+        for count in range(47):
+            decoded = CDP.decode(wire + bytes(count))
+            assert decoded == pdu, count
+            assert decoded.header_len == len(wire), count
+
+    @given(pdu=cdp_pdus(), trailer=st.binary(max_size=12))
+    def test_a_walk_hands_cdp_exactly_its_pdu(
+        self, pdu: CDP, trailer: bytes
+    ) -> None:
+        """Behind an 802.3 Length any trailer stays outside the PDU."""
+        snap = b"\xaa\xaa\x03\x00\x00\x0c\x20\x00" + bytes(pdu)
+        if len(snap) > 1500:
+            return
+        frame = bytes(12) + len(snap).to_bytes(2) + snap
+        packet = decode_frame(frame + trailer)
+        assert packet[CDP] == pdu
+        assert packet.consumed == len(frame)
 
 
 class TestVRRPAccessorSafety:

@@ -37,6 +37,11 @@ keepalived 2.3.0's adds Juniper, and says most open-source
 implementations, tcpdump and Wireshark among them, include it.
 :func:`verify` returns ``False`` for an advert checksummed without it.
 
+CDP's checksum is the internet checksum but for an odd final byte,
+which it does not pad into the high byte of a last word as RFC 1071
+does: see :func:`compute`. :meth:`~netprotocols.Packet.with_checksums`
+fills it like IPv4's, from the layer alone.
+
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
 and nothing checks ``IPv4.total_length`` against the payload you pass.
@@ -54,6 +59,7 @@ from netprotocols._base import (
     ipv6_to_bytes,
 )
 from netprotocols._enums import IPProtocol
+from netprotocols.layer2.cdp import CDP
 from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
@@ -207,6 +213,39 @@ def verify_lsa(lsa: OSPFLSA) -> bool:
     """
     sums = _fletcher_sums(bytes(lsa)[2:])
     return lsa.header.ls_checksum != 0 and sums == (0, 0)
+
+
+def _cdp_sum(data: bytes) -> int:
+    """Return CDP's checksum of ``data``.
+
+    It is :func:`internet_checksum` with one exception: an odd final
+    byte ``v`` is not padded into the high byte of a last word. It is
+    the word's low byte when below 0x80, and from 0x80 the word is
+    ``0xFF00 + v - 1``: Cisco's code adds the byte sign-extended, and
+    then 1 less, to make up for an off-by-one in its folding. That is
+    lldpd 1.0.18's src/daemon/frame.c ``frame_checksum()`` ("sum +=
+    0xff << 8; sum += v - 1;") and Wireshark's
+    epan/dissectors/packet-cdp.c (commit 31bf0857, fetched 2026-10-25),
+    which builds the same last word by decrementing both of its bytes.
+    """
+    if len(data) % 2:
+        last = data[-1]
+        word = 0xFF00 + last - 1 if last & 0x80 else last
+        data = data[:-1] + word.to_bytes(2)
+    return internet_checksum(data)
+
+
+def _whole_message_checksum(layer: IGMP | CDP) -> int:
+    """Checksum a message whose field is bytes 2-3 and covers it all.
+
+    Those are IGMP's and CDP's: the whole message with the field
+    zeroed, no pseudo-header, nothing after the message. IGMP's is the
+    internet checksum, CDP's :func:`_cdp_sum`.
+    """
+    message = _zeroed(bytes(layer), 2)
+    if isinstance(layer, CDP):
+        return _cdp_sum(message)
+    return internet_checksum(message)
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
@@ -437,15 +476,20 @@ def compute(
         cryptographic authentication, which computes none; ``PIM`` covers
         the whole message, or only the first 8 bytes of a Register
         (RFC 7761 §4.9.3), behind the IPv6 pseudo-header over IPv6 and
-        alone over IPv4 (``payload`` ignored).
+        alone over IPv4 (``payload`` ignored); ``CDP`` covers the
+        whole PDU, its TLVs included, with no pseudo-header (``ip``
+        and ``payload`` ignored), summed as the internet checksum but
+        for an odd final byte ``v``, added as the low byte of a last
+        word below 0x80 and as ``0xFF00 + v - 1`` from 0x80, as lldpd
+        and Wireshark sum it (see :func:`_cdp_sum`).
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6,
         VRRPv3, and PIM, whose coverage depends on the family.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
         ``SCTP`` packet, already carries its whole body in
         ``bytes(layer)``, so pass a ``payload`` only for bytes the layer
-        object does not itself hold. ``IGMP``, ``VRRP`` and ``PIM``
-        ignore it: nothing after the message is part of it.
+        object does not itself hold. ``IGMP``, ``VRRP``, ``PIM`` and
+        ``CDP`` ignore it: nothing after the message is part of it.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -453,10 +497,10 @@ def compute(
         return internet_checksum(_zeroed(bytes(layer), 10))
     if isinstance(layer, ICMPv4):
         return internet_checksum(_zeroed(bytes(layer), 2) + payload)
-    if isinstance(layer, IGMP):
+    if isinstance(layer, (IGMP, CDP)):
         # Whole message, checksum field (bytes 2-3) zeroed, no
         # pseudo-header; the body is already part of bytes(layer).
-        return internet_checksum(_zeroed(bytes(layer), 2))
+        return _whole_message_checksum(layer)
     if isinstance(layer, GRE):
         return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):

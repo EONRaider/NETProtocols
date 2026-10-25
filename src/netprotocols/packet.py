@@ -178,6 +178,7 @@ class Packet:
         are frozen, so layers are rebuilt via :func:`dataclasses.replace`.
         """
         from netprotocols.checksum import compute
+        from netprotocols.layer2.cdp import CDP
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
         from netprotocols.layer3.ip import IPv4, IPv6
         from netprotocols.layer3.ospf import OSPF
@@ -204,7 +205,7 @@ class Packet:
                     layer,
                     checksum=compute(layer, ip=enclosing, payload=trailing),
                 )
-            elif isinstance(layer, IPv4) or (
+            elif isinstance(layer, (IPv4, CDP)) or (
                 isinstance(layer, OSPF)
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):
