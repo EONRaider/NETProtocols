@@ -216,15 +216,19 @@ except ProtocolError as e:
     print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
 ```
 
-`offset` is relative to whatever buffer the error was found in: the
-`data` argument of a `decode()` call when `field` is `None` or names a
-fixed-header value, or the attribute `field` names when it's a raw
-`bytes` field parsed on demand (`options`, `body`, `sections`) — a TCP
-option error's `offset` is relative to `header.options`, not to the
-frame. `decode_frame` is the only code holding the cursor needed to
-rebase a layer's own offset to the whole frame, so it does — the
-result lands in `frame_offset`, left `None` by a bare
-`SomeClass.decode()` call with no frame to rebase against. A
+`offset` is relative to whatever buffer the error was found in. An
+error raised by `decode()` is relative to that call's `data` argument,
+whatever `field` names: OSPF's framing errors name `field="body"` (or
+`"auth_trailer"`) and still count from the start of the OSPF header,
+which is what lets `decode_frame` rebase them. An error raised later,
+by an accessor that parses a raw `bytes` attribute on demand
+(`options`, `body`, `sections`, `chunks`), is relative to that
+attribute — a TCP option error's `offset` is relative to
+`header.options`, an ICMPv6 NDP option's or an IGMPv3 group record's
+to `body`, not to the frame. `decode_frame` is the only code holding
+the cursor needed to rebase a layer's own offset to the whole frame,
+so it does — the result lands in `frame_offset`, left `None` by a
+bare `SomeClass.decode()` call with no frame to rebase against. A
 `__post_init__` validation error (values, not bytes) leaves `offset`
 `None` too; there is nothing to be positioned in. `HTTP` is the
 exception on both counts: its `field` names a grammar element
