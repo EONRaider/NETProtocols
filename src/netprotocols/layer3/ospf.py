@@ -22,7 +22,15 @@ constructor check that the body has its message's framing -- a Hello's
 fixed bytes and whole 20-byte LSA headers, whole 12-byte requests, whole
 LSA headers in an acknowledgment, and an update's LSA count and LSA
 lengths walking the body exactly -- so no accessor ever raises. A body
-of another type is kept as it is.
+of another type is kept as it is. The cost is that a malformed body of
+a known type fails the whole layer: ``decode`` raises, so a strict walk
+raises and a lax one stops after IPv4.
+
+Those framing errors are raised by ``decode``, so although they name
+``field="body"``, their ``offset`` is relative to the ``decode`` buffer,
+as every decode-time error's is (``24`` is the body's first byte), which
+is what lets :func:`~netprotocols.decode_frame` rebase it onto the
+frame; the same errors raised by the constructor have no offset.
 
 This module decodes OSPF version 2 over IPv4 only. OSPFv3 (RFC 5340),
 which IPv6 carries under the same protocol number, changes the header
@@ -35,7 +43,8 @@ before this module existed, instead of failing to decode as OSPFv2.
 20-byte LSA header (§A.4.1) and a raw ``body`` -- the Router, Network,
 Summary, AS-external (and NSSA, opaque, ...) contents that the LS Type
 selects. Decoding those bodies is follow-up work. The LS Checksum, a
-Fletcher checksum over the whole LSA, is computed and verified by
+Fletcher checksum over the whole LSA but its LS Age, is computed and
+verified by
 :func:`netprotocols.checksum.lsa_checksum` and
 :func:`~netprotocols.checksum.verify_lsa`.
 
