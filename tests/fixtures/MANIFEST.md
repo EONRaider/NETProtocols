@@ -4,21 +4,22 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, SCTP's CRC32c; fragment slices carry no
+pseudo-header, ICMPv4/v6, VRRP, SCTP's CRC32c; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 140 frames across 22
+frames routinely leave checksums to NIC offload. 158 frames across 23
 scenarios. Addresses are as-captured from the capture host's network.
 
-Nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Ten scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`) are captured separately by their own
+`sctp.pcap`, `vrrp.pcap`) are captured separately by their own
 `scripts/capture_fixtures_*.sh` over purpose-built topologies — real
 kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN tunnel,
-a userspace SCTP association, and IPsec ESP and AH built by a script
-and sent through raw sockets — see their rows and the notes below.
+a userspace SCTP association, IPsec ESP and AH built by a script
+and sent through raw sockets, and two keepalived VRRP routers — see
+their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -44,6 +45,7 @@ and sent through raw sockets — see their rows and the notes below.
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
+| `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -173,6 +175,42 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   inner frame's checksums too. The outer source ports are the kernel's
   hash of each inner flow; none is a registered port. This file's echo
   and UDP frames are the corpus's deepest chains, at 7 layers.
+
+- `vrrp.pcap` was produced by `scripts/capture_fixtures_vrrp.sh`:
+  keepalived 2.2.8 in two netns over a veth pair, run through four
+  segments (one VRID each, see the row above), captured on B's side.
+  The script asks ethtool to turn offload off first but, like the
+  other capture scripts, does not check that it did; what is
+  guaranteed is that `check_fixtures` verifies every IPv4 header
+  checksum and VRRP checksum in the file. **What keepalived built:
+  the whole IPv4 datagram but its header checksum** — it sends
+  through a raw socket with `IP_HDRINCL` (TOS `0xc0`, TTL 255, its
+  own identification counter), and `strace`, run once while
+  developing the script, showed it handing the kernel a zero header
+  checksum for the kernel to fill — plus every byte of the VRRP
+  message, checksum included.
+  **What the kernel built:** the IPv4 header checksum and the Ethernet
+  header. A master advertises once per interval for as long as it
+  runs, so the script drives each segment by watching the capture,
+  then keeps a fixed selection: each router's first two adverts with a
+  nonzero priority in each segment, and its priority-0 advert; the gaps
+  this leaves in the identification counters are adverts it dropped.
+  It asserts the kept frames' composition exactly. `check_fixtures`
+  verifies every VRRP checksum: the message alone for VRRPv2 (RFC 3768
+  §5.3.8), behind the IPv4 pseudo-header for VRRPv3 — with the real
+  destination, so for VRID 54 the unicast peer's address rather than
+  `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
+  only RFC 2460's pseudo-header, which is IPv6's. keepalived's
+  `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
+  leave the IPv4 pseudo-header out, and such an advert fails both
+  `check_fixtures` and `verify()`. It also requires each message's
+  length, from its version and count, to be the IP payload's exactly.
+  veth does not pad a short frame, so none of these frames carries
+  Ethernet padding (they are 46-58 bytes); `tests/test_vrrp.py` pads
+  them to 60 bytes, and appends a 4-byte trailer, to show the walk
+  leaves both undecoded. The kernel has no IPv6, so VRRPv3 over IPv6
+  is covered by constructed frames in `tests/test_vrrp.py`, with
+  checksums computed there and checked by `check_fixtures` too.
 
 ### IPsec test keys
 

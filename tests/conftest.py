@@ -202,3 +202,18 @@ def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""
     return b"\x08\x00\x00\x00\x12\x34\x56\x00"
+
+
+@pytest.fixture
+def raw_vrrpv2_advert() -> bytes:
+    """VRRPv2 advert from ``vrrp.pcap``: VRID 51, priority 200, Auth
+    Type 1 (PASS), Adver Int 1 s, two addresses, then the null-padded
+    password ``np-vrrp``."""
+    return bytes.fromhex("2133c80201015af60a0914330a0914346e702d7672727000")
+
+
+@pytest.fixture
+def raw_vrrpv3_advert() -> bytes:
+    """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
+    Adver Int 100 cs, one address — the minimal 12-byte message."""
+    return bytes.fromhex("3135c8010064e97c0a091446")

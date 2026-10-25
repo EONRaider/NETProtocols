@@ -26,6 +26,7 @@ from netprotocols import (
     IGMP,
     SCTP,
     VLAN,
+    VRRP,
     VXLAN,
     AHv6,
     DNSOverTCP,
@@ -38,6 +39,7 @@ from netprotocols import (
     IPv6Routing,
     Protocol,
     SCTPChunk,
+    VRRPv6,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
 
@@ -337,6 +339,31 @@ def ah_headers(draw: st.DrawFn, cls: type[AH] = AH) -> AH:
     )
 
 
+@st.composite
+def vrrp_headers(draw: st.DrawFn, cls: type[VRRP] = VRRP) -> VRRP:
+    # version / count_ip_addrs / addresses / auth_data are VRRP's
+    # interdependent fields: the version decides whether 8 bytes of
+    # authentication data follow, and the count must be the number of
+    # addresses, each in the family's own string form. VRRPv6 carries
+    # VRRPv3 alone.
+    version = draw(st.sampled_from(sorted(cls._versions)))
+    addresses = draw(
+        st.lists(ipv6_strings() if cls._ipv6 else ipv4_strings(), max_size=8)
+    )
+    auth_len = 8 if version == 2 else 0
+    return cls(
+        version=version,
+        type=draw(st.integers(0, 0x0F)),
+        vrid=draw(st.integers(0, 0xFF)),
+        priority=draw(st.integers(0, 0xFF)),
+        count_ip_addrs=len(addresses),
+        adver_word=draw(st.integers(0, 0xFFFF)),
+        checksum=draw(st.integers(0, 0xFFFF)),
+        addresses=tuple(addresses),
+        auth_data=draw(st.binary(min_size=auth_len, max_size=auth_len)),
+    )
+
+
 _HTTP_TOKENS = st.sampled_from([b"GET", b"POST", b"OPTIONS", b"X-Y.1"])
 _HTTP_TARGETS = st.sampled_from(
     [b"/", b"/a/b?c=d", b"*", b"http://h:8/x", b"h:443", b"/\xff%20"]
@@ -487,6 +514,8 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "ESP": esp_packets(),
     "AH": ah_headers(AH),
     "AHv6": ah_headers(AHv6),
+    "VRRP": vrrp_headers(VRRP),
+    "VRRPv6": vrrp_headers(VRRPv6),
     "HTTP": http_messages(),
     "VXLAN": vxlan_headers(),
 }

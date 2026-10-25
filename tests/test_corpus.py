@@ -20,6 +20,7 @@ from netprotocols import (
     TCP,
     UDP,
     VLAN,
+    VRRP,
     VXLAN,
     DNSOverTCP,
     Ethernet,
@@ -105,6 +106,7 @@ class TestCorpusCoverage:
             ESP,
             AH,
             VXLAN,
+            VRRP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

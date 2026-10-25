@@ -11,6 +11,7 @@ from netprotocols import (
     SCTP,
     TCP,
     UDP,
+    VRRP,
     VXLAN,
     Ethernet,
     ICMPv4,
@@ -39,6 +40,8 @@ class TestTruncation:
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
             (VXLAN, "raw_vxlan_header"),
+            (VRRP, "raw_vrrpv2_advert"),
+            (VRRP, "raw_vrrpv3_advert"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):

@@ -65,6 +65,10 @@ packet. Like the other three, it never raises past its fixed portion:
 a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
 stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
 report. See :mod:`netprotocols.layer4.sctp`.
+
+``VRRP`` has no length field either, but its version and address count
+give its exact length, so step 3 holds as for a header with one: the
+padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
 """
 
 from __future__ import annotations
