@@ -45,7 +45,7 @@ rows and the notes below.
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
-| `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, a whole-table request, and first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
+| `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -234,8 +234,8 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   a capture cannot pin down, so the script captures each scenario whole
   and keeps a fixed selection, asserting it exactly: per scenario, each
   router's first Request and first Response, and in the RIPv2 scenario
-  10.9.52.1's first Response at least 6 s after the scenario's first
-  captured frame, past its 5-second update timer: a whole-table update,
+  10.9.52.1's first Response more than 5 s after the scenario's first
+  captured frame (6 or more by whole-second timestamps), past its 5-second update timer: a whole-table update,
   carrying the peer's routes back poisoned. BIRD sends a RIPv1 router only classful networks, so
   the v1 routes are a class A, B and C network and the connected /24 is
   not advertised. In the RFC 4822 scenarios BIRD fills in Auth Data Len

@@ -29,8 +29,9 @@
 # capture cannot pin down. So the full capture of each scenario goes to
 # a scratch directory, and the fixture keeps a fixed selection: each
 # router's first Request and first Response, and in the v2 scenario the
-# first Response 10.9.52.1 sent at least 6 seconds after the scenario's
-# first captured frame, past its 5-second update timer: a whole-table
+# first Response 10.9.52.1 sent more than 5 seconds after the
+# scenario's first captured frame (6 or more by the pcap's whole-second
+# timestamps), past its 5-second update timer: a whole-table
 # update, which by then also carries the peer's routes, poisoned
 # (metric 16, split horizon with poisoned reverse). The
 # script asserts that selection exactly, by router, version, command,
@@ -53,6 +54,7 @@ fi
 for tool in ip tcpdump python3 ethtool bird; do
     command -v "$tool" >/dev/null || { echo "$tool is required." >&2; exit 1; }
 done
+echo "[*] $(bird --version 2>&1)"
 
 OUT="tests/fixtures/staging"
 mkdir -p "$OUT"
@@ -277,6 +279,6 @@ else
 fi
 
 echo
-echo "[i] Expect udp + rip counts, rip-md5 and rip-hmac-sha256 digests"
+echo "[i] Expect udp + rip counts, rip-keyed-md5 and rip-hmac-sha256 digests"
 echo "    verified, and zero failures. Fold tests/fixtures/staging/rip.pcap"
 echo "    into tests/fixtures/."

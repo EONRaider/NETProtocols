@@ -392,7 +392,10 @@ def _rip_digest(algorithm: str, key: bytes, covered: bytes) -> bytes:
     """The Authentication Data of a RIPv2 message whose bytes up to and
     including the trailer's 4-byte header are ``covered``: keyed MD5
     over them and the key zero-padded to 16 bytes (RFC 4822 §2.4), or
-    HMAC-SHA-256 over them and Apad (§2.5)."""
+    HMAC-SHA-256 over them and Apad (§2.5). The published key is shorter
+    than L (32 bytes), so §2.5's Ko, the key zero-padded to L, gives the
+    same pads as standard HMAC's padding to B; they differ only for a
+    key longer than L and no longer than B, which §2.5 hashes."""
     if algorithm == "keyed-md5":
         return hashlib.md5(covered + key.ljust(16, b"\x00")).digest()
     return hmac.new(key, covered + _RIP_APAD * 8, hashlib.sha256).digest()
