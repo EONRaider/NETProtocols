@@ -954,7 +954,14 @@ class TestHelloCost:
         hello = PIM(body=body).message
         assert isinstance(hello, PIMHello)
         assert len(hello.options) == self.COUNT + 1
-        assert _SliceCountingBytes.read <= 4 * len(body)
+        assert 0 < _SliceCountingBytes.read <= 4 * len(body)
+
+    def test_a_memoryview_body_parses_like_bytes(self):
+        """A body built as a memoryview parses to the same Hello."""
+        body = b"\x00\x01\x00\x02\x00\x69" + bytes(4)
+        hello = PIM(body=memoryview(body)).message
+        assert hello == PIM(body=body).message
+        assert isinstance(hello, PIMHello)
 
 
 def ipv6_frame(pim: PIM, src: str = "fe80::1", dst: str = "ff02::d") -> bytes:

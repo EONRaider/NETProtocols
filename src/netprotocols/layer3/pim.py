@@ -591,7 +591,7 @@ def _parse_hello(body: bytes) -> tuple[PIMHello, int]:
     """
     options: list[PIMHelloOption] = []
     end = 0
-    zero_tail = len(body.rstrip(b"\x00"))
+    zero_tail = len(bytes(body).rstrip(b"\x00"))
     try:
         for option_type, value in walk_kind_length_value(
             body,
