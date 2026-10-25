@@ -313,6 +313,24 @@ class TestCapturedChecksums:
         assert verify(summed_whole, ip=packet[IPv4])
         assert compute(summed_whole, ip=packet[IPv4]) != whole
 
+    def test_with_checksums_rewrites_a_whole_sum_to_the_8_byte_form(self):
+        """Rewrite a Register summed whole, though it verifies.
+
+        ``verify()`` accepts both forms; ``compute()``, and so
+        ``with_checksums()``, produces the 8-byte one.
+        """
+        packet = decode_frame(FRAMES[3])
+        raw = message_bytes(3)
+        whole = ones_complement_checksum(raw[:2] + b"\x00\x00" + raw[4:])
+        layers = [
+            replace(layer, checksum=whole) if isinstance(layer, PIM) else layer
+            for layer in packet
+        ]
+        summed_whole = Packet(*layers)
+        assert verify(summed_whole[PIM], ip=summed_whole[IPv4])
+        rewritten = summed_whole.with_checksums()
+        assert rewritten[PIM].checksum == pim_of(3).checksum != whole
+
     def test_a_tampered_message_fails(self):
         """Test a tampered message fails."""
         for index in range(len(FRAMES)):

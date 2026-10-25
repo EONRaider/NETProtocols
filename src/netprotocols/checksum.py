@@ -302,6 +302,11 @@ def verify(
 ) -> bool:
     """Whether ``layer``'s checksum field matches a recomputation.
 
+    It accepts what the governing RFC tells a receiver to accept, which
+    can be more than :func:`compute` produces: a UDP-over-IPv4 checksum
+    of ``0``, a GRE header without the C bit, and a PIM Register summed
+    over the whole message, each described below.
+
     A UDP-over-IPv4 checksum of ``0`` means "no checksum in use" and
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
     invalid). A GRE header whose Checksum-Present bit is clear carries
@@ -309,7 +314,10 @@ def verify(
     a frame cannot fail a checksum it does not have. A PIM Register
     verifies with its checksum over its first 8 bytes, as RFC 7761
     §4.9.3 computes it, or over the whole message, as it asks a
-    receiver to accept too.
+    receiver to accept too ("for interoperability reasons"). So a
+    whole-message Register verifies, but
+    :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
+    the 8-byte form :func:`compute` returns.
     """
     if (
         isinstance(layer, UDP)
