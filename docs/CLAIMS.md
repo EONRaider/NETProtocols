@@ -297,6 +297,71 @@ What moved, and why:
   code; the count depends on the interpreter's own startup imports, so
   it is quoted with the time it came from, not on its own.
 
+---
+
+### Re-measured for 2.4.0 (2026-10-25)
+
+Every number the README quotes, re-measured before tagging 2.4.0 (Tier 1
+of #170: IP-in-IP, VXLAN, ESP, AH and SCTP, #230-#234), on the same
+machine class as the 2.3.0 figures above: a cloud container, Intel Xeon
+@ 2.10 GHz, 4 vCPUs, CPython 3.12.3, x86-64 Linux; `dpkt 1.9.8`,
+`scapy 2.8.0`. **The corpus is not the one any earlier figure used**:
+it grew from 97 frames in 17 scenarios to 140 in 22 with the tier's
+five captures, so the decode rates here are not comparable with any
+earlier section's, only the ratios measured on the same run.
+
+| Claim | Command | Result |
+|---|---|---|
+| 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 119,098 / 113,681 / 118,365 f/s; dpkt 115,637 / 120,066 / 116,215; scapy 27,880 / 29,160 / 29,004. Against dpkt: 3.0% faster, 5.3% slower, 1.8% faster. Against scapy: 4.27×, 3.90×, 4.08×. Quoted: the median run, 118,365 against 116,215 and 29,004 (**4.1×**) |
+| 1.3 encode | `benchmark_encode.py` | netprotocols 1,416,774 ops/s, dpkt 338,650 (**4.18×**), scapy 700,191 |
+| 1.4 import | `benchmark_import.py`, best of three runs | netprotocols **55.0 ms** (87 modules), scapy.all **428.0 ms** (7.8×); dpkt 33.9 ms (107 modules) |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.4.0-py3-none-any.whl` 127,409 bytes (124.4 KiB), **21.7×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 (2.63 MiB); `src/` 9,099 lines |
+| 1.6 depth | `benchmark.py --depth` | deeper on **39 of 140** frames, same layer on 101 |
+
+What moved, and why:
+
+- **Decode against dpkt is at parity on this corpus**, inside run-to-run
+  noise in both directions (from 5.3% slower to 3.0% faster over three
+  runs), where 2.3.0 read 6.3% slower on the 97-frame corpus. Nothing
+  in the decode hot path changed; what changed is the workload, whose
+  43 new frames are all tunnels, IPsec and SCTP, and on the 11 VXLAN
+  frames netprotocols decodes the tunnelled frame that dpkt leaves raw
+  (see 1.6). No per-scenario rates were taken, so which frames moved
+  the gap is not measured here. This is **not** a "faster than dpkt"
+  result (section 6): the README keeps the 15% band, and the sign of
+  the gap flipped between consecutive runs.
+- **The depth lead grew by 12 frames, all from the new captures**: the
+  11 VXLAN frames, whose tunnelled Ethernet frame dpkt leaves as raw
+  bytes after the UDP header, and one SCTP frame (the script-built
+  packet with an unknown chunk type) that dpkt leaves raw after IPv4.
+  The other 27 are the DHCP, DNS, DNS-over-TCP, IPv6 fragment, MLD and
+  VLAN/ARP frames counted since 1.6 was first measured.
+- **Import cost is unchanged** within noise (55.0 ms against 56.8 ms),
+  with four more modules (87, from 83): `vxlan.py`, `esp.py`, `ah.py`
+  and `sctp.py`. `scapy.all` read 428.0 ms against 2.3.0's 487.0 ms;
+  if the correction below holds, both were scapy 2.8.0, so that is the
+  machine from run to run, not scapy. The ratio fell from 8.6× to 7.8×.
+- **The wheel grew 18.3 KiB** against 2.3.0's real wheel (108,658
+  bytes; see the correction below) with the five protocols and SCTP's
+  CRC32c code, and that growth alone is why the ratio fell: against the
+  2.7.0 wheel the 2.3.0 figure used, it would be 20.3×. scapy 2.8.0's
+  own wheel is 0.16 MiB larger than 2.7.0's, which lifts it back to
+  21.7×.
+- **Two corrections to the 2.3.0 figures above.** They name `scapy 2.7.0`,
+  but `uv.lock` had pinned `scapy 2.8.0` since `ca17292` (2026-10-09),
+  two weeks before 2.3.0 was tagged, and `uv run --group bench` installs
+  what the lock pins. The 2.3.0 scapy figures were therefore most likely
+  taken against 2.8.0, and its 1.5 ratio set netprotocols' wheel against
+  the 2.7.0 wheel's size (2,590,982 bytes) rather than the 2.8.0 one
+  that run would have installed. Separately, its 108,598-byte wheel was
+  built before that release's README edits, which ship in the wheel's
+  `METADATA`: rebuilt from the release commit (`7837c1a`), the 2.3.0
+  wheel is 108,658 bytes, the size of the wheel on PyPI, so its ratio
+  against 2.7.0's wheel was 23.8×, not 23.9×. The 2.3.0 rows are left
+  as recorded. The figures here name the version the lock pins, measure
+  its own wheel, and take netprotocols' wheel from `uv build --wheel`
+  run on a `git archive` of the release commit itself.
+
 ## 1. Performance
 
 ### 1.1 "2.1× faster than scapy at decoding"
@@ -318,6 +383,10 @@ Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
 
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 99,814 against 21,826, **4.6×**.*
+
+*Re-measured for 2.4.0 (2026-10-25, the 140-frame corpus; see above):
+median of three runs 118,365 against scapy 2.8.0's 29,004, **4.1×**
+(3.90-4.27× across the runs).*
 
 The wording is a positioning decision, not a measurement one: 5.4× is
 what the corpus shows on one machine today, and whoever writes the
@@ -347,6 +416,11 @@ Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetit
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 99,814 against dpkt's 106,497, **~6% slower**, inside the band.*
 
+*Re-measured for 2.4.0 (2026-10-25, the 140-frame corpus; see above):
+**at parity** — from 5.3% slower to 3.0% faster over three runs (median
+118,365 against 116,215), inside the band. The two caveats below still
+apply, now as 39 of 140 frames decoded deeper.*
+
 Two caveats from the re-measurement section apply and are not optional:
 the two libraries do not parse to the same depth (netprotocols goes
 deeper on 27 of 97 frames), and this is one machine. The defensible
@@ -355,7 +429,7 @@ further into the stack on more than a quarter of it" — not "faster than
 dpkt," which is no longer true and was never true robustly enough to
 have shipped it while it briefly was.
 
-### 1.3 "4.5× faster than dpkt at encoding"
+### 1.3 "4.2× faster than dpkt at encoding"
 **Status: VERIFIED**
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured under
@@ -379,16 +453,27 @@ along with the re-measurement).
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
 
+*Re-measured for 2.4.0 (2026-10-25; see above): netprotocols 1,416,774
+ops/s, dpkt 338,650, **4.18×**; scapy 2.8.0 700,191. Tier 1 did not
+touch the encode path; dpkt's rate rose more than ours between the two
+runs (15.8% against 7.0%), most likely the machine from run to run
+rather than either library.*
+
 Nobody benchmarks this direction; it remains the half of "codec" this
 library already wins. The ratio against dpkt narrowed from the 5.3×
-recorded at v1.3.0 to 4.5× — netprotocols' own absolute rate dropped
+recorded at v1.3.0 to 4.5× by 2.2.x (4.53× for 2.3.0, 4.18× for 2.4.0;
+see their dated lines above) — netprotocols' own absolute rate dropped
 somewhat less than its decode rate did over the same tiers (encoding
 never touched the registry/walker/error-context surface that grew
 decode's cost), while dpkt's own number held essentially flat. Still a
 wide, clean win.
 
-### 1.4 "Imports in 57 ms; scapy takes 487+ ms"
+### 1.4 "Imports in 55 ms; scapy takes 428+ ms"
 **Status: VERIFIED**
+
+*Re-measured for 2.4.0 (2026-10-25; see above): best of three
+`benchmark_import.py` runs, netprotocols **55.0 ms** (87 modules),
+`scapy.all` 2.8.0 **428.0 ms**, **7.8×**.*
 
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above): best
 of three `benchmark_import.py` runs, netprotocols **56.8 ms** (83
@@ -414,8 +499,12 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "~24× smaller wheel than scapy"
+### 1.5 "~22× smaller wheel than scapy"
 **Status: VERIFIED** — re-measure at each release (Rule 4)
+
+*Re-measured for 2.4.0 (2026-10-25): `netprotocols-2.4.0-py3-none-any.whl`
+is 127,409 bytes (124.4 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+2,762,122 (2.63 MiB), **21.7× smaller**. `src/` is 9,099 lines.*
 
 *Re-measured for 2.3.0 (2026-10-23): `netprotocols-2.3.0-py3-none-any.whl`
 is 108,598 bytes (106.1 KiB) against scapy 2.7.0's 2,590,982, **23.9×
@@ -445,7 +534,10 @@ quoting.
 *Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
 against the Tiers-2-4 tree, again after #147's `decode_frame()`
 methodology fix, and again for 2.3.0 (2026-10-23) — same 27/70 split as
-originally measured; depth
+originally measured. Re-measured for 2.4.0 (2026-10-25) on the
+140-frame corpus: **39 deeper, 101 the same**, the 12 new ones being
+the 11 VXLAN frames and one SCTP frame (see the 2.4.0 re-measurement
+above); depth
 comes from the decoders' own strictness, untouched by anything the
 throughput fix or the benchmark-methodology change did.*
 
@@ -519,8 +611,14 @@ version bump.
 *Published 2026-09-04 (embargo lifted, #107). Re-run against scapy
 2.7.0 and dpkt 1.9.8 (unchanged versions) at their current commits.*
 
+*Re-run for 2.4.0 (2026-10-25) against scapy 2.8.0, the version
+`uv.lock` pins: `from scapy.layers.inet import IP; p = IP();
+reveal_type(p.ThisFieldDoesNotExist)` under `mypy --strict` still
+reveals `Any` with no error. The file counts below were not re-counted
+for 2.4.0; they stand as of `secdev/scapy` @ `03f455c`.*
+
 ```
-# scapy 2.7.0 — a field name that does not exist
+# scapy 2.8.0 — a field name that does not exist
 p.ThisFieldDoesNotExist   → Any     (no error)
 
 # dpkt 1.9.8 — the whole module
@@ -728,11 +826,12 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:70-75` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 140
-frames**, across 22 scenarios captured with tcpdump over real kernel
+frame[cursor:cursor+layer.header_len]` for **every layer of all 158
+frames**, across 23 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
-association, and script-built IPsec ESP and AH. Every frame's
-checksums (SCTP's CRC32c included), and every ESP and AH ICV, verify
+association, keepalived VRRP routers, and script-built IPsec ESP and
+AH. Every frame's checksums (SCTP's CRC32c and VRRP's included), and
+every ESP and AH ICV, verify
 internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
@@ -740,14 +839,15 @@ internally (`scripts/check_fixtures.py`).
 
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
-that six TLV/name accessors never hang, that `HTTP`'s accessors never
-raise at all, and that `bytes(decode(x)) == x` is Hypothesis-generated
-for **all 24** protocols, up from 4. `tests/strategies.py` holds one
+that six TLV/name accessors never hang, that `HTTP`'s and `VRRP`'s
+accessors never raise at all, and that `bytes(decode(x)) == x` is
+Hypothesis-generated for **all 26** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 20 without a hand-written one (#97 added the first
+property over the 22 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
-`AHv6` the 18th and 19th, `SCTP` the 20th). Reproduce:
+`AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
+21st and 22nd). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -770,8 +870,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-2,939 statements, 1 missed (99.96%; re-measured 2026-10-24, after
-SCTP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+3,053 statements, 1 missed (99.97%; re-measured 2026-10-25, after
+VRRP, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
@@ -1011,7 +1111,10 @@ section to begin with.
   further on 27 of 97 frames (1.6). The number moved twice inside one
   roadmap — proof, not incidentally, of why this file holds comparative
   claims until they are re-measured rather than trusting the last
-  number on file.
+  number on file. Re-measured for 2.4.0 on the 140-frame corpus, it
+  reads at parity: faster on two runs of three, slower on the third,
+  which is exactly the kind of result this entry keeps out of the
+  README.
 - ❌ **"Superior to scapy"** with no axis named. Scapy crafts, sends,
   sniffs, fuzzes and covers thousands of protocols; we decode and
   re-encode a couple of dozen headers. On *codec* axes — typing,

@@ -87,7 +87,7 @@ from netprotocols.walk import MAX_DEPTH, decode_frame
 # registrations name the classes. See netprotocols/_defaults.py.
 _defaults.install(DEFAULT)
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 __all__ = [
     "AH",
