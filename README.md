@@ -143,6 +143,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking; the inner type/length field reads as Ethernet's does |
 | 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized (`is_raw_ipx`; the other fields are then IPX bytes), never dispatched |
 | 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
+| 2 | CDP | `CDP` | Cisco Discovery Protocol, versions 1 and 2, after SNAP OUI 00-00-0C PID 0x2000 (`llc.snap`); the 4-byte header and the TLVs, kept raw and named from Wireshark's packet-cdp.c, with accessors for Device ID, Addresses, Port ID, Capabilities, Software version, Platform and Management Address; its checksum (RFC 1071 but for an odd final byte) in `compute`/`verify` |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
@@ -444,7 +445,8 @@ raw = bytes(frame)  # ready for a raw socket
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
 checksum, VRRP's with or without its pseudo-header by version, PIM's,
-and SCTP's CRC32c via `crc32c()`; OSPF's LSA checksums via
+CDP's with its odd final byte summed as Cisco does, and SCTP's CRC32c
+via `crc32c()`; OSPF's LSA checksums via
 `lsa_checksum()`/`verify_lsa()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 

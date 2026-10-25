@@ -247,6 +247,17 @@ but can bound the PDU after it only through that private hook, pending
 to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s module docstring.
 
+`CDP`, which SNAP dispatches at OUI 00-00-0C PID 0x2000, is the first
+decoder behind that bound. It has no length of its own: its TLVs run to
+the end of the PDU, and its checksum covers exactly those bytes, so in
+a walk it decodes the PDU and nothing else. Called directly, its
+`decode()` walks TLVs to the end of the buffer but stops, without
+raising, where fewer than 4 bytes remain or at a TLV Length below 4,
+as Wireshark's dissector does, so zero padding is left undecoded; a
+TLV whose Length runs past the buffer raises `TruncatedHeaderError`.
+See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
+docstring.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -342,6 +353,7 @@ flowchart LR
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
+  SN -->|OUI 00-00-0C, PID 0x2000| CDP[CDP]
   V -->|0x8100, 0x88A8, 0x9100| V
   V -->|0x0806| A
   V -->|0x0800| I4
@@ -787,12 +799,14 @@ src/netprotocols/
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify, OSPF's LSA Fletcher checksum
+│                   compute, verify (CDP's odd-byte sum among them),
+│                   OSPF's LSA Fletcher checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
-│                   llc.py (802.2 LLC + SNAP, after an 802.3 Length)
+│                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
+│                   cdp.py (Cisco Discovery Protocol, after SNAP)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),
