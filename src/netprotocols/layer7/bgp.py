@@ -880,8 +880,9 @@ class BGP(Protocol):
 
         :raises InvalidFieldError: the Optional Parameters Length (or
             RFC 9072's Extended Optional Parameters Length) disagrees
-            with the message's length, or a parameter runs past the
-            parameters.
+            with the message's length, RFC 9072's marker leaves no room
+            for its 2-byte length (``offset`` at the marker), or a
+            parameter runs past the parameters.
         """
         fixed = self._open_fixed()
         if fixed is None:

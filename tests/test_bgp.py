@@ -482,10 +482,15 @@ class TestHeader:
             BGP.decode(raw)
         assert (caught.value.field, caught.value.offset) == ("marker", 0)
 
-    def test_length_below_the_header(self):
-        """A Length under 19 is rejected before the Type is read."""
+    @pytest.mark.parametrize("type_", [4, 9])
+    def test_length_below_the_header(self, type_):
+        """A Length under 19 is rejected before the Type is read.
+
+        So an unknown Type behind it reports the Length, not the Type.
+        """
+        raw = MARKER + b"\x00\x12" + bytes([type_]) + bytes(4)
         with pytest.raises(InvalidFieldError) as caught:
-            BGP.decode(MARKER + b"\x00\x12\x04" + bytes(4))
+            BGP.decode(raw)
         assert (caught.value.field, caught.value.offset) == ("length", 16)
 
     @pytest.mark.parametrize("type_", [0, 6, 255])
@@ -627,6 +632,19 @@ class TestTrailingBytes:
         msg = BGP.decode(KEEPALIVE + bytes(4))
         assert msg.next_protocol() is None
         assert msg.header_len == 19
+
+    def test_a_marker_prefix_that_breaks_off_does_not_chain(self):
+        """All 16 bytes after a message must read as a Marker, not 4.
+
+        Four ``0xff`` bytes and then zeros, with the buffer long enough
+        to hold a whole Marker, are not the start of a message.
+        """
+        trailer = b"\xff" * 4 + bytes(12)
+        assert BGP.decode(KEEPALIVE + trailer).next_protocol() is None
+        raw = frame(KEEPALIVE) + trailer
+        packet = decode_frame(raw)
+        assert packet.stopped_by is None
+        assert packet.consumed == len(raw) - len(trailer)
 
     @pytest.mark.parametrize("cut", [1, 4, 15, 16, 18, 22])
     def test_the_start_of_another_message_continues_the_walk(self, cut):
@@ -814,6 +832,20 @@ class TestOpen:
             BGPOptionalParameter(2, capabilities),
         )
 
+    def test_a_0xff_after_an_empty_parameters_length_is_not_extended(self):
+        """RFC 9072's marker needs a nonzero Non-Ext OP Len before it.
+
+        With a length of 0 the byte after it is no Non-Ext OP Type, so
+        the OPEN is the RFC 4271 encoding with three stray bytes, which
+        disagree with the length.
+        """
+        body = struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 0) + b"\xff\x00\x00"
+        msg = BGP.decode(message(1, body))
+        assert msg.extended_optional_parameters is False
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = msg.optional_parameters
+        assert caught.value.offset == 10
+
     def test_255_bytes_of_ordinary_parameters_are_not_extended(self):
         """An Optional Parameters Length of 255 alone is not RFC 9072."""
         params = b"\x02\xfd" + bytes(253)
@@ -828,12 +860,12 @@ class TestOpen:
             struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 4) + b"\x02\x01\x00",
             # Length 2 with 3 bytes present.
             struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 2) + b"\x02\x00\x00",
+            # Length 2 with two whole parameters, 4 bytes, present.
+            struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 2) + b"\x02\x00\x02\x00",
             # A parameter longer than the parameters.
             open_body(b"\x02\x05\x00"),
             # A lone type byte.
             open_body(b"\x02"),
-            # Extended, with no room for the extended length.
-            struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 255) + b"\xff\x00",
             # Extended, with the extended length disagreeing.
             struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 255)
             + b"\xff\x00\x04\x02\x00\x00",
@@ -850,6 +882,20 @@ class TestOpen:
             _ = msg.optional_parameters
         assert caught.value.field == "body"
         assert caught.value.protocol is BGP
+
+    @pytest.mark.parametrize("extra", [b"", b"\x00"])
+    def test_a_missing_extended_parameters_length(self, extra):
+        """RFC 9072's marker with no room for its 2-byte length after it.
+
+        The error names the missing length and points at the marker,
+        inside the body.
+        """
+        body = struct.pack("!BHH4sB", 4, 1, 90, bytes(4), 255) + b"\xff" + extra
+        msg = BGP.decode(message(1, body))
+        assert msg.extended_optional_parameters is True
+        with pytest.raises(InvalidFieldError, match="is missing") as caught:
+            _ = msg.optional_parameters
+        assert (caught.value.field, caught.value.offset) == ("body", 10)
 
     def test_a_constructed_open_too_short_for_its_fields(self):
         """A constructed OPEN too short for its fields has none."""
@@ -954,10 +1000,12 @@ class TestUpdate:
             + bytes([0x40, 6, 0])  # ATOMIC_AGGREGATE: no value to decode
             + bytes([0x40, 1, 1, 7])  # ORIGIN 7: unassigned
             + bytes([0xC0, 18, 4, 1, 2, 3, 4])  # AS4_AGGREGATOR, 4 bytes, raw
+            + bytes([0x40, 3, 5, 192, 0, 2, 1, 0])  # NEXT_HOP of 5
+            + bytes([0x80, 4, 5, 0, 0, 0, 0, 1])  # MED of 5
         )
         msg = BGP.decode(update(attributes=attributes))
         attrs = msg.path_attributes
-        assert [a.value for a in attrs] == [None, None, None, None, 7, None]
+        assert [a.value for a in attrs] == [None] * 4 + [7] + [None] * 3
         assert [a.value_text for a in attrs] == [
             "0000",
             "010203",
@@ -965,6 +1013,8 @@ class TestUpdate:
             "",
             "unknown (7)",
             "01020304",
+            "c000020100",
+            "0000000001",
         ]
         assert attrs[3].type_name == "ATOMIC_AGGREGATE"
 
