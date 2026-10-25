@@ -36,13 +36,16 @@
 # selection, written by this script.
 #
 # pimd builds every PIM message, its checksum included (over the whole
-# message, or over the first 8 bytes for a Register, RFC 7761 §4.9.3);
-# the kernel builds the outer IPv4 header. The Register's encapsulated
-# packet is the source's UDP datagram as R1 received it (its IPv4
-# header and UDP checksum built by the source's kernel, the TTL
-# decremented by R1). veth offloads are off on every link, and
-# check_fixtures.py verifies every checksum, the encapsulated packet's
-# included.
+# message, or over the first 8 bytes for a Register, RFC 7761 §4.9.3),
+# and the outer IPv4 header too: FRR 8.4's pim_msg_send() fills in the
+# identification, TOS, TTL, total length and addresses and sends with
+# IP_HDRINCL (IPPROTO_RAW for Registers), so the kernel fills in only
+# the header checksum and total length, as it always does for such a
+# socket. The Register's encapsulated packet is the source's
+# UDP datagram as R1 received it, its IPv4 header and UDP checksum
+# built by the source's kernel. veth offloads are off on every link,
+# and check_fixtures.py verifies every checksum, the encapsulated
+# packet's included.
 
 set -euo pipefail
 

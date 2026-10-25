@@ -236,8 +236,12 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   capture's frame count vary, so the script keeps the first frame of
   each of the 13 kinds it names and fails unless it saw all of them;
   the committed file is that selection. **pimd built every PIM
-  message**, checksum included; **the kernel built the outer IPv4
-  headers**. FRR sums a Register's checksum over its first 8 bytes
+  message**, checksum included, **and the outer IPv4 headers**: FRR
+  8.4's `pim_msg_send()` fills in the identification, TOS, TTL, total
+  length and addresses and sends with `IP_HDRINCL` (`IPPROTO_RAW` for
+  Registers), so **the kernel filled in only the IPv4 header checksum
+  and total length**, as it always does for such a socket.
+  FRR sums a Register's checksum over its first 8 bytes
   only, as RFC 7761 §4.9.3 specifies; `check_fixtures` accepts that or
   the whole-message form the RFC asks receivers to accept too. The data
   Register's encapsulated packet is the source's datagram as R1

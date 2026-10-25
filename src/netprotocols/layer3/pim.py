@@ -43,11 +43,11 @@ structure, using the same parser :attr:`PIM.message` does:
 * A Hello's options run to the end of the message, so its end is found
   by walking them: a remainder made only of zero bytes where the next
   option would start is padding and is left undecoded. Option type 0 is
-  reserved and never sent, so an all-zero option cannot be real. A
-  nonzero trailer cannot be told from an option: one that walks (an FCS
-  whose third and fourth bytes are zero reads as an empty option) is
-  kept as a phantom option, and one that does not makes the remainder
-  unwalkable (below).
+  reserved, so a conforming sender never ends a Hello with an all-zero
+  option. A nonzero trailer cannot be told from an option: one that
+  walks (an FCS whose third and fourth bytes are zero reads as an empty
+  option) is kept as a phantom option, and one that does not makes the
+  remainder unwalkable (below).
 * A Register's data packet, and the other types' bodies, run to the end
   of the buffer and are kept whole. A Register's checksum covers only
   its first 8 bytes (§4.9.3), so a trailer cannot break it.
@@ -57,10 +57,14 @@ length, an unknown address family, a count or length that runs past
 the buffer, a nonzero trailer after a Hello that does not walk), the
 whole remainder is kept in ``body`` verbatim and :attr:`PIM.message`
 raises. Past the 4-byte header ``decode`` never raises. The checksum
-(:mod:`netprotocols.checksum`) is the reliable signal for the cases
-the structure cannot see: over IPv4 a zero tail does not change the
-internet checksum, but a nonzero trailer kept in ``body``, or a message
-cut short, fails to verify.
+(:mod:`netprotocols.checksum`) is the signal for what the structure
+cannot see, within what the internet checksum itself can see: over
+IPv4 it is blind to zero bytes, so a zero tail kept in ``body``, or a
+cut that removes only zero bytes, still verifies, while a nonzero
+trailer kept in ``body`` (a phantom Hello option, an unwalkable
+remainder) or a cut that removes nonzero bytes fails. A Register's
+checksum covers its first 8 bytes only, so it says nothing about the
+data packet: a trailer in it, or a cut through it, still verifies.
 
 ``bytes(PIM.decode(x)) == x[:header_len]`` holds by construction: the
 header fields are packed back and ``body`` is carried verbatim. Every
@@ -631,9 +635,10 @@ class PIMRegister:
         The walk is :func:`~netprotocols.decode_frame` in lax mode, from
         :class:`~netprotocols.IPv6` when its version nibble is 6 and
         from :class:`~netprotocols.IPv4` otherwise. A Null-Register's
-        dummy header names PIM but carries no PIM message, so its walk
-        stops there with ``stopped_by`` set; so does any packet cut
-        short.
+        dummy IPv4 header names PIM but carries no PIM message, and its
+        dummy IPv6 header is followed by a dummy PIM header of version 0
+        (RFC 7761 §4.9.3), so either walk stops there with
+        ``stopped_by`` set; so does any packet cut short.
         """
         start = IPv6 if self.packet[:1] and self.packet[0] >> 4 == 6 else IPv4
         return decode_frame(self.packet, lax=True, start=start)

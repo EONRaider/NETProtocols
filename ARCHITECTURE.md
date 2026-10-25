@@ -151,7 +151,7 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
-**Two protocols vary this.** The first is text framing. `HTTP` has no
+**Three protocols vary this.** The first is text framing. `HTTP` has no
 fixed portion to unpack: `decode()` scans for the empty line that ends
 the head, then for the end the head's framing gives the body, so rule 1
 is a scan rather than an unpack and `header_len` covers the whole
@@ -185,7 +185,8 @@ read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
 [`layer4/sctp.py`](src/netprotocols/layer4/sctp.py)'s module docstring.
 
-`PIM` has no length either, and bounds itself by its own structure:
+The third is `PIM`. It has no length either, and bounds itself by its
+own structure:
 a Join/Prune, Register-Stop or Assert ends where its counts and
 encoded addresses say, so anything after it is left undecoded, and a
 Hello, whose options run to the end of the message, leaves a run of
