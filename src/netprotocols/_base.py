@@ -66,6 +66,16 @@ a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
 stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
 report. See :mod:`netprotocols.layer4.sctp`.
 
+``RIP`` is the port-dispatched case: its entries fill the UDP datagram,
+which the walk does not trim to UDP's length either. It keeps the whole
+buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
+report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
+instead of raising. See :mod:`netprotocols.layer7.rip`.
+
+``VRRP`` has no length field either, but its version and address count
+give its exact length, so step 3 holds as for a header with one: the
+padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
+
 Decode context in ``next_protocol``
 -----------------------------------
 ``BGP`` is the one header whose ``next_protocol()`` answers from what

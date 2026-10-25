@@ -17,10 +17,13 @@ from netprotocols import (
     BGP,
     DNS,
     ESP,
+    OSPF,
+    RIP,
     SCTP,
     TCP,
     UDP,
     VLAN,
+    VRRP,
     VXLAN,
     DNSOverTCP,
     Ethernet,
@@ -106,6 +109,9 @@ class TestCorpusCoverage:
             ESP,
             AH,
             VXLAN,
+            OSPF,
+            RIP,
+            VRRP,
             BGP,
         } <= seen
 

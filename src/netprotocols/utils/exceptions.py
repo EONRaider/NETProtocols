@@ -36,17 +36,20 @@ class ProtocolError(Exception):
 
     :ivar protocol: The class whose parsing raised, e.g. ``IPv4``.
     :ivar field: Name of the attribute most directly at fault, e.g.
-        ``"ihl"``. When it names a raw ``bytes`` attribute parsed on
-        demand (``"options"``, ``"body"``, ``"sections"``), ``offset``
-        is relative to *that* attribute rather than to a ``decode()``
-        call — see ``offset`` below.
-    :ivar offset: Byte offset of the problem. Relative to the ``data``
-        buffer passed to ``decode()`` when ``field`` is ``None`` or
-        names a fixed-header value; relative to the attribute ``field``
-        names when it names one (see above). ``None`` when there is no
-        buffer to be positioned in — most notably a validation error
-        raised from ``__post_init__``, which sees only field *values*,
-        never the bytes they came from. :class:`~netprotocols.HTTP`, the
+        ``"ihl"``. It may name a raw ``bytes`` attribute (``"options"``,
+        ``"body"``, ``"sections"``, ``"chunks"``); what ``offset`` is
+        then relative to depends on who raised — see ``offset`` below.
+    :ivar offset: Byte offset of the problem. For an error raised by
+        ``decode()``, relative to the ``data`` buffer passed to it,
+        whatever ``field`` names (:class:`~netprotocols.OSPF`'s framing
+        errors name ``"body"`` and count from the OSPF header); for an
+        error raised by an accessor that parses a raw ``bytes``
+        attribute on demand, relative to that attribute, which
+        ``field`` names (a TCP option error's is relative to
+        ``options``). ``None`` when there is no buffer to be positioned
+        in — most notably a validation error raised from
+        ``__post_init__``, which sees only field *values*, never the
+        bytes they came from. :class:`~netprotocols.HTTP`, the
         one text-framed protocol, differs: its ``field`` names a grammar
         element (``"chunk-size"``, ``"raw_body"``, ``"start_line"``) and
         its ``offset`` is always relative to the start of the message,

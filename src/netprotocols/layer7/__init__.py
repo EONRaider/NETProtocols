@@ -21,6 +21,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
@@ -28,6 +29,7 @@ __all__ = [
     "DHCP",
     "DNS",
     "HTTP",
+    "RIP",
     "VXLAN",
     "BGPOptionalParameter",
     "BGPPathAttribute",
@@ -42,5 +44,7 @@ __all__ = [
     "HTTPFraming",
     "HTTPHeaderField",
     "MXRecord",
+    "RIPAuthentication",
+    "RIPEntry",
     "SOARecord",
 ]

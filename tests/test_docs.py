@@ -91,6 +91,8 @@ class TestCorpusFiguresInDocs:
             "ipv6_ext.py",
             "_tlv.py",
             "sctp.py",
+            "rip.py",
+            "vrrp.py",
             "bgp.py",
         ],
     )

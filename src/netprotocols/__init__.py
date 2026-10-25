@@ -13,7 +13,15 @@ from netprotocols._enums import (
     EtherType,
     IPProtocol,
 )
-from netprotocols.checksum import compute, crc32c, internet_checksum, verify
+from netprotocols.checksum import (
+    compute,
+    crc32c,
+    fletcher_checksum,
+    internet_checksum,
+    lsa_checksum,
+    verify,
+    verify_lsa,
+)
 from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
@@ -31,6 +39,15 @@ from netprotocols.layer3.ipv6_ext import (
     IPv6Option,
     IPv6Routing,
 )
+from netprotocols.layer3.ospf import (
+    OSPF,
+    OSPFLSA,
+    OSPFDatabaseDescription,
+    OSPFHello,
+    OSPFLSAHeader,
+    OSPFLSRequest,
+)
+from netprotocols.layer3.vrrp import VRRP, VRRPv6
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
@@ -57,6 +74,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
@@ -106,10 +124,14 @@ __all__ = [
     "HTTP",
     "IGMP",
     "MAX_DEPTH",
+    "OSPF",
+    "OSPFLSA",
+    "RIP",
     "SCTP",
     "TCP",
     "UDP",
     "VLAN",
+    "VRRP",
     "VXLAN",
     "AHv6",
     "ARPHardwareType",
@@ -150,9 +172,15 @@ __all__ = [
     "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
+    "OSPFDatabaseDescription",
+    "OSPFHello",
+    "OSPFLSAHeader",
+    "OSPFLSRequest",
     "Packet",
     "Protocol",
     "ProtocolError",
+    "RIPAuthentication",
+    "RIPEntry",
     "Registry",
     "RegistryConflictError",
     "SCTPChunk",
@@ -160,12 +188,15 @@ __all__ = [
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",
+    "VRRPv6",
     "__version__",
     "compute",
     "crc32c",
     "decode_frame",
+    "fletcher_checksum",
     "flow_key",
     "internet_checksum",
+    "lsa_checksum",
     "random_mac",
     "read_captures",
     "read_pcap",
@@ -175,4 +206,5 @@ __all__ = [
     "validate_ipv4_addr",
     "validate_mac_addr",
     "verify",
+    "verify_lsa",
 ]

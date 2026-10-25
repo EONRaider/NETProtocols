@@ -52,10 +52,9 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 ## Why NETProtocols
 
 Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 140 frames of
-real captured traffic the corpus then held (CPython 3.12.3, x86-64
-Linux; re-measured for 2.4.0 on 2026-10-25 — see
-[docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
-reproduction command, and its caveats):
+real captured traffic the corpus held at 2.4.0 (CPython 3.12.3, x86-64 Linux; re-measured for
+2.4.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
+number below, its reproduction command, and its caveats):
 
 - **Within 15% of dpkt on decode, 4.1× faster than scapy** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
@@ -154,12 +153,15 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | IP-in-IP | `IPv4`, `IPv6` | RFC 2003/4213/2473, IP protocols 4 and 41; no header of its own, so the outer IP header dispatches straight to the inner one |
 | 3 | IPsec ESP | `ESP` | RFC 4303, IP protocol 50; SPI and sequence number decoded, the protected remainder kept as opaque `ciphertext` — the chain ends here by design, since without the Security Association nothing says where the Next Header is |
 | 3 | IPsec AH | `AH`, `AHv6` | RFC 4302, IP protocol 51; fixed fields decoded and the ICV kept raw (never verified), then the payload chains onward by `next_header` through the outer IP family's table — `AHv6`, an `AH` subclass, is what IPv6 dispatches to |
+| 3 | OSPFv2 | `OSPF` | RFC 2328, IP protocol 89 over IPv4; the 24-byte header, then Hello, Database Description, LS Request, LS Update and LS Acknowledgment parsed by typed accessors; LSA headers decoded, LSA bodies kept raw; packet checksum and LSA Fletcher checksum compute/verify. OSPFv3 (RFC 5340, IPv6) is not decoded: IPv6 protocol 89 ends the walk |
+| 3 | VRRP | `VRRP`, `VRRPv6` | RFC 3768 (VRRPv2) and RFC 5798 (VRRPv3), IP protocol 112; one class branches on the version nibble (VRRPv2's Auth Type, Adver Int and authentication data; VRRPv3's Max Adver Int) and decodes the virtual-address list at the width of the IP family that carried it — `VRRPv6`, a `VRRP` subclass, is what IPv6 dispatches to; checksum compute/verify |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
 | 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
+| 7 | RIP | `RIP` | RFC 1058/2453, RIPv1 and RIPv2 over UDP 520; route entries (`RIPEntry`) and the authentication entry (`RIPAuthentication`: plain-text password, RFC 4822 keyed MD5/HMAC-SHA) parsed on demand; RIPng is not decoded |
 | 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; no reassembly |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
 
@@ -435,7 +437,9 @@ raw = bytes(frame)  # ready for a raw socket
 
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
-checksum, and SCTP's CRC32c via `crc32c()`), and
+checksum, VRRP's with or without its pseudo-header by version, and
+SCTP's CRC32c via `crc32c()`; OSPF's LSA checksums via
+`lsa_checksum()`/`verify_lsa()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 
 ## Display helpers
@@ -514,7 +518,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-159-frame corpus of real captured traffic across 23 scenarios
+252-frame corpus of real captured traffic across 26 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

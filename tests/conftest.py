@@ -174,6 +174,16 @@ def raw_sctp_packet() -> bytes:
 
 
 @pytest.fixture
+def raw_ospf_hello() -> bytes:
+    """OSPFv2 Hello from tests/fixtures/ospf.pcap (AuType 0): router
+    10.0.0.1, area 0, DR 10.9.83.1, one neighbor (10.0.0.2)."""
+    return bytes.fromhex(
+        "020100300a000001000000008bac00000000000000000000"
+        "ffffff000002020a000000080a095301000000000a000002"
+    )
+
+
+@pytest.fixture
 def raw_esp_packet() -> bytes:
     """ESP packet (SPI 0x10000001, sequence 1) from ``esp.pcap``:
     NULL encryption, HMAC-SHA-256-128, carrying an ICMPv4 echo request
@@ -209,3 +219,32 @@ def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""
     return b"\x08\x00\x00\x00\x12\x34\x56\x00"
+
+
+@pytest.fixture
+def raw_rip_message() -> bytes:
+    """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
+    route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and
+    10.9.52.0/24, metric 1), no authentication."""
+    return bytes.fromhex(
+        "02020000"
+        "000200000a140200ffffff000000000000000001"
+        "000200000a140100ffffff000000000000000001"
+        "000200000a140380ffffff800000000000000001"
+        "000200000a093400ffffff000000000000000001"
+    )
+
+
+@pytest.fixture
+def raw_vrrpv2_advert() -> bytes:
+    """VRRPv2 advert from ``vrrp.pcap``: VRID 51, priority 200, Auth
+    Type 1 (PASS), Adver Int 1 s, two addresses, then the null-padded
+    password ``np-vrrp``."""
+    return bytes.fromhex("2133c80201015af60a0914330a0914346e702d7672727000")
+
+
+@pytest.fixture
+def raw_vrrpv3_advert() -> bytes:
+    """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
+    Adver Int 100 cs, one address — the minimal 12-byte message."""
+    return bytes.fromhex("3135c8010064e97c0a091446")
