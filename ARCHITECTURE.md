@@ -220,6 +220,11 @@ VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
 header with a length field and leaves Ethernet's padding undecoded. It
 must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
 wire, and VRRPv3's pseudo-header carries the message's length.
+`STP` is the same case at layer 2: a BPDU has no length field, but its
+BPDU Type gives its exact length (4, 35 or 36 octets), so it leaves
+whatever follows undecoded, including the extra octets of a PDU longer
+than its BPDU, which IEEE 802.1D says a receiver ignores. See
+[`layer2/stp.py`](src/netprotocols/layer2/stp.py)'s module docstring.
 
 **802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
 length (IEEE 802.3 Clause 3.2.6): from 0x0600 an EtherType, up to 1500
@@ -340,6 +345,7 @@ flowchart LR
   E -->|length ≤ 1500| L[LLC]
   V -->|length ≤ 1500| L
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
+  L -->|DSAP 0x42| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   V -->|0x8100, 0x88A8, 0x9100| V
@@ -792,7 +798,8 @@ src/netprotocols/
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
-│                   llc.py (802.2 LLC + SNAP, after an 802.3 Length)
+│                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
+│                   stp.py (802.1D / 802.1w BPDUs)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

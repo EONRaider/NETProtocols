@@ -85,6 +85,9 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
+``STP`` is the same case at layer 2: its BPDU Type gives its exact
+length, so the octets after the BPDU are left undecoded. See
+:mod:`netprotocols.layer2.stp`.
 
 Payload extent
 --------------

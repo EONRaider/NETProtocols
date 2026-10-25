@@ -143,6 +143,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking; the inner type/length field reads as Ethernet's does |
 | 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized (`is_raw_ipx`; the other fields are then IPX bytes), never dispatched |
 | 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
+| 2 | Spanning Tree BPDU (STP, RSTP) | `STP` | IEEE 802.1D-2004 §9.3, 802.1w; LLC DSAP 0x42 (`llc.dsap`); Configuration (35 octets), RST (36) and Topology Change Notification (4) BPDUs in one class, branching on the BPDU Type; per-type flag accessors (TC, TCA, Proposal, Port Role, Learning, Forwarding, Agreement), the 802.1t priority / system ID extension split, timers raw and in seconds; MST BPDUs decoded only as far as their RST prefix |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |

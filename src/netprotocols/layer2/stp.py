@@ -34,24 +34,23 @@ RST BPDU.
 Flags
 -----
 The Flags octet has two bits in a Configuration BPDU, Topology Change
-(bit 1, ``0x01``) and Topology Change Acknowledgment (bit 8,
-``0x80``). An RST BPDU keeps Topology Change and adds Proposal
-(``0x02``), the two-bit Port Role (``0x0C``), Learning (``0x10``),
-Forwarding (``0x20``) and Agreement (``0x40``), and leaves bit 8
-unused. Each type's unused bits "shall be transmitted as 0 and ignored
-on receipt", so a flag accessor answers ``None`` in a type that does
-not define its bit, as :class:`~netprotocols.VRRP`'s per-version
-accessors do, and the raw octet stays in :attr:`STP.flags`. The Port
-Role encodes 1 as Alternate or Backup, 2 as Root and 3 as Designated;
-802.1D-2004 names 0 Unknown, and 802.1Q, which reuses it in MSTI
-messages, Master. The bit positions and the role values are from the
-BPDU encoding text of the IEEE 802.1 working group's public document
-``aq-seaman-merged-bpdu-encoding-0509.pdf`` (an unapproved P802.1aq/D1.5
-draft of 802.1Q Clause 14, which restates the 802.1D-2004 encoding;
-fetched from ieee802.org 2026-10-25), and agree with Wireshark's
-``epan/dissectors/packet-bpdu.c`` (master, fetched 2026-10-25), whose
-names for the BPDU types, protocol versions and port roles this module
-uses.
+(bit 1, ``0x01``) and Topology Change Acknowledgment (bit 8, ``0x80``).
+An RST BPDU keeps Topology Change and adds Proposal (``0x02``), the
+two-bit Port Role (``0x0C``), Learning (``0x10``), Forwarding (``0x20``)
+and Agreement (``0x40``), and leaves bit 8 unused. Each type's unused
+bits "shall be transmitted as 0 and ignored on receipt", so a flag
+accessor answers ``None`` in a type that does not define its bit, as
+:class:`~netprotocols.VRRP`'s per-version accessors do, and the raw
+octet stays in :attr:`STP.flags`. The Port Role encodes 1 as Alternate
+or Backup, 2 as Root and 3 as Designated; 802.1D-2004 names 0 Unknown,
+and 802.1Q names it Master. The bit positions and the role values are
+from the BPDU encoding text of the IEEE 802.1 working group's public
+document ``aq-seaman-merged-bpdu-encoding-0509.pdf`` (an unapproved
+P802.1aq/D1.5 draft of 802.1Q Clause 14, which restates the 802.1D-2004
+encoding; fetched from ieee802.org 2026-10-25), and agree with
+Wireshark's ``epan/dissectors/packet-bpdu.c`` (master, fetched
+2026-10-25), whose names for the BPDU types, protocol versions and port
+roles this module uses.
 
 Bridge and Port Identifiers
 ---------------------------
@@ -68,9 +67,12 @@ own (:attr:`STP.root_priority`, :attr:`STP.bridge_priority`) and the
 is likewise a four-bit priority and a twelve-bit Port Number; its
 priority reads back, through :attr:`STP.port_priority`, in the 8-bit
 form whose low four bits are zero that the standard keeps for
-management. Linux's bridge, which built this library's fixture, still
-lays out 6 priority bits and a 10-bit port number, so its default
-port priority of 32 is ``0x8000`` on the wire: 128 here.
+management. Linux's bridge, which built this library's fixture, lays
+out 6 priority bits and a 10-bit port number instead (``BR_PORT_BITS``
+is 10 in ``net/bridge/br_private.h``, and ``br_if.c`` sets a new
+port's priority to ``0x8000 >> BR_PORT_BITS``, both read 2026-10-25),
+so its default port priority of 32 is ``0x8000`` on the wire: 128
+here.
 
 What decode rejects
 -------------------
@@ -79,9 +81,9 @@ the two values that leave no layout to read: a Protocol Identifier
 other than 0 (``field="protocol_id"``), the one value every rule of
 the standard's validation of received BPDUs requires, and a BPDU Type
 other than the three above (``field="bpdu_type"``), since nothing else
-says where the BPDU ends. Wireshark shows the rest of such a PDU as
-data; here it ends the walk with the error, or, lax, on
-``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
+says where the BPDU ends. Wireshark shows the rest of a PDU of
+unknown type as data; here such a PDU ends the walk with the error,
+or, lax, on ``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
 bytes) raises :class:`~netprotocols.TruncatedHeaderError`. Everything
 else is carried verbatim: the version, unused flag bits, a nonzero
 Version 1 Length, timer values no bridge would send.
@@ -109,10 +111,10 @@ RST BPDU an 802.1w bridge would read from it, carries its version (3)
 verbatim, and leaves the Version 3 information after ``header_len``,
 undecoded and not kept in the layer. Keeping it raw would need the
 Version 3 Length to bound it, and that field is unreliable on the
-wire: Wireshark's ``packet-bpdu.c`` documents a Cisco IOS release that
-sends it as a count of MSTI messages rather than of octets, and MST
-BPDUs whose Version 3 Length is 0 and whose format selector octet
-holds the length instead. Decoding MSTP properly is later work.
+wire: Wireshark's ``packet-bpdu.c`` notes a Cisco C3550 IOS release
+that appears to send it as a count of MSTI messages rather than of
+octets, and MST BPDUs whose Version 3 Length is 0 and whose format
+selector octet holds the length instead. Decoding MSTP properly is later work.
 """
 
 from __future__ import annotations
