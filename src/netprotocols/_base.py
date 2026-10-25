@@ -66,6 +66,12 @@ a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
 stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
 report. See :mod:`netprotocols.layer4.sctp`.
 
+``PIM`` has no length either, and bounds a message by its own
+structure: its counts and encoded addresses, or, for a Hello, a walk of
+its options that leaves a zero tail where the next option would start.
+Past its 4-byte header it never raises: a body its parser cannot read
+is kept whole. See :mod:`netprotocols.layer3.pim`.
+
 ``RIP`` is the port-dispatched case: its entries fill the UDP datagram,
 which the walk does not trim to UDP's length either. It keeps the whole
 buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors

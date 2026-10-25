@@ -4,26 +4,26 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, VRRP, SCTP's CRC32c, the OSPF packet checksum
-and every OSPF LSA's Fletcher checksum; fragment slices carry no
+pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, the OSPF packet
+checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
 digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 252 frames across 26
+frames routinely leave checksums to NIC offload. 265 frames across 27
 scenarios. Addresses are as-captured from the capture host's network.
 
-Thirteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Fourteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `bgp.pcap`) are
-captured separately by their own `scripts/capture_fixtures_*.sh` over
-purpose-built topologies — real kernel vlan devices, a DHCP
+`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
+`bgp.pcap`) are captured separately by their own
+`scripts/capture_fixtures_*.sh` over purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
-two FRR OSPF routers, and BGP sessions between three BIRD speakers —
-see their rows and the notes below.
+two FRR OSPF routers, two FRR PIM-SM routers, and BGP sessions between
+three BIRD speakers — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -53,6 +53,7 @@ see their rows and the notes below.
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
+| `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -332,6 +333,53 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   trailer; `tests/test_sctp.py` pads them by hand to cover a real NIC's.
   The kernel had no IPv6, so SCTP over IPv6 is covered by constructed
   frames in `tests/test_sctp.py`.
+
+- `pim.pcap` was produced by `scripts/capture_fixtures_pim.sh`: four
+  netns in a line over three veth pairs — a multicast source, two FRR
+  8.4 routers (zebra + pimd, R1 `10.184.12.1` with a secondary
+  `10.184.13.1` on the captured link, R2 `10.184.12.2`) and a receiver
+  that joins two groups from a socket with `IP_ADD_MEMBERSHIP` (IGMPv3,
+  `ip igmp` on R2's receiver-facing interface). Static RPs are on
+  opposite routers — R2 for `239.184.0.1`, R1 for `239.184.0.2` — so
+  both a (*,G) tree and a Register exchange cross the R1–R2 link, where
+  tcpdump captured `ip proto 103` on R1's side. So R1's own Hello and
+  both Registers (frames 1, 4 and 8) are outbound frames, despite the
+  inbound-only rule above, and the other ten are R2's, inbound. That
+  is harmless here, as for SCTP: pimd computes every PIM checksum
+  itself, in userspace, before the kernel sees the packet, the kernel
+  computes IPv4 header checksums in software, the script asks ethtool
+  to turn veth offloads off, and `check_fixtures` verifies all of
+  them. `ip pim
+  register-suppress-time 15` brings R1's Null-Register probe inside the
+  capture. The receiver then leaves (R2 prunes), and R2's pimd is
+  stopped (its goodbye Hello). Hello and Join/Prune timers make the raw
+  capture's frame count vary, so the script keeps the first frame of
+  each of the 13 kinds it names and fails unless it saw all of them;
+  the committed file is that selection. **pimd built every PIM
+  message**, checksum included, **and the outer IPv4 headers**: FRR
+  8.4's `pim_msg_send()` fills in the identification, TOS, TTL, total
+  length and addresses and sends with `IP_HDRINCL` (`IPPROTO_RAW` for
+  Registers), so **the kernel filled in only the IPv4 header checksum
+  and total length**, as it always does for such a socket.
+  FRR sums a Register's checksum over its first 8 bytes
+  only, as RFC 7761 §4.9.3 specifies; `check_fixtures` accepts that or
+  the whole-message form the RFC asks receivers to accept too. The data
+  Register's encapsulated packet is the source's datagram as R1
+  received it (IPv4 header and UDP checksum built by the source's
+  kernel), and `check_fixtures` verifies it too. The Null-Register's
+  dummy IPv4 header carries a zero header checksum, which RFC 7761
+  §4.9.3 says a receiver must not check, so `check_fixtures` counts it
+  as `pim-null-register-unchecked` (an IPv6 Null-Register's dummy PIM
+  header, which no capture here holds, is checked by its own checksum;
+  `tests/test_pim.py` builds two). veth does not pad frames, and the
+  shortest here (the Register-Stop, a 38-byte datagram) would get 8
+  bytes of zero padding from a real NIC; `tests/test_pim.py` appends
+  padding and a 4-byte trailer by hand. The kernel had no IPv6, so PIM
+  over IPv6 is covered by constructed frames in `tests/test_pim.py`,
+  their pseudo-header checksums computed there independently. No
+  capture holds an Assert, Bootstrap, Candidate-RP-Advertisement or
+  Graft: `tests/test_pim.py` builds an Assert and Graft messages, and
+  decodes the other types with their body kept raw.
 
 - `rip.pcap` was produced by `scripts/capture_fixtures_rip.sh`: two
   BIRD 2.14 daemons, one per netns over a veth pair, each exporting

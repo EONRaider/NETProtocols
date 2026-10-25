@@ -59,6 +59,7 @@ from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer3.ospf import OSPF, OSPFLSA
+from netprotocols.layer3.pim import PIM
 from netprotocols.layer3.vrrp import VRRP
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
@@ -272,6 +273,58 @@ def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     return field
 
 
+#: The PIM Register message type, whose checksum covers only the PIM
+#: header and the 4-byte Register header after it (RFC 7761 §4.9.3).
+_PIM_REGISTER = 1
+_PIM_REGISTER_HEADER_LEN = 8
+
+
+def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
+    """The PIM message bytes the checksum covers, checksum field (bytes
+    2-3) zeroed: the whole message, or a Register's first 8 bytes (RFC
+    7761 §4.9.3). ``ip`` is required, since only the family says
+    whether a pseudo-header goes in front."""
+    if ip is None:
+        raise InvalidFieldError(
+            "Computing a PIM checksum requires the enclosing IPv4/IPv6 "
+            "layer (over IPv6 its pseudo-header covers the addresses)",
+            protocol=type(layer),
+            field="checksum",
+        )
+    message = _zeroed(bytes(layer), 2)
+    if layer.type == _PIM_REGISTER:
+        return message[:_PIM_REGISTER_HEADER_LEN]
+    return message
+
+
+def _pim_sum(covered: bytes, ip: IPv4 | IPv6 | None) -> int:
+    """The internet checksum over ``covered``, behind the IPv6
+    pseudo-header (next header 103, the covered length) when ``ip`` is
+    IPv6, alone over IPv4 (RFC 7761 §4.9)."""
+    if isinstance(ip, IPv6):
+        covered = _pseudo_header(ip, IPProtocol.PIM, len(covered)) + covered
+    return internet_checksum(covered)
+
+
+def _pim_checksum(layer: PIM, ip: IPv4 | IPv6 | None) -> int:
+    """The PIM checksum: the internet checksum over the message, or over
+    a Register's first 8 bytes, with the IPv6 pseudo-header in front
+    over IPv6, whose length is then the covered length (RFC 7761
+    §4.9)."""
+    return _pim_sum(_pim_covered(layer, ip), ip)
+
+
+def _verify_pim(layer: PIM, ip: IPv4 | IPv6 | None) -> bool:
+    """Verify a PIM checksum. A Register's is also accepted computed
+    over the whole message, encapsulated packet included, as RFC 7761
+    §4.9.3 asks for interoperability with senders that sum it all."""
+    if layer.checksum == _pim_checksum(layer, ip):
+        return True
+    if layer.type != _PIM_REGISTER:
+        return False
+    return layer.checksum == _pim_sum(_zeroed(bytes(layer), 2), ip)
+
+
 def _ospf_checksum(layer: OSPF) -> int:
     """Checksum an OSPF packet but its Authentication field.
 
@@ -381,15 +434,18 @@ def compute(
         Packet Length bytes but the Authentication field, with no
         pseudo-header (``ip`` and ``payload`` ignored, so an LLS block
         after the packet never enters it), and raises under
-        cryptographic authentication, which computes none.
-    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6 and
-        VRRPv3.
+        cryptographic authentication, which computes none; ``PIM`` covers
+        the whole message, or only the first 8 bytes of a Register
+        (RFC 7761 §4.9.3), behind the IPv6 pseudo-header over IPv6 and
+        alone over IPv4 (``payload`` ignored).
+    :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6,
+        VRRPv3, and PIM, whose coverage depends on the family.
     :param payload: The bytes following ``layer`` on the wire. A decoded
-        ``ICMPv4``/``ICMPv6``/``IGMP`` message, and a decoded ``SCTP``
-        packet, already carries its whole body in ``bytes(layer)``, so
-        pass a ``payload`` only for bytes the layer object does not
-        itself hold. ``IGMP`` and ``VRRP`` ignore it: nothing after
-        either message is part of it.
+        ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
+        ``SCTP`` packet, already carries its whole body in
+        ``bytes(layer)``, so pass a ``payload`` only for bytes the layer
+        object does not itself hold. ``IGMP``, ``VRRP`` and ``PIM``
+        ignore it: nothing after the message is part of it.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
@@ -409,6 +465,8 @@ def compute(
         return _ospf_checksum(layer)
     if isinstance(layer, VRRP):
         return _vrrp_checksum(layer, ip)
+    if isinstance(layer, PIM):
+        return _pim_checksum(layer, ip)
     transport = _pseudo_header_checksum(layer, ip, payload)
     if transport is not None:
         return transport
@@ -427,6 +485,11 @@ def verify(
 ) -> bool:
     """Whether ``layer``'s checksum field matches a recomputation.
 
+    It accepts what the governing RFC tells a receiver to accept, which
+    can be more than :func:`compute` produces: a UDP-over-IPv4 checksum
+    of ``0``, a GRE header without the C bit, and a PIM Register summed
+    over the whole message, each described below.
+
     A UDP-over-IPv4 checksum of ``0`` means "no checksum in use" and
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
     invalid). A GRE header whose Checksum-Present bit is clear carries
@@ -434,7 +497,12 @@ def verify(
     a frame cannot fail a checksum it does not have — as does an OSPF
     packet under cryptographic authentication (AuType 2 or 3, RFC 2328
     §D.4.3, RFC 7474 §5), whose digest this library cannot check
-    without the key.
+    without the key. A PIM Register verifies with its checksum over its
+    first 8 bytes, as RFC 7761 §4.9.3 computes it, or over the whole
+    message, as it asks a receiver to accept too ("for interoperability
+    reasons"). So a whole-message Register verifies, but
+    :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
+    the 8-byte form :func:`compute` returns.
     """
     if (
         isinstance(layer, UDP)
@@ -446,5 +514,7 @@ def verify(
         return True
     if isinstance(layer, OSPF) and layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES:
         return True
+    if isinstance(layer, PIM):
+        return _verify_pim(layer, ip)
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire

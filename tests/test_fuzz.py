@@ -45,6 +45,7 @@ from netprotocols import (
     HTTP,
     IGMP,
     OSPF,
+    PIM,
     RIP,
     SCTP,
     TCP,
@@ -67,6 +68,9 @@ from netprotocols import (
     IPv6HopByHopOptions,
     IPv6Routing,
     Packet,
+    PIMHello,
+    PIMJoinPrune,
+    PIMRegister,
     Protocol,
     ProtocolError,
     RIPAuthentication,
@@ -83,6 +87,7 @@ from strategies import (
     http_messages,
     http_wire,
     ospf_packets,
+    pim_headers,
     sctp_chunks,
     sctp_headers,
     vrrp_headers,
@@ -102,6 +107,7 @@ ALL_PROTOCOLS = (
     ICMPv4,
     ICMPv6,
     IGMP,
+    PIM,
     TCP,
     UDP,
     SCTP,
@@ -923,6 +929,102 @@ class TestVRRPAccessorSafety:
             decoded = cls.decode(wire + trailer)
             assert decoded == header, trailer
             assert decoded.header_len == len(wire), trailer
+
+
+#: A PIM header (version 2, each type) and then bytes from a small
+#: alphabet, so counts, families 1 and 2, encoding 0, short option
+#: lengths and zero tails turn up far more often than in free bytes.
+_pim_like = st.tuples(
+    st.integers(0, 0x0F).map(lambda type_: bytes([0x20 | type_, 0, 0, 0])),
+    st.lists(
+        st.sampled_from([0, 0, 0, 1, 2, 4, 8, 0x20, 0xFF]), max_size=96
+    ).map(bytes),
+).map(b"".join)
+
+
+def _read_pim_message(pim: PIM) -> None:
+    """Read every accessor of a PIM message's typed form."""
+    message = pim.message
+    if isinstance(message, PIMHello):
+        for option in message.options:
+            assert option.type_name
+        for name in (
+            "holdtime",
+            "lan_prune_delay",
+            "dr_priority",
+            "generation_id",
+            "address_list",
+        ):
+            with contextlib.suppress(InvalidFieldError, ProtocolError):
+                getattr(message, name)
+    elif isinstance(message, PIMJoinPrune):
+        for group in message.groups:
+            _ = group.group.bidirectional, group.group.admin_scope
+            for source in group.joined + group.pruned:
+                _ = source.sparse, source.wildcard, source.rpt
+    elif isinstance(message, PIMRegister):
+        _ = message.encapsulated
+
+
+class TestPIMAccessorSafety:
+    @given(data=st.one_of(fuzz_input, _pim_like))
+    def test_decode_never_raises_past_the_header(self, data: bytes) -> None:
+        """Past the 4-byte header of a version-2 message decode() keeps
+        whatever its parser cannot read, so it raises only on a shorter
+        buffer or another version. It round-trips exactly the bytes it
+        consumed, and the accessors raise only ProtocolError, and
+        :attr:`PIM.message` only when decode() kept the whole remainder
+        because it would not parse."""
+        if len(data) < 4 or data[0] >> 4 != 2:
+            with pytest.raises(ProtocolError):
+                PIM.decode(data)
+            return
+        pim = PIM.decode(data)
+        assert bytes(pim) == data[: pim.header_len]
+        assert PIM.decode(bytes(pim)) == pim
+        assert pim.type_name
+        assert pim.checksum_hex_str
+        try:
+            _read_pim_message(pim)
+        except ProtocolError:
+            assert pim.header_len == len(data)
+
+    @given(header=pim_headers())
+    def test_a_zero_tail_is_left_undecoded(self, header: PIM) -> None:
+        """Ethernet's zero padding after a well-formed message is never
+        part of it, whatever its type bounds it by, except for the types
+        whose body runs to the end of the buffer (Register, and the
+        types kept raw), which keep it. Every padding length up to
+        Ethernet's 46-byte maximum is tried."""
+        wire = bytes(header)
+        keeps_tail = header.type in (1, 4) or header.type > 7
+        for padding in range(47):
+            pim = PIM.decode(wire + bytes(padding))
+            if keeps_tail:
+                assert pim.header_len == len(wire) + padding, padding
+            else:
+                assert pim == header, padding
+
+    @given(header=pim_headers())
+    def test_a_nonzero_trailer_after_a_bounded_message_is_left(
+        self, header: PIM
+    ) -> None:
+        """A message bounded by its own counts and addresses ends there,
+        whatever follows it (an FCS, say)."""
+        if header.type not in (2, 3, 5, 6, 7):
+            return
+        wire = bytes(header)
+        for trailer in (b"\x01", b"\xde\xad\xbe\xef", bytes(5) + b"\x01"):
+            assert PIM.decode(wire + trailer) == header
+
+    @given(header=pim_headers())
+    def test_built_messages_parse_back(self, header: PIM) -> None:
+        """A body built from a typed message parses back to a message
+        that serializes to that same body."""
+        message = header.message
+        if message is None:
+            return
+        assert bytes(message) == header.body
 
 
 def _read_every_accessor(msg: HTTP) -> None:

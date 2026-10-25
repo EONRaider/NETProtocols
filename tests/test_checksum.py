@@ -15,6 +15,7 @@ from netprotocols import (
     IGMP,
     OSPF,
     OSPFLSA,
+    PIM,
     SCTP,
     TCP,
     UDP,
@@ -83,7 +84,7 @@ def transport_cases():
                 ip, ip_start = layer, offset
             offset += layer.header_len
             if ip is None or not isinstance(
-                layer, (TCP, UDP, SCTP, ICMPv4, ICMPv6)
+                layer, (TCP, UDP, SCTP, ICMPv4, ICMPv6, PIM)
             ):
                 continue
             # The wire payload ends at the IP datagram's declared length.
@@ -116,7 +117,7 @@ CHECKSUMMED = [case for case in CASES if case not in UNCHECKSUMMED]
 class TestCorpusChecksums:
     def test_corpus_offers_every_transport_checksum_case(self):
         kinds = {type(transport) for _, transport, _, _ in CHECKSUMMED}
-        assert {TCP, UDP, SCTP, ICMPv4, ICMPv6} <= kinds
+        assert {TCP, UDP, SCTP, ICMPv4, ICMPv6, PIM} <= kinds
         assert any(isinstance(ip, IPv4) for _, _, ip, _ in CHECKSUMMED)
         assert any(isinstance(ip, IPv6) for _, _, ip, _ in CHECKSUMMED)
 
@@ -541,6 +542,123 @@ class TestGREChecksum:
             assert verify(gre, payload=frame[offset + gre.header_len :])
             seen += 1
         assert seen == 8
+
+
+def _rfc1071(data: bytes) -> int:
+    """The internet checksum, written here rather than taken from the
+    module under test."""
+    data += b"\x00" * (len(data) % 2)
+    total = sum(int.from_bytes(data[i : i + 2]) for i in range(0, len(data), 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return ~total & 0xFFFF
+
+
+class TestPIMChecksum:
+    """The PIM arm (RFC 7761 §4.9): the whole message, or a Register's
+    first 8 bytes, with the IPv6 pseudo-header over IPv6. The captured
+    frames are FRR's, over IPv4; the IPv6 ones are built."""
+
+    FRAMES = pcap_frames(FIXTURES / "pim.pcap")
+
+    def layers(self, index: int) -> tuple[PIM, IPv4]:
+        layers, _ = walk(self.FRAMES[index])
+        ip, pim = layers[1], layers[2]
+        assert isinstance(ip, IPv4) and isinstance(pim, PIM)
+        return pim, ip
+
+    def test_captured_registers_sum_their_first_8_bytes(self):
+        for index in (3, 7):
+            pim, ip = self.layers(index)
+            raw = bytes(pim)
+            assert pim.type == 1
+            assert compute(pim, ip=ip) == _rfc1071(
+                raw[:2] + bytes(2) + raw[4:8]
+            )
+            assert compute(pim, ip=ip) == pim.checksum
+
+    def test_other_captured_messages_sum_the_whole_message(self):
+        pim, ip = self.layers(2)
+        raw = bytes(pim)
+        assert compute(pim, ip=ip) == _rfc1071(raw[:2] + bytes(2) + raw[4:])
+
+    def test_a_register_summed_whole_verifies(self):
+        pim, ip = self.layers(3)
+        raw = bytes(pim)
+        whole = replace(pim, checksum=_rfc1071(raw[:2] + bytes(2) + raw[4:]))
+        assert whole.checksum != pim.checksum
+        assert verify(whole, ip=ip)
+        assert not verify(replace(pim, checksum=pim.checksum ^ 1), ip=ip)
+
+    def test_only_a_register_verifies_summed_two_ways(self):
+        """A Join/Prune whose checksum is the 8-byte sum does not verify:
+        the second form is a Register's alone."""
+        pim, ip = self.layers(2)
+        raw = bytes(pim)
+        header_sum = replace(
+            pim, checksum=_rfc1071(raw[:2] + bytes(2) + raw[4:8])
+        )
+        assert not verify(header_sum, ip=ip)
+        assert not verify(replace(pim, checksum=pim.checksum ^ 1), ip=ip)
+
+    def ipv6(self) -> IPv6:
+        return IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=0,
+            next_header=103,
+            hop_limit=1,
+            src="fe80::1",
+            dst="ff02::d",
+        )
+
+    def pseudo(self, length: int) -> bytes:
+        return (
+            bytes.fromhex("fe800000000000000000000000000001")
+            + bytes.fromhex("ff02000000000000000000000000000d")
+            + length.to_bytes(4)
+            + b"\x00\x00\x00\x67"
+        )
+
+    @pytest.mark.parametrize("type_", [0, 3])
+    def test_ipv6_prepends_the_pseudo_header(self, type_):
+        pim = PIM(type=type_, body=bytes(range(1, 31)))
+        raw = bytes(pim)
+        expected = _rfc1071(
+            self.pseudo(len(raw)) + raw[:2] + bytes(2) + raw[4:]
+        )
+        assert compute(pim, ip=self.ipv6()) == expected
+        assert verify(replace(pim, checksum=expected), ip=self.ipv6())
+
+    def test_an_ipv6_register_counts_8_bytes_in_the_pseudo_header(self):
+        pim = PIM(type=1, body=bytes(range(1, 31)))
+        raw = bytes(pim)
+        expected = _rfc1071(self.pseudo(8) + raw[:2] + bytes(2) + raw[4:8])
+        assert compute(pim, ip=self.ipv6()) == expected
+        whole = _rfc1071(self.pseudo(len(raw)) + raw[:2] + bytes(2) + raw[4:])
+        assert verify(replace(pim, checksum=whole), ip=self.ipv6())
+
+    def test_the_family_decides_the_sum(self):
+        pim, ip = self.layers(2)
+        assert compute(pim, ip=self.ipv6()) != compute(pim, ip=ip)
+
+    def test_computing_without_the_ip_layer_is_rejected(self):
+        pim, _ = self.layers(2)
+        for check in (compute, verify):
+            with pytest.raises(InvalidFieldError) as excinfo:
+                check(pim)
+            err = excinfo.value
+            assert err.protocol is PIM
+            assert err.field == "checksum"
+            assert str(err) == (
+                "Computing a PIM checksum requires the enclosing IPv4/IPv6 "
+                "layer (over IPv6 its pseudo-header covers the addresses)"
+            )
+
+    def test_payload_is_ignored(self):
+        pim, ip = self.layers(2)
+        assert compute(pim, ip=ip, payload=b"\x12\x34") == pim.checksum
 
 
 class TestChecksumRules:

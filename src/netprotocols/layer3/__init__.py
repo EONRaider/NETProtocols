@@ -19,6 +19,20 @@ from netprotocols.layer3.ospf import (
     OSPFLSAHeader,
     OSPFLSRequest,
 )
+from netprotocols.layer3.pim import (
+    PIM,
+    PIMAssert,
+    PIMEncodedGroup,
+    PIMEncodedSource,
+    PIMEncodedUnicast,
+    PIMGroupSet,
+    PIMHello,
+    PIMHelloOption,
+    PIMJoinPrune,
+    PIMLANPruneDelay,
+    PIMRegister,
+    PIMRegisterStop,
+)
 from netprotocols.layer3.vrrp import VRRP, VRRPv6
 
 __all__ = [
@@ -28,6 +42,7 @@ __all__ = [
     "IGMP",
     "OSPF",
     "OSPFLSA",
+    "PIM",
     "VRRP",
     "AHv6",
     "ICMPv4",
@@ -46,5 +61,16 @@ __all__ = [
     "OSPFHello",
     "OSPFLSAHeader",
     "OSPFLSRequest",
+    "PIMAssert",
+    "PIMEncodedGroup",
+    "PIMEncodedSource",
+    "PIMEncodedUnicast",
+    "PIMGroupSet",
+    "PIMHello",
+    "PIMHelloOption",
+    "PIMJoinPrune",
+    "PIMLANPruneDelay",
+    "PIMRegister",
+    "PIMRegisterStop",
     "VRRPv6",
 ]

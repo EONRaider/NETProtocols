@@ -47,6 +47,20 @@ from netprotocols.layer3.ospf import (
     OSPFLSAHeader,
     OSPFLSRequest,
 )
+from netprotocols.layer3.pim import (
+    PIM,
+    PIMAssert,
+    PIMEncodedGroup,
+    PIMEncodedSource,
+    PIMEncodedUnicast,
+    PIMGroupSet,
+    PIMHello,
+    PIMHelloOption,
+    PIMJoinPrune,
+    PIMLANPruneDelay,
+    PIMRegister,
+    PIMRegisterStop,
+)
 from netprotocols.layer3.vrrp import VRRP, VRRPv6
 from netprotocols.layer4.sctp import SCTP, SCTPChunk
 from netprotocols.layer4.tcp import TCP, TCPOption
@@ -126,6 +140,7 @@ __all__ = [
     "MAX_DEPTH",
     "OSPF",
     "OSPFLSA",
+    "PIM",
     "RIP",
     "SCTP",
     "TCP",
@@ -176,6 +191,17 @@ __all__ = [
     "OSPFHello",
     "OSPFLSAHeader",
     "OSPFLSRequest",
+    "PIMAssert",
+    "PIMEncodedGroup",
+    "PIMEncodedSource",
+    "PIMEncodedUnicast",
+    "PIMGroupSet",
+    "PIMHello",
+    "PIMHelloOption",
+    "PIMJoinPrune",
+    "PIMLANPruneDelay",
+    "PIMRegister",
+    "PIMRegisterStop",
     "Packet",
     "Protocol",
     "ProtocolError",

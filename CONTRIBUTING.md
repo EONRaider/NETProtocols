@@ -44,7 +44,7 @@ src/netprotocols/
   packet.py       Packet: an ordered stack of headers, with_checksums()
   layer2/         Ethernet, VLAN, ARP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
-                  GRE, IPsec ESP and AH, VRRP, OSPFv2
+                  GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)
   layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP
   utils/          exceptions, MAC/IPv4 helpers
@@ -61,7 +61,9 @@ subclass of `ProtocolError` (never a bare `struct.error` or
 `ValueError`) on malformed input. (SCTP, which has no length field
 and a CRC32c that trailing zeros change, finds its own extent instead:
 it leaves only zero padding after it undecoded, and keeps any other
-trailing or unparseable bytes in its `chunks` rather than raising.)
+trailing or unparseable bytes in its `chunks` rather than raising.
+PIM, which has no length field either, ends a message where its own
+structure does and keeps a body it cannot parse whole, likewise.)
 The authoritative description lives in the module docstring of
 [`src/netprotocols/_base.py`](src/netprotocols/_base.py) — read it
 before adding a protocol.
