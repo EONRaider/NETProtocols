@@ -52,11 +52,11 @@ is a protocol number, under that OUI, assigned by the OUI owner"), so
 
 - OUI 00-00-00 (RFC 1042, which RFC 9542 §3 describes as putting "an
   arbitrary EtherType" after "an all-zeros OUI") and OUI 00-00-F8 (the
-  IEEE 802.1H bridge-tunnel encapsulation, used for the EtherTypes RFC
-  1042 encapsulation cannot carry unambiguously, AppleTalk ARP and
-  IPX, as Linux's cfg80211 uses it: ``bridge_tunnel_header`` in
-  ``net/wireless/util.c``) make the PID an
-  EtherType, looked up in the ``ethertype`` table. That table holds
+  IEEE 802.1H bridge-tunnel encapsulation, whose PID is also an
+  EtherType: Linux's ``net/wireless/util.c``, read 2026-10-25, defines
+  ``bridge_tunnel_header`` as ``aa aa 03 00 00 f8`` "for EtherTypes
+  ETH_P_AARP and ETH_P_IPX") make the PID an EtherType, looked up in
+  the ``ethertype`` table. That table holds
   only values of 0x0600 or more (see :mod:`netprotocols.registry`), and
   a PID below that ends the walk: it is not an 802.3 Length.
 - Any other OUI makes the PID that organisation's own number, looked

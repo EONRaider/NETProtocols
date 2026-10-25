@@ -57,6 +57,7 @@ LLC_FRAMES = pcap_frames(FIXTURES / "llc.pcap")
     STP_CONFIG_A_TC_TCA,
     CDPV1,
     CDPV2,
+    CDPV1_HIGH_BYTE,
     RFC1042_ARP,
     RFC1042_ICMP,
     BRIDGE_TUNNEL_ARP,
@@ -137,13 +138,13 @@ def cdp_checksum(data: bytes) -> int:
     """Return CDP's checksum of ``data``, written out here.
 
     Not taken from the library: RFC 1071's sum, but an odd final byte is
-    added as the low byte of a last word (lldpd's ``frame_checksum``).
+    added as a signed octet, not padded into a last word's high byte.
     """
     total = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
     if len(data) & 1:
-        total += data[-1]
+        total += data[-1] - (0x100 if data[-1] & 0x80 else 0)
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
@@ -396,7 +397,9 @@ class TestTheFixture:
         assert len(STP_TCN) == 21
         assert packet.consumed == 17
 
-    @pytest.mark.parametrize("frame", [CDPV1, CDPV2], ids=["v1", "v2"])
+    @pytest.mark.parametrize(
+        "frame", [CDPV1, CDPV2, CDPV1_HIGH_BYTE], ids=["v1", "v2", "high"]
+    )
     def test_cdp_decodes_as_far_as_snap(self, frame):
         packet = decode_frame(frame)
         assert kinds(packet) == [Ethernet, LLC, SNAP]
@@ -459,7 +462,9 @@ class TestTheWalkBound:
         assert packet.consumed == len(STP_CONFIG_A)
         assert packet.stopped_by is None
 
-    @pytest.mark.parametrize("frame", [CDPV1, CDPV2], ids=["v1", "v2"])
+    @pytest.mark.parametrize(
+        "frame", [CDPV1, CDPV2, CDPV1_HIGH_BYTE], ids=["v1", "v2", "high"]
+    )
     @pytest.mark.parametrize(
         "trailer", [bytes(4), FCS, bytes(3) + FCS], ids=["zeros", "fcs", "both"]
     )

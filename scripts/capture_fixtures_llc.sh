@@ -20,10 +20,12 @@
 #      topology change and, not being the root, sends a Topology Change
 #      Notification BPDU towards A, which acknowledges it (TCA).
 #   3. lldpd (its own control socket, pidfile and interface list, in A,
-#      on npllc-ab) runs twice: with -cc it sends CDPv1 and with -ccc
-#      CDPv2 (LLC/SNAP, OUI 00-00-0C, PID 0x2000), each without waiting
-#      to hear a CDP peer. Its LLDP frames are left out of the capture
-#      by the capture filter.
+#      on npllc-ab) runs three times: with -cc it sends CDPv1 and with
+#      -ccc CDPv2 (LLC/SNAP, OUI 00-00-0C, PID 0x2000), each without
+#      waiting to hear a CDP peer; then -cc again, with a platform name
+#      ending in the byte 0xA9, so the CDP PDU's odd final byte is one
+#      that Cisco's checksum sign-extends. Its LLDP frames are left out
+#      of the capture by the capture filter.
 #   4. scripts/llc_fixture_frames.py, in A, sends six frames it builds
 #      byte for byte through an AF_PACKET socket on npllc-ab: RFC 1042
 #      ARP (padded to 60 bytes) and ICMP-in-IPv4, IEEE 802.1H ARP, RFC
@@ -152,7 +154,10 @@ def classify(frame):
         suffix += "-tca" if flags & 0x80 else ""
         return f"stp-config-{sender}{suffix}"
     if pdu[:8] == bytes.fromhex("aaaa0300000c2000"):
-        return f"cdpv{pdu[8]}"
+        # An odd-length PDU whose last byte has its top bit set: the
+        # case where CDP's checksum differs most from RFC 1071's.
+        high = len(pdu) % 2 and pdu[-1] & 0x80
+        return f"cdpv{pdu[8]}" + ("-high-odd-byte" if high else "")
     if pdu[:8] == bytes.fromhex("aaaa030000000806"):
         return "rfc1042-arp"
     if pdu[:8] == bytes.fromhex("aaaa030000000800"):
@@ -195,14 +200,14 @@ wait_for() {
     done
 }
 
-# Run lldpd in A with <cdp flags> until a <label> frame is captured,
-# then stop it.
+# Run lldpd in A with <cdp flags> and <platform> until a <label> frame
+# is captured, then stop it.
 run_lldpd() {
-    local flags=$1 label=$2
+    local flags=$1 label=$2 platform=$3
     ip netns exec "$NSA" unshare --uts sh -c '
         hostname npllc-cdp
         exec lldpd -d "$@"' lldpd "$flags" -k -S "NETProtocols LLC fixture" \
-        -P "npllc" -u "$WORK/lldpd.socket" -p "$WORK/lldpd.pid" \
+        -P "$platform" -u "$WORK/lldpd.socket" -p "$WORK/lldpd.pid" \
         -I "$AB" -O "$WORK/lldpd.conf" > "$WORK/lldpd$flags.log" 2>&1 &
     LLDPD_PID=$!
     wait_for "$label"
@@ -239,8 +244,10 @@ echo "[>] 3. lldpd: CDPv1, then CDPv2"
 # One transmission a second rather than the default 30 s.
 echo "configure lldp tx-interval 1" > "$WORK/lldpd.conf"
 chmod 644 "$WORK/lldpd.conf"
-run_lldpd -cc cdpv1
-run_lldpd -ccc cdpv2
+run_lldpd -cc cdpv1 npllc
+run_lldpd -ccc cdpv2 npllc
+# "npll" and the byte 0xA9 keep the PDU's length odd (91 bytes).
+run_lldpd -cc cdpv1-high-odd-byte "npll$(printf '\251')"
 
 echo "[>] 4. script-built frames"
 ip netns exec "$NSA" python3 scripts/llc_fixture_frames.py send "$AB"
@@ -309,6 +316,7 @@ expected = [
     "stp-config-a-tc-tca",
     "cdpv1",
     "cdpv2",
+    "cdpv1-high-odd-byte",
     "rfc1042-arp",
     "rfc1042-ipv4",
     "8021h-arp",
@@ -328,7 +336,8 @@ while offset < len(raw):
 # header; the script-built frames are padded to 60 bytes but for the
 # 79-byte ICMP one.
 assert lengths[:5] == [52, 52, 52, 21, 52], lengths
-assert lengths[7:] == [60, 79, 60, 60, 60, 60], lengths
+assert lengths[5:8] == [113, 113, 113], lengths
+assert lengths[8:] == [60, 79, 60, 60, 60, 60], lengths
 print(f"[+] {len(labels)} frames, as expected")
 PY
 )

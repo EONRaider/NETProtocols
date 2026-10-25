@@ -1197,15 +1197,19 @@ def _check_snap(
 
 
 def _cdp_checksum(data: bytes) -> int:
-    """The internet checksum as CDP computes it (lldpd's
-    ``frame_checksum`` with ``cisco`` set): an odd final byte is added
-    as the low-order byte of a last word, not the high-order one RFC
-    1071 pads it into."""
+    """The internet checksum as CDP computes it.
+
+    An odd final byte is not padded into the high-order byte of a last
+    word, as RFC 1071 does, but added as a signed octet: as the low byte
+    when below 0x80, and as its negative value (byte - 0x100) when not.
+    That is what lldpd's CDP frames verify with, on both sides of 0x80
+    (llc.pcap holds one of each).
+    """
     total = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
     if len(data) & 1:
-        total += data[-1]
+        total += data[-1] - (0x100 if data[-1] & 0x80 else 0)
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF

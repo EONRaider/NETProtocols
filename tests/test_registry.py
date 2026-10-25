@@ -429,10 +429,14 @@ class TestKeyRanges:
         registry.register(table, good, Fake)
         assert registry.get(table, good) is Fake
 
-    def test_the_decorator_and_derive_and_decode_as_refuse_too(self):
+    def test_every_way_to_register_refuses_too(self):
         isolated = Registry()
         with pytest.raises(InvalidRegistryKeyError):
             register(TABLE_ETHERTYPE, 0x0026, registry=isolated)(Fake)
+        with pytest.raises(InvalidRegistryKeyError):
+            register_all(
+                TABLE_ETHERTYPE, (0x0800, 0x0026), Fake, registry=isolated
+            )
         with pytest.raises(InvalidRegistryKeyError):
             isolated.derive({TABLE_ETHERTYPE: {0x0026: Fake}})
         with pytest.raises(InvalidRegistryKeyError):
