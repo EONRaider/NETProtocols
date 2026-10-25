@@ -48,8 +48,9 @@ def fletcher_verifies(data: bytes) -> bool:
     """Check ``data`` against the ISO 8473 Fletcher checksum it carries.
 
     With the checksum field in place, both running sums must be ``0``
-    modulo 255 (RFC 905 Annex B.4): the verification form, not the
-    library's generation of the field.
+    modulo 255 (RFC 905 Annex B.4). The library's ``verify_lsa`` makes
+    the same check; this is its own implementation, sharing no code
+    with it.
     """
     c0 = c1 = 0
     for byte in data:

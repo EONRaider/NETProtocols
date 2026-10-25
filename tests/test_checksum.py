@@ -821,8 +821,12 @@ class TestOSPFChecksum:
 
 
 def fletcher_sums(data: bytes) -> tuple[int, int]:
-    """RFC 905 B.4's check, done here and not by the library: both sums
-    of a correctly checksummed field are 0 modulo 255."""
+    """Return RFC 905 B.4's running sums, reimplemented here.
+
+    Both are 0 modulo 255 over a correctly checksummed field. verify_lsa
+    makes the same check; this copy keeps the tests from trusting the
+    library's sums.
+    """
     c0 = c1 = 0
     for byte in data:
         c0 = (c0 + byte) % 255
