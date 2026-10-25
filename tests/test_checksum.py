@@ -434,6 +434,11 @@ class TestCDPChecksum:
         data = b"\x02\xb4\x00\x00" + bytes((last,))
         assert _cdp_sum(data) != internet_checksum(data)
 
+    def test_an_odd_zero_byte_is_rfc_1071s_too(self):
+        """A final 0x00 adds 0 either way, so the two sums coincide."""
+        data = b"\x02\xb4\x00\x00\x00"
+        assert _cdp_sum(data) == internet_checksum(data)
+
     def test_an_even_pdu_is_rfc_1071s(self):
         data = bytes(range(1, 41))
         assert _cdp_sum(data) == internet_checksum(data)
