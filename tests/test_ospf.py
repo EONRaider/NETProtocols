@@ -765,6 +765,14 @@ class TestMalformed:
         "type_,body_len,position",
         [
             (1, 19, 0),  # Hello: short of its 20 fixed bytes
+            # Short of the fixed part by whole neighbors: these lengths
+            # leave no partial neighbor, so only the fixed-part check
+            # rejects them.
+            (1, 0, 0),
+            (1, 4, 0),
+            (1, 8, 0),
+            (1, 12, 0),
+            (1, 16, 0),
             (1, 22, 20),  # a partial neighbor
             (2, 7, 0),  # Database Description: short of 8
             (2, 8 + 21, 28),  # a partial LSA header
@@ -1095,6 +1103,34 @@ class TestCheckerCatchesTampering:
         # checksum too; fix that up so only the LSA's fails.
         damaged = decode_frame(self.flip(frame, 34 + 48))
         restored = damaged.with_checksums()
+        assert self.check(checker, bytes(restored)) == ["ospf-lsa-checksum"]
+
+    def test_swapped_lsa_bytes_fail_their_fletcher_checksum(self, checker):
+        """Fail two swapped adjacent LSA bytes, which change only C1."""
+        frame = FRAMES[9]
+        lsa = decode_frame(frame)[OSPF].lsas[0]
+        # Two body bytes of the first LSA, which starts at 34 + 28.
+        at = 34 + 48
+        first, second = frame[at], frame[at + 1]
+        assert first != second
+        assert {first, second} != {0x00, 0xFF}
+        assert lsa.body[:2] == bytes([first, second])
+        swapped = frame[:at] + bytes([second, first]) + frame[at + 2 :]
+        restored = decode_frame(swapped).with_checksums()
+        assert self.check(checker, bytes(restored)) == ["ospf-lsa-checksum"]
+
+    def test_a_c1_preserving_change_fails_its_fletcher_checksum(self, checker):
+        """Fail +1 on an LSA's second-to-last byte and -2 on its last.
+
+        That leaves C1 unchanged and moves only C0.
+        """
+        frame = FRAMES[9]
+        lsa = decode_frame(frame)[OSPF].lsas[0]
+        end = 34 + 28 + lsa.header.length
+        assert frame[end - 2] < 0xFF and frame[end - 1] >= 2
+        changed = bytes([frame[end - 2] + 1, frame[end - 1] - 2])
+        damaged = frame[: end - 2] + changed + frame[end:]
+        restored = decode_frame(damaged).with_checksums()
         assert self.check(checker, bytes(restored)) == ["ospf-lsa-checksum"]
 
     def test_a_nonzero_instance_id_passes(self, checker):
