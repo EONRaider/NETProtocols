@@ -11,11 +11,10 @@ an LLDPDU with no End TLV, malformed mandatory TLVs — is built here.
 is run over the corpus and over tampered copies of it.
 """
 
-import gc
 import importlib.util
 import struct
 import sys
-import time
+import tracemalloc
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
@@ -663,12 +662,18 @@ class TestDecodeCost:
     """LLDPDUs of thousands of 3-byte reserved TLVs.
 
     Small TLVs make the most of them per byte, the worst case for any
-    work the walk does per TLV over the rest of the buffer. Of two such
-    mistakes only one can be counted: copying the whole buffer with
-    ``bytes()`` calls the ``__bytes__`` a :class:`bytes` subclass
-    defines, but copying it through a :class:`memoryview` calls no
-    Python code at all. So one test counts the bytes read, and the other
-    compares decode times on 8 times the TLVs.
+    work the walk does per TLV over the rest of the buffer. A wall-clock
+    bound would be flaky on loaded, shared CI runners, so the cost is
+    measured instead, two ways, because of two such mistakes only one
+    can be counted: copying the whole buffer with ``bytes()`` calls the
+    ``__bytes__`` a :class:`bytes` subclass defines, but copying it
+    through a :class:`memoryview` calls no Python code at all. So one
+    test counts the bytes read, and the other traces with
+    :mod:`tracemalloc` the peak memory decode allocates when a megabyte
+    follows the End TLV. Neither catches per-TLV work that is quadratic
+    in time but leaves no large allocation behind, such as rebuilding
+    the list at every TLV with ``tlvs = tlvs + [tlv]``: that is a known
+    gap.
     """
 
     COUNT = 10000
@@ -690,29 +695,35 @@ class TestDecodeCost:
         assert len(lldp.tlvs) == self.COUNT + 1
         assert 0 < _ReadCountingBytes.read <= len(data)
 
-    def test_8_times_the_tlvs_take_about_8_times_as_long(self):
-        """Take under 16 times as long: twice what linear work would.
+    @pytest.mark.parametrize(
+        "wrap", [bytes, memoryview], ids=["bytes", "memoryview"]
+    )
+    def test_decode_never_copies_the_buffer_tail(self, wrap):
+        """Allocate at peak under half the megabyte after End, never decoded.
 
-        A wall-clock bound would be flaky on a slow runner, so this
-        bounds a ratio of two timings taken side by side, each the best
-        of 5. Linear work makes it about 8; copying the rest of the
-        buffer through a :class:`memoryview` at each TLV made it 25 or
-        more on the machine this test was written on.
+        1000 TLVs, not :attr:`COUNT`: decoding them peaks at about
+        65 KB from bytes and 99 KB from a memoryview (up to about 112 KB
+        on a first run under coverage), so 10,000 would exceed the bound
+        on their own, while a copy of the rest of the buffer at any one
+        TLV takes over a megabyte. If tracemalloc is already tracing it
+        is left on, else stopped.
         """
-        raws = (self.RAW, _reserved_tlvs(8 * self.COUNT))
-        best = [float("inf")] * 2
-        enabled = gc.isenabled()
-        gc.disable()
+        trailer = bytes(1 << 20)
+        data = wrap(_reserved_tlvs(1000) + trailer)
+        started = not tracemalloc.is_tracing()
+        if started:
+            tracemalloc.start()
         try:
-            for _ in range(5):
-                for index, raw in enumerate(raws):
-                    start = time.perf_counter()
-                    LLDP.decode(raw)
-                    best[index] = min(best[index], time.perf_counter() - start)
+            tracemalloc.reset_peak()
+            base, _ = tracemalloc.get_traced_memory()
+            lldp = LLDP.decode(data)
+            _, peak = tracemalloc.get_traced_memory()
         finally:
-            if enabled:
-                gc.enable()
-        assert best[1] / best[0] < 16
+            if started:
+                tracemalloc.stop()
+        assert len(lldp.tlvs) == 1001
+        assert lldp.tlvs[-1] == LLDPTLV(0)
+        assert peak - base < len(trailer) // 2, peak - base
 
 
 def _load_checker() -> ModuleType:
