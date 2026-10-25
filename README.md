@@ -51,10 +51,10 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265-frame corpus
-of real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
-2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
-number below, its reproduction command, and its caveats):
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265 frames of real
+captured traffic the corpus held at 2.5.0 (CPython 3.12.3, x86-64 Linux;
+re-measured for 2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md)
+for every number below, its reproduction command, and its caveats):
 
 - **3.4× faster than scapy on decode; dpkt is 1.3× faster** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
@@ -528,7 +528,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-265-frame corpus of real captured traffic across 27 scenarios
+271-frame corpus of real captured traffic across 28 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

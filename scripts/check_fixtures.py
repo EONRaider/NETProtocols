@@ -1036,6 +1036,23 @@ def _check_l3(
     strings."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
+    if ethertype == 0x0800 and len(payload) >= 20:
+        return _check_ipv4(payload, stats, depth, strict=strict)
+
+    if ethertype == 0x86DD and len(payload) >= 40:
+        return _check_ipv6(payload, stats, depth, strict=strict)
+
+    return _check_non_ip(ethertype, payload, stats, strict=strict)
+
+
+def _check_non_ip(
+    ethertype: int, payload: bytes, stats: Counter, *, strict: bool
+) -> list[str]:
+    """Validate a payload ``_check_l3`` found no IP header in.
+
+    That is ARP, an LLDPDU, or anything else, which fails under
+    ``strict``.
+    """
     if ethertype == 0x0806:
         stats["arp"] += 1
         # ARP carries no checksum; under strict, at least insist on the
@@ -1044,15 +1061,73 @@ def _check_l3(
             return ["unchecked-ethertype-0x0806"]
         return []
 
-    if ethertype == 0x0800 and len(payload) >= 20:
-        return _check_ipv4(payload, stats, depth, strict=strict)
-
-    if ethertype == 0x86DD and len(payload) >= 40:
-        return _check_ipv6(payload, stats, depth, strict=strict)
+    if ethertype == 0x88CC:
+        return _check_lldp(payload, stats)
 
     if strict:
         return [f"unchecked-ethertype-0x{ethertype:04x}"]
     stats[f"other-0x{ethertype:04x}"] += 1
+    return []
+
+
+def _lldp_tlvs(payload: bytes) -> tuple[list[tuple[int, bytes]], int] | None:
+    """Walk an LLDPDU's TLVs through End of LLDPDU.
+
+    Each is a 7-bit type and a 9-bit length in one big-endian word, then
+    the value (IEEE 802.1AB §8). Returns the ``(type, value)`` pairs and
+    the offset after End, or ``None`` when a TLV runs past the payload
+    or no End TLV ends the walk.
+    """
+    tlvs: list[tuple[int, bytes]] = []
+    cursor = 0
+    while cursor + 2 <= len(payload):
+        word = struct.unpack_from("!H", payload, cursor)[0]
+        end = cursor + 2 + (word & 0x1FF)
+        if end > len(payload):
+            return None
+        tlvs.append((word >> 9, payload[cursor + 2 : end]))
+        cursor = end
+        if word >> 9 == 0:
+            return tlvs, cursor
+    return None
+
+
+def _lldp_mandatory_tlvs_ok(tlvs: list[tuple[int, bytes]]) -> bool:
+    """Check that an LLDPDU opens with its three mandatory TLVs.
+
+    They are Chassis ID, Port ID and Time To Live, well formed, and none
+    of them may appear again.
+    """
+    if [tlv_type for tlv_type, _ in tlvs[:3]] != [1, 2, 3]:
+        return False
+    chassis_id, port_id, ttl = (value for _, value in tlvs[:3])
+    if not all(2 <= len(value) <= 256 for value in (chassis_id, port_id)):
+        return False
+    return len(ttl) == 2 and not {1, 2, 3} & {t for t, _ in tlvs[3:]}
+
+
+def _check_lldp(payload: bytes, stats: Counter) -> list[str]:
+    """Validate an LLDPDU's structure; LLDP has no checksum to verify.
+
+    The TLVs must walk to an End of LLDPDU TLV of length 0, with only
+    zero bytes (Ethernet padding) after it. The first three must be
+    Chassis ID and Port ID, each a subtype byte and a 1-255 byte ID,
+    and a 2-byte Time To Live, and none of those three types may
+    appear again; a shutdown LLDPDU (TTL 0) carries nothing else.
+    """
+    stats["lldp"] += 1
+    walked = _lldp_tlvs(payload)
+    if walked is None:
+        return ["lldp-unwalkable"]
+    tlvs, end = walked
+    if tlvs[-1][1] or payload[end:].strip(b"\x00"):
+        return ["lldp-bad-end"]
+    if not _lldp_mandatory_tlvs_ok(tlvs):
+        return ["lldp-mandatory-tlvs"]
+    if tlvs[2][1] == b"\x00\x00":
+        stats["lldp-shutdown"] += 1
+        if len(tlvs) != 4:
+            return ["lldp-shutdown-extra-tlvs"]
     return []
 
 

@@ -10,20 +10,21 @@ verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
 digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 265 frames across 27
+frames routinely leave checksums to NIC offload. 271 frames across 28
 scenarios. Addresses are as-captured from the capture host's network.
 
-Fourteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Fifteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`) are captured separately by their own
+`bgp.pcap`, `lldp.pcap`) are captured separately by their own
 `scripts/capture_fixtures_*.sh` over purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
-two FRR OSPF routers, two FRR PIM-SM routers, and BGP sessions between
-three BIRD speakers — see their rows and the notes below.
+two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
+three BIRD speakers, and two lldpd LLDP agents — see their rows and
+the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -53,6 +54,7 @@ three BIRD speakers — see their rows and the notes below.
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
+| `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
@@ -333,6 +335,49 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   trailer; `tests/test_sctp.py` pads them by hand to cover a real NIC's.
   The kernel had no IPv6, so SCTP over IPv6 is covered by constructed
   frames in `tests/test_sctp.py`.
+
+- `lldp.pcap` was produced by `scripts/capture_fixtures_lldp.sh`: lldpd
+  1.0.18 in each of two netns over a veth pair whose ends have fixed,
+  locally administered MAC addresses, run without `-c`, `-e`, `-f` or
+  `-s`, so only LLDP is spoken, each on its own veth end (`-I`) with
+  its own control socket (`-u`), its IPv4 address as management
+  address (`-m`) and a configuration file of `lldpcli` commands
+  (`-O`), which lldpd runs before it sends anything: a system name and
+  description, the Port ID subtype (`portidsubtype ifname` for A,
+  `macaddress` for B), and for A a custom TLV (`custom-tlv oui
+  0a,4e,50 subtype 1` with 300 bytes of content, `00 01 … ff 00 … 2b`),
+  for B a locally assigned Chassis ID (`system chassisid`) and
+  `tx-hold 6`. A's Port ID is then changed at run time with `lldpcli
+  configure lldp portidsubtype local np-port-a`, and both agents are
+  stopped with SIGTERM. **What lldpd built: every byte of every
+  frame**, the Ethernet header included — `_lldp_send()` writes it and
+  the frame goes out through a raw `PF_PACKET` socket — so there is no
+  kernel-built header and no checksum: LLDP has none. **What the configuration chose:** the
+  system names and descriptions, the Port ID subtypes, A's custom TLV,
+  B's Chassis ID and its TTL (tx-interval 30 s × tx-hold 6); the rest is
+  lldpd's default — Chassis ID from A's MAC address, TTL 120 (30 s × 4),
+  the System Capabilities, the two IEEE 802.3 TLVs (link aggregation,
+  MAC/PHY), and the interface number in the Management Address TLV (42
+  for A and 41 for B in this capture, 8 and 7 in an earlier run), which
+  lldpd takes from the system and the script does not pin. lldpd sends a shutdown LLDPDU (TTL 0, the three mandatory TLVs
+  and End of LLDPDU only) when it stops, and before it sends with a
+  changed chassis or port ID, for the old one. Both directions were
+  captured on B's side of the pair (`ether proto 0x88cc`); lldpd
+  repeats an unchanged LLDPDU every 30 s, so the script keeps the first
+  LLDPDU of each kind (sender, Port ID subtype, shutdown or not) and
+  asserts the six exactly: destination, sender, Chassis ID, Port ID,
+  TTL, the TLV type sequence, A's custom TLV, and that nothing follows
+  End of LLDPDU. Every TLV is under 512 bytes, as the 9-bit Length
+  requires, and the custom one, at 304, is the only one past 255.
+  veth does not pad, so the shutdown frames are 41 and 48 bytes;
+  `tests/test_lldp.py` pads every frame to 60 bytes, and appends a
+  4-byte trailer, to show the walk leaves both undecoded, and builds
+  the TLV types, lengths and malformed LLDPDUs no capture holds. LLDP
+  has no checksum, so `check_fixtures` checks each LLDPDU's structure
+  instead: the TLVs walk to an empty End of LLDPDU TLV followed only
+  by zero bytes, the first three are a Chassis ID and a Port ID (each
+  a subtype and a 1-255 byte ID) and a 2-byte Time To Live, none of
+  which recurs, and a shutdown LLDPDU carries nothing else.
 
 - `pim.pcap` was produced by `scripts/capture_fixtures_pim.sh`: four
   netns in a line over three veth pairs — a multicast source, two FRR
