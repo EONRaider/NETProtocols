@@ -188,7 +188,7 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   headers.** A originates five prefixes of different lengths (/24 to
   /32), each with its own MED, B two with a MED and 600 /24s without
   one, C one; then A withdraws its five and shuts both sessions down
-  with an RFC 8203 shutdown communication. Both speakers advertised
+  with an RFC 9003 shutdown communication. Both speakers advertised
   4-byte AS numbers (RFC 6793), so every AS_PATH carries 4-byte ones.
   The script writes every frame to `bgp/bgp_session.pcap` (see below)
   and keeps here only the frames whose payload is a whole number of

@@ -1172,8 +1172,11 @@ class TestNotification:
         "body,communication",
         [
             (b"\x06\x04\x02hi", "hi"),  # Administrative Reset
-            (b"\x06\x02\x00", ""),
+            (b"\x06\x02\x00", None),  # length 0: none follows
             (b"\x06\x02\x02\xc3\xa9", "é"),
+            (b"\x06\x02\x02\xc3\x28", None),  # invalid UTF-8
+            (b"\x06\x02\x02\xc0\xaf", None),  # overlong, not shortest form
+            (b"\x06\x02\x03\xed\xa0\x80", None),  # a UTF-16 surrogate
             (b"\x06\x02", None),  # no data
             (b"\x06\x02\x05hi", None),  # length overruns
             (b"\x06\x03\x02hi", None),  # Peer De-configured: no message
@@ -1181,9 +1184,15 @@ class TestNotification:
         ],
     )
     def test_shutdown_communication(self, body, communication):
-        """Only a well-formed shutdown communication is decoded."""
+        """Only a well-formed shutdown communication is decoded.
+
+        RFC 9003 §2: a length of 0 means no communication follows, and
+        a receiver must not interpret invalid UTF-8; the raw bytes stay
+        in ``error_data`` either way.
+        """
         msg = BGP.decode(message(3, body))
         assert msg.shutdown_communication == communication
+        assert msg.error_data == body[2:]
 
     def test_a_constructed_notification_without_codes(self):
         """A constructed NOTIFICATION without codes has none."""

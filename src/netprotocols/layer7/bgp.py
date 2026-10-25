@@ -377,7 +377,7 @@ _ERROR_SUBCODE_NAMES: dict[int, dict[int, str]] = {
 _UNSPECIFIC: dict[int, str] = {0: "Unspecific"}
 
 #: The Cease subcodes whose data may carry a shutdown communication
-#: (RFC 8203 §2, as updated by RFC 9003).
+#: (RFC 9003 §2, which obsoletes RFC 8203).
 _CEASE, _SHUTDOWN_SUBCODES = 6, frozenset({2, 4})
 
 
@@ -1035,10 +1035,13 @@ class BGP(Protocol):
     def shutdown_communication(self) -> str | None:
         """The operator's message in a Cease NOTIFICATION's data.
 
-        Carried by an Administrative Shutdown or Reset (RFC 8203, RFC
-        9003) as a length byte, then that many bytes of UTF-8. ``None``
-        when the message is not one of those, carries no communication,
-        or its length byte overruns the data.
+        Carried by an Administrative Shutdown or Reset (RFC 9003 §2,
+        which obsoletes RFC 8203) as a length byte, then that many bytes
+        of UTF-8. ``None`` when the message is not one of those, carries
+        no communication (no data, or a length of 0, which RFC 9003 §2
+        says means none follows), its length byte overruns the data, or
+        the bytes are not valid UTF-8, which a receiver must not
+        interpret (§2); :attr:`error_data` keeps the raw bytes.
         """
         data = self.error_data
         if (
@@ -1046,10 +1049,14 @@ class BGP(Protocol):
             or self.error_code != _CEASE
             or self.error_subcode not in _SHUTDOWN_SUBCODES
             or not data
+            or not data[0]
             or 1 + data[0] > len(data)
         ):
             return None
-        return data[1 : 1 + data[0]].decode("utf-8", "replace")
+        try:
+            return data[1 : 1 + data[0]].decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
 
 def _check_header(marker: bytes, length: int, type_: int) -> None:
