@@ -700,7 +700,10 @@ class TestRawMessageTypes:
             (4, "Bootstrap"),
             (8, "Candidate-RP-Advertisement"),
             (9, "State Refresh"),
-            (10, "unknown (10)"),
+            (10, "DF Election"),
+            (11, "ECMP Redirect"),
+            (12, "PIM Flooding Mechanism"),
+            (13, "unknown (13)"),
             (15, "unknown (15)"),
         ],
     )
@@ -846,6 +849,7 @@ class TestHelloOptions:
         """Test option names."""
         assert PIMHelloOption(26).type_name == "Join Attribute"
         assert PIMHelloOption(22).type_name == "Bidirectional Capable"
+        assert PIMHelloOption(18).type_name == "Deprecated"
         assert PIMHelloOption(65001).type_name == "unknown (65001)"
 
     def test_a_zero_option_before_others_is_an_option(self):

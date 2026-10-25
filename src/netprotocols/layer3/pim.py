@@ -3,7 +3,7 @@
 PIM rides directly on IPv4 or IPv6 as IP protocol 103 and never chains
 onward in a frame walk. Every message starts with the same 4-byte header
 (RFC 7761 §4.9): a version nibble (always 2), a type nibble, a reserved
-byte and the checksum. :class:`PIM` models that header as fields and
+byte (RFC 9436's Flag Bits) and the checksum. :class:`PIM` models that header as fields and
 keeps the rest of the message raw in ``body``, the shape :class:`IGMP`
 uses; :attr:`PIM.message` dispatches on ``type`` to a parser that reads
 ``body`` into a typed message:
@@ -137,7 +137,7 @@ _NATIVE_ENCODING = 0
 _OPTION_TYPE_NAMES: dict[int, str] = {
     1: "Holdtime",
     2: "LAN Prune Delay",
-    18: "DR Priority (deprecated)",
+    18: "Deprecated",
     19: "DR Priority",
     20: "Generation ID",
     21: "State Refresh Capable",
@@ -869,7 +869,10 @@ class PIM(Protocol):
         Register, ``2`` Register-Stop, ``3`` Join/Prune, ``4``
         Bootstrap, ``5`` Assert, ... (see :attr:`type_name`).
     :param reserved: Reserved byte: zero on send, ignored on receipt,
-        carried verbatim.
+        carried verbatim. RFC 9436 (updating RFC 7761) names it Flag
+        Bits and lets each type define its own: Bootstrap's No-Forward
+        bit, Assert's Packed and Aggregated bits, Register-Stop's
+        Packing Capability bit; none of them is decoded here.
     :param checksum: The internet checksum over the message — over the
         first 8 bytes only for a Register — with the IPv6 pseudo-header
         over IPv6, carried verbatim; compute and verify it with
@@ -900,6 +903,9 @@ class PIM(Protocol):
         7: "Graft-Ack",
         8: "Candidate-RP-Advertisement",
         9: "State Refresh",
+        10: "DF Election",
+        11: "ECMP Redirect",
+        12: "PIM Flooding Mechanism",
     }
 
     def __post_init__(self) -> None:
