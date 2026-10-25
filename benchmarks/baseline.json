@@ -1,13 +1,13 @@
 {
-  "frames_per_sec": 98007.5,
-  "calibration_per_sec": 14922.6,
-  "normalized": 6.5677,
-  "frames": 97,
+  "frames_per_sec": 97453.2,
+  "calibration_per_sec": 17932.6,
+  "normalized": 5.4344,
+  "frames": 265,
   "repetitions": 30,
   "trials": 9,
   "recorded": {
     "on": "CPython 3.12.3 / x86_64 / Linux",
     "python": "3.12.3",
-    "netprotocols": "2.2.1"
+    "netprotocols": "2.5.0"
   }
 }

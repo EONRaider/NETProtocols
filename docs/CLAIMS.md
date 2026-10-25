@@ -144,7 +144,7 @@ that is now more modest than it once was rather than less.
 This is reported plainly rather than smoothed over: the point of this
 register (Rule 1, Rule 4) is that a number gets published because it
 was measured, not because it was flattering. "Within 15%" (1.2) is
-still true — more true than it was, since the gap narrowed from the
+still true (it was, through 2.4.0; 2.5.0's corpus ended it, see 1.2) — more true than it was, since the gap narrowed from the
 2.9× that motivated Tier 1 in the first place — it just now describes
 the other direction.
 
@@ -362,6 +362,84 @@ What moved, and why:
   its own wheel, and take netprotocols' wheel from `uv build --wheel`
   run on a `git archive` of the release commit itself.
 
+### Re-measured for 2.5.0 (2026-10-25)
+
+Every number the README quotes, re-measured before tagging 2.5.0 (Tier 2
+of #170: VRRP, RIP, OSPF, PIM and BGP, #243 and #245-#248), on the same
+machine class as the 2.4.0 figures above: a cloud container, Intel Xeon
+@ 2.10 GHz, 4 vCPUs, CPython 3.12.3, x86-64 Linux; `dpkt 1.9.8`,
+`scapy 2.8.0`. **The corpus is not the one any earlier figure used**:
+it grew from 140 frames in 22 scenarios to 265 in 27 with the tier's
+five captures, so the decode rates here are not comparable with any
+earlier section's, only the ratios measured on the same run.
+
+| Claim | Command | Result |
+|---|---|---|
+| 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 107,199 / 108,099 / 104,092 f/s; dpkt 139,696 / 137,385 / 133,900; scapy 31,814 / 31,137 / 30,661. dpkt faster by 1.30×, 1.27×, 1.29×. Against scapy: 3.37×, 3.47×, 3.39×. Quoted: the median run, 107,199 against 139,696 (**dpkt 1.30× faster**) and 31,814 (**3.4×**) |
+| 1.3 encode | `benchmark_encode.py` | netprotocols 1,601,847 ops/s, dpkt 346,818 (**4.62×**), scapy 806,257 |
+| 1.4 import | `benchmark_import.py`, best of three runs | netprotocols **70.0 ms** (92 modules), scapy.all **396.9 ms** (5.7×); dpkt 32.5 ms (107 modules) |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.5.0-py3-none-any.whl` 180,744 bytes (176.5 KiB), **15.3×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 (2.63 MiB); `src/` 13,749 lines |
+| 1.6 depth | `benchmark.py --depth` | deeper on **79 of 265** frames, same layer on 186 |
+
+The first two decode runs' headers print "netprotocols 2.4.0": the
+version was bumped while they ran, and the decoded tree was the same
+2.5.0 code in all three.
+
+What moved, and why:
+
+- **dpkt now decodes this corpus about 1.3× faster, and the claim
+  "within 15% of dpkt" (1.2) no longer holds.** It is the workload, not
+  a regression. Measured file by file, best of 7 passes of 30
+  repetitions each (a throwaway harness over `benchmark.py`'s own
+  `decode_netprotocols` and `decode_dpkt`, not a committed script), the
+  five new captures take netprotocols 1.46× dpkt's time, and the 140
+  frames 2.4.0 was measured on 1.14× in that run and 1.02-1.10× in the
+  A/B below:
+
+  | Fixture | Frames | netprotocols f/s | dpkt f/s | dpkt faster by |
+  |---|---|---|---|---|
+  | `ospf.pcap` | 54 | 115,282 | 160,858 | 1.40× |
+  | `bgp.pcap` | 19 | 88,795 | 143,987 | 1.62× |
+  | `pim.pcap` | 13 | 72,277 | 165,868 | 2.29× |
+  | `rip.pcap` | 21 | 138,089 | 173,787 | 1.26× |
+  | `vrrp.pcap` | 18 | 118,974 | 136,079 | 1.14× |
+  | the five together | 125 | 107,239 | 156,417 | 1.46× |
+  | the other 22 files | 140 | 112,865 | 129,067 | 1.14× (this run) |
+
+  The same harness run twice on the 2.4.0 tree (`0a33a5d`) and twice on
+  this one, alternating, over those 140 frames read 119,777 and 118,200
+  f/s for 2.4.0 and 114,797 and 114,806 for 2.5.0, with dpkt between
+  117,313 and 127,185 across the four runs: netprotocols' gap to dpkt
+  was 1.06× and 1.03× on 2.4.0 and 1.02× and 1.10× on 2.5.0, inside
+  each other's noise, and 2.4.0's own `benchmark.py --compare` on its
+  140-frame corpus, re-run on this machine, still reads 1.03×. The
+  ~3% lower absolute rate on those frames is below what this harness
+  resolves; whether it is real is not established here. The routing
+  frames are where dpkt leads: it decodes OSPF, PIM and VRRP from IP
+  itself, to the same layer as netprotocols (1.6). Why it is faster on
+  them was not profiled for this release; what netprotocols does there
+  that dpkt does not is known (frozen dataclasses against dpkt's lazy
+  attributes, and framing walked at decode: PIM's structural bound and
+  Hello option walk, OSPF's packet-length checks, BGP's one layer per
+  message), but how much each costs is not measured. BGP and RIP are
+  decoded further than dpkt goes, so part of their gap is work dpkt does
+  not do.
+- **The depth lead grew by 40 frames, all from the new captures**: the
+  19 BGP frames, whose messages dpkt leaves as raw bytes after TCP (it
+  does not dispatch port 179), and the 21 RIP frames, which it leaves
+  raw after UDP (port 520). The other 39 are the frames counted at
+  2.4.0.
+- **Import cost grew 15 ms** (70.0 ms against 55.0 ms) with five more
+  modules (92, from 87): `vrrp.py`, `rip.py`, `ospf.py`, `pim.py` and
+  `bgp.py`, which define 27 frozen dataclasses between them, each
+  generated at import. `scapy.all` read 396.9 ms against 428.0 ms, the
+  machine from run to run. The ratio fell from 7.8× to 5.7×.
+- **Encode moved within noise** (4.62× against 4.18×): Tier 2 did not
+  touch the encode benchmark's path, and both libraries' rates rose
+  between the runs (netprotocols 13.1%, dpkt 2.4%).
+- **The wheel grew 52.1 KiB** with the five protocols, and the
+  ratio fell from 21.7× to 15.3×.
+
 ## 1. Performance
 
 ### 1.1 "2.1× faster than scapy at decoding"
@@ -388,13 +466,28 @@ Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
 median of three runs 118,365 against scapy 2.8.0's 29,004, **4.1×**
 (3.90-4.27× across the runs).*
 
+*Re-measured for 2.5.0 (2026-10-25, the 265-frame corpus; see above):
+median of three runs 107,199 against scapy 2.8.0's 31,814, **3.4×**
+(3.37-3.47× across the runs).*
+
 The wording is a positioning decision, not a measurement one: 5.4× is
 what the corpus shows on one machine today, and whoever writes the
 README should pick the number they are willing to defend on someone
 else's.
 
-### 1.2 "Within 15% of dpkt on decode"
-**Status: VERIFIED — the gap narrowed back, on a harder workload**
+### 1.2 "dpkt decodes 1.3× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
+**Status: VERIFIED for 2.5.0 — the 15% claim no longer holds on the 265-frame corpus**
+
+*Re-measured for 2.5.0 (2026-10-25, the 265-frame corpus; see above):
+**dpkt 1.30× faster** on the median run (107,199 against 139,696;
+1.27-1.30× across three runs). The 140 frames the claim was last
+measured on still read within 10% (1.02-1.10× in a file-by-file A/B
+against 2.4.0, which read 1.03-1.06×); the gap is the Tier 2 routing
+captures, on which dpkt takes about two thirds of netprotocols' time.
+The README now quotes the 1.3× and says where it comes from; closing
+it is decode-path work on the routing protocols, not something a
+re-measurement can recover. The history below is the claim as it
+stood.*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
 after #147 closed the dpkt-throughput regression below.*
@@ -424,10 +517,12 @@ apply, now as 39 of 140 frames decoded deeper.*
 Two caveats from the re-measurement section apply and are not optional:
 the two libraries do not parse to the same depth (netprotocols goes
 deeper on 27 of 97 frames), and this is one machine. The defensible
-public form is "within 15% of dpkt on the corpus walk, while decoding
+public form was "within 15% of dpkt on the corpus walk, while decoding
 further into the stack on more than a quarter of it" — not "faster than
 dpkt," which is no longer true and was never true robustly enough to
-have shipped it while it briefly was.
+have shipped it while it briefly was. From 2.5.0 the defensible form is
+"dpkt decodes the corpus about 1.3× faster; netprotocols decodes
+further into the stack on 79 of its 265 frames" (1.6).
 
 ### 1.3 "4.2× faster than dpkt at encoding"
 **Status: VERIFIED**
@@ -453,6 +548,10 @@ along with the re-measurement).
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
 
+*Re-measured for 2.5.0 (2026-10-25; see above): netprotocols 1,601,847
+ops/s, dpkt 346,818, **4.62×**; scapy 2.8.0 806,257. Tier 2 did not
+touch the encode path either.*
+
 *Re-measured for 2.4.0 (2026-10-25; see above): netprotocols 1,416,774
 ops/s, dpkt 338,650, **4.18×**; scapy 2.8.0 700,191. Tier 1 did not
 touch the encode path; dpkt's rate rose more than ours between the two
@@ -468,8 +567,13 @@ never touched the registry/walker/error-context surface that grew
 decode's cost), while dpkt's own number held essentially flat. Still a
 wide, clean win.
 
-### 1.4 "Imports in 55 ms; scapy takes 428+ ms"
+### 1.4 "Imports in 70 ms; scapy takes 397+ ms"
 **Status: VERIFIED**
+
+*Re-measured for 2.5.0 (2026-10-25; see above): best of three
+`benchmark_import.py` runs, netprotocols **70.0 ms** (92 modules),
+`scapy.all` 2.8.0 **396.9 ms**, **5.7×**. The five Tier 2 modules cost
+about 15 ms.*
 
 *Re-measured for 2.4.0 (2026-10-25; see above): best of three
 `benchmark_import.py` runs, netprotocols **55.0 ms** (87 modules),
@@ -501,6 +605,10 @@ never touch the host.
 
 ### 1.5 "~22× smaller wheel than scapy"
 **Status: VERIFIED** — re-measure at each release (Rule 4)
+
+*Re-measured for 2.5.0 (2026-10-25): `netprotocols-2.5.0-py3-none-any.whl`
+is 180,744 bytes (176.5 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+2,762,122 (2.63 MiB), **15.3× smaller**. `src/` is 13,749 lines.*
 
 *Re-measured for 2.4.0 (2026-10-25): `netprotocols-2.4.0-py3-none-any.whl`
 is 127,409 bytes (124.4 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
@@ -537,7 +645,9 @@ methodology fix, and again for 2.3.0 (2026-10-23) — same 27/70 split as
 originally measured. Re-measured for 2.4.0 (2026-10-25) on the
 140-frame corpus: **39 deeper, 101 the same**, the 12 new ones being
 the 11 VXLAN frames and one SCTP frame (see the 2.4.0 re-measurement
-above); depth
+above). Re-measured for 2.5.0 (2026-10-25) on the 265-frame corpus:
+**79 deeper, 186 the same**, the 40 new ones being the 19 BGP and 21
+RIP frames (see the 2.5.0 re-measurement above); depth
 comes from the decoders' own strictness, untouched by anything the
 throughput fix or the benchmark-methodology change did.*
 
@@ -1127,7 +1237,8 @@ section to begin with.
   number on file. Re-measured for 2.4.0 on the 140-frame corpus, it
   reads at parity: faster on two runs of three, slower on the third,
   which is exactly the kind of result this entry keeps out of the
-  README.
+  README. On 2.5.0's 265-frame corpus dpkt is 1.3× faster outright
+  (1.2).
 - ❌ **"Superior to scapy"** with no axis named. Scapy crafts, sends,
   sniffs, fuzzes and covers thousands of protocols; we decode and
   re-encode a couple of dozen headers. On *codec* axes — typing,

@@ -51,31 +51,33 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 140 frames of
-real captured traffic the corpus held at 2.4.0 (CPython 3.12.3, x86-64 Linux; re-measured for
-2.4.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265-frame corpus
+of real captured traffic (CPython 3.12.3, x86-64 Linux; re-measured for
+2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
 number below, its reproduction command, and its caveats):
 
-- **Within 15% of dpkt on decode, 4.1× faster than scapy** —
+- **3.4× faster than scapy on decode; dpkt is 1.3× faster** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
-  the faster of the two comparators, and on this corpus it and
-  netprotocols are at parity, the sign of the gap flipping between
-  runs. The gap moves both ways as this library and dpkt each change, and this
-  file's job is to say so honestly rather than only when it's
+  the faster of the two comparators. On the 140 frames the corpus held
+  at 2.4.0 the two are still within 10% of each other; the
+  routing captures 2.5.0 added (OSPF, BGP, PIM, RIP, VRRP) are where
+  dpkt pulls ahead, taking about two thirds of netprotocols' time on
+  them. The gap moves both ways as this library and dpkt each change,
+  and this file's job is to say so honestly rather than only when it's
   flattering.
-- **Decodes further into the stack than dpkt on 39 of those 140
-  frames** — DNS, DHCP and VXLAN-tunnelled payloads that dpkt leaves as
-  raw bytes, and 802.1Q tags it folds into the Ethernet header,
-  netprotocols decodes as layers of their own. A throughput number
-  means little without knowing how much work it bought.
-- **4.2× faster than dpkt at re-encoding** (`bytes(header)`,
+- **Decodes further into the stack than dpkt on 79 of those 265
+  frames** — BGP, RIP, DNS, DHCP and VXLAN-tunnelled payloads that dpkt
+  leaves as raw bytes, and 802.1Q tags it folds into the Ethernet
+  header, netprotocols decodes as layers of their own. A throughput
+  number means little without knowing how much work it bought.
+- **4.6× faster than dpkt at re-encoding** (`bytes(header)`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
-- **Imports in 55 ms; `scapy.all` takes 428+ ms** (`scripts/benchmark_import.py`),
+- **Imports in 70 ms; `scapy.all` takes 397+ ms** (`scripts/benchmark_import.py`),
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **A 124.4 KiB wheel against scapy's 2.63 MiB** — 21.7× smaller.
+- **A 176.5 KiB wheel against scapy's 2.63 MiB** — 15.3× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
@@ -479,7 +481,13 @@ and SCTP
 [#231](https://github.com/EONRaider/NETProtocols/pull/231),
 [#232](https://github.com/EONRaider/NETProtocols/pull/232),
 [#233](https://github.com/EONRaider/NETProtocols/pull/233),
-[#234](https://github.com/EONRaider/NETProtocols/pull/234)) — as 2.4.0
+[#234](https://github.com/EONRaider/NETProtocols/pull/234)) — as 2.4.0,
+and the second — VRRP, RIP, OSPF, PIM and BGP
+([#243](https://github.com/EONRaider/NETProtocols/pull/243),
+[#245](https://github.com/EONRaider/NETProtocols/pull/245),
+[#246](https://github.com/EONRaider/NETProtocols/pull/246),
+[#247](https://github.com/EONRaider/NETProtocols/pull/247),
+[#248](https://github.com/EONRaider/NETProtocols/pull/248)) — as 2.5.0
 (see [CHANGELOG.md](CHANGELOG.md)).
 
 The roadmap before it, the post-1.3.0
@@ -506,7 +514,7 @@ released as
 2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0 and 2.2.0
 rather than as their own versions, but the roadmap's original "only at
 a major version bump" release policy wasn't actually held to: 2.0.0,
-2.2.0, 2.2.1, 2.3.0 and now 2.4.0 are all on PyPI, and the comparative claims above
+2.2.0, 2.2.1, 2.3.0, 2.4.0 and now 2.5.0 are all on PyPI, and the comparative claims above
 draw on the finished tree. The wave before that one — TCP
 and IPv4 option parsing, ICMP message bodies, NDP, IPv6
 extension-header TLV options, the GRE checksum arm, a DNS-over-TCP
