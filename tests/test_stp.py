@@ -25,6 +25,7 @@ from netprotocols import (
     InvalidFieldError,
     InvalidMACAddressError,
     Registry,
+    RegistryConflictError,
     TruncatedHeaderError,
     decode_frame,
 )
@@ -505,6 +506,12 @@ class TestRejectedBPDUs:
         assert isinstance(packet.stopped_by, InvalidFieldError)
 
 
+class Own(STP):
+    """A third party's BPDU decoder, for the registration tests."""
+
+    __slots__ = ()
+
+
 class TestDispatch:
     def test_dsap_0x42_dispatches_to_stp(self):
         """Test DSAP 0x42 dispatches to STP."""
@@ -512,6 +519,26 @@ class TestDispatch:
         assert llc.next_protocol() is STP
         assert llc.next_protocol(Registry.from_defaults()) is STP
         assert Registry.from_defaults().get(TABLE_LLC_DSAP, 0x42) is STP
+
+    def test_a_decoder_of_ones_own_needs_override_or_a_registry(self):
+        """Test the CHANGELOG's migration advice for DSAP 0x42."""
+        registry = Registry.from_defaults()
+        with pytest.raises(RegistryConflictError):
+            registry.register(TABLE_LLC_DSAP, 0x42, Own)
+        registry.register(TABLE_LLC_DSAP, 0x42, Own, override=True)
+        assert registry.get(TABLE_LLC_DSAP, 0x42) is Own
+        derived = Registry.from_defaults().derive({TABLE_LLC_DSAP: {0x42: Own}})
+        assert derived.get(TABLE_LLC_DSAP, 0x42) is Own
+        packet = decode_frame(
+            STP_CONFIG_A, decode_as={TABLE_LLC_DSAP: {0x42: Own}}
+        )
+        assert isinstance(packet.layers[-1], Own)
+        assert Registry.from_defaults().get(TABLE_LLC_DSAP, 0x42) is STP
+
+    def test_the_ssap_is_not_checked(self):
+        """Test that a UI PDU at DSAP 0x42 reaches STP from any SSAP."""
+        assert LLC(dsap=0x42, ssap=0x43, control=0x03).next_protocol() is STP
+        assert LLC(dsap=0x42, ssap=0x00, control=0x00).next_protocol() is STP
 
     def test_stp_is_terminal(self):
         """Test STP is terminal."""

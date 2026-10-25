@@ -123,7 +123,8 @@ def install(registry: Registry) -> None:
     # ethertype (OUI 00-00-00, 00-00-F8) or llc.snap (any other OUI).
     add(TABLE_LLC_DSAP, LLCSAP.SNAP, SNAP)
     # Spanning Tree BPDUs (IEEE 802.1D, 802.1w) at the Bridge Spanning
-    # Tree SAP, in UI PDUs from SSAP 0x42 too.
+    # Tree SAP. BPDUs are UI PDUs sent from SSAP 0x42 too, but the SSAP
+    # is not checked: any UI or I-format PDU at DSAP 0x42 dispatches.
     add(TABLE_LLC_DSAP, LLCSAP.SPANNING_TREE, STP)
 
     # Shared by IPv4 and IPv6: registering in ip.proto reaches
