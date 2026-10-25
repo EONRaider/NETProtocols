@@ -236,6 +236,7 @@ class TestDecodeV2:
         assert vrrp.checksum_hex_str == "0x5af6"
 
     def test_a_short_checksum_is_zero_padded(self, raw_vrrpv2_advert):
+        """Write a checksum below ``0x1000`` with all four hex digits."""
         vrrp = replace(VRRP.decode(raw_vrrpv2_advert), checksum=0x0ABC)
         assert vrrp.checksum_hex_str == "0x0abc"
 
