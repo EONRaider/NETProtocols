@@ -1012,6 +1012,84 @@ def _check_upper_v6(
     return [f"unchecked-protocol-{next_header}"] if strict else []
 
 
+def _check_arp(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Count an ARP packet, which carries no checksum; under strict, at
+    least insist on the 28-byte Ethernet/IPv4 form rather than vouching
+    for a stub."""
+    stats["arp"] += 1
+    if strict and len(payload) < 28:
+        return ["unchecked-ethertype-0x0806"]
+    return []
+
+
+#: The MPLS bottom labels RFC 3032 §2.1 reserves for a payload: IPv4
+#: and IPv6 Explicit NULL. The two that announce a non-IP payload, the
+#: GAL (13, RFC 5586) and the OAM Alert Label (14, RFC 3429), map to
+#: ``None``.
+_MPLS_BOTTOM_LABELS = {0: 0x0800, 2: 0x86DD, 13: None, 14: None}
+
+#: The first nibble after a label stack read as an IP version
+#: (RFC 4928 §2), mapped to the EtherType that names that header.
+_MPLS_NIBBLES = {4: 0x0800, 6: 0x86DD}
+
+
+def _mpls_stack_end(payload: bytes) -> tuple[int, int] | None:
+    """Find the end of an MPLS label stack: the offset just past the
+    entry with its Bottom of Stack bit set, and that entry's label, or
+    ``None`` when the bytes end first."""
+    for offset in range(0, len(payload) - 3, 4):
+        word = struct.unpack_from("!I", payload, offset)[0]
+        if word & 0x100:
+            return offset + 4, word >> 12
+    return None
+
+
+def _check_mpls(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate an MPLS frame (EtherType 0x8847 or 0x8848, RFC 3032).
+
+    Walk the label stack to the entry with its Bottom of Stack bit set,
+    then validate what follows: an IPv4 or IPv6 packet, named by an
+    Explicit NULL bottom label or else by its first nibble (the same
+    convention the library documents, implemented here on its own), or,
+    after a pseudowire control word (first nibble 0, RFC 4385 §3), the
+    Ethernet frame an Ethernet pseudowire (RFC 4448) carries. A
+    pseudowire's payload type is signalled, not encoded, and the
+    corpus's only pseudowire is Ethernet. Anything else passes unread,
+    or fails under ``strict``; so does a stack whose bottom never comes.
+    """
+    end = _mpls_stack_end(payload)
+    if end is None:
+        stats["mpls-truncated"] += 1
+        return ["unchecked-mpls-truncated"] if strict else []
+    offset, bottom = end
+    stats["mpls-stack"] += 1
+    inner = payload[offset:]
+    nibble = inner[0] >> 4 if inner else None
+    if bottom in _MPLS_BOTTOM_LABELS:
+        ethertype = _MPLS_BOTTOM_LABELS[bottom]
+    else:
+        ethertype = _MPLS_NIBBLES.get(nibble)
+    if ethertype is not None:
+        return _check_l3(ethertype, inner, stats, depth + 1, strict=strict)
+    if bottom not in _MPLS_BOTTOM_LABELS and nibble == 0 and len(inner) >= 4:
+        stats["mpls-pseudowire"] += 1
+        return _check_ethernet(inner[4:], stats, depth + 1, strict=strict)
+    stats["mpls-unchecked-payload"] += 1
+    return ["unchecked-mpls-payload"] if strict else []
+
+
+#: The EtherTypes :func:`_check_l3` hands to a helper of their own.
+_L3_HELPERS = {
+    0x0806: _check_arp,
+    0x8847: _check_mpls,
+    0x8848: _check_mpls,
+}
+
+
 def _check_l3(
     ethertype: int,
     payload: bytes,
@@ -1022,7 +1100,8 @@ def _check_l3(
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
-    is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
+    is itself an EtherType, through an MPLS label stack (see
+    :func:`_check_mpls`), through IP-in-IP (IP protocols 4 and 41),
     through VXLAN, whose payload is a whole Ethernet frame, and through
     NULL-encrypted ESP and IPv4 AH after verifying the ICV, and checks a
     RIPv2 message's RFC 4822 digest with its published key. IPsec on an
@@ -1036,13 +1115,9 @@ def _check_l3(
     strings."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
-    if ethertype == 0x0806:
-        stats["arp"] += 1
-        # ARP carries no checksum; under strict, at least insist on the
-        # 28-byte Ethernet/IPv4 form rather than vouching for a stub.
-        if strict and len(payload) < 28:
-            return ["unchecked-ethertype-0x0806"]
-        return []
+    helper = _L3_HELPERS.get(ethertype)
+    if helper is not None:
+        return helper(payload, stats, depth, strict=strict)
 
     if ethertype == 0x0800 and len(payload) >= 20:
         return _check_ipv4(payload, stats, depth, strict=strict)
