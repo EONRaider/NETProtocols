@@ -412,6 +412,38 @@ class TestPacketLength:
         assert len(rip.entries) == 4
         assert rip.entries[3].auth_type_name == "Authentication Trailer"
 
+    @pytest.mark.parametrize(
+        "tail,kinds,remainder",
+        [
+            (
+                bytes(RIPAuthentication(2, b"pw".ljust(16, b"\x00"))),
+                [RIPAuthentication],
+                b"",
+            ),
+            (crypto_auth(44), [RIPAuthentication], b""),
+            (entry(afi=0xFF00), [RIPEntry], b""),
+            (b"\xff\xff\x12\x34", [], b"\xff\xff\x12\x34"),
+        ],
+        ids=["type-2-entry", "type-3-entry", "afi-0xff00-route", "ffff-tail"],
+    )
+    def test_a_packet_length_pointing_at_a_near_trailer(
+        self, tail, kinds, remainder
+    ):
+        """Require all four trailer header bytes where Packet Length points.
+
+        Bytes there that share one, two or three leading bytes with
+        ``0xFFFF 0x0001`` (``0xFF00``, ``0xFFFF 0x12``, ``0xFFFF 0x00``)
+        are read as entries and remainder, not as a trailer.
+        """
+        head = crypto_auth(44) + entry()
+        rip = RIP.decode(b"\x02\x02\x00\x00" + head + tail)
+        assert rip.authentication_trailer is None
+        assert rip.entries[:2] == RIP.decode(b"\x02\x02\x00\x00" + head).entries
+        assert [type(e) for e in rip.entries[2:]] == kinds
+        assert rip.remainder == remainder
+        tiled = b"".join(bytes(e) for e in rip.entries) + rip.remainder
+        assert tiled == head + tail
+
     def test_the_widest_cryptographic_fields(self):
         """Read every type 3 field unsigned, its widest value included."""
         auth = RIPAuthentication(3, b"\xff" * 8 + bytes(8))

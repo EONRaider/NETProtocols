@@ -608,6 +608,7 @@ class TestRIPAccessorSafety:
         assert rip.command_name
         entries = rip.entries
         trailer = rip.authentication_trailer
+        assert trailer is None or b"\xff\xff\x00\x01".startswith(trailer[:4])
         tiled = b"".join(bytes(entry) for entry in entries)
         tiled += rip.remainder + (trailer if trailer is not None else b"")
         assert tiled == rip.body
