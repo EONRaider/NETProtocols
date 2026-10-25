@@ -3,7 +3,19 @@ inheritance, and isolation from the process-wide default."""
 
 import pytest
 
-from netprotocols import DNS, SCTP, TCP, UDP, Ethernet, IPv4, IPv6, Protocol
+from netprotocols import (
+    DNS,
+    SCTP,
+    SNAP,
+    TCP,
+    UDP,
+    Ethernet,
+    InvalidRegistryKeyError,
+    IPv4,
+    IPv6,
+    Protocol,
+    decode_frame,
+)
 from netprotocols._defaults import (
     FAMILY_SPECIFIC_NUMBERS,
     IPV4_ONLY_NUMBERS,
@@ -15,6 +27,8 @@ from netprotocols.registry import (
     TABLE_ETHERTYPE,
     TABLE_IP_PROTO,
     TABLE_IP_PROTO_V6,
+    TABLE_LLC_DSAP,
+    TABLE_LLC_SNAP,
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
     TABLES,
@@ -45,6 +59,8 @@ class TestTableNames:
     def test_every_table_declares_its_parent(self):
         assert set(TABLES) == {
             TABLE_ETHERTYPE,
+            TABLE_LLC_DSAP,
+            TABLE_LLC_SNAP,
             TABLE_IP_PROTO,
             TABLE_IP_PROTO_V6,
             TABLE_UDP_PORT,
@@ -353,6 +369,12 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO, 89).__name__ == "OSPF"
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
 
+    def test_llc(self):
+        """SNAP is the one built-in LLC entry; the llc.snap table starts
+        empty, for CDP and other OUIs' protocols to register in."""
+        assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP}
+        assert DEFAULT.table(TABLE_LLC_SNAP) == {}
+
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS
         assert DEFAULT.get(TABLE_UDP_PORT, 67).__name__ == "DHCP"
@@ -368,3 +390,56 @@ class TestRepr:
         assert "Registry" in text
         for name in TABLES:
             assert f"{name}=0" in text
+
+
+class TestKeyRanges:
+    """A key its wire field cannot carry is refused at registration."""
+
+    @pytest.mark.parametrize("key", [0, 46, 1500, 1501, 1535, -1, 0x10000])
+    def test_ethertype_refuses_lengths_and_the_undefined_gap(
+        self, registry, key
+    ):
+        """An Ethernet header reads 1500 or less as an 802.3 Length and
+        1501-1535 as undefined, so an entry there would never be
+        reached from Ethernet."""
+        with pytest.raises(InvalidRegistryKeyError) as excinfo:
+            registry.register(TABLE_ETHERTYPE, key, Fake)
+        assert TABLE_ETHERTYPE in str(excinfo.value)
+        assert registry.get(TABLE_ETHERTYPE, key) is None
+
+    @pytest.mark.parametrize("key", [0x0600, 0x88B5, 0xFFFF])
+    def test_ethertype_accepts_every_type_value(self, registry, key):
+        registry.register(TABLE_ETHERTYPE, key, Fake)
+        assert registry.get(TABLE_ETHERTYPE, key) is Fake
+
+    @pytest.mark.parametrize(
+        "table,bad,good",
+        [
+            (TABLE_LLC_DSAP, 0x100, 0xFF),
+            (TABLE_LLC_DSAP, -1, 0),
+            (TABLE_LLC_SNAP, 1 << 40, (1 << 40) - 1),
+            (TABLE_LLC_SNAP, -1, 0),
+        ],
+    )
+    def test_the_llc_tables_take_their_field_width(
+        self, registry, table, bad, good
+    ):
+        with pytest.raises(InvalidRegistryKeyError):
+            registry.register(table, bad, Fake)
+        registry.register(table, good, Fake)
+        assert registry.get(table, good) is Fake
+
+    def test_the_decorator_and_derive_and_decode_as_refuse_too(self):
+        isolated = Registry()
+        with pytest.raises(InvalidRegistryKeyError):
+            register(TABLE_ETHERTYPE, 0x0026, registry=isolated)(Fake)
+        with pytest.raises(InvalidRegistryKeyError):
+            isolated.derive({TABLE_ETHERTYPE: {0x0026: Fake}})
+        with pytest.raises(InvalidRegistryKeyError):
+            decode_frame(bytes(14), decode_as={TABLE_ETHERTYPE: {38: Fake}})
+
+    def test_the_other_tables_accept_any_key(self, registry):
+        registry.register(TABLE_UDP_PORT, 0x10000, Fake)
+        registry.register(TABLE_IP_PROTO, 300, Fake)
+        assert registry.get(TABLE_UDP_PORT, 0x10000) is Fake
+        assert registry.get(TABLE_IP_PROTO, 300) is Fake

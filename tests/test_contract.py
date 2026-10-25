@@ -9,10 +9,12 @@ from netprotocols import (
     BGP,
     ESP,
     HTTP,
+    LLC,
     OSPF,
     PIM,
     RIP,
     SCTP,
+    SNAP,
     TCP,
     UDP,
     VRRP,
@@ -50,6 +52,8 @@ class TestTruncation:
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
             (BGP, "raw_bgp_keepalive"),
+            (LLC, "raw_llc_header"),
+            (SNAP, "raw_snap_header"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):

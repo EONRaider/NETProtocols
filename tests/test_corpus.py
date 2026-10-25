@@ -17,10 +17,12 @@ from netprotocols import (
     BGP,
     DNS,
     ESP,
+    LLC,
     OSPF,
     PIM,
     RIP,
     SCTP,
+    SNAP,
     TCP,
     UDP,
     VLAN,
@@ -115,6 +117,8 @@ class TestCorpusCoverage:
             RIP,
             VRRP,
             BGP,
+            LLC,
+            SNAP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

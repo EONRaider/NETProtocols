@@ -8,6 +8,7 @@ exact on-wire form.
 from netprotocols import _defaults
 from netprotocols._base import Protocol
 from netprotocols._enums import (
+    LLCSAP,
     ARPHardwareType,
     ARPOperation,
     EtherType,
@@ -25,6 +26,7 @@ from netprotocols.checksum import (
 from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.ethernet import Ethernet
+from netprotocols.layer2.llc import LLC, SNAP
 from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.ah import AH, AHv6
 from netprotocols.layer3.esp import ESP
@@ -99,6 +101,7 @@ from netprotocols.pcap import (
 )
 from netprotocols.registry import (
     DEFAULT,
+    InvalidRegistryKeyError,
     Registry,
     RegistryConflictError,
     UnknownTableError,
@@ -137,12 +140,15 @@ __all__ = [
     "GRE",
     "HTTP",
     "IGMP",
+    "LLC",
+    "LLCSAP",
     "MAX_DEPTH",
     "OSPF",
     "OSPFLSA",
     "PIM",
     "RIP",
     "SCTP",
+    "SNAP",
     "TCP",
     "UDP",
     "VLAN",
@@ -183,6 +189,7 @@ __all__ = [
     "InvalidIPv4AddressError",
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
+    "InvalidRegistryKeyError",
     "MXRecord",
     "MalformedCaptureError",
     "MaxDepthExceededError",

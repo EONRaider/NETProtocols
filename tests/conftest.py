@@ -232,6 +232,20 @@ def raw_vxlan_header() -> bytes:
 
 
 @pytest.fixture
+def raw_llc_header() -> bytes:
+    """LLC header of an 802.1D BPDU from tests/fixtures/llc.pcap: DSAP
+    and SSAP 0x42 (Bridge Spanning Tree), Control 0x03 (UI)."""
+    return b"\x42\x42\x03"
+
+
+@pytest.fixture
+def raw_snap_header() -> bytes:
+    """SNAP header of a CDP frame from tests/fixtures/llc.pcap: OUI
+    00-00-0C (Cisco), PID 0x2000 (CDP)."""
+    return b"\x00\x00\x0c\x20\x00"
+
+
+@pytest.fixture
 def raw_rip_message() -> bytes:
     """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
     route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and

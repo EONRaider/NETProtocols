@@ -14,6 +14,14 @@ bitfields are materialized as dataclass fields — ``pcp``, ``dei``,
 ``vid`` — so serialization surfaces the semantic parts instead of an
 opaque integer. The packed 16-bit view remains available as the
 ``tci`` property.
+
+The 2 bytes after the TCI are a Length/Type field like Ethernet's (a
+tagged IEEE 802.3 frame keeps its Length/Type field after the tag, so
+an LLC-encapsulated frame can be tagged too): an
+EtherType of 0x0600 or more dispatches as before, a value of 1500 or
+less is an 802.3 Length followed by an 802.2 LLC header, and the
+undefined 1501-1535 end the walk. :attr:`VLAN.ethertype` holds the raw
+value either way. See :mod:`netprotocols.layer2.llc`.
 """
 
 from __future__ import annotations
@@ -25,9 +33,11 @@ from typing import ClassVar, Self
 from netprotocols._base import Protocol
 from netprotocols._enums import EtherType
 from netprotocols.layer2.ethernet import (
-    _ethertype_class,
+    _MAX_LENGTH,
     _ethertype_enum,
     _ethertype_name,
+    _length,
+    _type_or_length_class,
 )
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
@@ -43,8 +53,10 @@ class VLAN(Protocol):
     :param dei: Drop eligible indicator, ``0`` or ``1``.
     :param vid: VLAN identifier, ``0``-``4095`` (``0`` = priority tag,
         ``0xFFF`` = wildcard).
-    :param ethertype: EtherType of the payload that follows this tag
-        (see :class:`~netprotocols.EtherType`).
+    :param ethertype: The raw Length/Type field after the tag: the
+        EtherType of the payload that follows (see
+        :class:`~netprotocols.EtherType`), or, at 1500 or less, the
+        802.3 length of the LLC PDU that follows (see :attr:`length`).
     """
 
     pcp: int
@@ -53,6 +65,9 @@ class VLAN(Protocol):
     ethertype: int
 
     _struct: ClassVar[Struct] = Struct("!HH")
+
+    #: An 802.3 Length bounds what follows (see :meth:`_payload_extent`).
+    _BOUNDS_PAYLOAD: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         if not 0 <= self.pcp <= 7:
@@ -101,7 +116,25 @@ class VLAN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        return _ethertype_class(self.ethertype, registry)
+        """The class for the tagged payload, read as
+        :meth:`Ethernet.next_protocol <netprotocols.Ethernet.next_protocol>`
+        reads its own field."""
+        return _type_or_length_class(self.ethertype, registry)
+
+    @property
+    def is_length(self) -> bool:
+        """Whether :attr:`ethertype` holds an 802.3 Length (see
+        :attr:`Ethernet.is_length <netprotocols.Ethernet.is_length>`)."""
+        return self.ethertype <= _MAX_LENGTH
+
+    @property
+    def length(self) -> int | None:
+        """The 802.3 Length of the LLC PDU after this tag, or ``None``
+        (see :attr:`Ethernet.length <netprotocols.Ethernet.length>`)."""
+        return _length(self.ethertype)
+
+    def _payload_extent(self) -> int | None:
+        return _length(self.ethertype)
 
     @property
     def ethertype_name(self) -> str:

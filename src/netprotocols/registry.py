@@ -1,11 +1,15 @@
 """The dispatch registry: how a header names the class that decodes
 what it carries, and how third parties add their own.
 
-Every ``next_protocol()`` in this library is a lookup in one of five
+Every ``next_protocol()`` in this library is a lookup in one of seven
 tables, each named after the wire field it dispatches on:
 
 ===============  =======================================================
-``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here too
+``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here
+                 too, and SNAP under OUI 00-00-00 or 00-00-F8
+``llc.dsap``     IEEE 802.2 LLC DSAP, after an 802.3 Length
+``llc.snap``     SNAP protocol under any other OUI, keyed
+                 ``(oui << 16) | pid``
 ``ip.proto``     IPv4 ``protocol``
 ``ip.proto.v6``  IPv6 ``next_header`` — inherits ``ip.proto``
 ``udp.port``     UDP well-known port (best-effort; see below)
@@ -28,6 +32,24 @@ library source::
 
 The decorator returns the class unchanged, so it stacks with
 ``@dataclass`` and never interferes with the type.
+
+Key ranges
+----------
+
+Three tables reject a key their wire field cannot reach, raising
+:class:`InvalidRegistryKeyError` at registration (never on a lookup):
+
+* ``ethertype`` takes 0x0600-0xFFFF only. IEEE 802.3 Clause 3.2.6 makes
+  a type/length value of 1500 or less a frame length, followed by an
+  802.2 LLC header, and leaves 1501-1535 undefined, so an Ethernet or
+  VLAN header never dispatches those values through this table. A
+  decoder registered at one would never be reached from Ethernet, and
+  would silently answer a GRE Protocol Type or SNAP PID that no
+  standard assigns; refusing it says so at once.
+* ``llc.dsap`` takes 0-0xFF, the width of the DSAP octet.
+* ``llc.snap`` takes 0 to 2**40 - 1: a 24-bit OUI and a 16-bit PID.
+
+The other tables accept any key, as they always have.
 
 Table inheritance
 -----------------
@@ -78,7 +100,7 @@ a per-call decoder override is expressed without touching global state.
 Best-effort tables
 ------------------
 
-``udp.port`` and ``tcp.port`` differ from the other three in kind, not
+``udp.port`` and ``tcp.port`` differ from the other five in kind, not
 just in name. An EtherType or IP protocol number is authoritative: the
 field exists to say what follows. A port is a *guess* — any service may
 run on any port, and the discriminator is split across two fields.
@@ -109,8 +131,11 @@ __all__ = [
     "TABLE_ETHERTYPE",
     "TABLE_IP_PROTO",
     "TABLE_IP_PROTO_V6",
+    "TABLE_LLC_DSAP",
+    "TABLE_LLC_SNAP",
     "TABLE_TCP_PORT",
     "TABLE_UDP_PORT",
+    "InvalidRegistryKeyError",
     "Registry",
     "RegistryConflictError",
     "UnknownTableError",
@@ -119,6 +144,8 @@ __all__ = [
 ]
 
 TABLE_ETHERTYPE = "ethertype"
+TABLE_LLC_DSAP = "llc.dsap"
+TABLE_LLC_SNAP = "llc.snap"
 TABLE_IP_PROTO = "ip.proto"
 TABLE_IP_PROTO_V6 = "ip.proto.v6"
 TABLE_UDP_PORT = "udp.port"
@@ -129,6 +156,8 @@ TABLE_TCP_PORT = "tcp.port"
 #: dispatch point a name third parties can register against.
 TABLES: Mapping[str, str | None] = {
     TABLE_ETHERTYPE: None,
+    TABLE_LLC_DSAP: None,
+    TABLE_LLC_SNAP: None,
     TABLE_IP_PROTO: None,
     TABLE_IP_PROTO_V6: TABLE_IP_PROTO,
     TABLE_UDP_PORT: None,
@@ -142,6 +171,15 @@ _CHILDREN: Mapping[str, tuple[str, ...]] = {
     for parent in TABLES
 }
 
+#: The keys a table accepts, for the tables whose wire field bounds
+#: them (see "Key ranges" in the module docstring). Checked when a key is
+#: registered, never on a lookup.
+_KEY_RANGES: Mapping[str, range] = {
+    TABLE_ETHERTYPE: range(0x0600, 0x1_0000),
+    TABLE_LLC_DSAP: range(0x100),
+    TABLE_LLC_SNAP: range(1 << 40),
+}
+
 _C = TypeVar("_C", bound="type[Protocol]")
 
 
@@ -151,6 +189,16 @@ class UnknownTableError(ProtocolError):
     Raised eagerly, with the valid names listed, because a typo in a
     table name would otherwise register a decoder that nothing ever
     consults.
+    """
+
+
+class InvalidRegistryKeyError(ProtocolError):
+    """A registration named a key its table's wire field cannot carry.
+
+    Raised for an ``ethertype`` key below 0x0600, which an Ethernet
+    header reads as an 802.3 Length or an undefined value rather than an
+    EtherType, and for an ``llc.dsap`` or ``llc.snap`` key wider than the
+    field it is read from. See "Key ranges" in the module docstring.
     """
 
 
@@ -250,11 +298,14 @@ class Registry:
         """Register ``protocol`` as the decoder for ``key`` in ``table``.
 
         :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+        :raises InvalidRegistryKeyError: ``key`` is outside the range
+            ``table`` accepts (see "Key ranges" in the module docstring).
         :raises RegistryConflictError: ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
             class to the same key succeeds and changes nothing.
         """
         entries = self.table(table)
+        _check_key(table, key)
         incumbent = entries.get(key)
         if incumbent is not None and incumbent is not protocol and not override:
             raise RegistryConflictError(
@@ -316,6 +367,10 @@ class Registry:
         Overrides replace whatever they land on, so nothing here can
         raise a conflict: naming a key that is already taken is the
         point.
+
+        :raises InvalidRegistryKeyError: an override names a key outside
+            the range its table accepts (see "Key ranges" in the module
+            docstring).
         """
         child = Registry()
         for name in TABLES:
@@ -332,6 +387,19 @@ class Registry:
             f"{name}={len(entries)}" for name, entries in self._tables.items()
         )
         return f"<{type(self).__name__} {sizes}>"
+
+
+def _check_key(table: str, key: int) -> None:
+    """Refuse a key outside the range ``table`` accepts.
+
+    :raises InvalidRegistryKeyError: ``key`` is outside that range.
+    """
+    accepted = _KEY_RANGES.get(table)
+    if accepted is not None and key not in accepted:
+        raise InvalidRegistryKeyError(
+            f"{table} key {key!r} is outside {accepted.start:#x}-"
+            f"{accepted.stop - 1:#x}, the values that table dispatches"
+        )
 
 
 def _qualname(protocol: type[Protocol]) -> str:

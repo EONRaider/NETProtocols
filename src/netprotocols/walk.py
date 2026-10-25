@@ -69,6 +69,21 @@ and a lax one stops short with ``stopped_by`` set; a larger
 ``max_depth``, or a second walk from ``packet.consumed`` with
 ``start=BGP``, decodes the rest. See :mod:`netprotocols.layer7.bgp`.
 
+802.3 Length
+------------
+
+An Ethernet or VLAN header whose Length/Type field holds an IEEE 802.3
+Length (1500 or less) says where the LLC PDU after it ends, and the
+walk ends the buffer it hands every later layer there: Ethernet's zero
+padding after a short PDU, and a captured FCS, reach no decoder and
+are left past ``packet.consumed``. It is the one enclosing length the
+walk honours; IPv4's, IPv6's and UDP's are not (#235). A Length beyond
+the end of the frame bounds nothing, so a frame cut by a snap length
+decodes what was captured, and a Length shorter than the 3-byte LLC
+header makes the LLC decode raise
+:class:`~netprotocols.TruncatedHeaderError`. See
+:mod:`netprotocols.layer2.llc`.
+
 On ``memoryview``
 -----------------
 
@@ -155,24 +170,21 @@ def decode_frame(
 
     layers: list[Protocol] = []
     cursor = 0
+    # Where the buffers handed to decode() end: the frame's end, until an
+    # 802.3 Length bounds the PDU (see "802.3 Length" above).
+    end = len(data)
     protocol: type[Protocol] | None = start
     stopped_by: ProtocolError | None = None
 
     try:
         while protocol is not None:
             if len(layers) == max_depth:
-                plural = "" if max_depth == 1 else "s"
-                raise MaxDepthExceededError(
-                    f"chain still going after {max_depth} header{plural} "
-                    f"({protocol.__name__} next); raise max_depth if this "
-                    f"frame is genuinely this deep",
-                    protocol=protocol,
-                    offset=cursor,
-                    frame_offset=cursor,
-                )
-            header = protocol.decode(data[cursor:])
+                raise _too_deep(max_depth, protocol, cursor)
+            header = protocol.decode(data[cursor:end])
             layers.append(header)
             cursor += header.header_len
+            if header._BOUNDS_PAYLOAD:
+                end = _bounded(header, cursor, end)
             protocol = header.next_protocol(registry)
     except ProtocolError as error:
         # decode() raises with offset relative to the slice it was
@@ -189,3 +201,31 @@ def decode_frame(
         stopped_by = error
 
     return Packet._from_decoded(layers, stopped_by)
+
+
+def _too_deep(
+    max_depth: int, protocol: type[Protocol], cursor: int
+) -> MaxDepthExceededError:
+    """The error for a chain still going after ``max_depth`` headers."""
+    plural = "" if max_depth == 1 else "s"
+    return MaxDepthExceededError(
+        f"chain still going after {max_depth} header{plural} "
+        f"({protocol.__name__} next); raise max_depth if this "
+        f"frame is genuinely this deep",
+        protocol=protocol,
+        offset=cursor,
+        frame_offset=cursor,
+    )
+
+
+def _bounded(header: Protocol, cursor: int, end: int) -> int:
+    """Where the buffers after ``header`` end, given its payload extent.
+
+    ``cursor`` is the offset just past ``header`` and ``end`` the
+    current bound. The tighter of the two wins, so a length larger than
+    what was captured bounds nothing and a bound never grows.
+    """
+    extent = header._payload_extent()
+    if extent is None:
+        return end
+    return min(end, cursor + extent)
