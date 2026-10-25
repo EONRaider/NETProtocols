@@ -832,6 +832,53 @@ class TestHelloOptions:
         assert bytes(hello) == b"\x00\x01\x00\x02\x00\x1e"
 
 
+class _SliceCountingBytes(bytes):
+    """Bytes that count how many bytes their slices and indexes return."""
+
+    read = 0
+
+    def __getitem__(self, key):
+        """Return ``bytes(self)[key]``, adding its length to the count."""
+        result = bytes(self)[key]
+        type(self).read += len(result) if isinstance(key, slice) else 1
+        return result
+
+
+class TestHelloCost:
+    """A Hello made of empty type-0 options, the worst case for the walk.
+
+    Each such option is where padding could start, so the parser must
+    know whether only zero bytes follow it; rescanning the rest of the
+    body for that at every option made decode and :attr:`PIM.message`
+    quadratic (a 64 KB Hello took seconds). A wall-clock bound would be
+    flaky under coverage tracing and on slow runners, so the cost is
+    counted instead: the bytes the parser reads out of the body by
+    slicing and indexing must stay linear in its length.
+    """
+
+    COUNT = 16000
+    BODY = bytes(4) * COUNT + b"\x00\x01\x00\x00"
+
+    def test_a_64_kb_hello_of_empty_options_decodes(self):
+        """Decode it whole: the options run to the last, nonzero one."""
+        pim = PIM.decode(b"\x20\x00\x00\x00" + self.BODY)
+        assert pim.header_len == 4 + len(self.BODY) == 64008
+        hello = pim.message
+        assert isinstance(hello, PIMHello)
+        assert len(hello.options) == self.COUNT + 1
+        assert hello.options[-1] == PIMHelloOption(1)
+
+    @pytest.mark.parametrize("tail", [b"", bytes(6)], ids=["bare", "padded"])
+    def test_the_walk_reads_the_body_a_bounded_number_of_times(self, tail):
+        """Read the body's bytes a bounded number of times, padded or not."""
+        body = _SliceCountingBytes(self.BODY + tail)
+        _SliceCountingBytes.read = 0
+        hello = PIM(body=body).message
+        assert isinstance(hello, PIMHello)
+        assert len(hello.options) == self.COUNT + 1
+        assert _SliceCountingBytes.read <= 4 * len(body)
+
+
 def ipv6_frame(pim: PIM, src: str = "fe80::1", dst: str = "ff02::d") -> bytes:
     """Build an Ethernet/IPv6 frame carrying ``pim``, checksum correct.
 

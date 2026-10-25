@@ -574,10 +574,14 @@ def _parse_hello(body: bytes) -> tuple[PIMHello, int]:
     """Walk a Hello's options to find where the message ends.
 
     A remainder of zero bytes where an option would start ends the
-    message there (see the module docstring).
+    message there (see the module docstring). Where the zero tail starts
+    is found once, up front: testing the remainder at every option
+    instead would rescan it for each empty type-0 option, quadratic in
+    a Hello made of them.
     """
     options: list[PIMHelloOption] = []
     end = 0
+    zero_tail = len(body.rstrip(b"\x00"))
     try:
         for option_type, value in walk_kind_length_value(
             body,
@@ -589,12 +593,12 @@ def _parse_hello(body: bytes) -> tuple[PIMHello, int]:
             field="body",
             width=2,
         ):
-            if option_type == 0 and not value and not any(body[end:]):
+            if option_type == 0 and end >= zero_tail:
                 break
             options.append(PIMHelloOption(option_type, value))
             end += _OPTION_HEADER.size + len(value)
     except InvalidFieldError:
-        if any(body[end:]):
+        if end < zero_tail:
             raise
     return PIMHello(tuple(options)), end
 
