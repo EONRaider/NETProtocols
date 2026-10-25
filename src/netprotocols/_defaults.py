@@ -85,6 +85,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer4.udp import UDP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.rip import RIP
     from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
@@ -135,6 +136,9 @@ def install(registry: Registry) -> None:
     # destination-first lookup finds it whatever that source port is.
     # Linux's pre-IANA 8472 is not registered: decode_as adds it per walk.
     add(TABLE_UDP_PORT, 4789, VXLAN)
+    # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
+    # answer a Request from another port back to it, from 520.
+    add(TABLE_UDP_PORT, 520, RIP)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

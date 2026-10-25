@@ -65,6 +65,12 @@ packet. Like the other three, it never raises past its fixed portion:
 a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
 stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
 report. See :mod:`netprotocols.layer4.sctp`.
+
+``RIP`` is the port-dispatched case: its entries fill the UDP datagram,
+which the walk does not trim to UDP's length either. It keeps the whole
+buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
+report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
+instead of raising. See :mod:`netprotocols.layer7.rip`.
 """
 
 from __future__ import annotations

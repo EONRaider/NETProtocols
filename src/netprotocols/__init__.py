@@ -51,6 +51,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
@@ -99,6 +100,7 @@ __all__ = [
     "HTTP",
     "IGMP",
     "MAX_DEPTH",
+    "RIP",
     "SCTP",
     "TCP",
     "UDP",
@@ -143,6 +145,8 @@ __all__ = [
     "Packet",
     "Protocol",
     "ProtocolError",
+    "RIPAuthentication",
+    "RIPEntry",
     "Registry",
     "RegistryConflictError",
     "SCTPChunk",

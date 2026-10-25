@@ -8,6 +8,7 @@ from netprotocols import (
     ARP,
     ESP,
     HTTP,
+    RIP,
     SCTP,
     TCP,
     UDP,
@@ -39,6 +40,7 @@ class TestTruncation:
             (ESP, "raw_esp_packet"),
             (AH, "raw_ah_header"),
             (VXLAN, "raw_vxlan_header"),
+            (RIP, "raw_rip_message"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
@@ -94,6 +96,27 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            pytest.param(lambda raw: raw + b"\xde\xad\xbe\xef", id="trailer"),
+            pytest.param(lambda raw: raw[:30], id="cut-entry"),
+        ],
+    )
+    def test_rip_keeps_its_whole_entries(self, raw_rip_message, damage, lax):
+        """RIP has no length field either: past its 4-byte header it
+        keeps everything, and a remainder shorter than an entry is
+        reported, not raised."""
+        raw = damage(raw_rip_message)
+        packet = decode_frame(raw, start=RIP, lax=lax)
+        assert [type(layer) for layer in packet] == [RIP]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw
+        rip = packet[RIP]
+        assert len(rip.entries) == (len(raw) - 4) // 20
+        assert rip.remainder == raw[4 + 20 * len(rip.entries) :]
 
 
 class TestDecodeInputs:

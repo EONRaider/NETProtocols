@@ -202,3 +202,17 @@ def raw_vxlan_header() -> bytes:
     """VXLAN header from tests/fixtures/vxlan.pcap: I flag set, VNI
     1193046 (0x123456), reserved bits zero."""
     return b"\x08\x00\x00\x00\x12\x34\x56\x00"
+
+
+@pytest.fixture
+def raw_rip_message() -> bytes:
+    """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
+    route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and
+    10.9.52.0/24, metric 1), no authentication."""
+    return bytes.fromhex(
+        "02020000"
+        "000200000a140200ffffff000000000000000001"
+        "000200000a140100ffffff000000000000000001"
+        "000200000a140380ffffff800000000000000001"
+        "000200000a093400ffffff000000000000000001"
+    )
