@@ -118,7 +118,9 @@ def crc32c(data: bytes | memoryview) -> int:
 def _fletcher_sums(data: bytes) -> tuple[int, int]:
     """Return the ISO 8473 running sums ``C0`` and ``C1`` of ``data``.
 
-    Both are taken modulo 255 (RFC 905 B.3.3, B.4.2).
+    Each octet is added to ``C0``, then ``C0`` to ``C1`` (RFC 905
+    B.3.3, B.4.2), both modulo 255, the arithmetic RFC 905 B.2(a)
+    defines.
     """
     c0 = c1 = 0
     for byte in data:
@@ -131,14 +133,15 @@ def fletcher_checksum(data: bytes | memoryview, offset: int) -> int:
     """Compute the ISO 8473 Fletcher checksum field for ``data``.
 
     The field's two bytes sit at ``offset`` and are read as zero (RFC
-    905 Annex B; RFC 1008 §7). The result is the 16-bit value
+    905 B.3.1; RFC 1008 §7.2.1). The result is the 16-bit value
     ``X << 8 | Y`` that makes both running sums of ``data``, with it in
     place, ``0`` modulo 255.
 
     Each of ``X`` and ``Y`` is reported in ``1``-``255``, ``255``
-    standing for zero, as RFC 905 B.3 says, so the result never has a
-    zero byte. OSPF's LS Checksum is this over an LSA from byte 2, its
-    LS Age excluded (see :func:`lsa_checksum`).
+    standing for zero, so the result never has a zero byte: RFC 905
+    B.2(b) regards ``255`` as zero, and RFC 1008 §7.2.1's reference
+    code writes ``255``. OSPF's LS Checksum is this over an LSA from
+    byte 2, its LS Age excluded (see :func:`lsa_checksum`).
 
     :raises ValueError: if the two-byte field at ``offset`` does not
         lie inside ``data``: ``offset`` must be ``0`` to

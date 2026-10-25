@@ -858,8 +858,9 @@ class TestFletcherChecksum:
         assert fletcher_checksum(data, 6) == fletcher_checksum(clobbered, 6)
 
     def test_zero_is_reported_as_255(self):
-        """RFC 905 B.3: a computed X or Y of 0 is sent as 255, so the
-        field never holds a zero byte. Worked by hand: over 01 [X Y] 02,
+        """A computed X or Y of 0 is sent as 255 (RFC 905 B.2(b) makes
+        them equal; RFC 1008 §7.2.1's code writes 255), so the field
+        never holds a zero byte. Worked by hand: over 01 [X Y] 02,
         C0 = 3 and C1 = 6 with the field zeroed, so X = (2 * 3 - 6) mod
         255 = 0, sent as 255, and Y = 510 - 3 - 255 = 252; over
         02 [X Y] 01, C0 = 3 and C1 = 9, so X = (2 * 3 - 9) mod 255 =
