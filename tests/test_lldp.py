@@ -467,6 +467,21 @@ class TestMandatoryTLVs:
         assert lldp.tlv(1) == LLDPTLV(1, b"\x04" + MAC_A)
         assert lldp.has_mandatory_tlvs
 
+    @pytest.mark.parametrize(
+        "duplicate",
+        [
+            tlv_bytes(1, b"\x07other"),
+            tlv_bytes(2, b"\x07p"),
+            tlv_bytes(3, b"\x00\x05"),
+        ],
+        ids=["chassis-id", "port-id", "ttl"],
+    )
+    def test_a_later_duplicate_is_not_looked_for(self, duplicate):
+        """Read the first three TLVs only, whatever recurs after them."""
+        lldp = LLDP.decode(MINIMAL[:-2] + duplicate + tlv_bytes(0))
+        assert (lldp.port_id, lldp.ttl) == (LLDPPortID(5, b"eth0"), 120)
+        assert lldp.has_mandatory_tlvs
+
     @pytest.mark.parametrize("subtype", [0, 8, 255])
     def test_a_reserved_subtype_is_read(self, subtype):
         """Read an ID of a reserved subtype like any other."""
