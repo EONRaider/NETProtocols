@@ -690,6 +690,23 @@ class TestAssert:
         with pytest.raises(TruncatedHeaderError):
             _ = PIM.decode(self.RAW[:-1]).message
 
+    def test_the_rpt_bit_is_the_top_bit_only(self):
+        """Read R=0 under the largest metric preference, bit 30 set."""
+        raw = self.RAW[:-8] + bytes.fromhex("7fffffffffffffff")
+        message = PIM.decode(raw).message
+        assert isinstance(message, PIMAssert)
+        assert not message.rpt
+        assert message.metric_preference == 0x7FFFFFFF
+        assert message.metric == 0xFFFFFFFF
+        assert bytes(PIM(type=5, body=bytes(message))) == raw
+
+    @pytest.mark.parametrize("metric", [-1, 1 << 32])
+    def test_the_metric_is_range_checked(self, metric):
+        """Reject a metric outside 32 bits."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            PIMAssert(group(G1), unicast(SOURCE), False, 0, metric)
+        assert excinfo.value.field == "metric"
+
 
 class TestRawMessageTypes:
     """Types without a typed message decode whole, with the body raw."""
@@ -831,6 +848,11 @@ class TestHelloOptions:
         """Test lan prune delay t bit."""
         hello = self.hello(PIMHelloOption(2, b"\x81\xf4\x09\xc4"))
         assert hello.lan_prune_delay == PIMLANPruneDelay(True, 500, 2500)
+
+    def test_lan_prune_delay_t_bit_is_the_top_bit_only(self):
+        """Read T=0 under a propagation delay with bit 14 set."""
+        hello = self.hello(PIMHelloOption(2, b"\x7f\xff\x09\xc4"))
+        assert hello.lan_prune_delay == PIMLANPruneDelay(False, 0x7FFF, 2500)
 
     def test_an_ipv6_address_list(self):
         """Test an ipv6 address list."""
