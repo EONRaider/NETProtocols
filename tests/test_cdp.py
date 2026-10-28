@@ -335,6 +335,9 @@ class TestWhereThePDUEnds:
         assert excinfo.value.offset == 9
         assert excinfo.value.expected == ">=4"
         assert excinfo.value.actual == length
+        assert f"declares Length {length}, below its 4-byte header" in str(
+            excinfo.value
+        )
 
     @pytest.mark.parametrize("count", [4, 5, 8, 46])
     def test_a_zero_tail_after_tlvs_is_left_undecoded(self, count):
@@ -375,6 +378,7 @@ class TestWhereThePDUEnds:
         assert excinfo.value.offset == 9
         assert excinfo.value.expected == 4
         assert excinfo.value.actual == len(rest)
+        assert f"needs 4 bytes, {len(rest)} remain" in str(excinfo.value)
 
     @pytest.mark.parametrize("count", [1, 2, 3])
     def test_a_cut_tlv_header_of_zeros_is_left_undecoded(self, count):
@@ -494,6 +498,7 @@ class TestDecode:
         assert excinfo.value.offset == 10
         assert excinfo.value.expected == 19
         assert excinfo.value.actual == 18
+        assert "declares Length 9, buffer holds 8" in str(excinfo.value)
 
 
 class TestConstruction:
@@ -548,6 +553,7 @@ class TestConstruction:
         with pytest.raises(InvalidFieldError) as excinfo:
             CDPTLV(**fields)
         assert excinfo.value.field == field
+        assert excinfo.value.protocol is CDPTLV
 
     @pytest.mark.parametrize(
         "fields,field",
@@ -568,6 +574,29 @@ class TestConstruction:
         assert excinfo.value.field.startswith(
             "protocol" if field == "p" else "address"
         )
+        assert excinfo.value.protocol is CDPAddress
+
+    def test_a_range_error_says_what_fits(self):
+        """Name the range and the value refused, in the error and text."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP(version=1, ttl=256)
+        assert excinfo.value.expected == "0-255"
+        assert excinfo.value.actual == 256
+        assert "CDP ttl must be within 0-255, got 256" in str(excinfo.value)
+
+    def test_a_tlv_of_another_type_is_named(self):
+        """Name the type found and its index, in the error and text."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP(1, 0, 0, (CDPTLV(1), b"\x00\x01\x00\x04"))
+        assert excinfo.value.expected == "CDPTLV"
+        assert excinfo.value.actual == "bytes"
+        assert "found bytes at index 1" in str(excinfo.value)
+
+    def test_protocol_type_0_fits(self):
+        """Accept the lowest protocol type, which no name covers."""
+        address = CDPAddress(0, b"", b"")
+        assert address.protocol_type_name == "unknown (0)"
+        assert bytes(address) == b"\x00\x00\x00\x00"
 
     def test_with_checksums_makes_a_frame_the_checker_accepts(
         self, check_fixtures
