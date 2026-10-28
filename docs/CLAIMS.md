@@ -512,12 +512,24 @@ What moved, and why:
   against 122,013. On the 140 frames the median was 2.1% lower (11 of
   16 pairs). `benchmark.py --compare` itself, run three times each,
   alternating, on 2.5.0 and on `c008e18` (this release's library code)
-  with the three new captures removed, read netprotocols 100,532 /
-  95,789 / 94,303 against 84,995 / 92,036 / 97,489 f/s, and the gate's
-  normalized figure 5.5598 / 5.8932 / 5.5451 against 5.8346 / 5.5992 /
-  4.7109, the opposite sign. The run-to-run spread on this machine is
-  about ±8%, so a cost of a few percent is likely but not established
-  here, and was not profiled. Profiling the decode path is #250.
+  with the three new captures removed, points the same way on
+  throughput: its comparison line read netprotocols 100,532 / 95,789 /
+  94,303 against 84,995 / 92,036 / 97,489 f/s, a median 3.9% lower, in
+  line with the harness, and its header line (the rate the normalized
+  figure is computed from) a median 7.2% lower (98,733 against 91,578).
+  Only the median of the gate's normalized figure moved the other way:
+  5.5598 / 5.8932 / 5.5451 against 5.8346 / 5.5992 / 4.7109, a median
+  0.7% higher, while its mean was 5.0% lower and it was lower in 2 of
+  the 3 pairs.
+  The run-to-run spread on this machine is about ±8%, so a cost of a
+  few percent is likely but not established here, and was not
+  profiled. Profiling the decode path is #250.
+- **The gate's baseline was left at 2.5.0's recording**, 5.4344
+  normalized on the 265-frame corpus. CI's `benchmark` job on
+  `ubuntu-latest` read +0.7% to +13.5% against it on the 293-frame
+  corpus (#254-#256 and master `c008e18`), new frames included. This
+  machine is not `ubuntu-latest`, so the gate was not re-anchored from
+  it; how and when to re-record is #251.
 - **The depth lead grew by 15 frames, all from the new captures**, but
   only 7 of them are frames dpkt leaves as raw bytes; checked frame by
   frame with `benchmark.py`'s own `_netprotocols_chain` and `_dpkt_chain`:
@@ -535,8 +547,8 @@ What moved, and why:
     too; the chain shows them as raw bytes only because dpkt then sets
     `.data` to the TLVs' bytes.
   The README names MPLS label stacks and SNAP headers beside 802.1Q
-  tags, which it already counted on the same terms. The five STP
-  BPDUs that dpkt decodes (`dpkt.stp`) count the same. The sixth BPDU,
+  tags, which it already counted on the same terms. The four STP
+  BPDUs that dpkt decodes (`dpkt.stp`) count the same. The fifth BPDU,
   the 802.1D Topology Change Notification, is the one frame dpkt cannot
   decode: `dpkt.stp.STP` needs 35 bytes and raises `NeedData` on the
   4-byte TCN, so `--depth` skips it (94 + 198 is 292) and every
@@ -563,7 +575,7 @@ What moved, and why:
   86.8) on the same tree. `scapy.all` (436.2 ms against 396.9) and dpkt
   (35.5 against 32.5) read 9-10% slower than at 2.5.0, more than
   netprotocols' own code did. Under `python -X importtime`, best of five, the
-  five modules' own (self) times are 1.3 ms (`mpls`), 3.0 ms (`lldp`),
+  five modules' own (self) times are 1.3 ms (`mpls`), 2.9 ms (`lldp`),
   1.6 ms (`llc`), 1.3 ms (`stp`) and 2.1 ms (`cdp`), about 9.2 ms, and
   `_enums` grew 0.2 ms; the rest of the growth is not attributed here.
   The modules define 13 dataclasses between them, against Tier 2's 27,
@@ -579,8 +591,8 @@ What moved, and why:
 
 ## 1. Performance
 
-### 1.1 "2.1× faster than scapy at decoding"
-**Status: VERIFIED — and still understated**
+### 1.1 "3.4× faster than scapy at decoding"
+**Status: VERIFIED**
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
 after #147 closed the dpkt-throughput regression below — see that
@@ -591,8 +603,10 @@ Was 36,500 frames/sec against scapy 2.7.0's 17,100 at v1.3.0. Tier 1
 brought it to 6.2×; post-Tiers-2-4 it read 5.6×; re-measured via
 `decode_frame()` after #147 (see the regression-close re-measurement
 above): **97,739 against 18,144, a 5.4× gap** — flat against the prior
-figure within this file's own noise band. The headline "2.1×" claim
-was always a conservative floor and stays true by a wide margin.
+figure within this file's own noise band. The heading's "2.1×", which
+it kept through 2.5.0, was a conservative floor that every
+re-measurement cleared by a wide margin; it now quotes the 2.6.0
+figure below.
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare`.
 
@@ -771,7 +785,7 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "~22× smaller wheel than scapy"
+### 1.5 "12.2× smaller wheel than scapy"
 **Status: VERIFIED** — re-measure at each release (Rule 4)
 
 *Re-measured for 2.6.0 (2026-10-28): `netprotocols-2.6.0-py3-none-any.whl`
