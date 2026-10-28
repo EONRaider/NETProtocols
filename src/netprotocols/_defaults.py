@@ -92,6 +92,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer2.llc import SNAP
     from netprotocols.layer2.lldp import LLDP
     from netprotocols.layer2.mpls import MPLS
+    from netprotocols.layer2.stp import STP
     from netprotocols.layer2.vlan import VLAN
     from netprotocols.layer3.ah import AH, AHv6
     from netprotocols.layer3.esp import ESP
@@ -137,6 +138,10 @@ def install(registry: Registry) -> None:
     # 0xAA too and the Control is UI; SNAP then reads its PID in
     # ethertype (OUI 00-00-00, 00-00-F8) or llc.snap (any other OUI).
     add(TABLE_LLC_DSAP, LLCSAP.SNAP, SNAP)
+    # Spanning Tree BPDUs (IEEE 802.1D, 802.1w) at the Bridge Spanning
+    # Tree SAP. BPDUs are UI PDUs sent from SSAP 0x42 too, but the SSAP
+    # is not checked: any UI or I-format PDU at DSAP 0x42 dispatches.
+    add(TABLE_LLC_DSAP, LLCSAP.SPANNING_TREE, STP)
 
     # Shared by IPv4 and IPv6: registering in ip.proto reaches
     # ip.proto.v6 too, because the latter inherits it.

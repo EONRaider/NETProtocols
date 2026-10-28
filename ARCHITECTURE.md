@@ -220,6 +220,12 @@ VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
 header with a length field and leaves Ethernet's padding undecoded. It
 must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
 wire, and VRRPv3's pseudo-header carries the message's length.
+`STP` is the same case at layer 2: a BPDU has no length field, but its
+BPDU Type gives its exact length (4, 35 or 36 octets), so it leaves
+whatever follows undecoded, including the extra octets of a PDU longer
+than its BPDU, which a receiver ignores (§14.4 of the IEEE 802.1 draft
+the module cites). See
+[`layer2/stp.py`](src/netprotocols/layer2/stp.py)'s module docstring.
 
 `LLDP` has no length for the whole LLDPDU either, but bounds itself
 by its last TLV: its TLVs each carry a Length, and the End of LLDPDU
@@ -331,25 +337,32 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP` and `MPLS` are the two exceptions: they answer from decode
-context rather than from a wire field alone. A BGP message carries no
-payload: a TCP segment can hold several messages back to back, each
-decoded as its own layer, so `BGP.next_protocol()` names the next
-message *beside* it — `BGP` when the bytes after this message begin
-another one, `None` when they do not. An MPLS label stack carries a
-packet but no field naming its protocol (see *MPLS: dispatch by
+`BGP`, `MPLS` and `LLC` are the three exceptions: they answer from
+decode context rather than from a wire field alone. A BGP message
+carries no payload: a TCP segment can hold several messages back to
+back, each decoded as its own layer, so `BGP.next_protocol()` names the
+next message *beside* it — `BGP` when the bytes after this message
+begin another one, `None` when they do not. An MPLS label stack carries
+a packet but no field naming its protocol (see *MPLS: dispatch by
 convention* below), so `MPLS.next_protocol()` infers one, partly from
-the first byte after the stack. Only the bytes can say, and
-`next_protocol()` is handed none, so each `decode()` records what it
-saw on the instance in a field kept out of the dataclass's comparison
-and hash (`compare=False`, the mechanism `HTTP` uses for its `_message`
-parse cache). Two equal headers compare equal however they were found,
-and can still chain differently. The rules of the decode contract hold
-for both unchanged; see *Port-based dispatch is best-effort* below,
+the first byte after the stack. SAP 0x42 carries GARP's PDUs (Protocol
+Identifier 0x0001) beside STP's BPDUs (0x0000), so `LLC.decode()`
+records, for a DSAP 0x42 PDU it would dispatch, whether the two octets
+after its Control are present and not 0x0000, and `LLC.next_protocol()`
+then answers `None`, whatever `llc.dsap` holds at 0x42; fewer than two
+octets still reach `STP`, which reports the truncation. Only the bytes
+can say, and `next_protocol()` is handed none, so each `decode()`
+records what it saw on the instance in a field kept out of the
+dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
+uses for its `_message` parse cache). Two equal headers compare equal
+however they were found, and can still chain differently. The rules of
+the decode contract hold for all three unchanged; see *Port-based
+dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
-next_protocol*, and the module docstrings of
+next_protocol*, the module docstrings of
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py) and
-[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py).
+[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py), and
+[`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s *DSAP 0x42*.
 
 ```mermaid
 flowchart LR
@@ -360,6 +373,7 @@ flowchart LR
   E -->|length ≤ 1500| L[LLC]
   V -->|length ≤ 1500| L
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
+  L -->|DSAP 0x42, UI or I, Protocol ID 0| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   V -->|0x8100, 0x88A8, 0x9100| V
@@ -370,8 +384,8 @@ flowchart LR
   V -->|0x8847, 0x8848| M
   M -->|bottom label 0, or first nibble 4| I4
   M -->|bottom label 2, or first nibble 6| I6
-  E -->|0x88CC| L[LLDP]
-  V -->|0x88CC| L
+  E -->|0x88CC| LD[LLDP]
+  V -->|0x88CC| LD
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
@@ -852,7 +866,8 @@ src/netprotocols/
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
 │                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
 │                   lldp.py (LLDP, IEEE 802.1AB),
-│                   mpls.py (MPLS label stack: MPLS + MPLSLabel)
+│                   mpls.py (MPLS label stack: MPLS + MPLSLabel),
+│                   stp.py (802.1D / 802.1w BPDUs)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

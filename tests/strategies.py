@@ -35,6 +35,7 @@ from netprotocols import (
     RIP,
     SCTP,
     SNAP,
+    STP,
     VLAN,
     VRRP,
     VXLAN,
@@ -198,6 +199,36 @@ def llc_headers(draw: st.DrawFn) -> LLC:
 def snap_headers(draw: st.DrawFn) -> SNAP:
     return SNAP(
         oui=draw(st.integers(0, 0xFFFFFF)), pid=draw(st.integers(0, 0xFFFF))
+    )
+
+
+@st.composite
+def stp_headers(draw: st.DrawFn) -> STP:
+    """A canonical BPDU of each type: a TCN carries nothing after its
+    type, a Configuration BPDU no Version 1 Length."""
+    bpdu_type = draw(st.sampled_from([0x00, 0x02, 0x80]))
+    version = draw(st.integers(0, 0xFF))
+    if bpdu_type == 0x80:
+        return STP(protocol_id=0, version=version, bpdu_type=bpdu_type)
+    u16 = st.integers(0, 0xFFFF)
+    return STP(
+        protocol_id=0,
+        version=version,
+        bpdu_type=bpdu_type,
+        flags=draw(st.integers(0, 0xFF)),
+        root_priority=draw(u16),
+        root_mac=draw(mac_strings()),
+        root_path_cost=draw(st.integers(0, 0xFFFFFFFF)),
+        bridge_priority=draw(u16),
+        bridge_mac=draw(mac_strings()),
+        port_id=draw(u16),
+        message_age=draw(u16),
+        max_age=draw(u16),
+        hello_time=draw(u16),
+        forward_delay=draw(u16),
+        version_1_length=(
+            draw(st.integers(0, 0xFF)) if bpdu_type == 0x02 else None
+        ),
     )
 
 
@@ -857,6 +888,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "SNAP": snap_headers(),
     "LLDP": lldp_lldpdus(),
     "MPLS": mpls_stacks(),
+    "STP": stp_headers(),
     "IPv4": ipv4_headers(),
     "IPv6": ipv6_headers(),
     "IPv6HopByHopOptions": ipv6_hop_by_hop_headers,

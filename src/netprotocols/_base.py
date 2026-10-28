@@ -85,6 +85,9 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
+``STP`` is the same case at layer 2: its BPDU Type gives its exact
+length, so the octets after the BPDU are left undecoded. See
+:mod:`netprotocols.layer2.stp`.
 
 ``LLDP`` has no length for the whole LLDPDU, but each TLV has one and
 the End of LLDPDU TLV ends the walk, so step 3 holds after it; a TLV
@@ -114,18 +117,21 @@ public form.
 
 Decode context in ``next_protocol``
 -----------------------------------
-Two headers answer ``next_protocol()`` from what ``decode()`` saw
+Three headers answer ``next_protocol()`` from what ``decode()`` saw
 rather than from a wire field alone, because no field says what follows
 them. ``BGP`` names the next message beside it rather than a class for
 its payload: whether the bytes after the message begin another one in
 the same TCP segment. ``MPLS`` names its payload by convention: by its
 bottom label where RFC 3032 reserves that label for one, and otherwise
-by the first nibble after the stack, read as an IP version. Each
+by the first nibble after the stack, read as an IP version. ``LLC``
+gates DSAP 0x42 on the payload's first two octets: a Protocol
+Identifier other than STP's 0x0000, such as GARP's, ends the walk. Each
 ``decode()`` records what only the bytes could tell it on the instance,
 in a ``compare=False`` field outside its comparison and hash, so two
 equal headers compare equal wherever they were found, and can still
-chain differently. Steps 1-3 above hold for both unchanged. See
-:mod:`netprotocols.layer7.bgp` and :mod:`netprotocols.layer2.mpls`.
+chain differently. Steps 1-3 above hold for all three unchanged. See
+:mod:`netprotocols.layer7.bgp`, :mod:`netprotocols.layer2.mpls` and
+:mod:`netprotocols.layer2.llc`.
 """
 
 from __future__ import annotations

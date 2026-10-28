@@ -35,6 +35,36 @@ so :meth:`LLC.next_protocol` dispatches only those, through the
 included. The other formats (S-format, and U-format commands such as
 XID and TEST) end the walk at the LLC layer.
 
+DSAP 0x42
+---------
+SAP 0x42 carries more than Spanning Tree BPDUs: GARP's PDUs, such as
+GVRP's, go there too, with Protocol Identifier 0x0001 where a BPDU has
+0x0000 (Wireshark's ``packet-gvrp.c``, ``GARP_DEFAULT_PROTOCOL_ID``),
+and the IEEE 802.1 draft that :mod:`netprotocols.layer2.stp` cites
+says PDUs with other Protocol Identifiers "may be processed according
+to the rules of those protocols" (P802.1aq/D1.5++ §14.5 NOTE 1). So
+:meth:`LLC.decode`, for a DSAP 0x42 PDU it would dispatch, looks at the
+two octets after the Control field, where the PDU starts: when both
+are there and are not 0x0000, :meth:`LLC.next_protocol` answers
+``None`` and the walk ends at the LLC layer, as it does at a DSAP with
+no ``llc.dsap`` entry. When they are 0x0000, or fewer than two octets
+follow (in a walk the 802.3 Length bounds the buffer, so padding and an
+FCS are not read as them unless the Length overstates the PDU), the PDU
+dispatches, and a
+short one reaches :class:`~netprotocols.STP` to raise its truncation.
+The check applies whatever class ``llc.dsap`` holds at 0x42, a
+registered one of the caller's own included, so a GARP decoder is not
+reached from the walk: decode the PDU after the LLC header directly.
+It is decode context
+(see *Decode context in next_protocol* in :mod:`netprotocols._base`):
+kept on the instance outside its comparison and hash, so equal headers
+compare equal wherever they were found. A header built with the
+constructor, or copied with :func:`dataclasses.replace`, has seen no
+bytes and dispatches as before; :func:`copy.copy` and
+:func:`copy.deepcopy` keep what :meth:`LLC.decode` recorded.
+:meth:`STP.decode <netprotocols.STP.decode>` called directly still
+rejects a Protocol Identifier other than 0.
+
 SNAP
 ----
 DSAP and SSAP 0xAA are the Subnetwork Access Protocol's SAP (IEEE Std
@@ -121,7 +151,7 @@ called them, who can bound it with ``frame[14 : 14 + eth.length]``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -175,6 +205,16 @@ def _check_octet(value: int, protocol: type[Protocol], field: str) -> None:
         )
 
 
+def _names_other_protocol(data: bytes | memoryview, offset: int) -> bool:
+    """Whether a Protocol Identifier other than STP's starts at ``offset``.
+
+    ``True`` when the two octets there are present and not ``0x0000``;
+    ``False`` when they are zero, or when fewer than two remain, so
+    that STP still reports the truncation.
+    """
+    return len(data) >= offset + 2 and (data[offset] | data[offset + 1]) != 0
+
+
 def _sap_name(sap: int) -> str:
     """Display name of an LSAP, e.g. ``"SNAP"``, or its hex value."""
     try:
@@ -199,6 +239,15 @@ class LLC(Protocol):
     dsap: int
     ssap: int
     control: int
+    #: Whether :meth:`decode` found a Protocol Identifier other than
+    #: STP's 0x0000 after a dispatching DSAP 0x42 PDU's Control (see
+    #: :meth:`next_protocol`); decode context, not a wire field, so it is
+    #: neither compared nor hashed. :func:`copy.copy` and
+    #: :func:`copy.deepcopy` keep it; :func:`dataclasses.replace` builds
+    #: a new header, which has it unset.
+    _other_protocol_id: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
 
     #: DSAP, SSAP and the first Control octet; an I- or S-format PDU
     #: adds a second Control octet after them.
@@ -244,7 +293,14 @@ class LLC(Protocol):
                     actual=len(data),
                 )
             control |= data[3] << 8
-        return cls(dsap=dsap, ssap=ssap, control=control)
+        llc = cls(dsap=dsap, ssap=ssap, control=control)
+        if (
+            dsap == LLCSAP.SPANNING_TREE
+            and llc._dispatches
+            and _names_other_protocol(data, llc.header_len)
+        ):
+            object.__setattr__(llc, "_other_protocol_id", True)
+        return llc
 
     def __bytes__(self) -> bytes:
         """Serialize the header, the Control's first octet first."""
@@ -316,12 +372,14 @@ class LLC(Protocol):
         """Return the class registered in ``llc.dsap`` for the DSAP.
 
         ``None`` for a PDU that carries no upper-layer data (anything
-        but I-format and UI), for Novell raw 802.3, and for DSAP 0xAA
+        but I-format and UI), for Novell raw 802.3, for DSAP 0xAA
         unless the SSAP is 0xAA and the Control UI, the one PDU after
-        which this library decodes a SNAP header (see the module
-        docstring).
+        which this library decodes a SNAP header, and for DSAP 0x42
+        when :meth:`decode` found two octets after the Control that
+        are not 0x0000, a Protocol Identifier other than the spanning
+        tree's, such as GARP's (see the module docstring).
         """
-        if not self._dispatches:
+        if not self._dispatches or self._other_protocol_id:
             return None
         if registry is None:
             return _DSAP_CLASSES.get(self.dsap)

@@ -1303,8 +1303,9 @@ def _check_llc(
 ) -> list[str]:
     """Validate an 802.2 LLC PDU: its Control field fits (1 octet when
     the two low bits are 11, else 2), then SNAP (DSAP 0xAA), an 802.1D
-    BPDU (DSAP 0x42) or a Novell raw 802.3 IPX packet (0xFFFF where the
-    DSAP and SSAP would be), whose IPX length must be the PDU's."""
+    BPDU or another protocol's PDU (DSAP 0x42) or a Novell raw 802.3 IPX
+    packet (0xFFFF where the DSAP and SSAP would be), whose IPX length
+    must be the PDU's."""
     if pdu[:2] == b"\xff\xff":
         stats["ipx-raw"] += 1
         if len(pdu) < 4 or struct.unpack_from("!H", pdu, 2)[0] != len(pdu):
@@ -1316,19 +1317,67 @@ def _check_llc(
     if pdu[0] == 0xAA:
         return _check_snap(pdu, stats, depth, strict=strict)
     if pdu[0] == 0x42:
-        return _check_bpdu(pdu[3:], stats)
+        return _check_sap_0x42(pdu, stats, strict=strict)
     stats[f"llc-dsap-0x{pdu[0]:02x}"] += 1
     return [f"unchecked-llc-dsap-0x{pdu[0]:02x}"] if strict else []
 
 
+def _check_sap_0x42(
+    pdu: bytes, stats: Counter, *, strict: bool = False
+) -> list[str]:
+    """Validate a PDU to the Bridge Spanning Tree SAP. Only a UI (either
+    P/F) or I-format PDU carries one, as the library dispatches; any
+    other Control is counted and not checked. After its 1-octet (UI) or
+    2-octet Control comes a BPDU when its first two octets, the Protocol
+    Identifier, are 0x0000 or fewer than two octets follow, and
+    otherwise another protocol's PDU, such as GARP's (Protocol
+    Identifier 0x0001), counted and not checked."""
+    control = pdu[2]
+    if control & ~0x10 != 0x03 and control & 0x01:
+        key = f"llc-dsap-0x42-control-0x{control:02x}"
+        stats[key] += 1
+        return [f"unchecked-{key}"] if strict else []
+    body = pdu[3 if control & 0x03 == 0x03 else 4 :]
+    if len(body) >= 2 and body[:2] != b"\x00\x00":
+        key = f"llc-dsap-0x42-protocol-0x{body[:2].hex()}"
+        stats[key] += 1
+        return [f"unchecked-{key}"] if strict else []
+    return _check_bpdu(body, stats)
+
+
+#: 802.1D BPDU Types: their names in the stats, the octets each needs
+#: (802.1D-2004 §9.3; a receiver ignores octets past these, P802.1aq/
+#: D1.5++ §14.4) and the Flags bits the type leaves unused, which "shall
+#: be transmitted as 0" (§14.4 a)-g)): all but Topology Change and its
+#: Acknowledgment in a Configuration BPDU, and bit 8 in an RST BPDU.
+_BPDU_TYPES = {
+    0x00: ("config", 35, 0x7E),
+    0x02: ("rst", 36, 0x80),
+    0x80: ("tcn", 4, 0x00),
+}
+
+
 def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
-    """Validate an 802.1D BPDU's framing: Protocol Identifier 0, and as
-    long as its type needs, 35 bytes for a Configuration BPDU (type
-    0x00) and 4 for a Topology Change Notification (type 0x80)."""
-    needed = {0x00: 35, 0x80: 4}.get(bpdu[3] if len(bpdu) > 3 else -1)
-    if bpdu[:2] != b"\x00\x00" or needed is None or len(bpdu) < needed:
+    """Validate an 802.1D BPDU: Protocol Identifier 0, a known BPDU Type
+    and as many octets as it needs, 35 for a Configuration BPDU (type
+    0x00), 36 for an RST BPDU (0x02) and 4 for a Topology Change
+    Notification (0x80), and, for an RST BPDU, a Protocol Version of 2
+    or more: the receiver-side checks of §14.5, which discards a type
+    0x02 BPDU of version 0 or 1. The rest are sender-side checks on the
+    fixture, of what a well-behaved bridge transmits but a receiver
+    ignores or tolerates: unused Flags bits 0 (§14.4 a)-g) "ignored on
+    receipt") and an RST BPDU's Version 1 Length 0 (§14.4 p); §14.5 c)
+    does not check it, and d)2) decodes a nonzero one as RST)."""
+    kind = bpdu[3] if len(bpdu) > 3 else -1
+    name, needed, unused = _BPDU_TYPES.get(kind, ("", 0, 0))
+    if bpdu[:2] != b"\x00\x00" or not needed or len(bpdu) < needed:
         return ["stp-bpdu-malformed"]
+    if unused and bpdu[4] & unused:
+        return [f"stp-{name}-unused-flags"]
+    if name == "rst" and (bpdu[2] < 2 or bpdu[35] != 0):
+        return ["stp-rst-malformed"]
     stats["stp-bpdu"] += 1
+    stats[f"stp-{name}"] += 1
     return []
 
 

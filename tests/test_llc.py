@@ -28,6 +28,7 @@ from netprotocols import (
     LLC,
     LLCSAP,
     SNAP,
+    STP,
     UDP,
     VLAN,
     VXLAN,
@@ -78,8 +79,9 @@ CDP_KEY = 0x00000C << 16 | 0x2000
 class WholeBuffer(Protocol):
     """A stand-in for a decoder with no length of its own.
 
-    STP's and CDP's will be such decoders: this one keeps every byte it
-    is handed, so what it holds shows where the walk ended its buffer.
+    CDP's will be such a decoder, and STP leaves what follows its BPDU
+    undecoded: this one keeps every byte it is handed, so what it holds
+    shows where the walk ended its buffer.
     """
 
     body: bytes
@@ -430,8 +432,9 @@ class TestLLCDispatch:
         llc = LLC(dsap=0x42, ssap=0x42, control=control)
         assert llc.next_protocol(registry) is None
 
-    def test_an_unregistered_dsap_ends_the_walk(self, raw_llc_header):
-        assert LLC.decode(raw_llc_header).next_protocol() is None
+    def test_an_unregistered_dsap_ends_the_walk(self):
+        """DSAP 0x12 is reserved and unassigned, so it stays free."""
+        assert LLC.decode(b"\x12\x12\x03").next_protocol() is None
 
     def test_snap_follows_aa_aa_ui(self):
         assert LLC(0xAA, 0xAA, 0x03).next_protocol() is SNAP
@@ -505,7 +508,7 @@ class TestSNAPHeader:
 
 
 class TestTheFixture:
-    def test_bpdus_decode_as_far_as_llc(self):
+    def test_bpdus_decode_to_stp(self):
         for frame in (
             STP_CONFIG_B,
             STP_CONFIG_A,
@@ -514,11 +517,11 @@ class TestTheFixture:
             STP_CONFIG_A_TC_TCA,
         ):
             packet = decode_frame(frame)
-            assert kinds(packet) == [Ethernet, LLC]
+            assert kinds(packet) == [Ethernet, LLC, STP]
             assert packet[LLC].dsap_enum is LLCSAP.SPANNING_TREE
             assert packet[Ethernet].length == len(frame) - 14
+            assert packet.consumed == len(frame)
         assert len(STP_TCN) == 21
-        assert packet.consumed == 17
 
     @pytest.mark.parametrize(
         "frame", [CDPV1, CDPV2, CDPV1_HIGH_BYTE], ids=["v1", "v2", "high"]

@@ -53,6 +53,7 @@ from netprotocols import (
     RIP,
     SCTP,
     SNAP,
+    STP,
     TCP,
     UDP,
     VLAN,
@@ -101,6 +102,7 @@ from strategies import (
     pim_headers,
     sctp_chunks,
     sctp_headers,
+    stp_headers,
     vrrp_headers,
 )
 from test_corpus import walk
@@ -111,6 +113,7 @@ ALL_PROTOCOLS = (
     LLC,
     SNAP,
     LLDP,
+    STP,
     ARP,
     IPv4,
     IPv6,
@@ -977,6 +980,91 @@ class TestLLCProperties:
             if eth.length is not None:
                 assert packet.consumed <= 14 + eth.length
             event(f"layers: {len(packet)}")
+
+
+#: STP's display and per-type accessors, every one of which must answer
+#: on any decoded or constructed BPDU.
+_STP_ACCESSORS = (
+    "header_len",
+    "bpdu_type_name",
+    "version_name",
+    "topology_change",
+    "topology_change_ack",
+    "proposal",
+    "learning",
+    "forwarding",
+    "agreement",
+    "port_role",
+    "port_role_name",
+    "root_priority_component",
+    "root_system_id_extension",
+    "bridge_priority_component",
+    "bridge_system_id_extension",
+    "root_id_str",
+    "bridge_id_str",
+    "port_priority",
+    "port_number",
+    "message_age_seconds",
+    "max_age_seconds",
+    "hello_time_seconds",
+    "forward_delay_seconds",
+)
+
+#: The BPDUs of the LLC fixture, after their Ethernet and LLC headers,
+#: and an RST BPDU built from the first with its type and version
+#: changed and a Version 1 Length added (no RST capture exists).
+_BPDUS = [frame[17:] for frame in _LLC_FRAMES[:5]]
+_BPDUS.append(b"\x00\x00\x02\x02" + _BPDUS[0][4:] + b"\x00")
+
+
+@st.composite
+def bpdus(draw: st.DrawFn) -> bytes:
+    """A BPDU of the fixture, cut, a few bytes changed (the type among
+    them, now and then), and a trailer of zeros or random bytes."""
+    bpdu = bytearray(draw(st.sampled_from(_BPDUS)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(0, len(bpdu) - 1))
+        bpdu[position] = draw(st.integers(0, 255))
+    if draw(st.booleans()):
+        bpdu[3] = draw(st.sampled_from([0x00, 0x02, 0x80, 0x01]))
+    cut = draw(st.integers(0, len(bpdu)))
+    trailer = draw(st.one_of(st.binary(max_size=12), st.just(bytes(8))))
+    return bytes(bpdu[:cut]) + trailer
+
+
+class TestSTPAccessorSafety:
+    @given(data=st.one_of(fuzz_input, bpdus()))
+    def test_decoded_bpdus_answer_every_accessor(self, data: bytes) -> None:
+        """Whatever decodes, every accessor answers without raising, the
+        BPDU round-trips through its own length, and the per-type flag
+        accessors are set exactly where the type defines their bit."""
+        try:
+            stp = STP.decode(data)
+        except ProtocolError:
+            return
+        for name in _STP_ACCESSORS:
+            getattr(stp, name)
+        assert bytes(stp) == data[: stp.header_len]
+        assert STP.decode(bytes(stp)) == stp
+        assert (stp.proposal is None) == (stp.bpdu_type != 0x02)
+        assert (stp.topology_change_ack is None) == (stp.bpdu_type != 0x00)
+        event(f"BPDU type: {stp.bpdu_type_name}")
+
+    @given(data=st.data())
+    def test_trailing_bytes_stay_out_of_the_bpdu(
+        self, data: st.DataObject
+    ) -> None:
+        """The type bounds the BPDU, so Ethernet's zero padding (every
+        length up to its 46-byte maximum) and a nonzero trailer such as
+        a 4-byte FCS are left undecoded."""
+        header = data.draw(stp_headers())
+        wire = bytes(header)
+        for trailer in [bytes(n) for n in range(47)] + [b"\xde\xad\xbe\xef"]:
+            decoded = STP.decode(wire + trailer)
+            assert decoded == header, trailer
+            assert decoded.header_len == len(wire), trailer
+        for name in _STP_ACCESSORS:
+            getattr(header, name)
 
 
 class TestVRRPAccessorSafety:

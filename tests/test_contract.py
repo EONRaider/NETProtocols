@@ -17,6 +17,7 @@ from netprotocols import (
     RIP,
     SCTP,
     SNAP,
+    STP,
     TCP,
     UDP,
     VRRP,
@@ -58,6 +59,8 @@ class TestTruncation:
             (LLC, "raw_llc_header"),
             (SNAP, "raw_snap_header"),
             (MPLS, "raw_mpls_stack"),
+            (STP, "raw_stp_config_bpdu"),
+            (STP, "raw_stp_tcn"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
