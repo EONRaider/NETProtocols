@@ -64,7 +64,8 @@ changes, May 16, 2009": an unapproved draft whose Clause 14 merges
 names for the BPDU types, the protocol versions and port roles 1-3
 this module uses; Wireshark's ``role_vals`` names no role 0. The
 draft's §14.4 o) labels octets 34 and 35 Max Age, a slip for the
-Forward Delay they carry: Wireshark reads Forward Delay there
+Forward Delay they carry: the draft's own Figure 14-1 lists "Forward
+Delay 34-35" (and Max Age at 30-31), Wireshark reads Forward Delay there
 (``BPDU_FORWARD_DELAY``, offset 33 from the Protocol Identifier), and
 Linux's ``br_send_config_bpdu()`` in ``net/bridge/br_stp_bpdu.c``
 (read 2026-10-28) writes it there, ``br_set_ticks(buf+33,
@@ -124,9 +125,13 @@ largest numbered octet defined" for the version implemented. They stay
 outside this layer, after its ``header_len``. ``bytes(STP.decode(x)) ==
 x[:header_len]``.
 
-Cisco's PVST+ BPDUs, which append TLVs to a Configuration or RST BPDU,
-never arrive at DSAP 0x42: they travel in SNAP under OUI 00-00-0C, PID
-0x010B, which is where Wireshark's ``packet-bpdu.c`` attaches its
+Cisco's PVST+ sends two kinds of BPDU (Cisco's "Troubleshoot PVID and
+Type Inconsistencies" document, 24063, read 2026-10-28). Its VLAN 1
+BPDUs go untagged to the IEEE address 01-80-C2-00-00-00 as plain BPDUs
+at DSAP 0x42, and decode here like any other. Its SSTP BPDUs, sent to
+01-00-0C-CC-CC-CD, are the ones that append TLVs to a Configuration or
+RST BPDU, and they travel in SNAP under OUI 00-00-0C, PID 0x010B, not
+at DSAP 0x42; that is where Wireshark's ``packet-bpdu.c`` attaches its
 Cisco TLV parser (``llc.cisco_pid`` ``CISCO_PID_PVSTPP``,
 ``packet-cisco-pid.h``). The default registry has no entry there, so
 such a frame ends the walk at :class:`~netprotocols.SNAP`; reaching

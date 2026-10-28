@@ -578,8 +578,11 @@ class TestTrailingBytes:
         assert packet.consumed == len(frame) - len(extra)
         assert bytes(packet) == frame[: packet.consumed]
 
-    def test_a_pvst_plus_bpdu_arrives_in_snap_not_at_dsap_0x42(self):
-        """Cisco PVST+ is SNAP OUI 00-00-0C PID 0x010B, not DSAP 0x42.
+    def test_a_pvst_plus_sstp_bpdu_arrives_in_snap(self):
+        """PVST+'s SSTP BPDUs are SNAP OUI 00-00-0C PID 0x010B.
+
+        Those carry the TLVs; PVST+'s VLAN 1 BPDUs to the IEEE address
+        are plain BPDUs at DSAP 0x42, like the fixture's.
 
         The default registry has no ``llc.snap`` entry there, so the
         walk ends at SNAP; an entry for STP reaches it, and the TLVs,
