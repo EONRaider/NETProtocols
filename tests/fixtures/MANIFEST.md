@@ -465,9 +465,10 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   `tests/test_stp.py` builds), and `check_fixtures` also holds each
   BPDU to its type's length (35 octets for a Configuration BPDU, 4 for
   a TCN, 36 for an RST BPDU, which must also have a Protocol Version of
-  2 or more and a Version 1 Length of 0) and a Configuration BPDU's
-  unused flag bits to 0. CDP decodes as far as SNAP: a CDP decoder is
-  later work.
+  2 or more) and, as checks on what the sender transmitted rather than
+  what a receiver requires, its type's unused flag bits and an RST
+  BPDU's Version 1 Length to 0. CDP decodes as far as SNAP: a CDP
+  decoder is later work.
 
 ### RIP test keys
 

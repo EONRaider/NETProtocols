@@ -1171,25 +1171,35 @@ def _check_llc(
     return [f"unchecked-llc-dsap-0x{pdu[0]:02x}"] if strict else []
 
 
-#: 802.1D BPDU Types: their names in the stats, and the octets each
-#: needs (802.1D-2004 §9.3; the validation of received BPDUs ignores
-#: octets past these).
-_BPDU_TYPES = {0x00: ("config", 35), 0x02: ("rst", 36), 0x80: ("tcn", 4)}
+#: 802.1D BPDU Types: their names in the stats, the octets each needs
+#: (802.1D-2004 §9.3; a receiver ignores octets past these, P802.1aq/
+#: D1.5++ §14.4) and the Flags bits the type leaves unused, which "shall
+#: be transmitted as 0" (§14.4 a)-g)): all but Topology Change and its
+#: Acknowledgment in a Configuration BPDU, and bit 8 in an RST BPDU.
+_BPDU_TYPES = {
+    0x00: ("config", 35, 0x7E),
+    0x02: ("rst", 36, 0x80),
+    0x80: ("tcn", 4, 0x00),
+}
 
 
 def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
     """Validate an 802.1D BPDU: Protocol Identifier 0, a known BPDU Type
     and as many octets as it needs, 35 for a Configuration BPDU (type
     0x00), 36 for an RST BPDU (0x02) and 4 for a Topology Change
-    Notification (0x80). A Configuration BPDU's six unused flag bits
-    must be 0, and an RST BPDU must have a Protocol Version of 2 or more
-    and a Version 1 Length of 0, as the validation of received BPDUs
-    requires."""
-    name, needed = _BPDU_TYPES.get(bpdu[3] if len(bpdu) > 3 else -1, ("", 0))
+    Notification (0x80), and, for an RST BPDU, a Protocol Version of 2
+    or more: the receiver-side checks of §14.5, which discards a type
+    0x02 BPDU of version 0 or 1. The rest are sender-side checks on the
+    fixture, of what a well-behaved bridge transmits but a receiver
+    ignores or tolerates: unused Flags bits 0 (§14.4 a)-g) "ignored on
+    receipt") and an RST BPDU's Version 1 Length 0 (§14.4 p); §14.5 c)
+    does not check it, and d)2) decodes a nonzero one as RST)."""
+    kind = bpdu[3] if len(bpdu) > 3 else -1
+    name, needed, unused = _BPDU_TYPES.get(kind, ("", 0, 0))
     if bpdu[:2] != b"\x00\x00" or not needed or len(bpdu) < needed:
         return ["stp-bpdu-malformed"]
-    if name == "config" and bpdu[4] & 0x7E:
-        return ["stp-config-unused-flags"]
+    if unused and bpdu[4] & unused:
+        return [f"stp-{name}-unused-flags"]
     if name == "rst" and (bpdu[2] < 2 or bpdu[35] != 0):
         return ["stp-rst-malformed"]
     stats["stp-bpdu"] += 1
