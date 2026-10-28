@@ -583,8 +583,10 @@ class TestTrailingBytes:
     def test_a_pvst_plus_sstp_bpdu_arrives_in_snap(self):
         """PVST+'s SSTP BPDUs are SNAP OUI 00-00-0C PID 0x010B.
 
-        Those carry the TLVs; PVST+'s VLAN 1 BPDUs to the IEEE address
-        are plain BPDUs at DSAP 0x42, like the fixture's.
+        Those carry the TLVs. PVST+'s VLAN 1 BPDUs go untagged to the
+        IEEE address, at DSAP 0x42, like the fixture's (Cisco, "Troubleshoot
+        Spanning Tree PVID- and Type-Inconsistencies", does not say they
+        carry a TLV; Wireshark parses PVST+ TLVs only under PID 0x010B).
 
         The default registry has no ``llc.snap`` entry there, so the
         walk ends at SNAP; an entry for STP reaches it, and the TLVs,

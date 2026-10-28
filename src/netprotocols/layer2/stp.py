@@ -125,10 +125,12 @@ largest numbered octet defined" for the version implemented. They stay
 outside this layer, after its ``header_len``. ``bytes(STP.decode(x)) ==
 x[:header_len]``.
 
-Cisco's PVST+ sends two kinds of BPDU (Cisco's "Troubleshoot PVID and
-Type Inconsistencies" document, 24063, read 2026-10-28). Its VLAN 1
-BPDUs go untagged to the IEEE address 01-80-C2-00-00-00 as plain BPDUs
-at DSAP 0x42, and decode here like any other. Its SSTP BPDUs, sent to
+Cisco's PVST+ sends two kinds of BPDU (Cisco's "Troubleshoot Spanning
+Tree PVID- and Type-Inconsistencies" document, 24063, read 2026-10-28).
+Its VLAN 1 BPDUs go untagged to the IEEE address 01-80-C2-00-00-00, at
+DSAP 0x42, and decode here like any other (Cisco does not say they
+carry a TLV; Wireshark parses PVST+ TLVs only under PID 0x010B). Its
+SSTP BPDUs, sent to
 01-00-0C-CC-CC-CD, are the ones that append TLVs to a Configuration or
 RST BPDU, and they travel in SNAP under OUI 00-00-0C, PID 0x010B, not
 at DSAP 0x42; that is where Wireshark's ``packet-bpdu.c`` attaches its
