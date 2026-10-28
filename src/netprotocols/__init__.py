@@ -28,6 +28,9 @@ from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.cdp import CDP, CDPTLV, CDPAddress
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.layer2.llc import LLC, SNAP
+from netprotocols.layer2.lldp import LLDP, LLDPTLV, LLDPChassisID, LLDPPortID
+from netprotocols.layer2.mpls import MPLS, MPLSLabel
+from netprotocols.layer2.stp import STP
 from netprotocols.layer2.vlan import VLAN
 from netprotocols.layer3.ah import AH, AHv6
 from netprotocols.layer3.esp import ESP
@@ -145,13 +148,17 @@ __all__ = [
     "IGMP",
     "LLC",
     "LLCSAP",
+    "LLDP",
+    "LLDPTLV",
     "MAX_DEPTH",
+    "MPLS",
     "OSPF",
     "OSPFLSA",
     "PIM",
     "RIP",
     "SCTP",
     "SNAP",
+    "STP",
     "TCP",
     "UDP",
     "VLAN",
@@ -194,6 +201,9 @@ __all__ = [
     "InvalidMACAddressError",
     "InvalidManufacturerCodeError",
     "InvalidRegistryKeyError",
+    "LLDPChassisID",
+    "LLDPPortID",
+    "MPLSLabel",
     "MXRecord",
     "MalformedCaptureError",
     "MaxDepthExceededError",

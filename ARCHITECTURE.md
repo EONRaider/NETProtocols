@@ -220,6 +220,28 @@ VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
 header with a length field and leaves Ethernet's padding undecoded. It
 must: a VRRPv3 advert for one IPv4 address is 12 bytes, padded on the
 wire, and VRRPv3's pseudo-header carries the message's length.
+`STP` is the same case at layer 2: a BPDU has no length field, but its
+BPDU Type gives its exact length (4, 35 or 36 octets), so it leaves
+whatever follows undecoded, including the extra octets of a PDU longer
+than its BPDU, which a receiver ignores (§14.4 of the IEEE 802.1 draft
+the module cites). See
+[`layer2/stp.py`](src/netprotocols/layer2/stp.py)'s module docstring.
+
+`LLDP` has no length for the whole LLDPDU either, but bounds itself
+by its last TLV: its TLVs each carry a Length, and the End of LLDPDU
+TLV ends the walk, so it obeys rule 3 like a header with a length
+field and leaves Ethernet's padding and an FCS undecoded. A TLV whose
+Length runs past the buffer raises `TruncatedHeaderError`, as a lying
+length does in rule 2. Wireshark's dissector notes that 802.1AB-2016
+made the End TLV optional, so an LLDPDU that reaches the end of the
+buffer without one decodes too; there nothing marks where a trailer
+starts, so the walk reads one as TLVs: two or more zero bytes read as
+an End TLV, and other bytes as another TLV or a framing error. The
+mandatory Chassis ID, Port ID and Time To Live TLVs are read by
+accessors from the first three positions, which answer `None` rather
+than raise when the order is broken, since that is not framing. See
+[`layer2/lldp.py`](src/netprotocols/layer2/lldp.py)'s module
+docstring.
 
 **802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
 length (IEEE 802.3 Clause 3.2.6): from 0x0600 an EtherType, up to 1500
@@ -341,21 +363,32 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP` is the one exception, and it answers from decode context rather
-than from a wire field. A BGP message carries no payload: a TCP segment
-can hold several messages back to back, each decoded as its own layer,
-so `BGP.next_protocol()` names the next message *beside* it — `BGP`
-when the bytes after this message begin another one, `None` when they
-do not. Only those bytes can say which, and `next_protocol()` is handed
-none, so `decode()` records the answer on the instance in a field kept
-out of the dataclass's comparison and hash (`compare=False`, the
-mechanism `HTTP` uses for its `_message` parse cache). Two equal
-messages compare equal however they were found, and can still chain
-differently. The rules of the decode contract hold for it unchanged;
-see *Port-based dispatch is best-effort* below,
+`BGP`, `MPLS` and `LLC` are the three exceptions: they answer from
+decode context rather than from a wire field alone. A BGP message
+carries no payload: a TCP segment can hold several messages back to
+back, each decoded as its own layer, so `BGP.next_protocol()` names the
+next message *beside* it — `BGP` when the bytes after this message
+begin another one, `None` when they do not. An MPLS label stack carries
+a packet but no field naming its protocol (see *MPLS: dispatch by
+convention* below), so `MPLS.next_protocol()` infers one, partly from
+the first byte after the stack. SAP 0x42 carries GARP's PDUs (Protocol
+Identifier 0x0001) beside STP's BPDUs (0x0000), so `LLC.decode()`
+records, for a DSAP 0x42 PDU it would dispatch, whether the two octets
+after its Control are present and not 0x0000, and `LLC.next_protocol()`
+then answers `None`, whatever `llc.dsap` holds at 0x42; fewer than two
+octets still reach `STP`, which reports the truncation. Only the bytes
+can say, and `next_protocol()` is handed none, so each `decode()`
+records what it saw on the instance in a field kept out of the
+dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
+uses for its `_message` parse cache). Two equal headers compare equal
+however they were found, and can still chain differently. The rules of
+the decode contract hold for all three unchanged; see *Port-based
+dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
-next_protocol*, and
-[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+next_protocol*, the module docstrings of
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py) and
+[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py), and
+[`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s *DSAP 0x42*.
 
 ```mermaid
 flowchart LR
@@ -366,6 +399,7 @@ flowchart LR
   E -->|length ≤ 1500| L[LLC]
   V -->|length ≤ 1500| L
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
+  L -->|DSAP 0x42, UI or I, Protocol ID 0| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   SN -->|OUI 00-00-0C, PID 0x2000| CDP[CDP]
@@ -373,6 +407,12 @@ flowchart LR
   V -->|0x0806| A
   V -->|0x0800| I4
   V -->|0x86DD| I6
+  E -->|0x8847, 0x8848| M[MPLS label stack]
+  V -->|0x8847, 0x8848| M
+  M -->|bottom label 0, or first nibble 4| I4
+  M -->|bottom label 2, or first nibble 6| I6
+  E -->|0x88CC| LD[LLDP]
+  V -->|0x88CC| LD
   I4 -->|1| IC4[ICMPv4]
   I4 -->|6| T[TCP]
   I4 -->|17| U[UDP]
@@ -451,8 +491,36 @@ bitfields — `pcp`, `dei`, `vid` — as dataclass fields validated in
 property (the same pattern `IPv6` uses for `version` /
 `traffic_class` / `flow_label`).
 
+**MPLS: dispatch by convention.** An MPLS label stack (RFC 3032) sits
+where a VLAN tag does, after Ethernet's EtherType (0x8847, or 0x8848
+for a multicast frame whose top label is upstream-assigned, RFC 5332),
+and decodes as one `MPLS` layer however many 4-byte entries it holds:
+the stack ends at the entry with its Bottom of Stack bit set, so it
+bounds itself, and a deep stack counts once against `max_depth`. What
+it does not have is a field naming the packet it carries. RFC 3032
+§2.2 leaves that to the binding of the label popped at the egress,
+which a capture never shows, so `MPLS.next_protocol()` follows a
+convention. A bottom label reserved for a payload settles it — 0, IPv4
+Explicit NULL, is IPv4 and 2, IPv6 Explicit NULL, is IPv6, whatever
+the bytes say, while 13 (GAL) and 14 (OAM Alert) are followed by a
+channel header or an OAM message and stop the walk. Otherwise the
+first nibble after the stack is read as an IP version, 4 or 6, as
+routers that load-balance IP over MPLS do (RFC 4928); anything else, a
+pseudowire control word's 0 among them, stops the walk. The class
+comes from the `ethertype` table at 0x0800 or 0x86DD, so a `registry`
+or `decode_as` override reaches the labelled packet too. The nibble is
+a guess, as a port is: an Ethernet pseudowire sent without a control
+word, whose inner destination MAC address happens to begin with 4 or
+6, decodes as an IP header, which is the misreading RFC 4928 and RFC
+4385's control word exist to prevent. GRE dispatches its Protocol Type
+through the `ethertype` table too, so MPLS in GRE (RFC 4023) reaches
+`MPLS` with no code of its own. See
+[`layer2/mpls.py`](src/netprotocols/layer2/mpls.py)'s module
+docstring.
+
 The numbers on the arrows are the wire values — EtherTypes out of
-Ethernet, IP protocol numbers out of IPv4/IPv6 — and they live in
+Ethernet, IP protocol numbers out of IPv4/IPv6; MPLS's arrows, which
+no wire field names, are the convention above — and they live in
 [`_enums.py`](src/netprotocols/_enums.py) as `EtherType` and
 `IPProtocol`. IPv4 and IPv6 share one registry because the number
 space is shared (1 is ICMPv4, 58 is ICMPv6, 6 is TCP, 17 is UDP, 132
@@ -502,7 +570,7 @@ field they dispatch on:
 
 | Table | Dispatches on | Read by |
 |---|---|---|
-| `ethertype` | Ethernet II EtherType (from Ethernet and VLAN, 0x0600 and up only; from GRE and SNAP, any value) | `Ethernet`, `VLAN`, `GRE`, `SNAP` (OUI 00-00-00, 00-00-F8) |
+| `ethertype` | Ethernet II EtherType (from Ethernet and VLAN, 0x0600 and up only; from GRE and SNAP, any value) | `Ethernet`, `VLAN`, `GRE`, `SNAP` (OUI 00-00-00, 00-00-F8); `MPLS` at 0x0800 and 0x86DD, by convention |
 | `llc.dsap` | IEEE 802.2 LLC DSAP | `LLC` |
 | `llc.snap` | SNAP `(oui << 16) \| pid`, any other OUI | `SNAP` |
 | `ip.proto` | IPv4 `protocol` | `IPv4`, `AH` |
@@ -552,16 +620,18 @@ therefore take the nearest one before it, as `Packet.with_checksums()`
 and `Packet.flow_key()` do, not the first.
 
 **Extending the walk without forking.** The tables are public. A
-protocol this library does not implement — MPLS, a proprietary
-telemetry header — is one registration away from participating in
+protocol this library does not implement — a proprietary telemetry
+header, say, sent under 0x88B5, which IANA's EtherType registry lists
+as "IEEE Std 802 - Local Experimental Ethertype", so no built-in
+decoder holds it — is one registration away from participating in
 frame walks like any built-in:
 
 ```python
 from netprotocols import Protocol
 from netprotocols.registry import register
 
-@register("ethertype", 0x8847)
-class MPLS(Protocol):
+@register("ethertype", 0x88B5)
+class Telemetry(Protocol):
     ...
 ```
 
@@ -597,8 +667,10 @@ value, an LLC header follows it. None can form a cycle: `ip.py` and
 ## Port-based dispatch is best-effort
 
 The `ethertype`, `llc.*` and `ip.proto` tables dispatch on a single
-authoritative field: it exists to say what follows. The two port
-tables break that model, and differ in kind rather than just in name.
+authoritative field: it exists to say what follows (MPLS, which looks
+up the `ethertype` table by convention, is the exception described
+above). The two port tables break that model, and differ in kind
+rather than just in name.
 A port is a *guess* — any service may run on any port, and the
 discriminator is split across the source and destination ports.
 Dispatch therefore checks the destination port first (a request
@@ -821,7 +893,10 @@ src/netprotocols/
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
 │                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
-│                   cdp.py (Cisco Discovery Protocol, after SNAP)
+│                   cdp.py (Cisco Discovery Protocol, after SNAP),
+│                   lldp.py (LLDP, IEEE 802.1AB),
+│                   mpls.py (MPLS label stack: MPLS + MPLSLabel),
+│                   stp.py (802.1D / 802.1w BPDUs)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

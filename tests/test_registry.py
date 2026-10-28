@@ -8,6 +8,7 @@ from netprotocols import (
     DNS,
     SCTP,
     SNAP,
+    STP,
     TCP,
     UDP,
     Ethernet,
@@ -87,20 +88,20 @@ class TestTableNames:
 
 class TestRegistration:
     def test_a_registered_class_is_dispatched(self, registry):
-        registry.register(TABLE_ETHERTYPE, 0x8847, Fake)
-        assert registry.get(TABLE_ETHERTYPE, 0x8847) is Fake
+        registry.register(TABLE_ETHERTYPE, 0x88B5, Fake)
+        assert registry.get(TABLE_ETHERTYPE, 0x88B5) is Fake
 
     def test_an_unregistered_key_answers_none(self, registry):
-        assert registry.get(TABLE_ETHERTYPE, 0x8847) is None
+        assert registry.get(TABLE_ETHERTYPE, 0x88B5) is None
 
     def test_register_returns_the_class_unchanged_as_a_decorator(self):
         isolated = Registry()
 
-        @register(TABLE_ETHERTYPE, 0x8847, registry=isolated)
+        @register(TABLE_ETHERTYPE, 0x88B5, registry=isolated)
         class Decorated(Protocol):
             pass
 
-        assert isolated.get(TABLE_ETHERTYPE, 0x8847) is Decorated
+        assert isolated.get(TABLE_ETHERTYPE, 0x88B5) is Decorated
         assert issubclass(Decorated, Protocol)
 
     def test_register_as_a_direct_call_returns_none(self):
@@ -141,9 +142,9 @@ class TestConflicts:
         assert registry.get(TABLE_UDP_PORT, 53) is DNS
 
     def test_a_different_class_on_the_same_key_still_raises(self, registry):
-        registry.register(TABLE_ETHERTYPE, 0x8847, Fake)
+        registry.register(TABLE_ETHERTYPE, 0x88B5, Fake)
         with pytest.raises(RegistryConflictError):
-            registry.register(TABLE_ETHERTYPE, 0x8847, OtherFake)
+            registry.register(TABLE_ETHERTYPE, 0x88B5, OtherFake)
 
     def test_installing_the_defaults_twice_is_a_no_op(self):
         registry = Registry()
@@ -266,8 +267,8 @@ class TestIsolation:
             assert empty.table(name) == {}
 
     def test_registering_on_a_copy_leaves_the_default_alone(self, registry):
-        registry.register(TABLE_ETHERTYPE, 0x8847, Fake)
-        assert DEFAULT.get(TABLE_ETHERTYPE, 0x8847) is None
+        registry.register(TABLE_ETHERTYPE, 0x88B5, Fake)
+        assert DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is None
 
     def test_registering_on_the_default_does_not_reach_an_earlier_copy(
         self, registry
@@ -372,9 +373,9 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_llc(self):
-        """SNAP is the one built-in LLC entry, and CDP, at Cisco's OUI
-        00-00-0C and PID 0x2000, the one built-in llc.snap entry."""
-        assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP}
+        """SNAP and STP are the built-in LLC entries, and CDP, at Cisco's
+        OUI 00-00-0C and PID 0x2000, the one built-in llc.snap entry."""
+        assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP, 0x42: STP}
         assert DEFAULT.table(TABLE_LLC_SNAP) == {0x00000C2000: CDP}
 
     def test_ports(self):

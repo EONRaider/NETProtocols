@@ -44,7 +44,8 @@ src/netprotocols/
                   Fletcher checksum of OSPF's LSAs, compute()/verify()
                   (CDP's odd-byte variant among them)
   packet.py       Packet: an ordered stack of headers, with_checksums()
-  layer2/         Ethernet, VLAN, ARP, LLC + SNAP (802.2), CDP
+  layer2/         Ethernet, VLAN, ARP, LLC + SNAP (802.2), STP (802.1D),
+                  LLDP, MPLS, CDP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
                   GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)

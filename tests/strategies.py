@@ -28,12 +28,16 @@ from netprotocols import (
     HTTP,
     IGMP,
     LLC,
+    LLDP,
+    LLDPTLV,
+    MPLS,
     OSPF,
     OSPFLSA,
     PIM,
     RIP,
     SCTP,
     SNAP,
+    STP,
     VLAN,
     VRRP,
     VXLAN,
@@ -48,6 +52,9 @@ from netprotocols import (
     IPv6DestinationOptions,
     IPv6HopByHopOptions,
     IPv6Routing,
+    LLDPChassisID,
+    LLDPPortID,
+    MPLSLabel,
     OSPFDatabaseDescription,
     OSPFHello,
     OSPFLSAHeader,
@@ -125,6 +132,56 @@ def vlan_headers(draw: st.DrawFn) -> VLAN:
     )
 
 
+#: An LLDP TLV value: mostly short, sometimes long enough to need the
+#: 9th Length bit, up to the 511 bytes the Length can carry.
+_lldp_values = st.one_of(
+    st.binary(max_size=24), st.binary(min_size=256, max_size=511)
+)
+
+
+@st.composite
+def lldp_lldpdus(draw: st.DrawFn) -> LLDP:
+    # tlvs is LLDP's one field, constrained as decode produces it: an
+    # End of LLDPDU TLV (type 0) comes last, empty, or not at all, and
+    # an LLDPDU holds at least one TLV. Half open with the mandatory
+    # Chassis ID, Port ID and TTL, so the typed accessors have
+    # something to read.
+    tlvs: list[LLDPTLV] = []
+    if draw(st.booleans()):
+        ids = st.tuples(
+            st.integers(0, 0xFF), st.binary(min_size=1, max_size=32)
+        )
+        tlvs.append(LLDPChassisID(*draw(ids)).tlv)
+        tlvs.append(LLDPPortID(*draw(ids)).tlv)
+        tlvs.append(LLDPTLV(3, draw(st.integers(0, 0xFFFF)).to_bytes(2)))
+    tlvs += draw(
+        st.lists(
+            st.builds(LLDPTLV, st.integers(1, 0x7F), _lldp_values), max_size=6
+        )
+    )
+    if not tlvs or draw(st.booleans()):
+        tlvs.append(LLDPTLV(0))
+    return LLDP(tlvs=tuple(tlvs))
+
+
+@st.composite
+def mpls_stacks(draw: st.DrawFn) -> MPLS:
+    # Construction requires S on the last entry alone, which is also all
+    # decode produces, so every buildable stack is canonical.
+    depth = draw(st.integers(1, 8))
+    return MPLS(
+        labels=tuple(
+            MPLSLabel(
+                label=draw(st.integers(0, 0xFFFFF)),
+                traffic_class=draw(st.integers(0, 0b111)),
+                bottom_of_stack=int(index == depth - 1),
+                ttl=draw(st.integers(0, 0xFF)),
+            )
+            for index in range(depth)
+        )
+    )
+
+
 @st.composite
 def llc_headers(draw: st.DrawFn) -> LLC:
     # Canonical Controls only: a U-format one (two low bits 11) is one
@@ -166,6 +223,36 @@ def cdp_pdus(draw: st.DrawFn) -> CDP:
         ttl=draw(st.integers(0, 0xFF)),
         checksum=draw(st.integers(0, 0xFFFF)),
         tlvs=tuple(tlvs),
+    )
+
+
+@st.composite
+def stp_headers(draw: st.DrawFn) -> STP:
+    """A canonical BPDU of each type: a TCN carries nothing after its
+    type, a Configuration BPDU no Version 1 Length."""
+    bpdu_type = draw(st.sampled_from([0x00, 0x02, 0x80]))
+    version = draw(st.integers(0, 0xFF))
+    if bpdu_type == 0x80:
+        return STP(protocol_id=0, version=version, bpdu_type=bpdu_type)
+    u16 = st.integers(0, 0xFFFF)
+    return STP(
+        protocol_id=0,
+        version=version,
+        bpdu_type=bpdu_type,
+        flags=draw(st.integers(0, 0xFF)),
+        root_priority=draw(u16),
+        root_mac=draw(mac_strings()),
+        root_path_cost=draw(st.integers(0, 0xFFFFFFFF)),
+        bridge_priority=draw(u16),
+        bridge_mac=draw(mac_strings()),
+        port_id=draw(u16),
+        message_age=draw(u16),
+        max_age=draw(u16),
+        hello_time=draw(u16),
+        forward_delay=draw(u16),
+        version_1_length=(
+            draw(st.integers(0, 0xFF)) if bpdu_type == 0x02 else None
+        ),
     )
 
 
@@ -823,6 +910,9 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "VLAN": vlan_headers(),
     "LLC": llc_headers(),
     "SNAP": snap_headers(),
+    "LLDP": lldp_lldpdus(),
+    "MPLS": mpls_stacks(),
+    "STP": stp_headers(),
     "CDP": cdp_pdus(),
     "IPv4": ipv4_headers(),
     "IPv6": ipv6_headers(),

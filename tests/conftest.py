@@ -239,6 +239,24 @@ def raw_llc_header() -> bytes:
 
 
 @pytest.fixture
+def raw_stp_config_bpdu() -> bytes:
+    """The root's Configuration BPDU with Topology Change from
+    tests/fixtures/llc.pcap: Root and Bridge Identifier 0x1000 /
+    02:00:00:00:a0:00, Port Identifier 0x8001, Max Age 20 s, Hello Time
+    1 s, Forward Delay 2 s."""
+    return bytes.fromhex(
+        "0000000001100002000000a00000000000100002000000a00080010000140001000200"
+    )
+
+
+@pytest.fixture
+def raw_stp_tcn() -> bytes:
+    """The Topology Change Notification BPDU from
+    tests/fixtures/llc.pcap."""
+    return b"\x00\x00\x00\x80"
+
+
+@pytest.fixture
 def raw_snap_header() -> bytes:
     """SNAP header of a CDP frame from tests/fixtures/llc.pcap: OUI
     00-00-0C (Cisco), PID 0x2000 (CDP)."""
@@ -250,6 +268,14 @@ def raw_cdp_header() -> bytes:
     """CDP header of the CDPv2 frame in tests/fixtures/llc.pcap: Version
     2, TTL 4, Checksum 0xFCF3."""
     return b"\x02\x04\xfc\xf3"
+
+
+@pytest.fixture
+def raw_mpls_stack() -> bytes:
+    """A two-entry MPLS label stack in the shape of
+    tests/fixtures/mpls.pcap's: label 16001, then label 16002 with the
+    bottom of stack bit set, TTL 64 each."""
+    return bytes.fromhex("03e8104003e82140")
 
 
 @pytest.fixture
@@ -279,3 +305,13 @@ def raw_vrrpv3_advert() -> bytes:
     """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
     Adver Int 100 cs, one address — the minimal 12-byte message."""
     return bytes.fromhex("3135c8010064e97c0a091446")
+
+
+@pytest.fixture
+def raw_lldp_shutdown() -> bytes:
+    """Shutdown LLDPDU from ``lldp.pcap``: agent A's Chassis ID (MAC
+    address ``02:4e:50:86:00:0a``), Port ID (interface name
+    ``nplldp-va``), a Time To Live of 0, and End of LLDPDU."""
+    return bytes.fromhex(
+        "020704024e5086000a040a056e706c6c64702d7661060200000000"
+    )

@@ -85,6 +85,21 @@ instead of raising. See :mod:`netprotocols.layer7.rip`.
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
+``STP`` is the same case at layer 2: its BPDU Type gives its exact
+length, so the octets after the BPDU are left undecoded. See
+:mod:`netprotocols.layer2.stp`.
+
+``LLDP`` has no length for the whole LLDPDU, but each TLV has one and
+the End of LLDPDU TLV ends the walk, so step 3 holds after it; a TLV
+running past the buffer raises :class:`TruncatedHeaderError`, as in
+step 2. An LLDPDU without an End TLV (optional since 802.1AB-2016, as
+Wireshark's dissector notes) runs to the end of the buffer. See
+:mod:`netprotocols.layer2.lldp`.
+
+``MPLS`` has none either, but its label stack ends at the entry with the
+Bottom of Stack bit set, so step 3 holds as for a header with one: the
+labelled packet, and any padding after it, is the next layer's. See
+:mod:`netprotocols.layer2.mpls`.
 
 ``CDP`` has no length either; in a walk the 802.3 Length before it
 ends its buffer (see *Payload extent*). Its ``decode()`` walks TLVs to
@@ -109,13 +124,21 @@ public form.
 
 Decode context in ``next_protocol``
 -----------------------------------
-``BGP`` is the one header whose ``next_protocol()`` answers from what
-``decode()`` saw rather than from a wire field, and names the next
-message beside it rather than a class for its payload: whether the
-bytes after the message begin another one in the same TCP segment.
-``decode()`` records that on the instance in a ``compare=False`` field,
-outside its comparison and hash. Steps 1-3 above hold for it unchanged.
-See :mod:`netprotocols.layer7.bgp`.
+Three headers answer ``next_protocol()`` from what ``decode()`` saw
+rather than from a wire field alone, because no field says what follows
+them. ``BGP`` names the next message beside it rather than a class for
+its payload: whether the bytes after the message begin another one in
+the same TCP segment. ``MPLS`` names its payload by convention: by its
+bottom label where RFC 3032 reserves that label for one, and otherwise
+by the first nibble after the stack, read as an IP version. ``LLC``
+gates DSAP 0x42 on the payload's first two octets: a Protocol
+Identifier other than STP's 0x0000, such as GARP's, ends the walk. Each
+``decode()`` records what only the bytes could tell it on the instance,
+in a ``compare=False`` field outside its comparison and hash, so two
+equal headers compare equal wherever they were found, and can still
+chain differently. Steps 1-3 above hold for all three unchanged. See
+:mod:`netprotocols.layer7.bgp`, :mod:`netprotocols.layer2.mpls` and
+:mod:`netprotocols.layer2.llc`.
 """
 
 from __future__ import annotations
