@@ -84,11 +84,11 @@ the TLVs must fill the buffer ``decode`` is handed:
   happens to leave the ones'-complement sum unchanged.
 
 Wireshark's dissector, epan/dissectors/packet-cdp.c, differs on two
-points: at a TLV Length below 4 it adds an "invalid length" item and
-stops, without marking the frame malformed, whatever follows; and with
-1-3 bytes left it tries to read a 4-byte TLV header from them and
-marks the frame malformed, even when they are zero (the TLV loop of
-``dissect_cdp``, commit 31bf0857).
+points: at a TLV Length below 4 it adds an "invalid length" item,
+stops, and shows whatever follows as plain data, without marking the
+frame malformed; and with 1-3 bytes left it tries to read a 4-byte TLV
+header from them and marks the frame malformed, even when they are
+zero (the TLV loop of ``dissect_cdp``, commit 31bf0857).
 
 A header shorter than its fixed 4 bytes raises
 :class:`~netprotocols.TruncatedHeaderError` (offset 0, no ``field``).
