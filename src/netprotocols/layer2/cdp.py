@@ -45,7 +45,9 @@ Capabilities mask or does not parse as an address list
 Where a CDP PDU ends
 --------------------
 CDP has no length for the whole PDU: the TLVs run to the end of the
-802.3 Length, and the checksum covers exactly those bytes. In a walk,
+802.3 Length, and the sender's checksum covers the whole PDU, which
+:func:`~netprotocols.checksum.verify` sums as ``bytes(cdp)``, the
+bytes decoded (but see zeros inside the Length, below). In a walk,
 :func:`~netprotocols.decode_frame` ends the buffer it hands
 :meth:`CDP.decode` there (see :mod:`netprotocols.layer2.llc`), so
 Ethernet's zero padding and a captured FCS never reach it. Called
@@ -62,6 +64,21 @@ the TLVs must fill the buffer ``decode`` is handed:
   them, so Ethernet's zero padding, of any length, stays out of the
   PDU. Rule 3 holds for those zeros only, as for SCTP: nothing else
   is left undecoded.
+* That rule cannot see zeros inside the 802.3 Length. In a walk,
+  zero bytes after the last TLV and before the end of the Length are
+  part of the PDU the sender declared, not Ethernet padding, but they
+  are left undecoded all the same, and the walk does not raise:
+  :attr:`~netprotocols.Packet.consumed` stopping short of
+  ``14 + eth.length`` (untagged) is the only signal. ``verify()``
+  sums ``bytes(cdp)`` without them. Where the TLVs end at an even
+  offset that changes nothing, but where they end at an odd one, on
+  a byte other than 0x00, and the sender summed the whole Length (as
+  packet-cdp.c sums its whole buffer), the odd byte falls in a
+  different word and ``verify()`` returns ``False``.
+  ``scripts/check_fixtures.py`` rejects such a frame
+  (``cdp-tlvs-overrun`` for 1-3 zeros, ``cdp-malformed`` for 4 or
+  more), and Wireshark marks 1-3 zeros malformed and shows 4 or more
+  as a TLV of invalid Length 0.
 * Otherwise a TLV Length below 4 raises
   :class:`~netprotocols.InvalidFieldError`, and 1-3 bytes left after
   the last TLV raise :class:`~netprotocols.TruncatedHeaderError`, each

@@ -249,8 +249,8 @@ to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 
 `CDP`, which SNAP dispatches at OUI 00-00-0C PID 0x2000, is the first
 decoder behind that bound. It has no length of its own: its TLVs run to
-the end of the PDU, and its checksum covers exactly those bytes, so in
-a walk it decodes the PDU and nothing else. Its `decode()` walks TLVs
+the end of the PDU, and its checksum covers the whole PDU, so in a walk
+it decodes the PDU and nothing else. Its `decode()` walks TLVs
 to the end of the buffer it is handed and stops early, without
 raising, only where every byte left is zero, so Ethernet's zero padding
 is left undecoded when it is called directly; rule 3 holds for those
@@ -260,6 +260,15 @@ zeros only, as for SCTP. Otherwise a TLV Length below 4 raises
 buffer, in a walk too, where those bytes are inside the 802.3 Length.
 Wireshark's dissector instead stops at a Length below 4 whatever
 follows, and marks 1-3 bytes left malformed even when they are zero.
+The zero rule has one blind spot: zeros after the last TLV but inside
+the 802.3 Length belong to the PDU the sender declared, yet a walk
+leaves them undecoded without raising, so `consumed` stopping short of
+the Length's end is the only signal. `verify()` sums the bytes decoded,
+without them; where the TLVs end at an odd offset on a nonzero byte
+and the sender summed the whole Length, it returns `False`.
+`scripts/check_fixtures.py` rejects such a frame, and Wireshark marks
+1-3 such zeros malformed and shows 4 or more as a TLV of invalid
+Length 0.
 See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
 docstring.
 

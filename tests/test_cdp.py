@@ -437,6 +437,31 @@ class TestWhereThePDUEnds:
         assert packet.consumed == 22 + len(pdu)
         assert packet.stopped_by is None
 
+    @pytest.mark.parametrize("count", [1, 2, 3, 4, 6])
+    @pytest.mark.parametrize(
+        "value,verifies",
+        [(b"ab", True), (b"abc", False), (b"ab\x80", False), (b"ab\x00", True)],
+        ids=["even", "odd", "odd-high", "odd-zero"],
+    )
+    def test_zeros_inside_the_802_3_length_and_the_checksum(
+        self, check_fixtures, count, value, verifies
+    ):
+        """Zeros the Length holds are left undecoded; summed by the sender,
+        they change verify() only where the TLVs end at an odd offset on a
+        byte other than 0x00. The checker rejects the frame either way."""
+        head = bytes(CDP(2, 180, 0, (CDPTLV(1, value),)))
+        pdu = bytearray(head + bytes(count))
+        pdu[2:4] = check_fixtures._cdp_checksum(bytes(pdu)).to_bytes(2)
+        frame = frame_of(bytes(pdu))
+        packet = decode_frame(frame)
+        assert packet.stopped_by is None
+        assert packet[CDP].header_len == len(head)
+        assert packet.consumed == 22 + len(head) < len(frame)
+        assert verify(packet[CDP]) is verifies
+        assert check_fixtures.check_frame(frame, check_fixtures.Counter()) == [
+            "cdp-tlvs-overrun" if count < 4 else "cdp-malformed"
+        ]
+
     def test_a_cut_tlv_header_inside_the_802_3_length_fails_a_walk(self):
         """Raise for 1-3 nonzero bytes the 802.3 Length holds."""
         frame = frame_of(b"\x02\xb4\x00\x00" + tlv(1, b"x") + b"\x00\x06")
