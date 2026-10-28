@@ -101,9 +101,9 @@ the standard's validation of received BPDUs requires, and a BPDU Type
 other than the three above (``field="bpdu_type"``), since nothing else
 says where the BPDU ends. In a walk from LLC DSAP 0x42 only the second
 can arise, since :class:`~netprotocols.LLC` does not dispatch a PDU of
-another Protocol Identifier there; Wireshark shows the rest of a PDU of unknown type as data,
-and here such a PDU ends the walk with the error, or, lax, on
-``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
+another Protocol Identifier there; Wireshark shows the rest of a PDU of
+unknown type as data, and here such a PDU ends the walk with the error,
+or, lax, on ``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
 bytes) raises :class:`~netprotocols.TruncatedHeaderError`. Everything
 else is carried verbatim: the version, unused flag bits, a nonzero
 Version 1 Length, timer values no bridge would send.
