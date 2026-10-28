@@ -15,6 +15,7 @@ from netprotocols import (
     AH,
     ARP,
     BGP,
+    CDP,
     DNS,
     ESP,
     LLC,
@@ -125,6 +126,7 @@ class TestCorpusCoverage:
             LLDP,
             MPLS,
             STP,
+            CDP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

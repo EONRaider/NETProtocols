@@ -146,6 +146,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
 | 2 | LLDP | `LLDP`, `LLDPTLV`, `LLDPChassisID`, `LLDPPortID` | IEEE 802.1AB, EtherType 0x88CC; every TLV through End of LLDPDU, the End TLV's bound leaving padding and an FCS undecoded; Chassis ID and Port ID (subtype and ID) and Time To Live typed, every other TLV raw with its type named |
 | 2 | Spanning Tree BPDU (STP, RSTP) | `STP` | IEEE 802.1D-2004 §9.3, 802.1w; LLC DSAP 0x42 (`llc.dsap`); Configuration (35 octets), RST (36) and Topology Change Notification (4) BPDUs in one class, branching on the BPDU Type; per-type flag accessors (TC, TCA, Proposal, Port Role, Learning, Forwarding, Agreement), the 802.1t priority / system ID extension split, timers raw and in seconds; MST BPDUs decoded only as far as their RST prefix |
+| 2 | CDP | `CDP` | Cisco Discovery Protocol, versions 1 and 2, after SNAP OUI 00-00-0C PID 0x2000 (`llc.snap`); the 4-byte header and the TLVs, kept raw and named from Wireshark's packet-cdp.c, with accessors for Device ID, Addresses, Port ID, Capabilities, Software version, Platform and Management Address; its checksum (RFC 1071 but for an odd final byte) in `compute`/`verify` |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
 | 2 | MPLS label stack | `MPLS` | RFC 3032 §2.1, EtherTypes 0x8847 and 0x8848 (and GRE's Protocol Type, RFC 4023); the whole stack as one layer of `MPLSLabel` entries (label, traffic class, S, TTL); no field names the payload, so it dispatches by convention to IPv4 or IPv6 — the bottom label when it is an Explicit NULL, otherwise the first nibble after the stack — and stops at a pseudowire control word |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
@@ -448,7 +449,8 @@ raw = bytes(frame)  # ready for a raw socket
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
 checksum, VRRP's with or without its pseudo-header by version, PIM's,
-and SCTP's CRC32c via `crc32c()`; OSPF's LSA checksums via
+CDP's with its odd final byte summed as Cisco does, and SCTP's CRC32c
+via `crc32c()`; OSPF's LSA checksums via
 `lsa_checksum()`/`verify_lsa()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 

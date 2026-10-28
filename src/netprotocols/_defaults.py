@@ -21,6 +21,7 @@ from netprotocols.registry import (
     TABLE_IP_PROTO,
     TABLE_IP_PROTO_V6,
     TABLE_LLC_DSAP,
+    TABLE_LLC_SNAP,
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
     Registry,
@@ -28,6 +29,11 @@ from netprotocols.registry import (
 )
 
 __all__ = ["install"]
+
+#: Cisco's OUI, 00-00-0C, and the PID it assigns CDP under it (SNAP
+#: 00-00-0C 0x2000: Wireshark's packet-cisco-pid.h, CISCO_PID_CDP).
+CISCO_OUI = 0x00000C
+CDP_PID = 0x2000
 
 #: EtherType values that mark a VLAN tag shim rather than a payload. A
 #: tag dispatches to VLAN, whose own ``next_protocol`` comes back to the
@@ -89,6 +95,7 @@ def install(registry: Registry) -> None:
     no-op, so calling this twice on the same registry changes nothing.
     """
     from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.cdp import CDP
     from netprotocols.layer2.llc import SNAP
     from netprotocols.layer2.lldp import LLDP
     from netprotocols.layer2.mpls import MPLS
@@ -142,6 +149,9 @@ def install(registry: Registry) -> None:
     # Tree SAP. BPDUs are UI PDUs sent from SSAP 0x42 too, but the SSAP
     # is not checked: any UI or I-format PDU at DSAP 0x42 dispatches.
     add(TABLE_LLC_DSAP, LLCSAP.SPANNING_TREE, STP)
+    # CDP is Cisco's own PID 0x2000 under Cisco's OUI 00-00-0C, keyed
+    # (oui << 16) | pid; it is not EtherType 0x2000.
+    add(TABLE_LLC_SNAP, CISCO_OUI << 16 | CDP_PID, CDP)
 
     # Shared by IPv4 and IPv6: registering in ip.proto reaches
     # ip.proto.v6 too, because the latter inherits it.

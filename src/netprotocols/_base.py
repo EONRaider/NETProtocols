@@ -101,6 +101,13 @@ Bottom of Stack bit set, so step 3 holds as for a header with one: the
 labelled packet, and any padding after it, is the next layer's. See
 :mod:`netprotocols.layer2.mpls`.
 
+``CDP`` has no length either; in a walk the 802.3 Length before it
+ends its buffer (see *Payload extent*). Its ``decode()`` walks TLVs to
+the end of that buffer and leaves only a run of zero bytes where the
+next TLV would start undecoded, so step 3 holds for those zeros alone:
+unlike SCTP's, it raises for any other bytes no TLV fits. See
+:mod:`netprotocols.layer2.cdp`.
+
 Payload extent
 --------------
 An 802.3 Length is the only length field the chain walk honours: a

@@ -269,6 +269,32 @@ but can bound the PDU after it only through that private hook, pending
 to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s module docstring.
 
+`CDP`, which SNAP dispatches at OUI 00-00-0C PID 0x2000, is the first
+decoder behind that bound. It has no length of its own: its TLVs run to
+the end of the PDU, and its checksum covers the whole PDU, so in a walk
+it decodes the PDU and nothing else. Its `decode()` walks TLVs
+to the end of the buffer it is handed and stops early, without
+raising, only where every byte left is zero, so Ethernet's zero padding
+is left undecoded when it is called directly; rule 3 holds for those
+zeros only, as for SCTP. Otherwise a TLV Length below 4 raises
+`InvalidFieldError`, 1-3 bytes left after the last TLV raise
+`TruncatedHeaderError`, and so does a TLV whose Length runs past the
+buffer, in a walk too, where those bytes are inside the 802.3 Length.
+Wireshark's dissector instead stops at a Length below 4 whatever
+follows, and marks 1-3 bytes left malformed even when they are zero.
+The zero rule has one blind spot: zeros after the last TLV but inside
+the 802.3 Length belong to the PDU the sender declared, yet a walk
+leaves them undecoded without raising, so `consumed` stopping short of
+the Length's end is the only structural signal. `verify()` sums the
+bytes decoded, without them; where the TLVs end at an odd offset on a
+nonzero byte and the sender summed the whole Length, it returns
+`False`.
+`scripts/check_fixtures.py` rejects such a frame, and Wireshark marks
+1-3 such zeros malformed and shows 4 or more as a TLV of invalid
+Length 0.
+See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
+docstring.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
@@ -376,6 +402,7 @@ flowchart LR
   L -->|DSAP 0x42, UI or I, Protocol ID 0| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
+  SN -->|OUI 00-00-0C, PID 0x2000| CDP[CDP]
   V -->|0x8100, 0x88A8, 0x9100| V
   V -->|0x0806| A
   V -->|0x0800| I4
@@ -859,12 +886,14 @@ src/netprotocols/
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify, OSPF's LSA Fletcher checksum
+│                   compute, verify (CDP's odd-byte sum among them),
+│                   OSPF's LSA Fletcher checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
 │                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
+│                   cdp.py (Cisco Discovery Protocol, after SNAP),
 │                   lldp.py (LLDP, IEEE 802.1AB),
 │                   mpls.py (MPLS label stack: MPLS + MPLSLabel),
 │                   stp.py (802.1D / 802.1w BPDUs)

@@ -7,6 +7,7 @@ from netprotocols import (
     AH,
     ARP,
     BGP,
+    CDP,
     ESP,
     HTTP,
     LLC,
@@ -61,6 +62,7 @@ class TestTruncation:
             (MPLS, "raw_mpls_stack"),
             (STP, "raw_stp_config_bpdu"),
             (STP, "raw_stp_tcn"),
+            (CDP, "raw_cdp_header"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):

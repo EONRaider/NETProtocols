@@ -24,6 +24,7 @@ import pytest
 from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     ARP,
+    CDP,
     GRE,
     LLC,
     LLCSAP,
@@ -79,9 +80,9 @@ CDP_KEY = 0x00000C << 16 | 0x2000
 class WholeBuffer(Protocol):
     """A stand-in for a decoder with no length of its own.
 
-    CDP's will be such a decoder, and STP leaves what follows its BPDU
-    undecoded: this one keeps every byte it is handed, so what it holds
-    shows where the walk ended its buffer.
+    CDP is one, reading TLVs to the end of its buffer, and STP leaves
+    what follows its BPDU undecoded: this one keeps every byte it is
+    handed, so what it holds shows where the walk ended its buffer.
     """
 
     body: bytes
@@ -487,7 +488,7 @@ class TestSNAPHeader:
         )
         assert SNAP(oui=0x00000C, pid=0x2000).next_protocol(registry) is VXLAN
         assert SNAP(oui=0, pid=0x2000).next_protocol(registry) is GRE
-        assert SNAP(oui=0x00000C, pid=0x2000).next_protocol() is None
+        assert SNAP(oui=0x00000C, pid=0x2000).next_protocol() is CDP
 
     @pytest.mark.parametrize(
         "fields,field",
@@ -526,11 +527,13 @@ class TestTheFixture:
     @pytest.mark.parametrize(
         "frame", [CDPV1, CDPV2, CDPV1_HIGH_BYTE], ids=["v1", "v2", "high"]
     )
-    def test_cdp_decodes_as_far_as_snap(self, frame):
+    def test_cdp_decodes_through_snap(self, frame):
         packet = decode_frame(frame)
-        assert kinds(packet) == [Ethernet, LLC, SNAP]
+        assert kinds(packet) == [Ethernet, LLC, SNAP, CDP]
         assert packet[SNAP].snap_key == CDP_KEY
-        assert packet[SNAP].next_protocol() is None
+        assert packet[SNAP].next_protocol() is CDP
+        assert bytes(packet[CDP]) == pdu_of(frame)[8:]
+        assert packet.consumed == len(frame)
         assert cdp_checksum(pdu_of(frame)[8:]) == 0
 
     def test_rfc1042_reaches_arp_through_the_ethertype_table(self):

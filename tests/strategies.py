@@ -19,6 +19,8 @@ from netprotocols import (
     AH,
     ARP,
     BGP,
+    CDP,
+    CDPTLV,
     DHCP,
     DNS,
     ESP,
@@ -199,6 +201,28 @@ def llc_headers(draw: st.DrawFn) -> LLC:
 def snap_headers(draw: st.DrawFn) -> SNAP:
     return SNAP(
         oui=draw(st.integers(0, 0xFFFFFF)), pid=draw(st.integers(0, 0xFFFF))
+    )
+
+
+@st.composite
+def cdp_pdus(draw: st.DrawFn) -> CDP:
+    # Any version: decode reads every one the same way. A CDPTLV's
+    # Length is never below 4, so every PDU built decodes back whole.
+    tlvs = draw(
+        st.lists(
+            st.builds(
+                CDPTLV,
+                type=st.integers(0, 0xFFFF),
+                value=st.binary(max_size=24),
+            ),
+            max_size=6,
+        )
+    )
+    return CDP(
+        version=draw(st.integers(0, 0xFF)),
+        ttl=draw(st.integers(0, 0xFF)),
+        checksum=draw(st.integers(0, 0xFFFF)),
+        tlvs=tuple(tlvs),
     )
 
 
@@ -889,6 +913,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "LLDP": lldp_lldpdus(),
     "MPLS": mpls_stacks(),
     "STP": stp_headers(),
+    "CDP": cdp_pdus(),
     "IPv4": ipv4_headers(),
     "IPv6": ipv6_headers(),
     "IPv6HopByHopOptions": ipv6_hop_by_hop_headers,

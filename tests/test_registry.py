@@ -4,6 +4,7 @@ inheritance, and isolation from the process-wide default."""
 import pytest
 
 from netprotocols import (
+    CDP,
     DNS,
     SCTP,
     SNAP,
@@ -372,10 +373,10 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_llc(self):
-        """SNAP and STP are the built-in LLC entries; the llc.snap table
-        starts empty, for CDP and other OUIs' protocols to register in."""
+        """SNAP and STP are the built-in LLC entries, and CDP, at Cisco's
+        OUI 00-00-0C and PID 0x2000, the one built-in llc.snap entry."""
         assert DEFAULT.table(TABLE_LLC_DSAP) == {0xAA: SNAP, 0x42: STP}
-        assert DEFAULT.table(TABLE_LLC_SNAP) == {}
+        assert DEFAULT.table(TABLE_LLC_SNAP) == {0x00000C2000: CDP}
 
     def test_ports(self):
         assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS

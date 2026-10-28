@@ -264,6 +264,13 @@ def raw_snap_header() -> bytes:
 
 
 @pytest.fixture
+def raw_cdp_header() -> bytes:
+    """CDP header of the CDPv2 frame in tests/fixtures/llc.pcap: Version
+    2, TTL 4, Checksum 0xFCF3."""
+    return b"\x02\x04\xfc\xf3"
+
+
+@pytest.fixture
 def raw_mpls_stack() -> bytes:
     """A two-entry MPLS label stack in the shape of
     tests/fixtures/mpls.pcap's: label 16001, then label 16002 with the

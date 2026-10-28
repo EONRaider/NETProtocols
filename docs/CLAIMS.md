@@ -954,18 +954,18 @@ internally (`scripts/check_fixtures.py`).
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that six TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
-`RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s and `STP`'s
-accessors never raise at all, and that
-`bytes(decode(x)) == x` is Hypothesis-generated for **all 35**
+`RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s, `STP`'s and
+`CDP`'s accessors never raise at all, and that
+`bytes(decode(x)) == x` is Hypothesis-generated for **all 36**
 protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 31 without a hand-written one (#97 added the first
+property over the 32 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
 `AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
 21st and 22nd, `RIP` the 23rd, `OSPF` the 24th, `PIM`
 the 25th, `BGP` the 26th, `MPLS` the 27th, `LLDP` the 28th, `LLC` and `SNAP` the 29th and
-30th, `STP` the 31st). Reproduce:
+30th, `STP` the 31st, `CDP` the 32nd). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -988,8 +988,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-4,828 statements, 1 missed (99.98%; re-measured 2026-10-28, after
-STP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+5,023 statements, 1 missed (99.98%; re-measured 2026-10-28, after
+CDP, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
