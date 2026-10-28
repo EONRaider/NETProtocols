@@ -52,9 +52,10 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 ## Why NETProtocols
 
 Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 265 frames of
-real captured traffic the corpus held at 2.5.0 (CPython 3.12.3, x86-64 Linux; re-measured for
-2.5.0 on 2026-10-25 — see [docs/CLAIMS.md](docs/CLAIMS.md) for every
-number below, its reproduction command, and its caveats):
+real captured traffic the corpus held at 2.5.0 (CPython 3.12.3, x86-64
+Linux; re-measured for 2.5.0 on 2026-10-25 — see
+[docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
+reproduction command, and its caveats):
 
 - **3.4× faster than scapy on decode; dpkt is 1.3× faster** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
@@ -143,8 +144,10 @@ ip.proto                  → error: "IPv4" has no attribute
 | 2 | IEEE 802.1Q VLAN tag (802.1ad QinQ) | `VLAN` | 802.1Q-2018 §9.6, PCP/DEI/VID, tag stacking; the inner type/length field reads as Ethernet's does |
 | 2 | IEEE 802.2 LLC | `LLC` | ISO/IEC 8802-2, DSAP/SSAP and a 1- or 2-octet Control; I-format and UI PDUs dispatch on DSAP (`llc.dsap`); Novell raw 802.3 recognized (`is_raw_ipx`; the other fields are then IPX bytes), never dispatched |
 | 2 | SNAP | `SNAP` | IEEE Std 802, RFC 1042; OUI and PID: OUI 00-00-00 and 00-00-F8 dispatch the PID as an EtherType, any other OUI through `llc.snap` |
+| 2 | LLDP | `LLDP`, `LLDPTLV`, `LLDPChassisID`, `LLDPPortID` | IEEE 802.1AB, EtherType 0x88CC; every TLV through End of LLDPDU, the End TLV's bound leaving padding and an FCS undecoded; Chassis ID and Port ID (subtype and ID) and Time To Live typed, every other TLV raw with its type named |
 | 2 | Spanning Tree BPDU (STP, RSTP) | `STP` | IEEE 802.1D-2004 §9.3, 802.1w; LLC DSAP 0x42 (`llc.dsap`); Configuration (35 octets), RST (36) and Topology Change Notification (4) BPDUs in one class, branching on the BPDU Type; per-type flag accessors (TC, TCA, Proposal, Port Role, Learning, Forwarding, Agreement), the 802.1t priority / system ID extension split, timers raw and in seconds; MST BPDUs decoded only as far as their RST prefix |
 | 2 | ARP | `ARP` | RFC 826, IPv4-over-Ethernet binding |
+| 2 | MPLS label stack | `MPLS` | RFC 3032 §2.1, EtherTypes 0x8847 and 0x8848 (and GRE's Protocol Type, RFC 4023); the whole stack as one layer of `MPLSLabel` entries (label, traffic class, S, TTL); no field names the payload, so it dispatches by convention to IPv4 or IPv6 — the bottom label when it is an Explicit NULL, otherwise the first nibble after the stack — and stops at a pseudowire control word |
 | 3 | IPv4 | `IPv4` | RFC 791, IHL/options aware |
 | 3 | IPv6 | `IPv6` | RFC 8200 |
 | 3 | IPv6 Hop-by-Hop Options | `IPv6HopByHopOptions` | RFC 8200 §4.3 |
@@ -405,8 +408,8 @@ implement can join the walk without forking it:
 from netprotocols import Protocol
 from netprotocols.registry import register
 
-@register("ethertype", 0x8847)
-class MPLS(Protocol):
+@register("ethertype", 0x88B5)  # IEEE 802 Local Experimental
+class Telemetry(Protocol):
     ...
 ```
 
@@ -455,7 +458,7 @@ Every class exposes human-readable properties next to the raw fields:
 `Ethernet.ethertype_name`, `IPv4.protocol_name`, `IPv4.flags_name`,
 `TCP.flags_str` (`"SYN ACK"`), `ARP.oper_name`, `ICMPv4.type_name`,
 and hexadecimal renderings such as `checksum_hex_str`. Unknown values
-degrade gracefully (`"0x88cc"`, `"unknown (47)"`) instead of raising.
+degrade gracefully (`"0x88b5"`, `"unknown (47)"`) instead of raising.
 
 ## How it works
 
@@ -531,7 +534,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-279-frame corpus of real captured traffic across 28 scenarios
+293-frame corpus of real captured traffic across 30 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

@@ -11,18 +11,27 @@ cannot catch is prose drifting away from it.
 """
 
 import doctest
+import inspect
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
 
+import netprotocols.registry as registry_module
 from conftest import FIXTURES, corpus_frames
-from netprotocols import HTTP, HTTPDisposition, HTTPFraming
+from netprotocols import HTTP, HTTPDisposition, HTTPFraming, Protocol
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_ETHERTYPE,
+    TABLE_IP_PROTO,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = FIXTURES / "MANIFEST.md"
 README = ROOT / "README.md"
 ARCHITECTURE = ROOT / "ARCHITECTURE.md"
+CLAIMS = ROOT / "docs" / "CLAIMS.md"
 
 ACTUAL_FRAMES = len(corpus_frames())
 ACTUAL_SCENARIOS = len(list(FIXTURES.glob("*.pcap")))
@@ -94,6 +103,7 @@ class TestCorpusFiguresInDocs:
             "rip.py",
             "vrrp.py",
             "bgp.py",
+            "mpls.py",
         ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:
@@ -199,3 +209,85 @@ class TestReadmeHTTPExamples:
             runner = doctest.DocTestRunner()
             runner.run(test)
             assert runner.summarize().failed == 0, block
+
+
+class _Experiment(Protocol):
+    """Stand in for the class registry.py's examples did not write."""
+
+
+def _registry_examples() -> list[str]:
+    """Return the ``register()`` examples in registry.py's docstrings.
+
+    The module docstring shows one; :func:`register`'s shows two.
+    """
+    blocks = []
+    for doc in (registry_module.__doc__, registry_module.register.__doc__):
+        literal = re.findall(
+            r"::\n\n((?:(?: {4}.*)?\n)+)", inspect.cleandoc(doc or "")
+        )
+        blocks += [textwrap.dedent(block) for block in literal]
+    return [
+        block
+        for block in blocks
+        if re.search(r'register\("(ethertype|ip\.proto)"', block)
+    ]
+
+
+class TestRegisterExample:
+    """Run the documented ``register()`` examples as written.
+
+    README.md, ARCHITECTURE.md and docs/CLAIMS.md show one each, and
+    registry.py's docstrings three. Each must claim a key no built-in
+    decoder holds, or it raises RegistryConflictError: the EtherType
+    was 0x8847 until MPLS shipped (#187), and is now 0x88B5, IEEE 802's
+    Local Experimental EtherType; the IP protocol is 253, reserved for
+    experimentation (RFC 3692).
+    """
+
+    @pytest.mark.parametrize(
+        "path", [README, ARCHITECTURE, CLAIMS], ids=lambda p: p.name
+    )
+    def test_the_example_registers_on_a_free_ethertype(
+        self, path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (code,) = [
+            block
+            for block in re.findall(
+                r"```python\n(.*?)```", path.read_text(), re.S
+            )
+            if '@register("ethertype"' in block
+        ]
+        # As below: the example registers in a copy of the defaults.
+        fresh = DEFAULT.derive()
+        monkeypatch.setattr(registry_module, "DEFAULT", fresh)
+        namespace: dict[str, object] = {}
+        exec(code, namespace)
+        assert fresh.get(TABLE_ETHERTYPE, 0x88B5) is namespace["Telemetry"]
+        assert DEFAULT.get(TABLE_ETHERTYPE, 0x88B5) is None
+
+    def test_the_registry_py_examples_register_on_free_keys(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Register each registry.py example in a copy of the defaults."""
+        examples = _registry_examples()
+        assert len(examples) == 3
+        for code in examples:
+            # register() reads the module's DEFAULT when called, so a
+            # copy of the real one keeps the examples out of it.
+            fresh = DEFAULT.derive()
+            monkeypatch.setattr(registry_module, "DEFAULT", fresh)
+            namespace: dict[str, object] = {
+                "Protocol": Protocol,
+                "register": registry_module.register,
+                "Experiment": _Experiment,
+            }
+            exec(code, namespace)
+            expected = {}
+            if '@register("ethertype", 0x88B5)' in code:
+                expected[TABLE_ETHERTYPE, 0x88B5] = namespace["Telemetry"]
+            if 'register("ip.proto", 253, Experiment)' in code:
+                expected[TABLE_IP_PROTO, 253] = _Experiment
+            assert expected
+            for (table, key), cls in expected.items():
+                assert DEFAULT.get(table, key) is None
+                assert fresh.get(table, key) is cls

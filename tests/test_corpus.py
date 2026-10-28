@@ -18,6 +18,8 @@ from netprotocols import (
     DNS,
     ESP,
     LLC,
+    LLDP,
+    MPLS,
     OSPF,
     PIM,
     RIP,
@@ -120,6 +122,8 @@ class TestCorpusCoverage:
             BGP,
             LLC,
             SNAP,
+            LLDP,
+            MPLS,
             STP,
         } <= seen
 

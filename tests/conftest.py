@@ -264,6 +264,14 @@ def raw_snap_header() -> bytes:
 
 
 @pytest.fixture
+def raw_mpls_stack() -> bytes:
+    """A two-entry MPLS label stack in the shape of
+    tests/fixtures/mpls.pcap's: label 16001, then label 16002 with the
+    bottom of stack bit set, TTL 64 each."""
+    return bytes.fromhex("03e8104003e82140")
+
+
+@pytest.fixture
 def raw_rip_message() -> bytes:
     """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
     route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and
@@ -290,3 +298,13 @@ def raw_vrrpv3_advert() -> bytes:
     """VRRPv3 advert from ``vrrp.pcap``: VRID 53, priority 200, Max
     Adver Int 100 cs, one address — the minimal 12-byte message."""
     return bytes.fromhex("3135c8010064e97c0a091446")
+
+
+@pytest.fixture
+def raw_lldp_shutdown() -> bytes:
+    """Shutdown LLDPDU from ``lldp.pcap``: agent A's Chassis ID (MAC
+    address ``02:4e:50:86:00:0a``), Port ID (interface name
+    ``nplldp-va``), a Time To Live of 0, and End of LLDPDU."""
+    return bytes.fromhex(
+        "020704024e5086000a040a056e706c6c64702d7661060200000000"
+    )
