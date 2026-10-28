@@ -32,6 +32,7 @@ from netprotocols import (
     decode_frame,
     verify,
 )
+from netprotocols.layer2.cdp import _CAPABILITY_NAMES, _TLV_TYPE_NAMES
 from netprotocols.registry import TABLE_LLC_SNAP
 
 CHECKER = Path(__file__).resolve().parent.parent / "scripts/check_fixtures.py"
@@ -51,6 +52,67 @@ LLDPD_ADDRESSES = bytes.fromhex("000000010101cc00040a091e01")
 IPV6_ENTRY = (
     b"\x02\x08\xaa\xaa\x03\x00\x00\x00\x86\xdd\x00\x10"
     + bytes.fromhex("20010db8000000000000000000000001")
+)
+
+
+#: Wireshark's names, copied from epan/dissectors/packet-cdp.c at commit
+#: 31bf085794733ece0436365ad3e0bbcc2292fc9a (gitlab.com/wireshark/wireshark,
+#: read 2026-10-28): ``type_vals``, and the ``hf_cdp_capabilities_*``
+#: fields' masks and names. Kept apart from cdp.py's tables so a change
+#: to one shows up as a failure here.
+WIRESHARK_TLV_TYPE_NAMES = {
+    0x0001: "Device ID",
+    0x0002: "Addresses",
+    0x0003: "Port ID",
+    0x0004: "Capabilities",
+    0x0005: "Software version",
+    0x0006: "Platform",
+    0x0007: "IP Prefix/Gateway (used for ODR)",
+    0x0008: "Protocol Hello",
+    0x0009: "VTP Management Domain",
+    0x000A: "Native VLAN",
+    0x000B: "Duplex",
+    0x000E: "VoIP VLAN Reply",
+    0x000F: "VoIP VLAN Query",
+    0x0010: "Power consumption",
+    0x0011: "MTU",
+    0x0012: "Trust Bitmap",
+    0x0013: "Untrusted Port CoS",
+    0x0014: "System Name",
+    0x0015: "System Object ID",
+    0x0016: "Management Address",
+    0x0017: "Location",
+    0x0018: "External Port-ID",
+    0x0019: "Power Requested",
+    0x001A: "Power Available",
+    0x001B: "Port Unidirectional",
+    0x001D: "EnergyWise",
+    0x001F: "Spare PoE",
+    0x1000: "BSSID",
+    0x1001: "Serial number",
+    0x1002: "SSID",
+    0x1003: "Radio1 channel",
+    0x1006: "SNMP UDP port",
+    0x1007: "Web TCP port",
+    0x1008: "Source MAC address",
+    0x1009: "Radio2 channel",
+    0x100A: "Radio1 Operating mode",
+    0x100B: "Radio2 Operating mode",
+    0x100C: "Radio1 Radio mode",
+    0x100D: "Radio2 Radio mode",
+}
+WIRESHARK_CAPABILITY_NAMES = (
+    (0x00000001, "Router"),
+    (0x00000002, "Transparent Bridge"),
+    (0x00000004, "Source Route Bridge"),
+    (0x00000008, "Switch"),
+    (0x00000010, "Host"),
+    (0x00000020, "IGMP capable"),
+    (0x00000040, "Repeater"),
+    (0x00000080, "VoIP Phone"),
+    (0x00000100, "Remotely Managed Device"),
+    (0x00000200, "CVTA/STP Dispute Resolution/Cisco VT Camera"),
+    (0x00000400, "Two Port Mac Relay"),
 )
 
 
@@ -594,6 +656,15 @@ class TestAccessors:
         """Name types from Wireshark's table; others read as unknown."""
         assert CDPTLV(tlv_type).type_name == name
 
+    def test_the_tables_are_wiresharks(self):
+        """Pin every type name and capability bit to Wireshark's."""
+        assert _TLV_TYPE_NAMES == WIRESHARK_TLV_TYPE_NAMES
+        assert len(_TLV_TYPE_NAMES) == 39
+        for tlv_type, name in WIRESHARK_TLV_TYPE_NAMES.items():
+            assert CDPTLV(tlv_type).type_name == name
+        assert _CAPABILITY_NAMES == WIRESHARK_CAPABILITY_NAMES
+        assert len(_CAPABILITY_NAMES) == 11
+
 
 class TestAddresses:
     @staticmethod
@@ -628,6 +699,9 @@ class TestAddresses:
             b"\x03\x01\xcc\x00\x04\x0a\x09\x1e\x01",  # unknown type
             IPV6_ENTRY[:10] + b"\x00\x0b" + IPV6_ENTRY[-11:],  # 11 bytes
             b"\x01\x00\x00\x00",  # empty protocol and address
+            b"\x01\x01\xcc\x00\x05\x0a\x09\x1e\x01\x02",  # IPv4 NLPID, 5
+            IPV6_ENTRY[:10] + b"\x00\x11" + IPV6_ENTRY[-16:] + b"\x02",
+            b"\x01" + IPV6_ENTRY[1:],  # NLPID type, 802.2 IPv6 protocol
         ],
         ids=[
             "v4-3",
@@ -637,6 +711,9 @@ class TestAddresses:
             "type-3",
             "v6-11",
             "empty",
+            "v4-5",
+            "v6-17",
+            "nlpid-8022-v6",
         ],
     )
     def test_other_forms_have_no_ip(self, entry):
