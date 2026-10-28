@@ -10,8 +10,10 @@ here as well, since veth neither pads nor carries an FCS.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import importlib.util
+import pickle
 import struct
 import tracemalloc
 from collections import Counter
@@ -857,6 +859,15 @@ class TestOtherProtocolIdentifiers:
         assert (garp.next_protocol(), bpdu.next_protocol()) == (None, STP)
         assert built.next_protocol() is STP
         assert dataclasses.replace(garp).next_protocol() is STP
+
+    @pytest.mark.parametrize(
+        "copier",
+        [copy.copy, copy.deepcopy, lambda x: pickle.loads(pickle.dumps(x))],
+        ids=["copy", "deepcopy", "pickle"],
+    )
+    def test_copies_keep_the_sniff(self, copier):
+        """Test what the field's comment says copies do."""
+        assert copier(LLC.decode(GVRP_PDU)).next_protocol() is None
 
     def test_other_dsaps_are_not_sniffed(self):
         """Test that only DSAP 0x42 PDUs are gated on the two octets."""

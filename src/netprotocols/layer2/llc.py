@@ -49,7 +49,8 @@ are there and are not 0x0000, :meth:`LLC.next_protocol` answers
 ``None`` and the walk ends at the LLC layer, as it does at a DSAP with
 no ``llc.dsap`` entry. When they are 0x0000, or fewer than two octets
 follow (in a walk the 802.3 Length bounds the buffer, so padding and an
-FCS are never read as them), the PDU dispatches, and a
+FCS are not read as them unless the Length overstates the PDU), the PDU
+dispatches, and a
 short one reaches :class:`~netprotocols.STP` to raise its truncation.
 The check applies whatever class ``llc.dsap`` holds at 0x42, a
 registered one of the caller's own included, so a GARP decoder is not
@@ -59,7 +60,8 @@ It is decode context
 kept on the instance outside its comparison and hash, so equal headers
 compare equal wherever they were found. A header built with the
 constructor, or copied with :func:`dataclasses.replace`, has seen no
-bytes and dispatches as before. :meth:`STP.decode
+bytes and dispatches as before; :func:`copy.copy`, :func:`copy.deepcopy`
+and :mod:`pickle` keep what :meth:`LLC.decode` recorded. :meth:`STP.decode
 <netprotocols.STP.decode>` called directly still rejects a Protocol
 Identifier other than 0.
 
@@ -240,7 +242,9 @@ class LLC(Protocol):
     #: Whether :meth:`decode` found a Protocol Identifier other than
     #: STP's 0x0000 after a dispatching DSAP 0x42 PDU's Control (see
     #: :meth:`next_protocol`); decode context, not a wire field, so it is
-    #: neither compared nor hashed.
+    #: neither compared nor hashed. :func:`copy.copy`,
+    #: :func:`copy.deepcopy` and :mod:`pickle` keep it;
+    #: :func:`dataclasses.replace` builds a new header, which has it unset.
     _other_protocol_id: bool = field(
         default=False, init=False, repr=False, compare=False
     )
