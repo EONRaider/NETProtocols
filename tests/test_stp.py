@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import struct
+import tracemalloc
 from collections import Counter
 from pathlib import Path
 
@@ -318,6 +319,101 @@ class TestRSTBPDUs:
         assert packet.consumed == 14 + 3 + 36
 
 
+#: A BPDU from a bridge that is not the root, built here field by field
+#: so that no two fields share a value an accessor could confuse: an
+#: 802.1t root priority of 32768 with system ID extension 356 (0x8164),
+#: a bridge priority of 36864 with extension 515 (0x9203), distinct
+#: root and bridge MACs, Root Path Cost 100, Port Identifier 0x0401
+#: (priority 0, Port Number 1025) and four distinct timers that are not
+#: whole seconds.
+NON_ROOT_FIELDS = (
+    0x8164,
+    bytes.fromhex("0200000000a1"),
+    100,
+    0x9203,
+    bytes.fromhex("0200000000b2"),
+    0x0401,
+    0x0180,
+    0x1340,
+    0x0280,
+    0x0F40,
+)
+
+
+def non_root(bpdu_type: int, version: int, flags: int) -> bytes:
+    """Pack :data:`NON_ROOT_FIELDS` with ``struct``, not :class:`STP`."""
+    head = struct.pack("!HBBB", 0, version, bpdu_type, flags)
+    body = struct.pack("!H6sIH6sHHHHH", *NON_ROOT_FIELDS)
+    return head + body + (b"\x00" if bpdu_type == 0x02 else b"")
+
+
+class TestAccessors:
+    """Every identifier, port and timer accessor on a non-root BPDU."""
+
+    @pytest.mark.parametrize(
+        "bpdu_type,version,flags,length",
+        [(0x00, 0, 0x81, 35), (0x02, 2, 0x7D, 36)],
+        ids=["config", "rst"],
+    )
+    def test_a_non_root_bpdu(self, bpdu_type, version, flags, length):
+        """Test each accessor against the value packed for it."""
+        raw = non_root(bpdu_type, version, flags)
+        stp = STP.decode(raw)
+        assert stp.header_len == length == len(raw)
+        assert bytes(stp) == raw
+        assert stp.root_priority == 0x8164
+        assert stp.root_mac == "02:00:00:00:00:a1"
+        assert stp.root_path_cost == 100
+        assert stp.bridge_priority == 0x9203
+        assert stp.bridge_mac == "02:00:00:00:00:b2"
+        assert stp.port_id == 0x0401
+        assert stp.root_priority_component == 32768
+        assert stp.root_system_id_extension == 356
+        assert stp.bridge_priority_component == 36864
+        assert stp.bridge_system_id_extension == 515
+        assert stp.root_id_str == "32768/356/02:00:00:00:00:a1"
+        assert stp.bridge_id_str == "36864/515/02:00:00:00:00:b2"
+        assert stp.port_priority == 0
+        assert stp.port_number == 1025
+        assert (stp.message_age, stp.max_age) == (0x0180, 0x1340)
+        assert (stp.hello_time, stp.forward_delay) == (0x0280, 0x0F40)
+        assert stp.message_age_seconds == 1.5
+        assert stp.max_age_seconds == 19.25
+        assert stp.hello_time_seconds == 2.5
+        assert stp.forward_delay_seconds == 15.25
+
+    @pytest.mark.parametrize(
+        "port_id,priority,number",
+        [(0x8001, 128, 1), (0xF0FF, 240, 255), (0x1FFF, 16, 4095)],
+    )
+    def test_the_port_identifier_splits_4_and_12(
+        self, port_id, priority, number
+    ):
+        """802.1t's split, not Linux's 6 priority and 10 number bits."""
+        fields = list(NON_ROOT_FIELDS)
+        fields[5] = port_id
+        raw = struct.pack("!HBBB", 0, 0, 0, 0) + struct.pack(
+            "!H6sIH6sHHHHH", *fields
+        )
+        stp = STP.decode(raw)
+        assert (stp.port_priority, stp.port_number) == (priority, number)
+
+    @pytest.mark.parametrize(
+        "version,name",
+        [
+            (0, "Spanning Tree"),
+            (1, "unknown (1)"),
+            (2, "Rapid Spanning Tree"),
+            (3, "Multiple Spanning Tree"),
+            (4, "Shortest Path Tree"),
+            (5, "unknown (5)"),
+        ],
+    )
+    def test_every_version_name(self, version, name):
+        """Test Wireshark's version_id_vals names, and the fallback."""
+        assert STP.decode(non_root(0x02, version, 0)).version_name == name
+
+
 class TestMSTBPDUs:
     """MSTP is decoded only as far as its RST prefix (see the module)."""
 
@@ -388,12 +484,15 @@ class TestTrailingBytes:
 
 
 class TestHostileInput:
-    def test_a_64_kib_tail_is_not_read(self):
-        """Decode reads its type's octets, never the rest of the buffer.
+    def test_decode_indexes_only_the_version_1_length(self):
+        """Count the indexing and slicing decode does past its prefix.
 
-        Indexing and slicing past the fixed prefix are counted: an RST
-        BPDU's decode reads the one Version 1 Length octet and nothing
-        else that way, whatever follows.
+        An RST BPDU's decode indexes the one Version 1 Length octet and
+        a Configuration BPDU's or a TCN's nothing, whatever follows.
+        This counts ``__getitem__`` calls only: ``struct.unpack_from``
+        and a ``bytes()`` or memoryview copy read the buffer without one,
+        so :meth:`test_decode_never_copies_the_buffer_tail` measures the
+        memory instead.
         """
 
         class Counting(bytes):
@@ -408,6 +507,37 @@ class TestHostileInput:
             stp = STP.decode(Counting(bpdu + bytes(65536)))
             assert stp == STP.decode(bpdu)
             assert Counting.reads == reads
+
+    @pytest.mark.parametrize(
+        "wrap", [bytes, bytearray, memoryview], ids=["bytes", "bytearray", "mv"]
+    )
+    @pytest.mark.parametrize(
+        "bpdu", [CONFIG_A_TC, RST_DESIGNATED, TCN], ids=["config", "rst", "tcn"]
+    )
+    def test_decode_never_copies_the_buffer_tail(self, wrap, bpdu):
+        """Allocate at peak under half the megabyte after the BPDU.
+
+        Traced with :mod:`tracemalloc`, as tests/test_lldp.py does: a
+        copy of the whole buffer takes over a megabyte. ``bytes(data)``
+        of a :class:`bytes` returns the object itself, so only the
+        bytearray and memoryview cases see such a copy. If tracemalloc
+        is already tracing it is left on, else stopped.
+        """
+        trailer = bytes(1 << 20)
+        data = wrap(bpdu + trailer)
+        started = not tracemalloc.is_tracing()
+        if started:
+            tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            base, _ = tracemalloc.get_traced_memory()
+            stp = STP.decode(data)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            if started:
+                tracemalloc.stop()
+        assert stp == STP.decode(bpdu)
+        assert peak - base < len(trailer) // 2, peak - base
 
     def test_a_memoryview_is_not_retained(self):
         """Test a memoryview is not retained."""
