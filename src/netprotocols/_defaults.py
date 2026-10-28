@@ -15,11 +15,12 @@ module.
 
 from __future__ import annotations
 
-from netprotocols._enums import EtherType, IPProtocol
+from netprotocols._enums import LLCSAP, EtherType, IPProtocol
 from netprotocols.registry import (
     TABLE_ETHERTYPE,
     TABLE_IP_PROTO,
     TABLE_IP_PROTO_V6,
+    TABLE_LLC_DSAP,
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
     Registry,
@@ -88,6 +89,7 @@ def install(registry: Registry) -> None:
     no-op, so calling this twice on the same registry changes nothing.
     """
     from netprotocols.layer2.arp import ARP
+    from netprotocols.layer2.llc import SNAP
     from netprotocols.layer2.lldp import LLDP
     from netprotocols.layer2.mpls import MPLS
     from netprotocols.layer2.vlan import VLAN
@@ -129,6 +131,12 @@ def install(registry: Registry) -> None:
     # chains onward through this same table, at IPv4's or IPv6's
     # EtherType, by the convention its module docstring describes.
     register_all(TABLE_ETHERTYPE, MPLS_ETHERTYPES, MPLS, registry=registry)
+
+    # SNAP (IEEE Std 802, RFC 1042) extends the LLC header at the SNAP
+    # SAP. LLC.next_protocol reaches this entry only when the SSAP is
+    # 0xAA too and the Control is UI; SNAP then reads its PID in
+    # ethertype (OUI 00-00-00, 00-00-F8) or llc.snap (any other OUI).
+    add(TABLE_LLC_DSAP, LLCSAP.SNAP, SNAP)
 
     # Shared by IPv4 and IPv6: registering in ip.proto reaches
     # ip.proto.v6 too, because the latter inherits it.

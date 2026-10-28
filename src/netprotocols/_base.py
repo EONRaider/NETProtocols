@@ -8,6 +8,10 @@ and must:
 
 1. Parse the fixed portion with the class-level ``struct.Struct``,
    raising :class:`TruncatedHeaderError` if the buffer is too short.
+   One enclosing length shortens that buffer: after an Ethernet or VLAN
+   header holding an IEEE 802.3 Length, the chain walk ends every later
+   layer's buffer where that Length puts the end of the LLC PDU, never
+   past the end of the frame (see "Payload extent" below).
 2. For variable-length headers (IPv4, TCP), validate the declared
    length (raising :class:`InvalidFieldError` for nonsense values and
    :class:`TruncatedHeaderError` when the declared length exceeds the
@@ -93,6 +97,20 @@ Wireshark's dissector notes) runs to the end of the buffer. See
 Bottom of Stack bit set, so step 3 holds as for a header with one: the
 labelled packet, and any padding after it, is the next layer's. See
 :mod:`netprotocols.layer2.mpls`.
+
+Payload extent
+--------------
+An 802.3 Length is the only length field the chain walk honours: a
+header whose class sets ``_BOUNDS_PAYLOAD`` answers
+``_payload_extent()`` with how many bytes after it belong to its
+payload, or ``None``, and :func:`~netprotocols.decode_frame` ends the
+buffers it hands every later layer there, so zero padding and an FCS
+after a short LLC PDU reach no decoder. ``Ethernet`` and ``VLAN`` are
+the two such classes. A bound past the end of the frame bounds
+nothing, so a frame cut by a snap length decodes as it would unbounded;
+the tighter of two bounds wins. IPv4's, IPv6's and UDP's lengths are
+not honoured (#235). Both names are private while #235 settles the
+public form.
 
 Decode context in ``next_protocol``
 -----------------------------------
@@ -284,6 +302,11 @@ class Protocol(ABC):
     #: Layout of the fixed portion of the header, network byte order.
     _struct: ClassVar[Struct]
 
+    #: Whether :meth:`_payload_extent` can bound this header's payload.
+    #: A class attribute, so the chain walk tests it per layer without a
+    #: call (see "Payload extent" in this module's docstring).
+    _BOUNDS_PAYLOAD: ClassVar[bool] = False
+
     @classmethod
     def _unpack_fixed(cls, data: bytes | memoryview) -> tuple[Any, ...]:
         """Unpack the fixed portion of the header from ``data``.
@@ -320,6 +343,16 @@ class Protocol(ABC):
         headers (IPv4, TCP) override it to account for options.
         """
         return self._struct.size
+
+    def _payload_extent(self) -> int | None:
+        """Return how many bytes after this header its payload occupies.
+
+        That is, by a length field the header carries, or ``None`` if it
+        carries none. Read by the chain walk only for a class that sets
+        ``_BOUNDS_PAYLOAD`` (see "Payload extent" in this module's
+        docstring).
+        """
+        return None
 
     def next_protocol(
         self, registry: Registry | None = None

@@ -4,28 +4,30 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, the OSPF packet
+pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
 digest, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 279 frames across 29
+frames routinely leave checksums to NIC offload. 293 frames across 30
 scenarios. Addresses are as-captured from the capture host's network.
 
-Sixteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Seventeen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`, `mpls.pcap`, `lldp.pcap`) are captured separately by their
-own `scripts/capture_fixtures_*.sh` over purpose-built topologies —
-real kernel vlan devices, a DHCP server/client, a GRE tunnel, a DNS server queried over TCP, kernel
+`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`) are captured
+separately by their own `scripts/capture_fixtures_*.sh` over
+purpose-built topologies — real kernel vlan devices, a DHCP
+server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
 two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
 three BIRD speakers, MPLS label stacks built by a script around
-kernel-built IPv4 datagrams and sent through a raw socket, and two
-lldpd LLDP agents — see their rows and the notes below.
+kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
+LLDP agents, and two STP bridges with lldpd speaking CDP — see their
+rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -58,6 +60,7 @@ lldpd LLDP agents — see their rows and the notes below.
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
+| `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC` (DSAP 0x42); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -73,7 +76,8 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   options-bearing segments are otherwise abundant.
 - Unknown-EtherType frames are exercised by deliberately synthetic
   fixtures in the unit tests (their point is being unknown), not by the
-  corpus.
+  corpus. The one exception is `llc.pcap`'s script-built frame whose
+  type/length value, 1501, IEEE 802.3 leaves undefined.
 - `vlan_icmp.pcap` was produced by `scripts/capture_fixtures_vlan.sh`.
   A VLAN tag never reaches a host on an access port, so the script
   builds real 802.1Q / 802.1ad vlan devices over a veth pair, lets the
@@ -497,6 +501,54 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   does not pad, so no frame carries Ethernet padding or an FCS;
   `tests/test_rip.py` appends a 4-byte trailer to every frame and cuts
   one inside an entry to cover both.
+
+- `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
+  netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s
+  hello time, 2 s forward delay; A at priority 0x1000, so the root),
+  a veth pair between A's port and B's, and a second from B's other
+  port to netns X, with tcpdump on B's port facing A capturing both
+  directions (`not ether proto 0x88cc`, so no LLDP). Bringing the A-B
+  link up gives each bridge's first Configuration BPDU, then A's, as
+  root, and A's with the Topology Change flag once its port forwards;
+  bringing B's second port up makes B, not the root, send a Topology
+  Change Notification, which A acknowledges. lldpd 1.0.18 then runs in
+  A on A's port, with its own control socket, pidfile and interface
+  list, `-cc` (CDPv1 forced), then `-ccc` (CDPv2 forced), then `-cc`
+  again with the platform name `npll` and the byte 0xA9, in its own
+  UTS namespace with hostname `npllc-cdp`, `-k`, `-S` and `-P`, so the
+  frames carry no detail of the capture host. Last,
+  `scripts/llc_fixture_frames.py` (stdlib only) sends six frames from A
+  through an `AF_PACKET` socket. **The kernel's bridge code built every
+  BPDU** (Ethernet header, LLC header and BPDU), **lldpd built every
+  CDP frame** in userspace, its checksum included, and **the script
+  built every byte of the other six**, their zero padding to 60 bytes
+  and the IPv4 header and ICMP checksums included; `AF_PACKET` sends a
+  frame as it is given. The bridges and veths have fixed MAC addresses,
+  so the BPDUs' bridge and port IDs are the same on every run. BPDUs
+  repeat every second and CDP frames too, so the script keeps the first
+  frame of each of the 14 kinds it names and fails unless it saw all of
+  them, in order. `check_fixtures` holds each 802.3 Length against its
+  frame (only the zero padding of a PDU shorter than 46 bytes may
+  follow), checks the LLC and SNAP framing and the BPDU and raw IPX
+  lengths, walks the CDP TLVs to the Length's end and verifies the CDP
+  checksum over exactly that PDU (91 bytes in all three, odd: where RFC
+  1071 pads a final byte into the high byte of a word, CDP's checksum
+  adds it as the low byte when it is below 0x80 and as 0xFF00 plus its
+  value less 1 when not, the form of lldpd's `frame_checksum()` in
+  src/daemon/frame.c and Wireshark's packet-cdp.c, and lldpd's three
+  frames verify that way; the third, ending in 0xA9, pins that a final
+  byte from 0x80 is not padded as RFC 1071 pads it, nor added as its
+  plain value or as 0xFF00 plus it without the `- 1`, but it cannot
+  tell lldpd's form from adding the byte less 0x100, which differs
+  only where the sum under `v - 0x100` folds to 0, which is 0xFFFF
+  under lldpd's form, giving a checksum of 0xFFFF under `v - 0x100`
+  and 0 under lldpd's: `test_cdp_odd_byte_is_lldpds_form` in
+  `tests/test_llc.py` separates the two on `b"\x00\x7f\x81"`), and
+  verifies the IPv4 and ICMP checksums inside RFC 1042 framing. veth
+  does not pad, so the BPDUs and CDP frames carry no padding (the TCN is a
+  21-byte frame); `tests/test_llc.py` appends padding and a 4-byte
+  FCS by hand. The library decodes BPDUs only as far as their LLC
+  header and CDP as far as SNAP: STP and CDP decoders are later work.
 
 ### RIP test keys
 

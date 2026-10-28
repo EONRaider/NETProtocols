@@ -25,6 +25,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    LLC,
     LLDP,
     LLDPTLV,
     MPLS,
@@ -33,6 +34,7 @@ from netprotocols import (
     PIM,
     RIP,
     SCTP,
+    SNAP,
     VLAN,
     VRRP,
     VXLAN,
@@ -174,6 +176,28 @@ def mpls_stacks(draw: st.DrawFn) -> MPLS:
             )
             for index in range(depth)
         )
+    )
+
+
+@st.composite
+def llc_headers(draw: st.DrawFn) -> LLC:
+    # Canonical Controls only: a U-format one (two low bits 11) is one
+    # octet, an I- or S-format one two, as decode reads them.
+    if draw(st.booleans()):
+        control = draw(st.integers(0, 0x3F)) << 2 | 0x03
+    else:
+        control = draw(st.integers(0, 0xFFFF).filter(lambda c: c & 3 != 3))
+    return LLC(
+        dsap=draw(st.integers(0, 0xFF)),
+        ssap=draw(st.integers(0, 0xFF)),
+        control=control,
+    )
+
+
+@st.composite
+def snap_headers(draw: st.DrawFn) -> SNAP:
+    return SNAP(
+        oui=draw(st.integers(0, 0xFFFFFF)), pid=draw(st.integers(0, 0xFFFF))
     )
 
 
@@ -829,6 +853,8 @@ def pim_headers(draw: st.DrawFn) -> PIM:
 ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "ARP": arp_headers(),
     "VLAN": vlan_headers(),
+    "LLC": llc_headers(),
+    "SNAP": snap_headers(),
     "LLDP": lldp_lldpdus(),
     "MPLS": mpls_stacks(),
     "IPv4": ipv4_headers(),

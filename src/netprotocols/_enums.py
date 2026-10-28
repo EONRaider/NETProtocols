@@ -7,7 +7,13 @@ here without creating an import cycle.
 
 from enum import IntEnum
 
-__all__ = ["ARPHardwareType", "ARPOperation", "EtherType", "IPProtocol"]
+__all__ = [
+    "LLCSAP",
+    "ARPHardwareType",
+    "ARPOperation",
+    "EtherType",
+    "IPProtocol",
+]
 
 
 class EtherType(IntEnum):
@@ -40,6 +46,63 @@ _ETHERTYPE_NAMES = {
     EtherType.MPLS: "MPLS",
     EtherType.MPLS_UPSTREAM_ASSIGNED: "MPLS with upstream-assigned label",
     EtherType.LLDP: "LLDP",
+}
+
+
+class LLCSAP(IntEnum):
+    """IEEE 802.2 LLC service access point (LSAP) addresses.
+
+    Every value the IEEE Registration Authority lists as assigned in its
+    "Current Assignment of Individual LSAP Address Values" and "Group
+    LSAP Address Values" tables
+    (https://standards.ieee.org/products-programs/regauth/llc/public/,
+    fetched 2026-10-25): the fourteen assigned individual addresses and
+    the global DSAP. The values unlisted there are reserved, or for
+    unreserved use (an individual address whose second least significant
+    bit is 0, such as Novell's 0xE0 and NetBIOS's 0xF0, which the IEEE
+    does not list). The least significant bit of a DSAP is the
+    individual/group bit and of an SSAP the command/response bit, so an
+    SSAP's name is that of the value with that bit clear.
+    """
+
+    NULL = 0x00
+    LLC_SUBLAYER_MANAGEMENT = 0x02
+    IP = 0x06
+    SDE = 0x0A
+    PROWAY_NETWORK_MANAGEMENT = 0x0E
+    SPANNING_TREE = 0x42
+    MMS = 0x4E
+    X25_PLP = 0x7E
+    BACNET = 0x82
+    PROWAY_ACTIVE_STATION_LIST = 0x8E
+    SOURCE_ROUTING_RDE = 0xA6
+    SNAP = 0xAA
+    IEC_62056_46 = 0xE6
+    ISO_NETWORK_LAYER = 0xFE
+    GLOBAL = 0xFF
+
+    @property
+    def display_name(self) -> str:
+        return _LLC_SAP_NAMES[self]
+
+
+# The documents each assignment cites in the IEEE listing above.
+_LLC_SAP_NAMES = {
+    LLCSAP.NULL: "Null",  # ISO/IEC 8802-2
+    LLCSAP.LLC_SUBLAYER_MANAGEMENT: "LLC Sublayer Management",  # 802.1B
+    LLCSAP.IP: "ARPANET IP",  # RFC 791
+    LLCSAP.SDE: "802.10 Secure Data Exchange",  # IEEE 802.10B
+    LLCSAP.PROWAY_NETWORK_MANAGEMENT: "PROWAY Network Management",  # IEC 955
+    LLCSAP.SPANNING_TREE: "Bridge Spanning Tree",  # ISO/IEC 10038
+    LLCSAP.MMS: "Manufacturing Message Service",  # ISO 9506
+    LLCSAP.X25_PLP: "X.25 Packet Layer",  # ISO/IEC 8208
+    LLCSAP.BACNET: "BACnet",  # ANSI/ASHRAE 135
+    LLCSAP.PROWAY_ACTIVE_STATION_LIST: "PROWAY Active Station List",  # IEC 955
+    LLCSAP.SOURCE_ROUTING_RDE: "Source Routing RDE",  # ISO/IEC 8802-2
+    LLCSAP.SNAP: "SNAP",  # IEEE Std 802
+    LLCSAP.IEC_62056_46: "IEC 62056-46",  # IEC 62056-46
+    LLCSAP.ISO_NETWORK_LAYER: "ISO Network Layer",  # ISO/IEC TR 9577
+    LLCSAP.GLOBAL: "Global",  # ISO/IEC 8802-2, global DSAP
 }
 
 

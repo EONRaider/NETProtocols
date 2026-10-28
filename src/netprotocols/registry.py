@@ -2,14 +2,18 @@
 what it carries, and how third parties add their own.
 
 A ``next_protocol()`` that dispatches on a wire field is a lookup in
-one of five tables, each named after that field. A few return a fixed
+one of seven tables, each named after that field. A few return a fixed
 successor instead (VXLAN, ``DNSOverTCP``, BGP), and MPLS, whose label
 stack names no payload protocol, looks up the ``ethertype`` table at
 0x0800 or 0x86DD by convention (see :mod:`netprotocols.layer2.mpls`).
 
 ===============  =========================================================
 ``ethertype``    Ethernet II EtherType; VLAN tags and GRE chain here too,
-                 and MPLS by convention
+                 and SNAP under OUI 00-00-00 or 00-00-F8; MPLS by
+                 convention
+``llc.dsap``     IEEE 802.2 LLC DSAP, after an 802.3 Length
+``llc.snap``     SNAP protocol under any other OUI, keyed
+                 ``(oui << 16) | pid``
 ``ip.proto``     IPv4 ``protocol``
 ``ip.proto.v6``  IPv6 ``next_header`` — inherits ``ip.proto``
 ``udp.port``     UDP well-known port (best-effort; see below)
@@ -34,6 +38,28 @@ library source::
 
 The decorator returns the class unchanged, so it stacks with
 ``@dataclass`` and never interferes with the type.
+
+Key ranges
+----------
+
+Two tables reject a key their wire field cannot carry, raising
+:class:`InvalidRegistryKeyError` at registration (never on a lookup):
+
+* ``llc.dsap`` takes 0-0xFF, the width of the DSAP octet.
+* ``llc.snap`` takes 0 to 2**40 - 1: a 24-bit OUI and a 16-bit PID.
+
+The other tables accept any key, as they always have, ``ethertype``
+among them. An Ethernet or VLAN header never consults ``ethertype``
+for a type/length value of 1500 or less, which IEEE 802.3 Clause 3.2.6
+makes a frame Length followed by an 802.2 LLC header, nor for the
+undefined 1501-1535. But a GRE Protocol Type, and a SNAP PID under OUI
+00-00-00 or 00-00-F8, are looked up there whatever their value, and
+GRE has low values assigned: RFC 1701's "Current List of Protocol Types"
+assigns SNA 0x0004, OSI network layer 0x00FE and PUP 0x0200 ("The
+following table of values MUST be used to identify the following
+protocols"). A decoder registered at ``ethertype`` 0x00FE is reached
+from a GRE Protocol Type or a SNAP PID of 0x00FE, and never from an
+Ethernet or VLAN header.
 
 Table inheritance
 -----------------
@@ -84,7 +110,7 @@ a per-call decoder override is expressed without touching global state.
 Best-effort tables
 ------------------
 
-``udp.port`` and ``tcp.port`` differ from the other three in kind, not
+``udp.port`` and ``tcp.port`` differ from the other five in kind, not
 just in name. An EtherType or IP protocol number is authoritative: the
 field exists to say what follows (MPLS, which looks up the ``ethertype``
 table by convention, is the exception described above). A port is a
@@ -117,8 +143,11 @@ __all__ = [
     "TABLE_ETHERTYPE",
     "TABLE_IP_PROTO",
     "TABLE_IP_PROTO_V6",
+    "TABLE_LLC_DSAP",
+    "TABLE_LLC_SNAP",
     "TABLE_TCP_PORT",
     "TABLE_UDP_PORT",
+    "InvalidRegistryKeyError",
     "Registry",
     "RegistryConflictError",
     "UnknownTableError",
@@ -127,6 +156,8 @@ __all__ = [
 ]
 
 TABLE_ETHERTYPE = "ethertype"
+TABLE_LLC_DSAP = "llc.dsap"
+TABLE_LLC_SNAP = "llc.snap"
 TABLE_IP_PROTO = "ip.proto"
 TABLE_IP_PROTO_V6 = "ip.proto.v6"
 TABLE_UDP_PORT = "udp.port"
@@ -137,6 +168,8 @@ TABLE_TCP_PORT = "tcp.port"
 #: dispatch point a name third parties can register against.
 TABLES: Mapping[str, str | None] = {
     TABLE_ETHERTYPE: None,
+    TABLE_LLC_DSAP: None,
+    TABLE_LLC_SNAP: None,
     TABLE_IP_PROTO: None,
     TABLE_IP_PROTO_V6: TABLE_IP_PROTO,
     TABLE_UDP_PORT: None,
@@ -150,6 +183,14 @@ _CHILDREN: Mapping[str, tuple[str, ...]] = {
     for parent in TABLES
 }
 
+#: The keys a table accepts, for the tables whose wire field bounds
+#: them (see "Key ranges" in the module docstring). Checked when a key is
+#: registered, never on a lookup.
+_KEY_RANGES: Mapping[str, range] = {
+    TABLE_LLC_DSAP: range(0x100),
+    TABLE_LLC_SNAP: range(1 << 40),
+}
+
 _C = TypeVar("_C", bound="type[Protocol]")
 
 
@@ -159,6 +200,16 @@ class UnknownTableError(ProtocolError):
     Raised eagerly, with the valid names listed, because a typo in a
     table name would otherwise register a decoder that nothing ever
     consults.
+    """
+
+
+class InvalidRegistryKeyError(ProtocolError):
+    """A registration named a key its table's wire field cannot carry.
+
+    Raised for an ``llc.dsap`` key outside 0-0xFF and an ``llc.snap``
+    key outside 0 to 2**40 - 1 (a negative key included), the values
+    the fields they are read from can carry. No other table raises it.
+    See "Key ranges" in the module docstring.
     """
 
 
@@ -258,11 +309,15 @@ class Registry:
         """Register ``protocol`` as the decoder for ``key`` in ``table``.
 
         :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+        :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+            ``llc.snap`` and ``key`` is outside the range it accepts (see
+            "Key ranges" in the module docstring).
         :raises RegistryConflictError: ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
             class to the same key succeeds and changes nothing.
         """
         entries = self.table(table)
+        _check_key(table, key)
         incumbent = entries.get(key)
         if incumbent is not None and incumbent is not protocol and not override:
             raise RegistryConflictError(
@@ -324,6 +379,10 @@ class Registry:
         Overrides replace whatever they land on, so nothing here can
         raise a conflict: naming a key that is already taken is the
         point.
+
+        :raises InvalidRegistryKeyError: an override names an
+            ``llc.dsap`` or ``llc.snap`` key outside the range that table
+            accepts (see "Key ranges" in the module docstring).
         """
         child = Registry()
         for name in TABLES:
@@ -340,6 +399,19 @@ class Registry:
             f"{name}={len(entries)}" for name, entries in self._tables.items()
         )
         return f"<{type(self).__name__} {sizes}>"
+
+
+def _check_key(table: str, key: int) -> None:
+    """Refuse a key outside the range ``table`` accepts.
+
+    :raises InvalidRegistryKeyError: ``key`` is outside that range.
+    """
+    accepted = _KEY_RANGES.get(table)
+    if accepted is not None and key not in accepted:
+        raise InvalidRegistryKeyError(
+            f"{table} key {key!r} is outside {accepted.start:#x}-"
+            f"{accepted.stop - 1:#x}, the values that table dispatches"
+        )
 
 
 def _qualname(protocol: type[Protocol]) -> str:
@@ -429,6 +501,17 @@ def register_all(
 
     For protocols that a single value cannot describe: a VLAN tag is any
     of three EtherTypes, DHCP answers on two ports.
+
+    The keys are registered one at a time, in order, and not atomically:
+    when one raises, as :meth:`Registry.register` describes, the keys
+    before it stay registered and the ones after it are not tried.
+
+    :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+    :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+        ``llc.snap`` and a key is outside the range it accepts (see "Key
+        ranges" in the module docstring).
+    :raises RegistryConflictError: a key is held by a different class
+        and ``override`` is false.
     """
     target = DEFAULT if registry is None else registry
     for key in keys:

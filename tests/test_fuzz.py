@@ -44,6 +44,7 @@ from netprotocols import (
     GRE,
     HTTP,
     IGMP,
+    LLC,
     LLDP,
     LLDPTLV,
     MPLS,
@@ -51,6 +52,7 @@ from netprotocols import (
     PIM,
     RIP,
     SCTP,
+    SNAP,
     TCP,
     UDP,
     VLAN,
@@ -84,6 +86,7 @@ from netprotocols import (
     SCTPChunk,
     TCPOption,
     VRRPv6,
+    decode_frame,
 )
 from strategies import (
     ROUND_TRIP_STRATEGIES,
@@ -105,6 +108,8 @@ from test_corpus import walk
 ALL_PROTOCOLS = (
     Ethernet,
     VLAN,
+    LLC,
+    SNAP,
     LLDP,
     ARP,
     IPv4,
@@ -908,6 +913,70 @@ _VRRP_ACCESSORS = (
     "checksum_hex_str",
     "header_len",
 )
+
+
+#: The 802.3 frames of the LLC fixture (BPDUs, CDP, RFC 1042, 802.1H,
+#: a tagged frame, Novell raw 802.3, the 1501 frame).
+_LLC_FRAMES = pcap_frames(FIXTURES / "llc.pcap")
+
+
+@st.composite
+def llc_frames(draw: st.DrawFn) -> bytes:
+    """A captured 802.3 frame, its Length redrawn now and then, a few
+    bytes changed, and a trailer of zeros or random bytes appended."""
+    frame = bytearray(draw(st.sampled_from(_LLC_FRAMES)))
+    if draw(st.booleans()):
+        frame[12:14] = draw(st.integers(0, 1600)).to_bytes(2, "big")
+    for _ in range(draw(st.integers(0, 4))):
+        position = draw(st.integers(min_value=14, max_value=len(frame) - 1))
+        frame[position] = draw(st.integers(0, 255))
+    trailer = draw(st.one_of(st.binary(max_size=12), st.just(bytes(8))))
+    return bytes(frame) + trailer
+
+
+class TestLLCProperties:
+    @given(data=st.one_of(fuzz_input, llc_frames()))
+    def test_accessors_never_raise(self, data: bytes) -> None:
+        """Decode raises only ProtocolError; every accessor of LLC, SNAP
+        and the type/length helpers of Ethernet answers, never raises."""
+        with contextlib.suppress(ProtocolError):
+            eth = Ethernet.decode(data)
+            _ = (eth.is_length, eth.length, eth.next_protocol())
+            event(f"type/length class: {eth.next_protocol()}")
+        with contextlib.suppress(ProtocolError):
+            tag = VLAN.decode(data)
+            _ = (tag.is_length, tag.length, tag.next_protocol())
+        with contextlib.suppress(ProtocolError):
+            llc = LLC.decode(data)
+            _ = (
+                llc.header_len,
+                llc.control_format,
+                llc.is_group,
+                llc.is_response,
+                llc.is_raw_ipx,
+                llc.dsap_name,
+                llc.ssap_name,
+                llc.dsap_enum,
+                llc.next_protocol(),
+            )
+            assert LLC.decode(bytes(llc)) == llc
+        with contextlib.suppress(ProtocolError):
+            snap = SNAP.decode(data)
+            _ = (snap.carries_ethertype, snap.snap_key, snap.oui_str)
+            _ = snap.next_protocol()
+
+    @given(frame=llc_frames())
+    def test_no_layer_reads_past_the_8023_length(self, frame: bytes) -> None:
+        """Every layer after an 802.3 Length lies inside the PDU it
+        bounds, and the walk never reads past the frame."""
+        with contextlib.suppress(ProtocolError):
+            packet = decode_frame(frame)
+            assert packet.consumed <= len(frame)
+            assert bytes(packet) == frame[: packet.consumed]
+            eth = packet[Ethernet]
+            if eth.length is not None:
+                assert packet.consumed <= 14 + eth.length
+            event(f"layers: {len(packet)}")
 
 
 class TestVRRPAccessorSafety:
