@@ -346,7 +346,7 @@ flowchart LR
   E -->|length ≤ 1500| L[LLC]
   V -->|length ≤ 1500| L
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
-  L -->|DSAP 0x42| STP[STP BPDU]
+  L -->|DSAP 0x42, UI or I| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   V -->|0x8100, 0x88A8, 0x9100| V

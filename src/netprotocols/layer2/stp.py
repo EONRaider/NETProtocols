@@ -28,8 +28,8 @@ every field the type does not carry ``None``. One class decodes all
 three, branching on the type as :class:`~netprotocols.ICMPv4` branches
 on its own, and the layout is keyed on the type alone: the version is
 carried verbatim, so a type 0x02 BPDU of version 0 or 1, which the
-validation of received BPDUs below would discard, still decodes as an
-RST BPDU.
+validation of received BPDUs would discard (§14.5 h) of the draft
+cited below), still decodes as an RST BPDU.
 
 Flags
 -----
@@ -42,15 +42,25 @@ bits "shall be transmitted as 0 and ignored on receipt", so a flag
 accessor answers ``None`` in a type that does not define its bit, as
 :class:`~netprotocols.VRRP`'s per-version accessors do, and the raw
 octet stays in :attr:`STP.flags`. The Port Role encodes 1 as Alternate
-or Backup, 2 as Root and 3 as Designated; 802.1D-2004 names 0 Unknown,
-and 802.1Q names it Master. The bit positions and the role values are
-from the BPDU encoding text of the IEEE 802.1 working group's public
-document ``aq-seaman-merged-bpdu-encoding-0509.pdf`` (an unapproved
-P802.1aq/D1.5 draft of 802.1Q Clause 14, which restates the 802.1D-2004
-encoding; fetched from ieee802.org 2026-10-25), and agree with
-Wireshark's ``epan/dissectors/packet-bpdu.c`` (master, fetched
-2026-10-25), whose names for the BPDU types, protocol versions and port
-roles this module uses.
+or Backup, 2 as Root and 3 as Designated; 0 is Unknown here, the name
+IEEE 802.1D-2004 gave it, which 802.1Q replaced with Master (the
+draft's §14.2.9 NOTE).
+
+The bit positions, the role values and the field layout are from the
+BPDU encoding text of the IEEE 802.1 working group's public document
+``aq-seaman-merged-bpdu-encoding-0509.pdf``, "P802.1aq/D1.5++suggested
+changes, May 16, 2009": an unapproved draft whose Clause 14 merges
+802.1D Clause 9 with 802.1Q-2005 Clause 14 (fetched from ieee802.org
+2026-10-25), called "the draft" here. They agree with Wireshark's
+``epan/dissectors/packet-bpdu.c`` (master, fetched 2026-10-25), whose
+names for the BPDU types, the protocol versions and port roles 1-3
+this module uses; Wireshark's ``role_vals`` names no role 0. The
+draft's §14.4 o) labels octets 34 and 35 Max Age, a slip for the
+Forward Delay they carry: Wireshark reads Forward Delay there
+(``BPDU_FORWARD_DELAY``, offset 33 from the Protocol Identifier), and
+Linux's ``br_send_config_bpdu()`` in ``net/bridge/br_stp_bpdu.c``
+(read 2026-10-28) writes it there, ``br_set_ticks(buf+33,
+bpdu->forward_delay)``.
 
 Bridge and Port Identifiers
 ---------------------------
@@ -189,8 +199,10 @@ _VERSION_NAMES: dict[int, str] = {
     4: "Shortest Path Tree",
 }
 
-#: Port Role values of an RST BPDU (see the module docstring): 0 is
-#: 802.1D-2004's Unknown, which 802.1Q calls Master.
+#: Port Role values of an RST BPDU (see the module docstring): 1-3 as
+#: Wireshark's role_vals names them; 0, which role_vals does not name,
+#: is 802.1D-2004's Unknown, which 802.1Q calls Master (the draft's
+#: §14.2.9 NOTE).
 _ROLE_NAMES: dict[int, str] = {
     0: "Unknown",
     1: "Alternate or Backup",
