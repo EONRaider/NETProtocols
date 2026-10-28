@@ -23,6 +23,7 @@ from netprotocols import (
     LLC,
     SNAP,
     STP,
+    VLAN,
     Ethernet,
     InvalidFieldError,
     InvalidMACAddressError,
@@ -446,6 +447,25 @@ class TestMSTBPDUs:
         assert [type(layer) for layer in packet] == [Ethernet, LLC, STP]
         assert packet.consumed == 14 + 3 + 36
         assert bytes(packet) == frame[: packet.consumed]
+
+    def test_a_caller_recovers_the_version_3_information(self):
+        """Test the module docstring's slice, padding and FCS present."""
+        frame = pad(frame_8023(LLC_UI + self.MST)) + FCS
+        packet = decode_frame(frame)
+        v3 = frame[packet.consumed : 14 + packet[Ethernet].length]
+        assert v3 == self.MST[36:]
+        assert struct.unpack_from("!H", v3)[0] == len(v3) - 2 == 64
+
+    def test_behind_a_vlan_tag_the_length_is_the_tags(self):
+        """Test the VLAN form of the slice."""
+        pdu = LLC_UI + self.MST
+        tag = b"\x81\x00\x00\x64" + struct.pack("!H", len(pdu))
+        frame = DST + SRC + tag + pdu + FCS
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, VLAN, LLC, STP]
+        assert packet[Ethernet].length is None
+        v3 = frame[packet.consumed : 18 + packet[VLAN].length]
+        assert v3 == self.MST[36:]
 
 
 class TestTrailingBytes:

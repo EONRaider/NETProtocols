@@ -122,12 +122,31 @@ Configuration Identifier, the CIST's internal fields and up to 64 MSTI
 Configuration Messages. :class:`STP` decodes its first 36 octets, the
 RST BPDU an 802.1w bridge would read from it, carries its version (3)
 verbatim, and leaves the Version 3 information after ``header_len``,
-undecoded and not kept in the layer. Keeping it raw would need the
-Version 3 Length to bound it, and that field is unreliable on the
-wire: Wireshark's ``packet-bpdu.c`` notes a Cisco C3550 IOS release
-that appears to send it as a count of MSTI messages rather than of
-octets, and MST BPDUs whose Version 3 Length is 0 and whose format
-selector octet holds the length instead. Decoding MSTP properly is later work.
+undecoded and not kept in the layer. The draft backs that reading.
+Under §14.6 i), an implementation of version 2 interprets a PDU of
+version 3 as if it carried version 2, ignoring the parameters and
+octets version 2 does not define; and even an MST bridge decodes a
+version 3 BPDU as MST only when §14.5 e) holds (102 or more octets, a
+Version 1 Length of 0, a Version 3 Length of a whole number of MSTI
+messages), and otherwise, by §14.5 d), as an RST BPDU.
+
+Keeping the Version 3 information raw in the layer would need an end
+for it. In a walk the 802.3 Length already gives one, but a direct
+:meth:`STP.decode` has nothing but the Version 3 Length, and that field
+is unreliable on the wire: Wireshark's ``packet-bpdu.c`` notes a Cisco
+C3550 IOS release that appears to send it as a count of MSTI messages
+rather than of octets, and MST BPDUs whose Version 3 Length is 0 and
+whose format selector octet holds the length instead. Read to the end
+of the buffer instead, it would take in Ethernet's padding and an FCS,
+which ``header_len`` would then cover. In a walk, a caller recovers the
+Version 3 information from the frame, after the layer and up to where
+the 802.3 Length ends the PDU::
+
+    v3 = frame[packet.consumed : 14 + packet[Ethernet].length]
+
+Behind one VLAN tag the Length is the tag's, 4 bytes later:
+``frame[packet.consumed : 18 + packet[VLAN].length]``. Decoding MSTP
+properly is later work.
 """
 
 from __future__ import annotations
