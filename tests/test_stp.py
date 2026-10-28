@@ -350,40 +350,113 @@ def non_root(bpdu_type: int, version: int, flags: int) -> bytes:
     return head + body + (b"\x00" if bpdu_type == 0x02 else b"")
 
 
-class TestAccessors:
-    """Every identifier, port and timer accessor on a non-root BPDU."""
+#: What every field and accessor of :func:`non_root`'s BPDU reads, shared
+#: by its Configuration and RST forms.
+NON_ROOT_COMMON = {
+    "protocol_id": 0,
+    "root_priority": 0x8164,
+    "root_mac": "02:00:00:00:00:a1",
+    "root_path_cost": 100,
+    "bridge_priority": 0x9203,
+    "bridge_mac": "02:00:00:00:00:b2",
+    "port_id": 0x0401,
+    "message_age": 0x0180,
+    "max_age": 0x1340,
+    "hello_time": 0x0280,
+    "forward_delay": 0x0F40,
+    "root_priority_component": 32768,
+    "root_system_id_extension": 356,
+    "bridge_priority_component": 36864,
+    "bridge_system_id_extension": 515,
+    "root_id_str": "32768/356/02:00:00:00:00:a1",
+    "bridge_id_str": "36864/515/02:00:00:00:00:b2",
+    "port_priority": 0,
+    "port_number": 1025,
+    "message_age_seconds": 1.5,
+    "max_age_seconds": 19.25,
+    "hello_time_seconds": 2.5,
+    "forward_delay_seconds": 15.25,
+}
 
-    @pytest.mark.parametrize(
-        "bpdu_type,version,flags,length",
-        [(0x00, 0, 0x81, 35), (0x02, 2, 0x7D, 36)],
-        ids=["config", "rst"],
-    )
-    def test_a_non_root_bpdu(self, bpdu_type, version, flags, length):
-        """Test each accessor against the value packed for it."""
-        raw = non_root(bpdu_type, version, flags)
+#: A Configuration BPDU with Topology Change and its Acknowledgment set
+#: (0x81), and an RST BPDU from a designated port with Topology Change,
+#: Learning, Forwarding and Agreement set (0x7D): what each reads beyond
+#: :data:`NON_ROOT_COMMON`.
+NON_ROOT_CASES = {
+    "config": (
+        (0x00, 0, 0x81),
+        {
+            "version": 0,
+            "bpdu_type": 0x00,
+            "flags": 0x81,
+            "version_1_length": None,
+            "header_len": 35,
+            "bpdu_type_name": "Configuration",
+            "version_name": "Spanning Tree",
+            "topology_change": True,
+            "topology_change_ack": True,
+            "proposal": None,
+            "learning": None,
+            "forwarding": None,
+            "agreement": None,
+            "port_role": None,
+            "port_role_name": None,
+        },
+    ),
+    "rst": (
+        (0x02, 2, 0x7D),
+        {
+            "version": 2,
+            "bpdu_type": 0x02,
+            "flags": 0x7D,
+            "version_1_length": 0,
+            "header_len": 36,
+            "bpdu_type_name": "Rapid/Multiple Spanning Tree",
+            "version_name": "Rapid Spanning Tree",
+            "topology_change": True,
+            "topology_change_ack": None,
+            "proposal": False,
+            "learning": True,
+            "forwarding": True,
+            "agreement": True,
+            "port_role": 3,
+            "port_role_name": "Designated",
+        },
+    ),
+}
+
+
+def _public_attributes() -> set[str]:
+    """Every dataclass field and public property :class:`STP` has."""
+    properties = {
+        name
+        for name in dir(STP)
+        if not name.startswith("_") and isinstance(getattr(STP, name), property)
+    }
+    return properties | {field.name for field in dataclasses.fields(STP)}
+
+
+class TestAccessors:
+    """Every field and accessor on a non-root BPDU."""
+
+    @pytest.mark.parametrize("case", NON_ROOT_CASES, ids=list(NON_ROOT_CASES))
+    def test_a_non_root_bpdu(self, case):
+        """Test each field and accessor against the value packed for it."""
+        args, specific = NON_ROOT_CASES[case]
+        expected = {**NON_ROOT_COMMON, **specific}
+        raw = non_root(*args)
         stp = STP.decode(raw)
-        assert stp.header_len == length == len(raw)
         assert bytes(stp) == raw
-        assert stp.root_priority == 0x8164
-        assert stp.root_mac == "02:00:00:00:00:a1"
-        assert stp.root_path_cost == 100
-        assert stp.bridge_priority == 0x9203
-        assert stp.bridge_mac == "02:00:00:00:00:b2"
-        assert stp.port_id == 0x0401
-        assert stp.root_priority_component == 32768
-        assert stp.root_system_id_extension == 356
-        assert stp.bridge_priority_component == 36864
-        assert stp.bridge_system_id_extension == 515
-        assert stp.root_id_str == "32768/356/02:00:00:00:00:a1"
-        assert stp.bridge_id_str == "36864/515/02:00:00:00:00:b2"
-        assert stp.port_priority == 0
-        assert stp.port_number == 1025
-        assert (stp.message_age, stp.max_age) == (0x0180, 0x1340)
-        assert (stp.hello_time, stp.forward_delay) == (0x0280, 0x0F40)
-        assert stp.message_age_seconds == 1.5
-        assert stp.max_age_seconds == 19.25
-        assert stp.hello_time_seconds == 2.5
-        assert stp.forward_delay_seconds == 15.25
+        assert stp.header_len == len(raw)
+        actual = {name: getattr(stp, name) for name in expected}
+        assert actual == expected
+        for name, value in expected.items():
+            assert type(actual[name]) is type(value), name
+
+    def test_the_cases_pin_every_public_attribute(self):
+        """A new field or accessor must be added to the expected values."""
+        for _, specific in NON_ROOT_CASES.values():
+            assert set(NON_ROOT_COMMON) | set(specific) == _public_attributes()
 
     @pytest.mark.parametrize(
         "port_id,priority,number",
