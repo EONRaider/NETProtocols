@@ -1048,6 +1048,7 @@ class TestCDPProperties:
             for address in addresses or ():
                 _ = (address.ip, address.protocol_type_name, bytes(address))
         assert bytes(cdp) == data[: cdp.header_len]
+        assert not any(data[cdp.header_len :])
         assert CDP.decode(bytes(cdp)) == cdp
 
     @given(pdu=cdp_pdus())
@@ -1059,6 +1060,25 @@ class TestCDPProperties:
             decoded = CDP.decode(wire + bytes(count))
             assert decoded == pdu, count
             assert decoded.header_len == len(wire), count
+
+    @given(
+        pdu=cdp_pdus(),
+        trailer=st.binary(min_size=1, max_size=12).filter(any),
+    )
+    def test_a_nonzero_trailer_is_never_left_out(
+        self, pdu: CDP, trailer: bytes
+    ) -> None:
+        """A standalone decode raises, or reads the trailer as TLVs: it
+        never stops where the PDU ends and drops nonzero bytes."""
+        wire = bytes(pdu)
+        try:
+            decoded = CDP.decode(wire + trailer)
+        except ProtocolError:
+            event("raised")
+            return
+        event("phantom TLVs")
+        assert decoded.tlvs[: len(pdu.tlvs)] == pdu.tlvs
+        assert decoded.header_len > len(wire)
 
     @given(pdu=cdp_pdus(), trailer=st.binary(max_size=12))
     def test_a_walk_hands_cdp_exactly_its_pdu(

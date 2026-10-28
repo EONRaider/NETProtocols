@@ -204,7 +204,7 @@ class TestWhereThePDUEnds:
     @pytest.mark.parametrize("frame", FRAMES, ids=IDS)
     @pytest.mark.parametrize("count", [1, 2, 3, 4, 5, 46])
     def test_standalone_zero_padding_is_left_undecoded(self, frame, count):
-        """Fewer than 4 bytes left, or a Length of 0, ends the walk."""
+        """End the walk at a run of zeros: 1-3 bytes, or a Length of 0."""
         pdu = pdu_of(frame)
         cdp = CDP.decode(pdu + bytes(count))
         assert cdp == CDP.decode(pdu)
@@ -221,11 +221,16 @@ class TestWhereThePDUEnds:
         assert excinfo.value.expected == len(pdu) + 0xBEEF
         assert excinfo.value.actual == len(pdu) + 4
 
-    def test_standalone_an_fcs_with_a_short_length_is_left_out(self):
-        """Leave out an FCS read as a TLV header of Length below 4."""
+    def test_standalone_an_fcs_with_a_short_length_raises(self):
+        """Raise for an FCS read as a TLV header of Length below 4."""
         pdu = pdu_of(CDPV1)
-        cdp = CDP.decode(pdu + b"\xde\xad\x00\x03")
-        assert cdp.header_len == len(pdu)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP.decode(pdu + b"\xde\xad\x00\x03")
+        assert excinfo.value.protocol is CDP
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == len(pdu)
+        assert excinfo.value.expected == ">=4"
+        assert excinfo.value.actual == 3
 
     def test_standalone_an_fcs_of_length_4_is_a_phantom_tlv(self):
         """It decodes, and the checksum is what shows it was not sent."""
@@ -235,19 +240,48 @@ class TestWhereThePDUEnds:
         assert cdp.header_len == len(pdu) + 4
         assert not verify(cdp)
 
-    def test_a_short_length_stops_the_walk_inside_the_pdu(self):
-        """Wireshark stops there too; the rest is not decoded."""
+    def test_a_short_length_inside_the_pdu_raises(self):
+        """Raise where Wireshark stops: TLVs follow, nothing is dropped."""
         body = tlv(1, b"sw1") + b"\x00\x05\x00\x02" + tlv(6, b"p")
-        cdp = CDP.decode(b"\x02\xb4\x00\x00" + body)
-        assert cdp.tlvs == (CDPTLV(1, b"sw1"),)
-        assert cdp.header_len == 4 + 7
-        assert bytes(cdp) == (b"\x02\xb4\x00\x00" + body)[: cdp.header_len]
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP.decode(b"\x02\xb4\x00\x00" + body)
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == 4 + 7
+        assert excinfo.value.actual == 2
 
     @pytest.mark.parametrize("length", [0, 1, 2, 3])
-    def test_every_length_below_4_stops(self, length):
-        """Stop at Lengths 0-3, which cannot cover their own header."""
-        data = b"\x01\xb4\x00\x00" + struct.pack("!HH", 1, length) + b"abcd"
-        assert CDP.decode(data).tlvs == ()
+    @pytest.mark.parametrize(
+        "header_type,rest",
+        [(1, b""), (0, b"abcd"), (0, bytes(4) + b"\x01")],
+        ids=["type", "value", "last-byte"],
+    )
+    def test_every_length_below_4_raises_before_nonzero_bytes(
+        self, length, header_type, rest
+    ):
+        """Raise at Lengths 0-3, which cannot cover their own header,
+        when any byte from that header on is nonzero, the last one too."""
+        data = (
+            b"\x01\xb4\x00\x00"
+            + tlv(9, b"x")
+            + struct.pack("!HH", header_type, length)
+            + rest
+        )
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP.decode(data)
+        assert excinfo.value.protocol is CDP
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == 9
+        assert excinfo.value.expected == ">=4"
+        assert excinfo.value.actual == length
+
+    @pytest.mark.parametrize("count", [4, 5, 8, 46])
+    def test_a_zero_tail_after_tlvs_is_left_undecoded(self, count):
+        """Stop at zeros after the last TLV; header_len leaves them out."""
+        head = b"\x02\xb4\x00\x00" + tlv(1, b"sw1") + tlv(9, b"")
+        cdp = CDP.decode(head + bytes(count))
+        assert cdp.tlvs == (CDPTLV(1, b"sw1"), CDPTLV(9))
+        assert cdp.header_len == len(head)
+        assert bytes(cdp) == head
 
     def test_a_snap_length_cut_raises_in_a_strict_walk(self):
         """Raise at the cut TLV, its offset rebased onto the frame."""
@@ -265,12 +299,85 @@ class TestWhereThePDUEnds:
         assert [type(layer) for layer in packet] == [Ethernet, LLC, SNAP]
         assert isinstance(packet.stopped_by, TruncatedHeaderError)
 
-    def test_a_cut_tlv_header_is_left_undecoded(self):
-        """1-3 bytes of a TLV header left: not enough to read a Length."""
-        data = b"\x01\xb4\x00\x00" + tlv(1, b"x") + b"\x00\x06\x00"
+    @pytest.mark.parametrize(
+        "rest",
+        [b"\x01", b"\x00\x06", b"\x00\x06\x00", b"\x00\x00\x01", b"\xde\xad"],
+    )
+    def test_a_cut_tlv_header_raises(self, rest):
+        """1-3 bytes left, not all zero: too few for a TLV header."""
+        data = b"\x01\xb4\x00\x00" + tlv(1, b"x") + rest
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            CDP.decode(data)
+        assert excinfo.value.protocol is CDP
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == 9
+        assert excinfo.value.expected == 4
+        assert excinfo.value.actual == len(rest)
+
+    @pytest.mark.parametrize("count", [1, 2, 3])
+    def test_a_cut_tlv_header_of_zeros_is_left_undecoded(self, count):
+        """1-3 zero bytes after the last TLV are padding."""
+        data = b"\x01\xb4\x00\x00" + tlv(1, b"x") + bytes(count)
         cdp = CDP.decode(data)
         assert cdp.tlvs == (CDPTLV(1, b"x"),)
         assert cdp.header_len == 9
+
+    @staticmethod
+    def malformed_frame(check_fixtures) -> bytes:
+        """Return the review's frame: a TLV, then 8 bytes no TLV fits.
+
+        Bytes 10-13 read as a TLV of type 0xFFFF and Length 0; the
+        checksum is filled over all 18 bytes the 802.3 Length holds,
+        the checker's way, so only the TLV walk can tell.
+        """
+        head = bytes(CDP(2, 180, 0, (CDPTLV(1, b"ab"),)))
+        pdu = bytearray(head + bytes.fromhex("ffff0000abcd5432"))
+        pdu[2:4] = check_fixtures._cdp_checksum(bytes(pdu)).to_bytes(2)
+        return frame_of(bytes(pdu))
+
+    def test_a_short_length_inside_the_802_3_length_fails_a_strict_walk(
+        self, check_fixtures
+    ):
+        """Raise, rebased onto the frame; the checker rejects it too."""
+        frame = self.malformed_frame(check_fixtures)
+        assert len(frame) == 40
+        with pytest.raises(InvalidFieldError) as excinfo:
+            decode_frame(frame)
+        assert excinfo.value.protocol is CDP
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == 10
+        assert excinfo.value.actual == 0
+        assert excinfo.value.frame_offset == 22 + 10
+        assert check_fixtures.check_frame(frame, check_fixtures.Counter()) == [
+            "cdp-malformed"
+        ]
+
+    def test_a_short_length_inside_the_802_3_length_stops_a_lax_walk(
+        self, check_fixtures
+    ):
+        """Stop a lax walk before CDP, the error on stopped_by."""
+        packet = decode_frame(self.malformed_frame(check_fixtures), lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC, SNAP]
+        assert packet.consumed == 22
+        assert isinstance(packet.stopped_by, InvalidFieldError)
+        assert packet.stopped_by.offset == 10
+
+    def test_zeros_inside_the_802_3_length_end_a_walk(self):
+        """Stop at zeros the 802.3 Length holds, as standalone."""
+        pdu = b"\x02\xb4\x00\x00" + tlv(1, b"x")
+        packet = decode_frame(frame_of(pdu + bytes(6)))
+        assert packet[CDP] == CDP.decode(pdu)
+        assert packet.consumed == 22 + len(pdu)
+        assert packet.stopped_by is None
+
+    def test_a_cut_tlv_header_inside_the_802_3_length_fails_a_walk(self):
+        """Raise for 1-3 nonzero bytes the 802.3 Length holds."""
+        frame = frame_of(b"\x02\xb4\x00\x00" + tlv(1, b"x") + b"\x00\x06")
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            decode_frame(frame + bytes(20))
+        assert excinfo.value.field == "tlvs"
+        assert excinfo.value.offset == 9
+        assert excinfo.value.frame_offset == 22 + 9
 
 
 class TestDecode:
@@ -629,6 +736,17 @@ class TestDecodeCost:
         _SliceCountingBytes.read = 0
         cdp = CDP.decode(data)
         assert len(cdp.tlvs) == 13000
+        assert 0 < _SliceCountingBytes.read <= len(data)
+
+    def test_a_nonzero_byte_after_padding_is_found_in_one_scan(self):
+        """Scan the tail once, on the way out, before raising for it."""
+        data = _SliceCountingBytes(
+            b"\x02\xb4\x00\x00" + self.VALUED + bytes(46) + b"\x01"
+        )
+        _SliceCountingBytes.read = 0
+        with pytest.raises(InvalidFieldError) as excinfo:
+            CDP.decode(data)
+        assert excinfo.value.offset == 4 + len(self.VALUED)
         assert 0 < _SliceCountingBytes.read <= len(data)
 
     def test_a_huge_address_count_reads_the_value_once(self):

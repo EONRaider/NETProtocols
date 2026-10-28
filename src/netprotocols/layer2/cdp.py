@@ -51,29 +51,44 @@ CDP has no length for the whole PDU: the TLVs run to the end of the
 Ethernet's zero padding and a captured FCS never reach it. Called
 directly, ``decode`` has no Length to go by and reads TLVs from byte 4
 to the end of its buffer, so the caller bounds it, e.g. with
-``frame[22 : 14 + eth.length]`` for an untagged frame. Without that
-bound:
+``frame[22 : 14 + eth.length]`` for an untagged frame. Either way,
+the TLVs must fill the buffer ``decode`` is handed:
 
-* ``decode`` stops, without raising, where fewer than 4 bytes are left
-  or at a TLV header whose Length is below 4, the size of the header
-  it counts. That header and everything after it are left undecoded
-  (decode contract rule 3), and :attr:`CDP.header_len` ends before
-  them. So zero padding of any length is left undecoded: its first 4
-  bytes read as a TLV of Length 0. Wireshark's dissector stops at such
-  a Length too, flagging it as invalid.
+* ``decode`` stops, without raising, only where every byte left is
+  zero: fewer than 4 bytes are left, or a TLV header's Length is below
+  4, the size of the header it counts, and from there to the end of
+  the buffer the bytes are all zero. Those zeros are left undecoded
+  (decode contract rule 3) and :attr:`CDP.header_len` ends before
+  them, so Ethernet's zero padding, of any length, stays out of the
+  PDU. Rule 3 holds for those zeros only, as for SCTP: nothing else
+  is left undecoded.
+* Otherwise a TLV Length below 4 raises
+  :class:`~netprotocols.InvalidFieldError`, and 1-3 bytes left after
+  the last TLV raise :class:`~netprotocols.TruncatedHeaderError`, each
+  with ``field="tlvs"`` and the offset where the TLV would start. In a
+  walk, where the 802.3 Length ends the buffer, such bytes are inside
+  the PDU the sender declared: a strict
+  :func:`~netprotocols.decode_frame` raises, and a lax one stops
+  before CDP with the error on ``stopped_by``.
 * A TLV whose Length is 4 or more but runs past the buffer raises
   :class:`~netprotocols.TruncatedHeaderError` (``field="tlvs"``, the
   offset of the TLV's header), as any header that lies about its
   length does. That is also what a snap length cutting a TLV short
   raises inside a walk.
-* A nonzero trailer such as a 4-byte FCS reads as a TLV header: its
-  last 2 bytes are the Length, so it stops the walk below 4, raises
-  above 4, and with exactly 4 decodes as a phantom TLV with an empty
-  value. :func:`~netprotocols.checksum.verify` sums the bytes
-  decoded, ``bytes(cdp)``, so a phantom TLV, or a stop before the
-  sender's last TLV, fails it unless the bytes added or left out
-  happen to leave the ones'-complement sum unchanged: it is the
-  signal that the bytes decoded are not the PDU the sender summed.
+* So a nonzero trailer such as a 4-byte FCS, read as a TLV header
+  whose last 2 bytes are the Length, raises for a Length below 4 or
+  one that runs past the buffer, and with exactly 4 decodes as a
+  phantom TLV with an empty value. In that one case
+  :func:`~netprotocols.checksum.verify`, which sums the bytes decoded,
+  ``bytes(cdp)``, is the signal: it fails unless the phantom TLV
+  happens to leave the ones'-complement sum unchanged.
+
+Wireshark's dissector, epan/dissectors/packet-cdp.c, differs on two
+points: at a TLV Length below 4 it adds an "invalid length" item and
+stops, without marking the frame malformed, whatever follows; and with
+1-3 bytes left it tries to read a 4-byte TLV header from them and
+marks the frame malformed, even when they are zero (the TLV loop of
+``dissect_cdp``, commit 31bf0857).
 
 A header shorter than its fixed 4 bytes raises
 :class:`~netprotocols.TruncatedHeaderError` (offset 0, no ``field``).
@@ -82,16 +97,12 @@ The walk is local to this module rather than
 :func:`~netprotocols._tlv.walk_kind_length_value`, the TLV walker
 TCP, IPv4, IPv6 and PIM share. Its 2-byte Type and Length, with
 ``length_includes_header=True``, are CDP's TLV header, floor of 4
-included; what does not fit is the rest. That walker raises
-:class:`~netprotocols.InvalidFieldError` for a Length below the floor,
-where ``decode`` stops; it raises
-:class:`~netprotocols.InvalidFieldError` too for a Length that runs
-past the bytes, where the decode contract asks for
-:class:`~netprotocols.TruncatedHeaderError`; its offsets count from
-the start of the bytes it is handed, not from the start of the CDP
-header, which ``decode``'s errors count from; and it yields no offset
-for ``decode`` to bound :attr:`CDP.header_len` with. The LLDP decoder
-keeps its own walk for the same reasons.
+included, but it raises :class:`~netprotocols.InvalidFieldError` for
+a header cut short and for a Length that runs past the bytes, where
+the decode contract asks for :class:`~netprotocols.TruncatedHeaderError`,
+and it knows no zero tail: ending there would take a wrapper that
+catches its errors and translates them. The LLDP decoder keeps its own
+walk for the same reasons.
 
 ``bytes(CDP.decode(x)) == x[:header_len]`` holds by construction: the
 header is packed back from its three fields and each TLV from its type
@@ -393,6 +404,48 @@ def _parse_addresses(value: bytes) -> tuple[CDPAddress, ...] | None:
     return tuple(addresses)
 
 
+def _end_tlvs(
+    protocol: type, data: bytes | memoryview, cursor: int, length: int | None
+) -> None:
+    """Let the TLVs end at ``cursor`` only if every byte from it is zero.
+
+    A run of zero bytes there is padding, left undecoded; anything else
+    is a TLV the PDU cannot hold. The remainder is scanned once, on the
+    way out of the walk, so decoding stays linear.
+
+    :param protocol: The class to attach to a raised error.
+    :param data: The buffer being decoded.
+    :param cursor: Where the next TLV would start.
+    :param length: That TLV's Length, below 4, or ``None`` when fewer
+        than 4 bytes are left to hold its header.
+    :raises TruncatedHeaderError: ``length`` is ``None`` and the bytes
+        left are not all zero.
+    :raises InvalidFieldError: ``length`` is below 4 and the bytes
+        left are not all zero.
+    """
+    if not any(data[cursor:]):
+        return
+    if length is None:
+        raise TruncatedHeaderError(
+            f"CDP TLV header at offset {cursor} needs {_TLV_HEADER_LEN} "
+            f"bytes, {len(data) - cursor} remain",
+            protocol=protocol,
+            field="tlvs",
+            offset=cursor,
+            expected=_TLV_HEADER_LEN,
+            actual=len(data) - cursor,
+        )
+    raise InvalidFieldError(
+        f"CDP TLV at offset {cursor} declares Length {length}, below "
+        f"its {_TLV_HEADER_LEN}-byte header",
+        protocol=protocol,
+        field="tlvs",
+        offset=cursor,
+        expected=f">={_TLV_HEADER_LEN}",
+        actual=length,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CDP(Protocol):
     """A Cisco Discovery Protocol PDU; see the module docstring.
@@ -439,17 +492,25 @@ class CDP(Protocol):
         """Decode the CDP PDU at the start of ``data``; see the module.
 
         :raises TruncatedHeaderError: ``data`` is shorter than the
-            4-byte header (no ``field``), or a TLV whose Length is 4 or
-            more runs past it (``field="tlvs"``, the offset of that
-            TLV's header).
+            4-byte header (no ``field``); a TLV whose Length is 4 or
+            more runs past it, or 1-3 bytes are left after the last TLV
+            and not all are zero (``field="tlvs"``, the offset of that
+            TLV, or of those bytes).
+        :raises InvalidFieldError: a TLV's Length is below 4 and the
+            bytes from its header to the end of ``data`` are not all
+            zero (``field="tlvs"``, the offset of that TLV).
         """
         version, ttl, checksum = cls._unpack_fixed(data)
         size = len(data)
         tlvs: list[CDPTLV] = []
         cursor = cls._struct.size
-        while cursor + _TLV_HEADER_LEN <= size:
+        while cursor < size:
+            if size - cursor < _TLV_HEADER_LEN:
+                _end_tlvs(cls, data, cursor, None)
+                break
             tlv_type, length = _TLV_HEADER.unpack_from(data, cursor)
             if length < _TLV_HEADER_LEN:
+                _end_tlvs(cls, data, cursor, length)
                 break
             end = cursor + length
             if end > size:
