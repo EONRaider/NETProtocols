@@ -250,11 +250,16 @@ to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 `CDP`, which SNAP dispatches at OUI 00-00-0C PID 0x2000, is the first
 decoder behind that bound. It has no length of its own: its TLVs run to
 the end of the PDU, and its checksum covers exactly those bytes, so in
-a walk it decodes the PDU and nothing else. Called directly, its
-`decode()` walks TLVs to the end of the buffer but stops, without
-raising, where fewer than 4 bytes remain or at a TLV Length below 4,
-as Wireshark's dissector does, so zero padding is left undecoded; a
-TLV whose Length runs past the buffer raises `TruncatedHeaderError`.
+a walk it decodes the PDU and nothing else. Its `decode()` walks TLVs
+to the end of the buffer it is handed and stops early, without
+raising, only where every byte left is zero, so Ethernet's zero padding
+is left undecoded when it is called directly; rule 3 holds for those
+zeros only, as for SCTP. Otherwise a TLV Length below 4 raises
+`InvalidFieldError`, 1-3 bytes left after the last TLV raise
+`TruncatedHeaderError`, and so does a TLV whose Length runs past the
+buffer, in a walk too, where those bytes are inside the 802.3 Length.
+Wireshark's dissector instead stops at a Length below 4 whatever
+follows, and marks 1-3 bytes left malformed even when they are zero.
 See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
 docstring.
 
