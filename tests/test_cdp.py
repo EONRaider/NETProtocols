@@ -887,10 +887,11 @@ class TestDecodeCost:
         data = b"\x02\xb4\x00\x00" + tlv(1, b"x") + bytes(1 << 22) + last
         tracemalloc.start()
         try:
-            try:
+            if last:
+                with pytest.raises(InvalidFieldError):
+                    CDP.decode(data)
+            else:
                 CDP.decode(data)
-            except InvalidFieldError:
-                assert last
             _, peak = tracemalloc.get_traced_memory()
         finally:
             tracemalloc.stop()

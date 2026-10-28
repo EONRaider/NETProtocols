@@ -69,8 +69,8 @@ the TLVs must fill the buffer ``decode`` is handed:
   part of the PDU the sender declared, not Ethernet padding, but they
   are left undecoded all the same, and the walk does not raise:
   :attr:`~netprotocols.Packet.consumed` stopping short of
-  ``14 + eth.length`` (untagged) is the only signal. ``verify()``
-  sums ``bytes(cdp)`` without them. Where the TLVs end at an even
+  ``14 + eth.length`` (untagged) is the only structural signal.
+  ``verify()`` sums ``bytes(cdp)`` without them. Where the TLVs end at an even
   offset that changes nothing, but where they end at an odd one, on
   a byte other than 0x00, and the sender summed the whole Length (as
   packet-cdp.c sums its whole buffer), the odd byte falls in a

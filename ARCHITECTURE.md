@@ -263,9 +263,10 @@ follows, and marks 1-3 bytes left malformed even when they are zero.
 The zero rule has one blind spot: zeros after the last TLV but inside
 the 802.3 Length belong to the PDU the sender declared, yet a walk
 leaves them undecoded without raising, so `consumed` stopping short of
-the Length's end is the only signal. `verify()` sums the bytes decoded,
-without them; where the TLVs end at an odd offset on a nonzero byte
-and the sender summed the whole Length, it returns `False`.
+the Length's end is the only structural signal. `verify()` sums the
+bytes decoded, without them; where the TLVs end at an odd offset on a
+nonzero byte and the sender summed the whole Length, it returns
+`False`.
 `scripts/check_fixtures.py` rejects such a frame, and Wireshark marks
 1-3 such zeros malformed and shows 4 or more as a TLV of invalid
 Length 0.
