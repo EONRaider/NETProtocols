@@ -63,9 +63,11 @@ is a protocol number, under that OUI, assigned by the OUI owner"), so
   EtherType: Linux's ``net/wireless/util.c``, read 2026-10-25, defines
   ``bridge_tunnel_header`` as ``aa aa 03 00 00 f8`` "for EtherTypes
   ETH_P_AARP and ETH_P_IPX") make the PID an EtherType, looked up in
-  the ``ethertype`` table. That table holds
-  only values of 0x0600 or more (see :mod:`netprotocols.registry`), and
-  a PID below that ends the walk: it is not an 802.3 Length.
+  the ``ethertype`` table whatever its value. A PID below 0x0600 is
+  never read as an 802.3 Length: the default registry holds nothing
+  there, so the walk ends, but a class registered there is reached, as
+  it is from a GRE Protocol Type (see "Key ranges" in
+  :mod:`netprotocols.registry`).
 - Any other OUI makes the PID that organisation's own number, looked
   up in the ``llc.snap`` table under ``(oui << 16) | pid``. Cisco's CDP
   is OUI 00-00-0C PID 0x2000, which is not EtherType 0x2000.

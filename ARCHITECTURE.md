@@ -481,7 +481,7 @@ field they dispatch on:
 
 | Table | Dispatches on | Read by |
 |---|---|---|
-| `ethertype` | Ethernet II EtherType (0x0600-0xFFFF only) | `Ethernet`, `VLAN`, `GRE`, `SNAP` (OUI 00-00-00, 00-00-F8) |
+| `ethertype` | Ethernet II EtherType (from Ethernet and VLAN, 0x0600 and up only; from GRE and SNAP, any value) | `Ethernet`, `VLAN`, `GRE`, `SNAP` (OUI 00-00-00, 00-00-F8) |
 | `llc.dsap` | IEEE 802.2 LLC DSAP | `LLC` |
 | `llc.snap` | SNAP `(oui << 16) \| pid`, any other OUI | `SNAP` |
 | `ip.proto` | IPv4 `protocol` | `IPv4`, `AH` |
