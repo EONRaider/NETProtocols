@@ -60,10 +60,10 @@ It is decode context
 kept on the instance outside its comparison and hash, so equal headers
 compare equal wherever they were found. A header built with the
 constructor, or copied with :func:`dataclasses.replace`, has seen no
-bytes and dispatches as before; :func:`copy.copy`, :func:`copy.deepcopy`
-and :mod:`pickle` keep what :meth:`LLC.decode` recorded. :meth:`STP.decode
-<netprotocols.STP.decode>` called directly still rejects a Protocol
-Identifier other than 0.
+bytes and dispatches as before; :func:`copy.copy` and
+:func:`copy.deepcopy` keep what :meth:`LLC.decode` recorded.
+:meth:`STP.decode <netprotocols.STP.decode>` called directly still
+rejects a Protocol Identifier other than 0.
 
 SNAP
 ----
@@ -242,9 +242,9 @@ class LLC(Protocol):
     #: Whether :meth:`decode` found a Protocol Identifier other than
     #: STP's 0x0000 after a dispatching DSAP 0x42 PDU's Control (see
     #: :meth:`next_protocol`); decode context, not a wire field, so it is
-    #: neither compared nor hashed. :func:`copy.copy`,
-    #: :func:`copy.deepcopy` and :mod:`pickle` keep it;
-    #: :func:`dataclasses.replace` builds a new header, which has it unset.
+    #: neither compared nor hashed. :func:`copy.copy` and
+    #: :func:`copy.deepcopy` keep it; :func:`dataclasses.replace` builds
+    #: a new header, which has it unset.
     _other_protocol_id: bool = field(
         default=False, init=False, repr=False, compare=False
     )

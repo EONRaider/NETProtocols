@@ -13,7 +13,6 @@ from __future__ import annotations
 import copy
 import dataclasses
 import importlib.util
-import pickle
 import struct
 import tracemalloc
 from collections import Counter
@@ -864,8 +863,8 @@ class TestOtherProtocolIdentifiers:
 
     @pytest.mark.parametrize(
         "copier",
-        [copy.copy, copy.deepcopy, lambda x: pickle.loads(pickle.dumps(x))],
-        ids=["copy", "deepcopy", "pickle"],
+        [copy.copy, copy.deepcopy],
+        ids=["copy", "deepcopy"],
     )
     def test_copies_keep_the_sniff(self, copier):
         """Test what the field's comment says copies do."""

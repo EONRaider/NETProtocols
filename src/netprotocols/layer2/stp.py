@@ -126,7 +126,8 @@ outside this layer, after its ``header_len``. ``bytes(STP.decode(x)) ==
 x[:header_len]``.
 
 Cisco's PVST+ sends two kinds of BPDU (Cisco's "Troubleshoot Spanning
-Tree PVID- and Type-Inconsistencies" document, 24063, read 2026-10-28).
+Tree PVID- and Type-Inconsistencies" document, 24063, read 2026-10-28,
+https://www.cisco.com/c/en/us/support/docs/lan-switching/spanning-tree-protocol/24063-pvid-inconsistency-24063.html).
 Its VLAN 1 BPDUs go untagged to the IEEE address 01-80-C2-00-00-00, at
 DSAP 0x42, and decode here like any other (Cisco does not say they
 carry a TLV; Wireshark parses PVST+ TLVs only under PID 0x010B). Its
