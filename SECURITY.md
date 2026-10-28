@@ -58,6 +58,14 @@ until request/response pairing exists.
 holds; reassembling the stream, and the segment-overlap tricks that
 come with it, are the caller's in the same way.
 
+`MPLS` names the packet under its label stack by convention, since
+nothing in the stack names it: an Explicit NULL bottom label, or else
+the first nibble after the stack read as an IP version. A pseudowire
+sent without a control word can therefore decode as IPv4 or IPv6 (RFC
+4928 describes the same misreading in routers); that guess is
+documented behaviour, not a vulnerability, and the module docstring
+says how to walk such a payload explicitly.
+
 Vulnerabilities in third-party tooling used only in CI (linters, type
 checkers, the build backend) are out of scope for this policy --
 please report those upstream instead.

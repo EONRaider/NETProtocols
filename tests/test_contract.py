@@ -10,6 +10,8 @@ from netprotocols import (
     ESP,
     HTTP,
     LLC,
+    LLDP,
+    MPLS,
     OSPF,
     PIM,
     RIP,
@@ -36,6 +38,7 @@ class TestTruncation:
         "protocol,fixture",
         [
             (Ethernet, "raw_eth_header"),
+            (LLDP, "raw_lldp_shutdown"),
             (ARP, "raw_arp_header"),
             (IPv4, "raw_ipv4_header"),
             (IPv6, "raw_ipv6_header"),
@@ -54,6 +57,7 @@ class TestTruncation:
             (BGP, "raw_bgp_keepalive"),
             (LLC, "raw_llc_header"),
             (SNAP, "raw_snap_header"),
+            (MPLS, "raw_mpls_stack"),
         ],
     )
     def test_truncated_fixed_header_raises(self, protocol, fixture, request):
@@ -95,6 +99,20 @@ class TestTruncation:
         lying = raw_bgp_keepalive[:16] + b"\x10\x00\x02" + bytes(4)
         with pytest.raises(TruncatedHeaderError):
             BGP.decode(lying)
+
+    def test_lying_lldp_tlv_length_raises(self, raw_lldp_shutdown):
+        """A Port ID TLV whose Length claims 511 bytes on a 27-byte
+        buffer."""
+        lying = raw_lldp_shutdown[:9] + b"\x05\xff" + raw_lldp_shutdown[11:]
+        with pytest.raises(TruncatedHeaderError):
+            LLDP.decode(lying)
+
+    def test_a_stack_cut_before_its_bottom_raises(self, raw_mpls_stack):
+        """MPLS has no length to lie with: its S bit ends the stack, so
+        a stack cut before its bottom entry is the truncation case."""
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            MPLS.decode(raw_mpls_stack[:-1])
+        assert (excinfo.value.field, excinfo.value.offset) == ("labels", 4)
 
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):
@@ -184,6 +202,13 @@ class TestDecodeInputs:
         assert ip.src == src_before
         assert ip.options == options_before
         assert bytes(ip) == raw_ipv4_header
+
+    def test_mpls_memoryview_accepted_and_not_retained(self, raw_mpls_stack):
+        buffer = bytearray(raw_mpls_stack + b"\x45")
+        mpls = MPLS.decode(memoryview(buffer))
+        buffer[:] = bytes(len(buffer))
+        assert bytes(mpls) == raw_mpls_stack
+        assert mpls.payload_ethertype == 0x0800
 
     def test_trailing_bytes_tolerated(self, raw_eth_header, raw_arp_header):
         eth = Ethernet.decode(raw_eth_header + raw_arp_header)

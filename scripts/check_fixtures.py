@@ -1012,6 +1012,98 @@ def _check_upper_v6(
     return [f"unchecked-protocol-{next_header}"] if strict else []
 
 
+def _check_arp(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Count an ARP packet, which carries no checksum.
+
+    Under strict, at least insist on the 28-byte Ethernet/IPv4 form
+    rather than vouching for a stub.
+    """
+    stats["arp"] += 1
+    if strict and len(payload) < 28:
+        return ["unchecked-ethertype-0x0806"]
+    return []
+
+
+#: The MPLS bottom labels RFC 3032 §2.1 reserves for a payload: IPv4
+#: and IPv6 Explicit NULL. The two that announce a non-IP payload, the
+#: GAL (13, RFC 5586) and the OAM Alert Label (14, RFC 3429), map to
+#: ``None``.
+_MPLS_BOTTOM_LABELS = {0: 0x0800, 2: 0x86DD, 13: None, 14: None}
+
+#: The first nibble after a label stack read as an IP version
+#: (RFC 4928 §2), mapped to the EtherType that names that header.
+_MPLS_NIBBLES = {4: 0x0800, 6: 0x86DD}
+
+
+def _mpls_stack_end(payload: bytes) -> tuple[int, int] | None:
+    """Find the end of an MPLS label stack.
+
+    Return the offset just past the entry with its Bottom of Stack bit
+    set, and that entry's label, or ``None`` when the bytes end first.
+    """
+    for offset in range(0, len(payload) - 3, 4):
+        word = struct.unpack_from("!I", payload, offset)[0]
+        if word & 0x100:
+            return offset + 4, word >> 12
+    return None
+
+
+def _check_mpls(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+) -> list[str]:
+    """Validate an MPLS frame (EtherType 0x8847 or 0x8848, RFC 3032).
+
+    Walk the label stack to the entry with its Bottom of Stack bit set,
+    then validate what follows: an IPv4 or IPv6 packet, named by an
+    Explicit NULL bottom label or else by its first nibble (the same
+    convention the library documents, implemented here on its own), or,
+    after a pseudowire control word (first nibble 0, RFC 4385 §3), the
+    Ethernet frame an Ethernet pseudowire (RFC 4448) carries. A
+    pseudowire's payload type is signalled, not encoded, and the
+    corpus's only pseudowire is Ethernet. Anything else passes unread,
+    or fails under ``strict``; so does a stack whose bottom never comes.
+    """
+    end = _mpls_stack_end(payload)
+    if end is None:
+        stats["mpls-truncated"] += 1
+        return ["unchecked-mpls-truncated"] if strict else []
+    offset, bottom = end
+    stats["mpls-stack"] += 1
+    inner = payload[offset:]
+    nibble = inner[0] >> 4 if inner else None
+    if bottom in _MPLS_BOTTOM_LABELS:
+        ethertype = _MPLS_BOTTOM_LABELS[bottom]
+    else:
+        ethertype = _MPLS_NIBBLES.get(nibble)
+    if ethertype is not None:
+        return _check_l3(ethertype, inner, stats, depth + 1, strict=strict)
+    if bottom not in _MPLS_BOTTOM_LABELS and nibble == 0 and len(inner) >= 4:
+        stats["mpls-pseudowire"] += 1
+        return _check_ethernet(inner[4:], stats, depth + 1, strict=strict)
+    stats["mpls-unchecked-payload"] += 1
+    return ["unchecked-mpls-payload"] if strict else []
+
+
+#: The EtherTypes :func:`_check_l3` hands to a helper of their own.
+def _check_lldp_l3(
+    payload: bytes, stats: Counter, depth: int, *, strict: bool
+) -> list[str]:
+    """Adapt :func:`_check_lldp` to the ``_L3_HELPERS`` signature: an
+    LLDPDU ends the walk, so neither ``depth`` nor ``strict`` applies."""
+    del depth, strict
+    return _check_lldp(payload, stats)
+
+
+_L3_HELPERS = {
+    0x0806: _check_arp,
+    0x8847: _check_mpls,
+    0x8848: _check_mpls,
+    0x88CC: _check_lldp_l3,
+}
+
+
 def _check_l3(
     ethertype: int,
     payload: bytes,
@@ -1022,7 +1114,8 @@ def _check_l3(
 ) -> list[str]:
     """Validate the checksums reachable from an L3 payload named by
     ``ethertype``. Recurses through a GRE tunnel, whose inner protocol
-    is itself an EtherType, through IP-in-IP (IP protocols 4 and 41),
+    is itself an EtherType, through an MPLS label stack (see
+    :func:`_check_mpls`), through IP-in-IP (IP protocols 4 and 41),
     through VXLAN, whose payload is a whole Ethernet frame, and through
     NULL-encrypted ESP and IPv4 AH after verifying the ICV, and checks a
     RIPv2 message's RFC 4822 digest with its published key. IPsec on an
@@ -1036,13 +1129,9 @@ def _check_l3(
     strings."""
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
-    if ethertype == 0x0806:
-        stats["arp"] += 1
-        # ARP carries no checksum; under strict, at least insist on the
-        # 28-byte Ethernet/IPv4 form rather than vouching for a stub.
-        if strict and len(payload) < 28:
-            return ["unchecked-ethertype-0x0806"]
-        return []
+    helper = _L3_HELPERS.get(ethertype)
+    if helper is not None:
+        return helper(payload, stats, depth, strict=strict)
 
     if ethertype == 0x0800 and len(payload) >= 20:
         return _check_ipv4(payload, stats, depth, strict=strict)
@@ -1053,6 +1142,67 @@ def _check_l3(
     if strict:
         return [f"unchecked-ethertype-0x{ethertype:04x}"]
     stats[f"other-0x{ethertype:04x}"] += 1
+    return []
+
+
+def _lldp_tlvs(payload: bytes) -> tuple[list[tuple[int, bytes]], int] | None:
+    """Walk an LLDPDU's TLVs through End of LLDPDU.
+
+    Each is a 7-bit type and a 9-bit length in one big-endian word, then
+    the value (IEEE 802.1AB §8). Returns the ``(type, value)`` pairs and
+    the offset after End, or ``None`` when a TLV runs past the payload
+    or no End TLV ends the walk.
+    """
+    tlvs: list[tuple[int, bytes]] = []
+    cursor = 0
+    while cursor + 2 <= len(payload):
+        word = struct.unpack_from("!H", payload, cursor)[0]
+        end = cursor + 2 + (word & 0x1FF)
+        if end > len(payload):
+            return None
+        tlvs.append((word >> 9, payload[cursor + 2 : end]))
+        cursor = end
+        if word >> 9 == 0:
+            return tlvs, cursor
+    return None
+
+
+def _lldp_mandatory_tlvs_ok(tlvs: list[tuple[int, bytes]]) -> bool:
+    """Check that an LLDPDU opens with its three mandatory TLVs.
+
+    They are Chassis ID, Port ID and Time To Live, well formed, and none
+    of them may appear again.
+    """
+    if [tlv_type for tlv_type, _ in tlvs[:3]] != [1, 2, 3]:
+        return False
+    chassis_id, port_id, ttl = (value for _, value in tlvs[:3])
+    if not all(2 <= len(value) <= 256 for value in (chassis_id, port_id)):
+        return False
+    return len(ttl) == 2 and not {1, 2, 3} & {t for t, _ in tlvs[3:]}
+
+
+def _check_lldp(payload: bytes, stats: Counter) -> list[str]:
+    """Validate an LLDPDU's structure; LLDP has no checksum to verify.
+
+    The TLVs must walk to an End of LLDPDU TLV of length 0, with only
+    zero bytes (Ethernet padding) after it. The first three must be
+    Chassis ID and Port ID, each a subtype byte and a 1-255 byte ID,
+    and a 2-byte Time To Live, and none of those three types may
+    appear again; a shutdown LLDPDU (TTL 0) carries nothing else.
+    """
+    stats["lldp"] += 1
+    walked = _lldp_tlvs(payload)
+    if walked is None:
+        return ["lldp-unwalkable"]
+    tlvs, end = walked
+    if tlvs[-1][1] or payload[end:].strip(b"\x00"):
+        return ["lldp-bad-end"]
+    if not _lldp_mandatory_tlvs_ok(tlvs):
+        return ["lldp-mandatory-tlvs"]
+    if tlvs[2][1] == b"\x00\x00":
+        stats["lldp-shutdown"] += 1
+        if len(tlvs) != 4:
+            return ["lldp-shutdown-extra-tlvs"]
     return []
 
 

@@ -30,11 +30,13 @@ class TestEthernet:
         assert Ethernet.decode(raw_eth_header).next_protocol() is ARP
 
     def test_unknown_ethertype_ends_chain(self):
+        # 0x88B5 is IEEE 802's Local Experimental EtherType 1, which no
+        # protocol will be assigned (0x88CC, used here before, is LLDP).
         eth = Ethernet(
-            dst="ff:ff:ff:ff:ff:ff", src="00:07:0d:af:f4:54", ethertype=0x88CC
+            dst="ff:ff:ff:ff:ff:ff", src="00:07:0d:af:f4:54", ethertype=0x88B5
         )
         assert eth.next_protocol() is None
-        assert eth.ethertype_name == "0x88cc"
+        assert eth.ethertype_name == "0x88b5"
         assert eth.ethertype_enum is None
 
     def test_invalid_mac_rejected(self):
