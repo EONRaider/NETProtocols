@@ -1027,12 +1027,13 @@ class MPLS(Protocol):
     ...
 ```
 
-Five tables — `ethertype`, `ip.proto`, `ip.proto.v6`, `udp.port`,
-`tcp.port` — each named after the field it dispatches on. The registry
-*is* the dispatch mechanism, not a hook bolted onto hardcoded
-functions: the built-in decoders go in through the same public
-`register()` a third party calls (`src/netprotocols/_defaults.py`), so
-there is no privileged path and nothing to fall out of sync.
+Seven tables — `ethertype`, `llc.dsap`, `llc.snap`, `ip.proto`,
+`ip.proto.v6`, `udp.port`, `tcp.port` — each named after the field it
+dispatches on. The registry *is* the dispatch mechanism, not a hook
+bolted onto hardcoded functions: the built-in decoders go in through the
+same public `register()` a third party calls
+(`src/netprotocols/_defaults.py`), so there is no privileged path and
+nothing to fall out of sync.
 
 Reproduce: `uv run pytest tests/test_registry.py` — 40 tests covering
 registration, conflict handling, table inheritance and isolation from

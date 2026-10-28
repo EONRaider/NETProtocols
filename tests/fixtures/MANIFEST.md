@@ -447,11 +447,17 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   1071 pads a final byte into the high byte of a word, CDP's checksum
   adds it as the low byte when it is below 0x80 and as 0xFF00 plus its
   value less 1 when not, the form of lldpd's `frame_checksum()` in
-  src/daemon/frame.c and Wireshark's packet-cdp.c; the third frame,
-  ending in 0xA9, is there to pin that, and lldpd's frames verify that
-  way), and verifies
-  the IPv4 and ICMP checksums inside RFC 1042 framing. veth does not
-  pad, so the BPDUs and CDP frames carry no padding (the TCN is a
+  src/daemon/frame.c and Wireshark's packet-cdp.c, and lldpd's three
+  frames verify that way; the third, ending in 0xA9, pins that a final
+  byte from 0x80 is not padded as RFC 1071 pads it, nor added as its
+  plain value or as 0xFF00 plus it without the `- 1`, but it cannot
+  tell lldpd's form from adding the byte less 0x100, which differs
+  only where the sum under `v - 0x100` folds to 0, which is 0xFFFF
+  under lldpd's form, giving a checksum of 0xFFFF under `v - 0x100`
+  and 0 under lldpd's: `test_cdp_odd_byte_is_lldpds_form` in
+  `tests/test_llc.py` separates the two on `b"\x00\x7f\x81"`), and
+  verifies the IPv4 and ICMP checksums inside RFC 1042 framing. veth
+  does not pad, so the BPDUs and CDP frames carry no padding (the TCN is a
   21-byte frame); `tests/test_llc.py` appends padding and a 4-byte
   FCS by hand, and `tests/test_cdp.py` does for the CDP frames. The
   library decodes BPDUs only as far as their LLC header (an STP

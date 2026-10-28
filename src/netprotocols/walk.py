@@ -141,10 +141,12 @@ def decode_frame(
         payload or an ICMP error's quoted packet.
     :param max_depth: Maximum number of headers to decode before
         raising :class:`~netprotocols.MaxDepthExceededError`.
-    :param lax: When true, a :class:`~netprotocols.ProtocolError` ends
-        the walk instead of propagating, and is reported on the
-        returned packet's ``stopped_by``. Strict decoding of each
-        individual header is unchanged.
+    :param lax: When true, a :class:`~netprotocols.ProtocolError`
+        raised while walking the chain ends the walk instead of
+        propagating, and is reported on the returned packet's
+        ``stopped_by``. An error in ``decode_as`` is raised before the
+        walk begins, whatever this says (see below). Strict decoding of
+        each individual header is unchanged.
     :param registry: Dispatch tables to resolve ``next_protocol()``
         against. Defaults to the process-wide registry.
     :param decode_as: Per-call decoder overrides, keyed by table then by
@@ -158,10 +160,10 @@ def decode_frame(
     :raises UnknownTableError: ``decode_as`` names a table that is not
         one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
         says.
-    :raises InvalidRegistryKeyError: ``decode_as`` names a key outside
-        the range its table accepts, such as an ``ethertype`` key below
-        0x0600 (see "Key ranges" in :mod:`netprotocols.registry`),
-        whatever ``lax`` says.
+    :raises InvalidRegistryKeyError: ``decode_as`` names an
+        ``llc.dsap`` or ``llc.snap`` key outside the range that table
+        accepts, such as a DSAP above 0xFF (see "Key ranges" in
+        :mod:`netprotocols.registry`), whatever ``lax`` says.
     :raises ValueError: ``max_depth`` is below 1.
 
     Building the override registry costs a small copy, so a caller

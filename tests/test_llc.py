@@ -232,7 +232,8 @@ class TestTypeOrLength:
     def test_gre_keeps_reading_an_ethertype(self):
         """GRE's Protocol Type is an EtherType only (RFC 2784).
 
-        A value of 1500 or less names nothing, and is not a Length.
+        A value of 1500 or less is not a Length; the default registry
+        names nothing there (see TestALowEthertypeKey).
         """
         gre = GRE.decode(b"\x00\x00\x00\x26")
         assert gre.next_protocol() is None
@@ -242,6 +243,90 @@ class TestTypeOrLength:
         assert kinds(packet) == [Ethernet]
         assert packet[Ethernet].ethertype == 1501
         assert packet.consumed == 14
+
+
+class TestALowEthertypeKey:
+    """An ``ethertype`` key below 0x0600 is reached as in 2.5.0, except
+    from Ethernet and VLAN.
+
+    RFC 1701's "Current List of Protocol Types" assigns GRE OSI network
+    layer 0x00FE. A class registered there decodes GRE Protocol Type
+    0x00FE and a SNAP PID of 0x00FE under OUI 00-00-00 or 00-00-F8,
+    while an Ethernet or VLAN header reads 0x00FE as an 802.3 Length
+    and answers LLC.
+    """
+
+    OSI = 0x00FE
+
+    @pytest.fixture
+    def registry(self):
+        return Registry.from_defaults().derive(
+            {TABLE_ETHERTYPE: {self.OSI: WholeBuffer}}
+        )
+
+    @pytest.fixture
+    def gre_osi(self):
+        """A real GRE frame (gre.pcap) with its Protocol Type set to
+        0x00FE; GRE has no checksum here, and IPv4's does not cover it."""
+        frame = bytearray(pcap_frames(FIXTURES / "gre.pcap")[0])
+        assert kinds(decode_frame(bytes(frame))) == [
+            Ethernet,
+            IPv4,
+            GRE,
+            IPv4,
+            ICMPv4,
+        ]
+        gre_at = 14 + IPv4.decode(frame[14:]).header_len
+        assert GRE.decode(frame[gre_at:]).header_len == 4
+        struct.pack_into("!H", frame, gre_at + 2, self.OSI)
+        return bytes(frame), gre_at
+
+    def test_gre_reaches_it(self, registry, gre_osi):
+        frame, gre_at = gre_osi
+        packet = decode_frame(frame, registry=registry)
+        assert kinds(packet) == [Ethernet, IPv4, GRE, WholeBuffer]
+        assert packet.layers[2].protocol_type == self.OSI
+        assert packet.layers[3].body == frame[gre_at + 4 :]
+        assert packet.consumed == len(frame)
+
+    def test_decode_as_reaches_it_from_gre(self, gre_osi):
+        frame, _ = gre_osi
+        packet = decode_frame(
+            frame, decode_as={TABLE_ETHERTYPE: {self.OSI: WholeBuffer}}
+        )
+        assert kinds(packet) == [Ethernet, IPv4, GRE, WholeBuffer]
+
+    def test_the_default_registry_ends_the_walk_at_gre(self, gre_osi):
+        frame, _ = gre_osi
+        assert kinds(decode_frame(frame)) == [Ethernet, IPv4, GRE]
+
+    def test_ethernet_and_vlan_read_it_as_a_length(self, registry):
+        """Type/length 0x00FE is a 254-byte LLC PDU, never the key."""
+        pdu = bytes([LLCSAP.ISO_NETWORK_LAYER, LLCSAP.ISO_NETWORK_LAYER, 3])
+        frame = frame_8023(pdu + bytes(self.OSI - len(pdu)))
+        assert Ethernet.decode(frame).length == self.OSI
+        assert kinds(decode_frame(frame, registry=registry)) == [
+            Ethernet,
+            LLC,
+        ]
+        tagged = frame[:12] + b"\x81\x00\x00\x1e" + frame[12:]
+        assert kinds(decode_frame(tagged, registry=registry)) == [
+            Ethernet,
+            VLAN,
+            LLC,
+        ]
+
+    @pytest.mark.parametrize("oui", [0x000000, 0x0000F8])
+    def test_a_snap_pid_under_an_ethertype_oui_reaches_it(self, registry, oui):
+        snap = b"\xaa\xaa\x03" + oui.to_bytes(3, "big") + b"\x00\xfe"
+        packet = decode_frame(frame_8023(snap + b"osi"), registry=registry)
+        assert kinds(packet) == [Ethernet, LLC, SNAP, WholeBuffer]
+        assert packet.layers[-1].body == b"osi"
+
+    def test_a_snap_pid_under_another_oui_does_not(self, registry):
+        snap = b"\xaa\xaa\x03\x00\x00\x0c\x00\xfe"
+        packet = decode_frame(frame_8023(snap + b"osi"), registry=registry)
+        assert kinds(packet) == [Ethernet, LLC, SNAP]
 
 
 class TestLLCHeader:
