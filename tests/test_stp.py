@@ -794,6 +794,22 @@ class TestOtherProtocolIdentifiers:
         assert [type(layer) for layer in packet] == [Ethernet, LLC, STP]
         assert packet[STP] == STP.decode(CONFIG_A_TC)
 
+    @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
+    def test_exactly_two_octets_are_read(self, head):
+        """Test the boundary: two octets are a Protocol Identifier.
+
+        0x0001 alone ends the walk at LLC without an error; 0x0000 alone
+        is a BPDU's prefix cut short, which STP reports.
+        """
+        frame = pad(frame_8023(head + b"\x00\x01")) + FCS
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+        assert packet.stopped_by is None
+        frame = pad(frame_8023(head + b"\x00\x00")) + FCS
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            decode_frame(frame)
+        assert excinfo.value.protocol is STP
+
     @pytest.mark.parametrize("after", [b"", b"\x00", b"\x01"])
     @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
     def test_fewer_than_two_octets_still_reach_stp(self, head, after):
@@ -1041,12 +1057,15 @@ class TestTheChecker:
         failures = check_fixtures.check_frame(frame, Counter())
         assert any(f.startswith(failure) for f in failures), failures
 
+    @pytest.mark.parametrize(
+        "body", [GVRP_PDU[3:], b"\x00\x01"], ids=["gvrp", "exactly-two"]
+    )
     @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
     def test_another_protocol_at_sap_0x42_is_not_a_bpdu(
-        self, check_fixtures, head
+        self, check_fixtures, head, body
     ):
         """Test GVRP passes, counted and, strict, reported unchecked."""
-        pdu = head + GVRP_PDU[3:]
+        pdu = head + body
         stats = Counter()
         assert check_fixtures.check_frame(pad(frame_8023(pdu)), stats) == []
         assert stats["llc-dsap-0x42-protocol-0x0001"] == 1
