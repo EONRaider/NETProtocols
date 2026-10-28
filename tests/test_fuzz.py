@@ -30,7 +30,7 @@ import struct
 import sys
 
 import pytest
-from hypothesis import event, given
+from hypothesis import event, example, given
 from hypothesis import strategies as st
 
 from conftest import FIXTURES, corpus_frames, pcap_frames
@@ -1022,6 +1022,26 @@ def cdp_bodies(draw: st.DrawFn) -> bytes:
     return bytes(data) + trailer
 
 
+@st.composite
+def cdp_nonzero_trailers(draw: st.DrawFn) -> bytes:
+    """A trailer holding a nonzero byte by construction: random bytes
+    around one nonzero byte, or whole TLVs (each Length at least 4, so
+    never all zero) followed by up to 3 zeros, which decode as phantom
+    TLVs."""
+    if draw(st.booleans()):
+        return (
+            draw(st.binary(max_size=6))
+            + bytes((draw(st.integers(1, 255)),))
+            + draw(st.binary(max_size=5))
+        )
+    tlvs = b""
+    for _ in range(draw(st.integers(1, 2))):
+        tlvs += _cdp_tlv(
+            draw(st.integers(0, 0xFFFF)), draw(st.binary(max_size=4))
+        )
+    return tlvs + bytes(draw(st.integers(0, 3)))
+
+
 class TestCDPProperties:
     @given(data=st.one_of(fuzz_input, cdp_bodies()))
     def test_accessors_never_raise(self, data: bytes) -> None:
@@ -1061,10 +1081,8 @@ class TestCDPProperties:
             assert decoded == pdu, count
             assert decoded.header_len == len(wire), count
 
-    @given(
-        pdu=cdp_pdus(),
-        trailer=st.binary(min_size=1, max_size=12).filter(any),
-    )
+    @given(pdu=cdp_pdus(), trailer=cdp_nonzero_trailers())
+    @example(pdu=CDP(2, 180), trailer=b"\xde\xad\x00\x04")
     def test_a_nonzero_trailer_is_never_left_out(
         self, pdu: CDP, trailer: bytes
     ) -> None:
