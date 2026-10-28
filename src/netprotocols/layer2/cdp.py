@@ -520,8 +520,8 @@ class CDP(Protocol):
                     protocol=cls,
                     field="tlvs",
                     offset=cursor,
-                    expected=end,
-                    actual=size,
+                    expected=length,
+                    actual=size - cursor,
                 )
             tlvs.append(
                 CDPTLV(tlv_type, bytes(data[cursor + _TLV_HEADER_LEN : end]))

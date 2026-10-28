@@ -280,8 +280,8 @@ class TestWhereThePDUEnds:
             CDP.decode(pdu + FCS)
         assert excinfo.value.field == "tlvs"
         assert excinfo.value.offset == len(pdu)
-        assert excinfo.value.expected == len(pdu) + 0xBEEF
-        assert excinfo.value.actual == len(pdu) + 4
+        assert excinfo.value.expected == 0xBEEF
+        assert excinfo.value.actual == 4
 
     def test_standalone_an_fcs_with_a_short_length_raises(self):
         """Raise for an FCS read as a TLV header of Length below 4."""
@@ -496,8 +496,8 @@ class TestDecode:
         with pytest.raises(TruncatedHeaderError) as excinfo:
             CDP.decode(data)
         assert excinfo.value.offset == 10
-        assert excinfo.value.expected == 19
-        assert excinfo.value.actual == 18
+        assert excinfo.value.expected == 9
+        assert excinfo.value.actual == 8
         assert "declares Length 9, buffer holds 8" in str(excinfo.value)
 
 
