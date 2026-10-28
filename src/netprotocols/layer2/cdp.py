@@ -411,7 +411,8 @@ def _end_tlvs(
 
     A run of zero bytes there is padding, left undecoded; anything else
     is a TLV the PDU cannot hold. The remainder is scanned once, on the
-    way out of the walk, so decoding stays linear.
+    way out of the walk, and through a view, so decoding stays linear
+    and copies none of it.
 
     :param protocol: The class to attach to a raised error.
     :param data: The buffer being decoded.
@@ -423,7 +424,8 @@ def _end_tlvs(
     :raises InvalidFieldError: ``length`` is below 4 and the bytes
         left are not all zero.
     """
-    if not any(data[cursor:]):
+    # Through a view, so a long tail is scanned without being copied.
+    if not any(memoryview(data)[cursor:]):
         return
     if length is None:
         raise TruncatedHeaderError(

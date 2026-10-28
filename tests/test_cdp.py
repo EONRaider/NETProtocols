@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import struct
+import tracemalloc
 from dataclasses import replace
 from pathlib import Path
 
@@ -854,6 +855,21 @@ class TestDecodeCost:
             CDP.decode(data)
         assert excinfo.value.offset == 4 + len(self.VALUED)
         assert 0 < _SliceCountingBytes.read <= len(data)
+
+    @pytest.mark.parametrize("last", [b"", b"\x01"], ids=["zeros", "nonzero"])
+    def test_a_long_tail_is_scanned_without_a_copy(self, last):
+        """Scan a 4 MiB tail through a view: peak memory stays far below it."""
+        data = b"\x02\xb4\x00\x00" + tlv(1, b"x") + bytes(1 << 22) + last
+        tracemalloc.start()
+        try:
+            try:
+                CDP.decode(data)
+            except InvalidFieldError:
+                assert last
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 1 << 16
 
     def test_a_huge_address_count_reads_the_value_once(self):
         """End a count of 2**32 - 1 when the value runs out."""
