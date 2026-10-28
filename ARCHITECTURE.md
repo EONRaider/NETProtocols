@@ -321,8 +321,9 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP` is the one exception, and it answers from decode context rather
-than from a wire field. A BGP message carries no payload: a TCP segment
+`BGP` is the one exception, naming the next message beside it rather
+than its payload, and it answers from decode context rather than from
+a wire field. A BGP message carries no payload: a TCP segment
 can hold several messages back to back, each decoded as its own layer,
 so `BGP.next_protocol()` names the next message *beside* it — `BGP`
 when the bytes after this message begin another one, `None` when they
@@ -336,6 +337,14 @@ see *Port-based dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
 next_protocol*, and
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
+`LLC` answers from decode context in one case: SAP 0x42 carries GARP's
+PDUs (Protocol Identifier 0x0001) beside STP's BPDUs (0x0000), so
+`LLC.decode()` records, for a DSAP 0x42 PDU it would dispatch, whether
+the two octets after its Control are present and not 0x0000, and
+`next_protocol()` then answers `None`, whatever `llc.dsap` holds at
+0x42; fewer than two octets still reach `STP`, which reports the
+truncation. See [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s
+*DSAP 0x42*.
 
 ```mermaid
 flowchart LR
@@ -346,7 +355,7 @@ flowchart LR
   E -->|length ≤ 1500| L[LLC]
   V -->|length ≤ 1500| L
   L -->|DSAP 0xAA, SSAP 0xAA, UI| SN[SNAP]
-  L -->|DSAP 0x42, UI or I| STP[STP BPDU]
+  L -->|DSAP 0x42, UI or I, Protocol ID 0| STP[STP BPDU]
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0806| A
   SN -->|OUI 00-00-00 or 00-00-F8, PID 0x0800| I4
   V -->|0x8100, 0x88A8, 0x9100| V

@@ -1153,8 +1153,9 @@ def _check_llc(
 ) -> list[str]:
     """Validate an 802.2 LLC PDU: its Control field fits (1 octet when
     the two low bits are 11, else 2), then SNAP (DSAP 0xAA), an 802.1D
-    BPDU (DSAP 0x42) or a Novell raw 802.3 IPX packet (0xFFFF where the
-    DSAP and SSAP would be), whose IPX length must be the PDU's."""
+    BPDU or another protocol's PDU (DSAP 0x42) or a Novell raw 802.3 IPX
+    packet (0xFFFF where the DSAP and SSAP would be), whose IPX length
+    must be the PDU's."""
     if pdu[:2] == b"\xff\xff":
         stats["ipx-raw"] += 1
         if len(pdu) < 4 or struct.unpack_from("!H", pdu, 2)[0] != len(pdu):
@@ -1166,9 +1167,25 @@ def _check_llc(
     if pdu[0] == 0xAA:
         return _check_snap(pdu, stats, depth, strict=strict)
     if pdu[0] == 0x42:
-        return _check_bpdu(pdu[3:], stats)
+        return _check_sap_0x42(pdu, stats, strict=strict)
     stats[f"llc-dsap-0x{pdu[0]:02x}"] += 1
     return [f"unchecked-llc-dsap-0x{pdu[0]:02x}"] if strict else []
+
+
+def _check_sap_0x42(
+    pdu: bytes, stats: Counter, *, strict: bool = False
+) -> list[str]:
+    """Validate a PDU to the Bridge Spanning Tree SAP, after its 1-octet
+    (U-format) or 2-octet Control: a BPDU when its first two octets, the
+    Protocol Identifier, are 0x0000 or fewer than two octets follow, and
+    otherwise another protocol's PDU, such as GARP's (Protocol
+    Identifier 0x0001), counted and not checked."""
+    body = pdu[3 if pdu[2] & 0x03 == 0x03 else 4 :]
+    if len(body) >= 2 and body[:2] != b"\x00\x00":
+        key = f"llc-dsap-0x42-protocol-0x{body[:2].hex()}"
+        stats[key] += 1
+        return [f"unchecked-{key}"] if strict else []
+    return _check_bpdu(body, stats)
 
 
 #: 802.1D BPDU Types: their names in the stats, the octets each needs

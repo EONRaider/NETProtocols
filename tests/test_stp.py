@@ -10,6 +10,7 @@ here as well, since veth neither pads nor carries an FCS.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import struct
 import tracemalloc
@@ -656,24 +657,129 @@ class TestRejectedBPDUs:
             protocol_id,
         )
 
-    @pytest.mark.parametrize(
-        "bpdu,field,frame_offset",
-        [
-            (b"\x00\x00\x00\x01", "bpdu_type", 20),
-            (b"\x00\x01\x00\x80", "protocol_id", 17),
-        ],
-        ids=["type", "protocol-id"],
-    )
-    def test_in_a_walk(self, bpdu, field, frame_offset):
-        """Test both rejections in a frame walk, strict and lax."""
-        frame = pad(frame_8023(LLC_UI + bpdu))
+    def test_an_unknown_type_in_a_walk(self):
+        """Test the type rejection in a frame walk, strict and lax.
+
+        A Protocol Identifier other than 0 never reaches STP in a walk
+        (see :class:`TestOtherProtocolIdentifiers`).
+        """
+        frame = pad(frame_8023(LLC_UI + b"\x00\x00\x00\x01"))
         with pytest.raises(InvalidFieldError) as excinfo:
             decode_frame(frame)
-        assert excinfo.value.field == field
-        assert excinfo.value.frame_offset == frame_offset
+        assert excinfo.value.field == "bpdu_type"
+        assert excinfo.value.frame_offset == 20
         packet = decode_frame(frame, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, LLC]
         assert isinstance(packet.stopped_by, InvalidFieldError)
+
+
+#: A GVRP PDU (GARP, Protocol Identifier 0x0001) to SAP 0x42, padded as a
+#: NIC pads it: one message, attribute type 1 (VID), length 4, JoinIn
+#: (2) for VLAN 30, then two end marks.
+GVRP_PDU = LLC_UI + b"\x00\x01" + b"\x01" + b"\x04\x02\x00\x1e" + b"\x00\x00"
+GVRP = pad(
+    bytes.fromhex("0180c2000021")
+    + SRC
+    + struct.pack("!H", len(GVRP_PDU))
+    + GVRP_PDU
+)
+
+#: The I-format Control 0x0000, two octets: a PDU it carries dispatches.
+LLC_I = b"\x42\x42\x00\x00"
+
+
+class TestOtherProtocolIdentifiers:
+    """LLC ends the walk at a DSAP 0x42 PDU that is not a BPDU."""
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize("fcs", [b"", FCS], ids=["no-fcs", "fcs"])
+    def test_a_gvrp_pdu_ends_the_walk_at_llc(self, lax, fcs):
+        """Test GARP's Protocol Identifier 0x0001 ends the walk at LLC."""
+        packet = decode_frame(GVRP + fcs, lax=lax)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+        assert packet.stopped_by is None
+        assert packet.consumed == 14 + 3
+        assert packet[LLC].next_protocol() is None
+
+    @pytest.mark.parametrize(
+        "protocol_id", [b"\x00\x01", b"\x01\x00", b"\xff\xff"]
+    )
+    @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
+    def test_any_nonzero_identifier_after_either_control(
+        self, head, protocol_id
+    ):
+        """Test the two octets after a 1- and a 2-octet Control."""
+        frame = pad(frame_8023(head + protocol_id + CONFIG_A_TC[2:]))
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+        assert packet.consumed == 14 + len(head)
+
+    @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
+    def test_protocol_identifier_0_still_reaches_stp(self, head):
+        """Test a BPDU after a 1- and a 2-octet Control."""
+        packet = decode_frame(pad(frame_8023(head + CONFIG_A_TC)) + FCS)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC, STP]
+        assert packet[STP] == STP.decode(CONFIG_A_TC)
+
+    @pytest.mark.parametrize("after", [b"", b"\x00", b"\x01"])
+    @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
+    def test_fewer_than_two_octets_still_reach_stp(self, head, after):
+        """Test that STP reports the truncation, padding and FCS unread.
+
+        A lone 0x01 followed by the padding's zeros would read as a
+        Protocol Identifier of 0x0100 if the 802.3 Length did not end
+        the buffer first.
+        """
+        frame = pad(frame_8023(head + after)) + FCS
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            decode_frame(frame)
+        assert excinfo.value.protocol is STP
+        assert excinfo.value.frame_offset == 14 + len(head)
+        packet = decode_frame(frame, lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
+        assert packet[LLC].next_protocol() is STP
+
+    def test_a_registered_decoder_is_not_reached_either(self):
+        """Test the check applies whatever llc.dsap holds at 0x42."""
+        packet = decode_frame(GVRP, decode_as={TABLE_LLC_DSAP: {0x42: Own}})
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+
+    def test_a_memoryview_is_read_too(self):
+        """Test the sniff on a memoryview, which is not retained."""
+        buffer = bytearray(GVRP_PDU)
+        llc = LLC.decode(memoryview(buffer))
+        buffer[3:5] = b"\x00\x00"
+        assert llc.next_protocol() is None
+        assert LLC.decode(memoryview(buffer)).next_protocol() is STP
+
+    def test_the_sniff_is_outside_equality_hash_and_repr(self):
+        """Test equal headers compare equal however they chain."""
+        garp = LLC.decode(GVRP_PDU)
+        bpdu = LLC.decode(LLC_UI + CONFIG_A_TC)
+        built = LLC(dsap=0x42, ssap=0x42, control=0x03)
+        assert garp == bpdu == built
+        assert hash(garp) == hash(bpdu) == hash(built)
+        assert repr(garp) == repr(built)
+        assert bytes(garp) == bytes(built) == LLC_UI
+        assert (garp.next_protocol(), bpdu.next_protocol()) == (None, STP)
+        assert built.next_protocol() is STP
+        assert dataclasses.replace(garp).next_protocol() is STP
+
+    def test_other_dsaps_are_not_sniffed(self):
+        """Test that only DSAP 0x42 PDUs are gated on the two octets."""
+        llc = LLC.decode(b"\x43\x42\x03\x00\x01")
+        assert llc == LLC(dsap=0x43, ssap=0x42, control=0x03)
+        registry = Registry.from_defaults().derive(
+            {TABLE_LLC_DSAP: {0x43: Own}}
+        )
+        assert llc.next_protocol(registry) is Own
+
+    def test_a_direct_decode_still_rejects_it(self):
+        """Test STP.decode on GARP's PDU raises, as before."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            STP.decode(GVRP_PDU[3:])
+        assert excinfo.value.field == "protocol_id"
 
 
 class Own(STP):
@@ -833,7 +939,8 @@ class TestTheChecker:
         "bpdu,failure",
         [
             (b"\x00\x00\x00\x01", "stp-bpdu-malformed"),
-            (b"\x00\x01\x00\x80", "stp-bpdu-malformed"),
+            (b"", "stp-bpdu-malformed"),
+            (b"\x01", "stp-bpdu-malformed"),
             (RST_DESIGNATED[:35], "stp-bpdu-malformed"),
             (CONFIG_A_TC[:4] + b"\x02" + CONFIG_A_TC[5:], "stp-config-unused"),
             (CONFIG_A_TC[:4] + b"\x40" + CONFIG_A_TC[5:], "stp-config-unused"),
@@ -844,7 +951,8 @@ class TestTheChecker:
         ],
         ids=[
             "type",
-            "protocol-id",
+            "empty",
+            "one-octet",
             "rst-35",
             "config-proposal",
             "config-agreement",
@@ -859,3 +967,28 @@ class TestTheChecker:
         frame = pad(frame_8023(LLC_UI + bpdu))
         failures = check_fixtures.check_frame(frame, Counter())
         assert any(f.startswith(failure) for f in failures), failures
+
+    @pytest.mark.parametrize("head", [LLC_UI, LLC_I], ids=["ui", "i-format"])
+    def test_another_protocol_at_sap_0x42_is_not_a_bpdu(
+        self, check_fixtures, head
+    ):
+        """Test GVRP passes, counted and, strict, reported unchecked."""
+        pdu = head + GVRP_PDU[3:]
+        stats = Counter()
+        assert check_fixtures.check_frame(pad(frame_8023(pdu)), stats) == []
+        assert stats["llc-dsap-0x42-protocol-0x0001"] == 1
+        assert stats["stp-bpdu"] == 0
+        strict = check_fixtures._check_llc(pdu, Counter(), 0, strict=True)
+        assert strict == ["unchecked-llc-dsap-0x42-protocol-0x0001"]
+
+    def test_an_i_format_bpdu_is_read_after_its_2_octet_control(
+        self, check_fixtures
+    ):
+        """Test the checker sizes the Control as the library does.
+
+        Read one octet early, this RST BPDU would have version 0.
+        """
+        stats = Counter()
+        frame = pad(frame_8023(LLC_I + RST_DESIGNATED))
+        assert check_fixtures.check_frame(frame, stats) == []
+        assert stats["stp-rst"] == 1

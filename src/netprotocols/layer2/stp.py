@@ -6,6 +6,14 @@ Spanning Tree SAP), sent to the group address 01-80-C2-00-00-00. The
 default registry puts :class:`STP` at DSAP 0x42 in the ``llc.dsap``
 table, and :class:`STP` is terminal: a BPDU encapsulates nothing.
 
+A walk reaches :class:`STP` from a UI or I-format PDU to DSAP 0x42
+whose first two octets are 0x0000, STP's Protocol Identifier, or that
+holds fewer than two octets. GARP's PDUs, such as GVRP's, share the
+SAP with Protocol Identifier 0x0001, so :class:`~netprotocols.LLC` ends the
+walk at a PDU whose two octets are anything but 0x0000, whatever class
+``llc.dsap`` holds at 0x42 (see "DSAP 0x42" in
+:mod:`netprotocols.layer2.llc`).
+
 Every BPDU starts with a Protocol Identifier (two octets, always 0 for
 the spanning tree family), a Protocol Version Identifier and a BPDU
 Type; the type alone decides the rest (IEEE 802.1D-2004 §9.3):
@@ -91,9 +99,11 @@ the two values that leave no layout to read: a Protocol Identifier
 other than 0 (``field="protocol_id"``), the one value every rule of
 the standard's validation of received BPDUs requires, and a BPDU Type
 other than the three above (``field="bpdu_type"``), since nothing else
-says where the BPDU ends. Wireshark shows the rest of a PDU of
-unknown type as data; here such a PDU ends the walk with the error,
-or, lax, on ``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
+says where the BPDU ends. In a walk from LLC DSAP 0x42 only the second
+can arise, since :class:`~netprotocols.LLC` does not dispatch a PDU of
+another Protocol Identifier there; Wireshark shows the rest of a PDU of unknown type as data,
+and here such a PDU ends the walk with the error, or, lax, on
+``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
 bytes) raises :class:`~netprotocols.TruncatedHeaderError`. Everything
 else is carried verbatim: the version, unused flag bits, a nonzero
 Version 1 Length, timer values no bridge would send.
