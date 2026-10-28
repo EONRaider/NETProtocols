@@ -102,7 +102,7 @@ a header cut short and for a Length that runs past the bytes, where
 the decode contract asks for :class:`~netprotocols.TruncatedHeaderError`,
 and it knows no zero tail: ending there would take a wrapper that
 catches its errors and translates them. The LLDP decoder keeps its own
-walk for the same reasons.
+walk too.
 
 ``bytes(CDP.decode(x)) == x[:header_len]`` holds by construction: the
 header is packed back from its three fields and each TLV from its type
