@@ -96,10 +96,23 @@ a frame walk the 802.3 Length before the LLC header already ends the
 buffer at the end of the PDU (see :mod:`netprotocols.layer2.llc`), so
 Ethernet's zero padding and an FCS never reach :meth:`STP.decode`; a
 direct call leaves them, too, undecoded. What can reach it is a PDU
-longer than its BPDU: the standard says the additional octets of a
-Configuration or RST BPDU "shall be ignored", and they stay outside
-this layer, after its ``header_len``. ``bytes(STP.decode(x)) ==
+longer than its BPDU: "Additional octets in received BPDUs identified
+by the validation procedure (14.5) as STP Configuration BPDUs shall be
+ignored", says the draft's §14.4, which says the same of RST BPDUs,
+and §14.6 i)3) ignores "all octets that appear in the PDU beyond the
+largest numbered octet defined" for the version implemented. They stay
+outside this layer, after its ``header_len``. ``bytes(STP.decode(x)) ==
 x[:header_len]``.
+
+Cisco's PVST+ BPDUs, which append TLVs to a Configuration or RST BPDU,
+never arrive at DSAP 0x42: they travel in SNAP under OUI 00-00-0C, PID
+0x010B, which is where Wireshark's ``packet-bpdu.c`` attaches its
+Cisco TLV parser (``llc.cisco_pid`` ``CISCO_PID_PVSTPP``,
+``packet-cisco-pid.h``). The default registry has no entry there, so
+such a frame ends the walk at :class:`~netprotocols.SNAP`; reaching
+:class:`STP` from it would take an ``llc.snap`` entry at
+``(0x00000C << 16) | 0x010B``, and would leave the TLVs, which
+Wireshark reads from offset 36 of the BPDU, after the layer.
 
 MSTP is decoded only as far as its RST prefix
 ---------------------------------------------

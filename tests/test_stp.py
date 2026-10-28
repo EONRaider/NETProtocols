@@ -21,6 +21,7 @@ import pytest
 from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     LLC,
+    SNAP,
     STP,
     Ethernet,
     InvalidFieldError,
@@ -30,7 +31,7 @@ from netprotocols import (
     TruncatedHeaderError,
     decode_frame,
 )
-from netprotocols.registry import TABLE_LLC_DSAP
+from netprotocols.registry import TABLE_LLC_DSAP, TABLE_LLC_SNAP
 
 (
     STP_CONFIG_B,
@@ -472,8 +473,9 @@ class TestTrailingBytes:
     def test_octets_past_a_configuration_bpdu_are_ignored(self):
         """A longer PDU: the extra octets stay after header_len.
 
-        As a Cisco PVST+ BPDU's Originating VLAN TLV follows its
-        Configuration BPDU (Wireshark's dissect_bpdu_pvst_tlv).
+        "Additional octets in received BPDUs identified ... as STP
+        Configuration BPDUs shall be ignored" (P802.1aq/D1.5++ §14.4;
+        also §14.6 i)3).
         """
         extra = b"\x00\x00\x00\x02\x00\x1e"
         frame = frame_8023(LLC_UI + CONFIG_A_TC + extra)
@@ -481,6 +483,24 @@ class TestTrailingBytes:
         assert packet[STP] == STP.decode(CONFIG_A_TC)
         assert packet.consumed == len(frame) - len(extra)
         assert bytes(packet) == frame[: packet.consumed]
+
+    def test_a_pvst_plus_bpdu_arrives_in_snap_not_at_dsap_0x42(self):
+        """Cisco PVST+ is SNAP OUI 00-00-0C PID 0x010B, not DSAP 0x42.
+
+        The default registry has no ``llc.snap`` entry there, so the
+        walk ends at SNAP; an entry for STP reaches it, and the TLVs,
+        from offset 36 after a pad octet, stay after the layer.
+        """
+        tlv = b"\x00\x00\x00\x02\x00\x1e"
+        snap = b"\xaa\xaa\x03\x00\x00\x0c\x01\x0b"
+        frame = pad(frame_8023(snap + CONFIG_A_TC + b"\x00" + tlv))
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC, SNAP]
+        key = (0x00000C << 16) | 0x010B
+        packet = decode_frame(frame, decode_as={TABLE_LLC_SNAP: {key: STP}})
+        assert [type(layer) for layer in packet] == [Ethernet, LLC, SNAP, STP]
+        assert packet[STP] == STP.decode(CONFIG_A_TC)
+        assert packet.consumed == 14 + 8 + 35
 
 
 class TestHostileInput:

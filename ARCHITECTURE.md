@@ -223,7 +223,8 @@ wire, and VRRPv3's pseudo-header carries the message's length.
 `STP` is the same case at layer 2: a BPDU has no length field, but its
 BPDU Type gives its exact length (4, 35 or 36 octets), so it leaves
 whatever follows undecoded, including the extra octets of a PDU longer
-than its BPDU, which IEEE 802.1D says a receiver ignores. See
+than its BPDU, which a receiver ignores (§14.4 of the IEEE 802.1 draft
+the module cites). See
 [`layer2/stp.py`](src/netprotocols/layer2/stp.py)'s module docstring.
 
 **802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
