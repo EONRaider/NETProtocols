@@ -1054,6 +1054,44 @@ class TestTheChecker:
         strict = check_fixtures._check_llc(pdu, Counter(), 0, strict=True)
         assert strict == ["unchecked-llc-dsap-0x42-protocol-0x0001"]
 
+    @pytest.mark.parametrize(
+        "pdu,control",
+        [
+            (b"\x42\x42\xe3", 0xE3),
+            (b"\x42\x42\xf3\x00\x00\x01", 0xF3),
+            (b"\x42\x42\xaf\x81\x01\x00", 0xAF),
+            (b"\x42\x43\x01\x01", 0x01),
+        ],
+        ids=["test", "test-pf-data", "xid", "rr"],
+    )
+    def test_a_pdu_the_library_does_not_dispatch_is_not_a_bpdu(
+        self, check_fixtures, pdu, control
+    ):
+        """Test TEST, XID and an S-format RR: counted, not checked.
+
+        The library ends their walk at LLC, and the checker agrees.
+        """
+        frame = pad(frame_8023(pdu))
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC]
+        stats = Counter()
+        assert check_fixtures.check_frame(frame, stats) == []
+        key = f"llc-dsap-0x42-control-0x{control:02x}"
+        assert stats[key] == 1
+        assert stats["stp-bpdu"] == 0
+        assert [k for k in stats if "protocol" in k] == []
+        strict = check_fixtures._check_llc(pdu, Counter(), 0, strict=True)
+        assert strict == [f"unchecked-{key}"]
+
+    def test_a_ui_pdu_with_the_p_f_bit_set_is_a_bpdu(self, check_fixtures):
+        """Test Control 0x13, UI with P/F set: both sides read a BPDU."""
+        frame = pad(frame_8023(b"\x42\x42\x13" + CONFIG_A_TC))
+        packet = decode_frame(frame)
+        assert [type(layer) for layer in packet] == [Ethernet, LLC, STP]
+        stats = Counter()
+        assert check_fixtures.check_frame(frame, stats) == []
+        assert stats["stp-config"] == 1
+
     def test_an_i_format_bpdu_is_read_after_its_2_octet_control(
         self, check_fixtures
     ):

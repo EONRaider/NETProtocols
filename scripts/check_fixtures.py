@@ -1175,12 +1175,19 @@ def _check_llc(
 def _check_sap_0x42(
     pdu: bytes, stats: Counter, *, strict: bool = False
 ) -> list[str]:
-    """Validate a PDU to the Bridge Spanning Tree SAP, after its 1-octet
-    (U-format) or 2-octet Control: a BPDU when its first two octets, the
-    Protocol Identifier, are 0x0000 or fewer than two octets follow, and
+    """Validate a PDU to the Bridge Spanning Tree SAP. Only a UI (either
+    P/F) or I-format PDU carries one, as the library dispatches; any
+    other Control is counted and not checked. After its 1-octet (UI) or
+    2-octet Control comes a BPDU when its first two octets, the Protocol
+    Identifier, are 0x0000 or fewer than two octets follow, and
     otherwise another protocol's PDU, such as GARP's (Protocol
     Identifier 0x0001), counted and not checked."""
-    body = pdu[3 if pdu[2] & 0x03 == 0x03 else 4 :]
+    control = pdu[2]
+    if control & ~0x10 != 0x03 and control & 0x01:
+        key = f"llc-dsap-0x42-control-0x{control:02x}"
+        stats[key] += 1
+        return [f"unchecked-{key}"] if strict else []
+    body = pdu[3 if control & 0x03 == 0x03 else 4 :]
     if len(body) >= 2 and body[:2] != b"\x00\x00":
         key = f"llc-dsap-0x42-protocol-0x{body[:2].hex()}"
         stats[key] += 1
