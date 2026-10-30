@@ -224,13 +224,14 @@ def _walk_chunks(
     :raises InvalidFieldError: if a chunk's length is below 4.
 
     Bounded: every chunk advances the walk by at least 4 bytes, so it
-    never hangs or over-reads whatever ``raw`` holds.
+    never hangs or over-reads whatever ``raw`` holds. The zero-tail scan
+    reads through a view, so a long trailer is not copied to be checked.
     """
     size = len(raw)
     cursor = start
     while cursor < size:
         if size - cursor < _CHUNK_HEADER.size:
-            if not any(raw[cursor:]):
+            if not any(memoryview(raw)[cursor:]):
                 return
             raise TruncatedHeaderError(
                 f"SCTP chunk header needs {_CHUNK_HEADER.size} bytes, "
@@ -244,7 +245,7 @@ def _walk_chunks(
         type_, flags, length = _CHUNK_HEADER.unpack_from(raw, cursor)
         if length < _CHUNK_HEADER.size:
             # Checked only on the way out, so the scan runs once.
-            if not any(raw[cursor:]):
+            if not any(memoryview(raw)[cursor:]):
                 return
             raise InvalidFieldError(
                 f"SCTP chunk length must be at least {_CHUNK_HEADER.size}, "
