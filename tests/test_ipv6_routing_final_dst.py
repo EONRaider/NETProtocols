@@ -28,7 +28,7 @@ from netprotocols import (
     decode_frame,
     flow_key,
 )
-from netprotocols.layer3.ipv6_ext import effective_destination
+from netprotocols.layer3.ipv6_ext import _effective_destination
 
 SRC = "2001:db8::1"
 NEXT_HOP = "2001:db8::2"
@@ -335,7 +335,7 @@ class TestFallsBackToIpDst:
         assert checksum.compute(
             udp, ip=ip, routing=routing, payload=b"hi"
         ) == checksum.compute(udp, ip=ip, payload=b"hi")
-        assert effective_destination(ip, routing) == "10.0.0.2"
+        assert _effective_destination(ip, routing) == "10.0.0.2"
 
     def test_no_ip_with_routing(self):
         routing = IPv6Routing.decode(routing_srh([FINAL, NEXT_HOP], 1))
@@ -433,18 +433,27 @@ class TestWhichRoutingHeader:
             next_header=43, hop_limit=64, src=SRC, dst=dst,
         )  # fmt: skip
 
-    def test_first_of_several_headers_wins(self):
-        first = IPv6Routing.decode(routing_srh([FINAL, NEXT_HOP], 1))
-        second = IPv6Routing.decode(routing_srh(["2001:db8::77", NEXT_HOP], 1))
+    def test_last_header_with_segments_left_wins(self):
+        # RFC 8200 §4.4: a Routing header with none left is skipped, so
+        # the route ends at the last one that has some.
         udp = UDP(src_port=1000, dst_port=2000, length=10, checksum=0)
-        packet = Packet(self._ip(NEXT_HOP), first, second, udp)
-        fixed = packet.with_checksums(payload=b"hi")
-        assert fixed[UDP].checksum == ref_checksum(
-            SRC, FINAL, udp_header(), b"hi"
-        )
-        key = packet.flow_key()
-        assert key is not None
-        assert FINAL in (key.addr_a, key.addr_b)
+        decoy = IPv6Routing.decode(routing_srh(["2001:db8::77", NEXT_HOP], 0))
+        final = "2001:db8::aa"
+        for first, second in (
+            (decoy, IPv6Routing.decode(routing_srh([final, NEXT_HOP], 1))),
+            (
+                IPv6Routing.decode(routing_srh(["2001:db8::77", NEXT_HOP], 1)),
+                IPv6Routing.decode(routing_srh([final, NEXT_HOP], 1)),
+            ),
+        ):
+            packet = Packet(self._ip(NEXT_HOP), first, second, udp)
+            fixed = packet.with_checksums(payload=b"hi")
+            assert fixed[UDP].checksum == ref_checksum(
+                SRC, final, udp_header(), b"hi"
+            )
+            key = packet.flow_key()
+            assert key is not None
+            assert final in (key.addr_a, key.addr_b)
 
     def test_outer_tunnel_routing_is_not_between(self):
         outer_routing = IPv6Routing.decode(

@@ -24,12 +24,16 @@ def _enclosing_ip(
 ) -> tuple[IPv4 | IPv6 | None, IPv6Routing | None]:
     """Find the IP header and Routing header enclosing ``layers[index]``.
 
-    That is the IP header nearest before it and the first
-    :class:`~netprotocols.IPv6Routing` between the two.
+    That is the IP header nearest before it and the last
+    :class:`~netprotocols.IPv6Routing` between the two with
+    ``segments_left`` above 0, or ``None`` if there is none.
 
-    RFC 8200 §4.1 allows one Routing header per packet; if a hand-built
-    stack has several, the first is the one returned. A Routing header
-    before the nearest IP header (an outer tunnel's) is not between.
+    RFC 8200 §4.1 says each extension header "should occur at most
+    once", so a stack with several Routing headers is unusual; a
+    receiver processes them in order (§4.4) and skips one with no
+    segments left, so the route ends at the last one that has some. A
+    Routing header before the nearest IP header (an outer tunnel's) is
+    not between.
     """
     from netprotocols.layer3.ip import IPv4, IPv6
     from netprotocols.layer3.ipv6_ext import IPv6Routing
@@ -38,7 +42,11 @@ def _enclosing_ip(
     for layer in reversed(layers[:index]):
         if isinstance(layer, (IPv4, IPv6)):
             return layer, routing
-        if isinstance(layer, IPv6Routing):
+        if (
+            routing is None
+            and isinstance(layer, IPv6Routing)
+            and layer.segments_left > 0
+        ):
             routing = layer
     return None, None
 
@@ -159,9 +167,9 @@ class Packet:
         endpoints, not the conversation's. Layers between that IP header
         and the transport (IPv6 extension headers, AH) are skipped and
         do not change the key's protocol number, which is the
-        transport's own. An IPv6 Routing header between them is passed
-        on, so the key's destination is the route's final destination
-        while segments are left (see
+        transport's own. The last IPv6 Routing header between them with
+        segments left is passed on, so the key's destination is the
+        route's final destination (see
         :func:`~netprotocols.flow.flow_key`).
         VXLAN is different: its outer UDP datagram is the first
         transport layer, so the key is the tunnel's own underlay flow

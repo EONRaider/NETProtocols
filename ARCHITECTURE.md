@@ -853,11 +853,13 @@ Behind an IPv6 Routing header with segments left, RFC 8200 §8.1 puts
 the route's *final* destination in the pseudo-header, while `ip.dst`
 is the next hop. `compute()`, `verify()` and `flow_key()` take the
 Routing header as a keyword-only `routing`, and `Packet.with_checksums()`
-and `Packet.flow_key()` pass the first one between the nearest IP
-header and the transport. `IPv6Routing.final_destination(dst)` resolves
-it for types 0, 2, 3 (RPL, from `dst`'s prefix) and 4 (SRH, Segment
-List[0]); for another type, malformed data, no segments left or IPv4
-the address stays `ip.dst`.
+and `Packet.flow_key()` pass the last one with segments left between
+the nearest IP header and the transport (RFC 8200 §4.4 skips one with
+none left, so the route ends at the last that has some).
+`IPv6Routing.final_destination(dst)` resolves it for types 0, 2, 3
+(RPL, from `dst`'s prefix) and 4 (SRH, Segment List[0]); for another
+type, malformed data, no segments left or IPv4 the address stays
+`ip.dst`.
 
 That is also why `SCTP.decode()` bounds its own extent (see "The decode
 contract" above): otherwise Ethernet's padding would land inside the

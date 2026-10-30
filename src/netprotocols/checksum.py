@@ -65,7 +65,7 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
-from netprotocols.layer3.ipv6_ext import IPv6Routing, effective_destination
+from netprotocols.layer3.ipv6_ext import IPv6Routing, _effective_destination
 from netprotocols.layer3.ospf import OSPF, OSPFLSA
 from netprotocols.layer3.pim import PIM
 from netprotocols.layer3.vrrp import VRRP
@@ -280,11 +280,11 @@ def _pseudo_ip(
     (RFC 8200 §8.1), so that every pseudo-header built from the result
     uses the right address; ``ip`` itself when nothing changes. The
     choice is
-    :func:`~netprotocols.layer3.ipv6_ext.effective_destination`.
+    :func:`~netprotocols.layer3.ipv6_ext._effective_destination`.
     """
     if routing is None or ip is None:
         return ip
-    dst = effective_destination(ip, routing)
+    dst = _effective_destination(ip, routing)
     return ip if dst == ip.dst else replace(ip, dst=dst)
 
 
@@ -517,8 +517,11 @@ def compute(
         cannot resolve) it uses ``ip.dst`` as before. Used only by the
         layers whose checksum has a pseudo-header
         (see ``ip``). If several Routing headers precede the layer,
-        pass the first, as :meth:`Packet.with_checksums
-        <netprotocols.packet.Packet.with_checksums>` does.
+        pass the last one with segments left, as
+        :meth:`Packet.with_checksums
+        <netprotocols.packet.Packet.with_checksums>` does: a receiver
+        skips a Routing header with none left (RFC 8200 §4.4), so the
+        route ends at the last that has some.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
         ``SCTP`` packet, already carries its whole body in

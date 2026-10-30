@@ -28,7 +28,7 @@ from typing import NamedTuple
 from netprotocols._base import Protocol
 from netprotocols._enums import IPProtocol
 from netprotocols.layer3.ip import IPv4, IPv6
-from netprotocols.layer3.ipv6_ext import IPv6Routing, effective_destination
+from netprotocols.layer3.ipv6_ext import IPv6Routing, _effective_destination
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
@@ -124,7 +124,9 @@ def flow_key(
         Where that method cannot resolve the route (an unknown routing
         type, malformed data), and when no segments are left, ``IPv4``
         included, the address is ``ip.dst``. If several Routing
-        headers precede ``layer``, pass the first.
+        headers precede ``layer``, pass the last one with segments left,
+        as :meth:`Packet.flow_key <netprotocols.packet.Packet.flow_key>`
+        does.
     :raises InvalidFieldError: ``layer`` is TCP/UDP/SCTP but ``ip`` is
         ``None``.
     """
@@ -144,6 +146,6 @@ def flow_key(
         if isinstance(layer, transport)
     )
     a = (ip.src, layer.src_port)
-    b = (effective_destination(ip, routing), layer.dst_port)
+    b = (_effective_destination(ip, routing), layer.dst_port)
     lo, hi = (a, b) if a <= b else (b, a)
     return FlowKey(lo[0], hi[0], lo[1], hi[1], protocol_number)

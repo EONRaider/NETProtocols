@@ -409,6 +409,10 @@ class IPv6Routing(Protocol):
           is ``16 - CmprE`` octets long and ends ``Pad`` octets before
           the header's end; its first ``CmprE`` octets are those of
           ``dst``, the enclosing IPv6 header's Destination Address.
+          That is the destination at capture time, as RFC 6554 §3
+          has the prefix elided against the packet's current
+          destination and as Linux, which recompresses the header at
+          every hop, writes it.
         * ``4`` (Segment Routing Header, RFC 8754 §2): ``Segment
           List[0]``, which holds the last segment of the route.
 
@@ -419,7 +423,7 @@ class IPv6Routing(Protocol):
         address. It never raises. It does not look at
         :attr:`segments_left`: with none left the address is ``dst``
         itself, and callers that want that case use ``dst`` (see
-        :func:`effective_destination`).
+        :func:`_effective_destination`).
 
         :param dst: The enclosing :class:`~netprotocols.IPv6` header's
             Destination Address. Only type 3 reads it.
@@ -549,7 +553,7 @@ def _last_address(
     return bytes_to_ipv6(segments[-1].packed)
 
 
-def effective_destination(ip: IPv4 | IPv6, routing: IPv6Routing | None) -> str:
+def _effective_destination(ip: IPv4 | IPv6, routing: IPv6Routing | None) -> str:
     """Return the destination that checksums and flow keys use.
 
     RFC 8200 §8.1: "If the IPv6 packet contains a Routing header, the
