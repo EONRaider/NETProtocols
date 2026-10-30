@@ -48,6 +48,7 @@ from netprotocols import (
 )
 from netprotocols.checksum import (
     _cdp_sum,
+    _pseudo_ip,
     fletcher_checksum,
     lsa_checksum,
     verify_lsa,
@@ -1860,6 +1861,31 @@ class TestRoutingFallsBackToIpDst:
         assert compute(udp, ip=ip, routing=routing, payload=b"hi") == compute(
             udp, ip=ip, payload=b"hi"
         )
+
+    def test_the_pseudo_header_layer_is_the_same_object_when_unchanged(self):
+        """``_pseudo_ip`` hands back ``ip`` itself unless the destination
+        changes, so an IPv4 layer is never rebuilt (and revalidated)."""
+        ip4 = IPv4(
+            version=4, ihl=5, dscp=0, ecn=0, total_length=30, identification=0,
+            flags=0, fragment_offset=0, ttl=64, protocol=17, checksum=0,
+            src="10.0.0.1", dst="10.0.0.2",
+        )  # fmt: skip
+        frame = build_frame(
+            routing_srh([RT_FINAL, RT_NEXT_HOP], 1), RT_NEXT_HOP, RT_FINAL
+        )
+        p = decode_frame(frame, start=IPv6)
+        ip6, srh = p[IPv6], p[IPv6Routing]
+        assert _pseudo_ip(ip4, srh) is ip4
+        assert _pseudo_ip(ip6, None) is ip6
+        assert _pseudo_ip(None, srh) is None
+        assert _pseudo_ip(replace(ip6, dst=RT_FINAL), srh).dst == RT_FINAL
+        spent = replace(srh, segments_left=0)
+        assert _pseudo_ip(ip6, spent) is ip6
+        unknown = replace(srh, routing_type=253)
+        assert _pseudo_ip(ip6, unknown) is ip6
+        changed = _pseudo_ip(ip6, srh)
+        assert changed is not ip6
+        assert changed == replace(ip6, dst=RT_FINAL)
 
     def test_no_ip_with_routing(self):
         routing = IPv6Routing.decode(routing_srh([RT_FINAL, RT_NEXT_HOP], 1))
