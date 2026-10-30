@@ -520,8 +520,10 @@ def compute(
         pass the last one with segments left, as
         :meth:`Packet.with_checksums
         <netprotocols.packet.Packet.with_checksums>` does: a receiver
-        skips a Routing header with none left (RFC 8200 §4.4), so the
-        route ends at the last that has some.
+        skips a Routing header with none left (RFC 8200 §4.4 for
+        unrecognized types, and each type's own processing rules: RFC
+        2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3), so the route ends at
+        the last that has some.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
         ``SCTP`` packet, already carries its whole body in

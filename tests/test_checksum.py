@@ -1951,7 +1951,9 @@ class TestRoutingRPLSourceAndCompression:
 
 class TestRoutingWhichHeader:
     """Several Routing headers: a receiver skips one with no segments
-    left (RFC 8200 §4.4), so the route ends at the last with some."""
+    left (RFC 8200 §4.4 for unrecognized types, and each type's own
+    processing rules: RFC 2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3), so
+    the route ends at the last with some."""
 
     DST = RT_NEXT_HOP
     ALIAS = "2001:db8::77"

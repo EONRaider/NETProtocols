@@ -30,10 +30,11 @@ def _enclosing_ip(
 
     RFC 8200 §4.1 says each extension header "should occur at most
     once", so a stack with several Routing headers is unusual; a
-    receiver processes them in order (§4.4) and skips one with no
-    segments left, so the route ends at the last one that has some. A
-    Routing header before the nearest IP header (an outer tunnel's) is
-    not between.
+    receiver processes them in order and skips one with no segments
+    left (RFC 8200 §4.4 for unrecognized types, and each type's own
+    processing rules: RFC 2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3),
+    so the route ends at the last one that has some. A Routing header
+    before the nearest IP header (an outer tunnel's) is not between.
     """
     from netprotocols.layer3.ip import IPv4, IPv6
     from netprotocols.layer3.ipv6_ext import IPv6Routing

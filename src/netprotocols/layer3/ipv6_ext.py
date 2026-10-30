@@ -409,10 +409,9 @@ class IPv6Routing(Protocol):
           is ``16 - CmprE`` octets long and ends ``Pad`` octets before
           the header's end; its first ``CmprE`` octets are those of
           ``dst``, the enclosing IPv6 header's Destination Address.
-          That is the destination at capture time, as RFC 6554 §3
-          has the prefix elided against the packet's current
-          destination and as Linux, which recompresses the header at
-          every hop, writes it.
+          That is the destination at capture time: RFC 6554 §3
+          takes the shared prefix from "the IPv6 Destination Address
+          of the packet carrying the SRH".
         * ``4`` (Segment Routing Header, RFC 8754 §2): ``Segment
           List[0]``, which holds the last segment of the route.
 
