@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Transport checksums and flow keys use the final destination behind an IPv6 Routing header (RFC 8200 §8.1, #236).** The pseudo-header of a TCP, UDP, ICMPv6, VRRPv3 or PIM checksum over IPv6 used `ip.dst`, which on a packet in flight behind a Routing header with `segments_left > 0` is the next hop, so `compute()` gave the wrong value, `verify()` called a correct packet corrupt, and `Packet.with_checksums()` would write the wrong one; `flow_key()` keyed the two directions of a source-routed flow differently. `checksum.compute()`, `checksum.verify()` and `flow.flow_key()` take a new keyword-only `routing: IPv6Routing | None = None`, and `Packet.with_checksums()` and `Packet.flow_key()` pass the first `IPv6Routing` between the nearest IP header and the transport (a Routing header before an inner IP header, as in a tunnel, does not apply to it). With `routing` given, IPv6 and segments left, the address is the new `IPv6Routing.final_destination(dst)`: the last address of type 0 (RFC 2460 §4.4) and the Home Address of type 2 (RFC 6275 §6.4); for type 3 (RFC 6554 §3) the last entry, rebuilt from the first `CmprE` octets of `dst` and the octets the header carries, `Pad` excluded; for type 4 (RFC 8754 §2) Segment List[0]. It returns `None`, and the address stays `ip.dst`, for another routing type or data of the wrong shape, as it does with no segments left and over IPv4. It never raises and works on a layer decoded from a `memoryview`. Callers that pass no `routing` behave as before. `IPv6Routing.segments` still returns `None` for types 3 and 4.
+
 ## [2.6.0] - 2026-10-28
 
 ### Added

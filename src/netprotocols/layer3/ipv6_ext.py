@@ -23,10 +23,12 @@ from ipaddress import IPv6Address
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, bytes_to_ipv6
+from netprotocols._base import Protocol, bytes_to_ipv6, ipv6_to_bytes
 from netprotocols._enums import IPProtocol
 from netprotocols._tlv import walk_kind_length_value
 from netprotocols.layer3.ip import (
+    IPv4,
+    IPv6,
     _ip_protocol_class,
     _ip_protocol_enum,
     _ip_protocol_name,
@@ -251,6 +253,17 @@ class IPv6DestinationOptions(_IPv6OptionsHeader):
 _ROUTING_TYPE_RH0 = 0
 _ROUTING_TYPE_MOBILE_IPV6 = 2
 
+#: The two routing types :meth:`IPv6Routing.final_destination` resolves
+#: beyond those above: RPL Source Routing (RFC 6554 §3) and the Segment
+#: Routing Header (RFC 8754 §2).
+_ROUTING_TYPE_RPL = 3
+_ROUTING_TYPE_SRH = 4
+
+#: Octets of an IPv6 address, and of the SRH's fixed part inside
+#: :attr:`IPv6Routing.data` (Last Entry, Flags and Tag; RFC 8754 §2).
+_ADDRESS_LEN = 16
+_FIXED_LEN = 4
+
 
 @dataclass(frozen=True, slots=True)
 class IPv6Routing(Protocol):
@@ -357,7 +370,14 @@ class IPv6Routing(Protocol):
         decoded: RFC 6554 §3 elides a shared prefix from each
         intermediate address, relative to the enclosing packet's
         *destination* address — context this accessor, scoped to one
-        extension header, does not have. Read :attr:`data` raw for it.
+        extension header, does not have. Read :attr:`data` raw for it,
+        or pass that address to :meth:`final_destination`, which
+        rebuilds the one address the checksum and flow key need.
+        The Segment Routing Header (``4``, RFC 8754) is not decoded
+        either: its list is in reverse order (Segment List[0] is the
+        last segment) and is followed by TLVs, so it would not be the
+        visiting-order list this accessor returns for types 0 and 2;
+        :meth:`final_destination` reads its Segment List[0].
 
         ``None`` for every other routing type and for data whose
         length is not ``4 + 16 * N`` bytes for some ``N`` (degrades,
@@ -374,6 +394,76 @@ class IPv6Routing(Protocol):
             IPv6Address(bytes_to_ipv6(addresses[i : i + 16]))
             for i in range(0, len(addresses), 16)
         )
+
+    def final_destination(self, dst: str) -> str | None:
+        """Return the route's final destination, or ``None``.
+
+        The address is the one RFC 8200 §8.1 puts in the upper-layer
+        pseudo-header while a Routing header is present: the last
+        address of the route, which sits in the header until the last
+        hop is reached. By type:
+
+        * ``0`` (RH0, RFC 2460 §4.4): the last address of the list.
+        * ``2`` (Mobile IPv6, RFC 6275 §6.4): the one Home Address.
+        * ``3`` (RPL, RFC 6554 §3): the last entry, ``Address[n]``,
+          is ``16 - CmprE`` octets long and ends ``Pad`` octets before
+          the header's end; its first ``CmprE`` octets are those of
+          ``dst``, the enclosing IPv6 header's Destination Address.
+        * ``4`` (Segment Routing Header, RFC 8754 §2): ``Segment
+          List[0]``, which holds the last segment of the route.
+
+        ``None`` for any other routing type, and for data that does
+        not have the type's shape: no address, more than one for type
+        2, a Last Entry beyond the data for type 4, entries that do not
+        tile the RPL address area, or a ``dst`` that is not an IPv6
+        address. It never raises. It does not look at
+        :attr:`segments_left`: with none left the address is ``dst``
+        itself, and callers that want that case use ``dst`` (see
+        :func:`effective_destination`).
+
+        :param dst: The enclosing :class:`~netprotocols.IPv6` header's
+            Destination Address. Only type 3 reads it.
+        """
+        if self.routing_type == _ROUTING_TYPE_RH0:
+            return _last_address(self.segments)
+        if self.routing_type == _ROUTING_TYPE_MOBILE_IPV6:
+            return _last_address(self.segments, only=True)
+        if self.routing_type == _ROUTING_TYPE_RPL:
+            return self._rpl_final_destination(dst)
+        if self.routing_type == _ROUTING_TYPE_SRH:
+            return self._srh_final_destination()
+        return None
+
+    def _rpl_final_destination(self, dst: str) -> str | None:
+        """Rebuild RPL's ``Address[n]`` (RFC 6554 §3).
+
+        It comes from ``dst``'s first ``CmprE`` octets and the octets
+        the header carries.
+        """
+        cmpr_i, cmpr_e = self.data[0] >> 4, self.data[0] & 0xF
+        pad = self.data[1] >> 4
+        addresses = self.data[_FIXED_LEN:]
+        size = _ADDRESS_LEN - cmpr_e
+        start = len(addresses) - pad - size
+        # Address[1..n-1] take 16 - CmprI octets each, so the octets
+        # before the last entry must be a whole number of them.
+        if start < 0 or start % (_ADDRESS_LEN - cmpr_i):
+            return None
+        try:
+            prefix = ipv6_to_bytes(dst)[:cmpr_e]
+        except OSError:
+            return None
+        return bytes_to_ipv6(prefix + addresses[start : start + size])
+
+    def _srh_final_destination(self) -> str | None:
+        """Return ``Segment List[0]`` (RFC 8754 §2).
+
+        ``None`` unless Last Entry lies inside the data.
+        """
+        last_entry = self.data[0]
+        if len(self.data) < _FIXED_LEN + (last_entry + 1) * _ADDRESS_LEN:
+            return None
+        return bytes_to_ipv6(self.data[_FIXED_LEN : _FIXED_LEN + _ADDRESS_LEN])
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,3 +535,40 @@ class IPv6Fragment(Protocol):
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
         this library does not enumerate."""
         return _ip_protocol_enum(self.next_header)
+
+
+def _last_address(
+    segments: tuple[IPv6Address, ...] | None, *, only: bool = False
+) -> str | None:
+    """Return the last of ``segments`` as a string.
+
+    ``None`` if there is none (or, with ``only``, not exactly one).
+    """
+    if not segments or (only and len(segments) != 1):
+        return None
+    return bytes_to_ipv6(segments[-1].packed)
+
+
+def effective_destination(ip: IPv4 | IPv6, routing: IPv6Routing | None) -> str:
+    """Return the destination that checksums and flow keys use.
+
+    RFC 8200 §8.1: "If the IPv6 packet contains a Routing header, the
+    Destination Address used in the pseudo-header is that of the final
+    destination." So when ``ip`` is IPv6 and ``routing`` has
+    ``segments_left > 0``, that is
+    :meth:`IPv6Routing.final_destination`. In every other case it is
+    ``ip.dst``: no ``routing``, IPv4, no segments left (``ip.dst`` is
+    then the final destination), or a route whose final destination
+    ``final_destination`` cannot resolve (an unknown routing type,
+    malformed data). The last is a fallback, not a claim that
+    ``ip.dst`` is right: with segments left it is the next hop.
+    """
+    if (
+        routing is not None
+        and isinstance(ip, IPv6)
+        and routing.segments_left > 0
+    ):
+        final = routing.final_destination(ip.dst)
+        if final is not None:
+            return final
+    return ip.dst

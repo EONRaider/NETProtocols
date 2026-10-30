@@ -13,8 +13,34 @@ from netprotocols.utils.exceptions import (
 
 if TYPE_CHECKING:
     from netprotocols.flow import FlowKey
+    from netprotocols.layer3.ip import IPv4, IPv6
+    from netprotocols.layer3.ipv6_ext import IPv6Routing
 
 __all__ = ["Packet"]
+
+
+def _enclosing_ip(
+    layers: tuple[Protocol, ...], index: int
+) -> tuple[IPv4 | IPv6 | None, IPv6Routing | None]:
+    """Find the IP header and Routing header enclosing ``layers[index]``.
+
+    That is the IP header nearest before it and the first
+    :class:`~netprotocols.IPv6Routing` between the two.
+
+    RFC 8200 §4.1 allows one Routing header per packet; if a hand-built
+    stack has several, the first is the one returned. A Routing header
+    before the nearest IP header (an outer tunnel's) is not between.
+    """
+    from netprotocols.layer3.ip import IPv4, IPv6
+    from netprotocols.layer3.ipv6_ext import IPv6Routing
+
+    routing: IPv6Routing | None = None
+    for layer in reversed(layers[:index]):
+        if isinstance(layer, (IPv4, IPv6)):
+            return layer, routing
+        if isinstance(layer, IPv6Routing):
+            routing = layer
+    return None, None
 
 
 class Packet:
@@ -133,8 +159,10 @@ class Packet:
         endpoints, not the conversation's. Layers between that IP header
         and the transport (IPv6 extension headers, AH) are skipped and
         do not change the key's protocol number, which is the
-        transport's own; see :func:`~netprotocols.flow.flow_key` for
-        what an IPv6 Routing header does to its addresses.
+        transport's own. An IPv6 Routing header between them is passed
+        on, so the key's destination is the route's final destination
+        while segments are left (see
+        :func:`~netprotocols.flow.flow_key`).
         VXLAN is different: its outer UDP datagram is the first
         transport layer, so the key is the tunnel's own underlay flow
         (the endpoints' addresses, the source port hashed from the inner
@@ -149,14 +177,13 @@ class Packet:
         """
         from netprotocols.flow import _TRANSPORTS
         from netprotocols.flow import flow_key as _flow_key
-        from netprotocols.layer3.ip import IPv4, IPv6
 
-        ip: IPv4 | IPv6 | None = None
-        for layer in self.layers:
-            if isinstance(layer, (IPv4, IPv6)):
-                ip = layer
-            elif isinstance(layer, _TRANSPORTS):
-                return None if ip is None else _flow_key(layer, ip=ip)
+        for index, layer in enumerate(self.layers):
+            if isinstance(layer, _TRANSPORTS):
+                ip, routing = _enclosing_ip(self.layers, index)
+                if ip is None:
+                    return None
+                return _flow_key(layer, ip=ip, routing=routing)
         return None
 
     @property
@@ -180,7 +207,7 @@ class Packet:
         from netprotocols.checksum import compute
         from netprotocols.layer2.cdp import CDP
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
-        from netprotocols.layer3.ip import IPv4, IPv6
+        from netprotocols.layer3.ip import IPv4
         from netprotocols.layer3.ospf import OSPF
         from netprotocols.layer3.pim import PIM
         from netprotocols.layer3.vrrp import VRRP
@@ -193,17 +220,12 @@ class Packet:
         for index in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[index]
             if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4, VRRP, PIM)):
-                enclosing = next(
-                    (
-                        candidate
-                        for candidate in reversed(self.layers[:index])
-                        if isinstance(candidate, (IPv4, IPv6))
-                    ),
-                    None,
-                )
+                enclosing, routing = _enclosing_ip(self.layers, index)
                 layer = replace(
                     layer,
-                    checksum=compute(layer, ip=enclosing, payload=trailing),
+                    checksum=compute(
+                        layer, ip=enclosing, routing=routing, payload=trailing
+                    ),
                 )
             elif isinstance(layer, (IPv4, CDP)) or (
                 isinstance(layer, OSPF)

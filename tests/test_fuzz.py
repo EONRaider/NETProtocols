@@ -28,6 +28,7 @@ this file (mutmut's, for one).
 import contextlib
 import struct
 import sys
+from ipaddress import IPv6Address
 
 import pytest
 from hypothesis import event, example, given
@@ -470,6 +471,51 @@ class TestNDPAccessorSafety:
                 for option in icmp.ndp_options or ():
                     assert option.type_name
                     _ = option.link_layer_address
+
+
+#: Routing headers of every type this library resolves, with arbitrary
+#: type-specific data (any CmprI/CmprE/Pad/Last Entry) of a legal
+#: length; the destinations include a malformed one.
+_routing_headers = st.builds(
+    lambda routing_type, segments_left, blocks, seed: IPv6Routing(
+        next_header=59,
+        hdr_ext_len=blocks,
+        routing_type=routing_type,
+        segments_left=segments_left,
+        data=(seed * (4 + blocks * 8))[: 4 + blocks * 8],
+    ),
+    routing_type=st.integers(0, 5),
+    segments_left=st.integers(0, 255),
+    blocks=st.integers(0, 8),
+    seed=st.binary(min_size=1, max_size=16),
+)
+_destinations = st.sampled_from(["2001:db8::1", "::", "not an address", ""])
+
+
+class TestIPv6RoutingFinalDestinationSafety:
+    @given(data=fuzz_input, dst=_destinations)
+    def test_decoded_header_never_raises(self, data: bytes, dst: str) -> None:
+        """``final_destination`` returns an address string or ``None``
+        on whatever bytes a Routing header decodes from."""
+        with contextlib.suppress(ProtocolError):
+            header = IPv6Routing.decode(data)
+            final = header.final_destination(dst)
+            assert final is None or isinstance(IPv6Address(final), IPv6Address)
+
+    @given(header=_routing_headers, dst=_destinations)
+    def test_every_type_and_shape_never_raises(
+        self, header: IPv6Routing, dst: str
+    ) -> None:
+        final = header.final_destination(dst)
+        assert final is None or isinstance(IPv6Address(final), IPv6Address)
+
+    @given(header=_routing_headers)
+    def test_memoryview_decode_agrees(self, header: IPv6Routing) -> None:
+        raw = bytes(header)
+        view = IPv6Routing.decode(memoryview(raw))
+        assert view.final_destination(
+            "2001:db8::1"
+        ) == header.final_destination("2001:db8::1")
 
 
 class TestIPv6OptionAccessorSafety:
