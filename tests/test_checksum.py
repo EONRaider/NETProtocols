@@ -4,7 +4,10 @@ its captured value. SCTP's CRC32c is tested here too, not in
 test_sctp.py, because this file is in the mutation audit's test
 selection (pyproject.toml's [tool.mutmut]); so is CDP's checksum."""
 
+import socket
+import struct
 from dataclasses import replace
+from ipaddress import IPv6Address
 
 import pytest
 
@@ -31,6 +34,7 @@ from netprotocols import (
     IPv4,
     IPv6,
     IPv6Fragment,
+    IPv6Routing,
     OSPFLSAHeader,
     Packet,
     ProtocolError,
@@ -44,6 +48,7 @@ from netprotocols import (
 )
 from netprotocols.checksum import (
     _cdp_sum,
+    _pseudo_ip,
     fletcher_checksum,
     lsa_checksum,
     verify_lsa,
@@ -1454,3 +1459,551 @@ class TestLSAChecksum:
         changed = self.lsa(b"\x01\x02\x04\x14", lsa.header.ls_checksum)
         assert fletcher_sums(bytes(changed)[2:])[1] == 0
         assert not verify_lsa(changed)
+
+
+# --- IPv6 Routing headers: the final destination (#236, RFC 8200 §8.1) ---
+#
+# These live here, not in a file of their own, because this file is in the
+# mutation audit's test selection (pyproject.toml's [tool.mutmut]): a test
+# elsewhere never reaches the mutants of ``_pseudo_ip``, ``compute`` or
+# ``verify``. Every expected checksum is computed by :func:`ref_checksum`,
+# a stdlib-only ones'-complement sum written here from RFC 8200 §8.1 and
+# RFC 1071, sharing no code with ``netprotocols.checksum``. ``ISSUE_FRAME``
+# is the issue's reproduction frame, whose wire checksum (0x2fad) was
+# computed the same independent way before the fix existed.
+
+RT_SRC = "2001:db8::1"
+RT_NEXT_HOP = "2001:db8::2"
+RT_FINAL = "2001:db8::99"
+
+ISSUE_FRAME = bytes.fromhex(
+    "6000000000322b4020010db800000000000000000000000120010db800000000"
+    "0000000000000002110404010100000020010db8000000000000000000000099"
+    "20010db800000000000000000000000203e807d0000a2fad6869"
+)
+
+
+def pton(address: str) -> bytes:
+    return socket.inet_pton(socket.AF_INET6, address)
+
+
+def ref_checksum(src: str, dst: str, next_header: int, message: bytes) -> int:
+    """RFC 8200 §8.1 + RFC 1071, from scratch: the checksum of
+    ``message`` (its checksum field zeroed) behind the IPv6 pseudo-header
+    for ``src``, ``dst`` and ``next_header``. UDP sends a computed zero
+    as 0xFFFF (RFC 768)."""
+    data = (
+        pton(src)
+        + pton(dst)
+        + struct.pack("!IBBBB", len(message), 0, 0, 0, next_header)
+        + message
+    )
+    if len(data) % 2:
+        data += b"\x00"
+    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    while total > 0xFFFF:
+        total = (total & 0xFFFF) + (total >> 16)
+    value = ~total & 0xFFFF
+    return (value or 0xFFFF) if next_header == 17 else value
+
+
+def udp_message(
+    payload: bytes = b"hi",
+    sport: int = 1000,
+    dport: int = 2000,
+    value: int = 0,
+) -> bytes:
+    return struct.pack("!HHHH", sport, dport, 8 + len(payload), value) + payload
+
+
+def routing_type0(addresses: list[str], segments_left: int) -> bytes:
+    body = b"\x00" * 4 + b"".join(pton(a) for a in addresses)
+    return bytes([17, len(addresses) * 2, 0, segments_left]) + body
+
+
+def routing_type2(home: str) -> bytes:
+    return bytes([17, 2, 2, 1]) + b"\x00" * 4 + pton(home)
+
+
+def routing_rpl(
+    cmpr_i: int, cmpr_e: int, pad: int, entries: bytes, segments_left: int
+) -> bytes:
+    body = bytes([cmpr_i << 4 | cmpr_e, pad << 4, 0, 0]) + entries
+    body += b"\x00" * pad
+    assert len(body) % 8 == 4
+    return bytes([17, (len(body) - 4) // 8, 3, segments_left]) + body
+
+
+def routing_srh(segment_list: list[str], segments_left: int) -> bytes:
+    body = bytes([len(segment_list) - 1, 0, 0, 0])
+    body += b"".join(pton(a) for a in segment_list)
+    assert len(body) % 8 == 4
+    return bytes([17, (len(body) - 4) // 8, 4, segments_left]) + body
+
+
+def build_upper(
+    routings: bytes | list[bytes],
+    next_header: int,
+    message: bytes,
+    offset: int,
+    wire_dst: str,
+    final: str,
+    src: str = RT_SRC,
+) -> bytes:
+    """IPv6 (dst ``wire_dst``) + the Routing header(s) + ``message``,
+    whose 2-byte checksum field at ``offset`` holds the reference value
+    for ``final``. Each header's Next Header is patched to name the
+    next one (43), the last to ``next_header``."""
+    if isinstance(routings, bytes):
+        routings = [routings]
+    chain = b"".join(
+        bytes([43 if i < len(routings) - 1 else next_header]) + header[1:]
+        for i, header in enumerate(routings)
+    )
+    value = ref_checksum(src, final, next_header, message)
+    message = (
+        message[:offset] + struct.pack("!H", value) + message[offset + 2 :]
+    )
+    ip = (
+        struct.pack("!IHBB", 0x60000000, len(chain) + len(message), 43, 64)
+        + pton(src)
+        + pton(wire_dst)
+    )
+    return ip + chain + message
+
+
+def build_frame(
+    routing: bytes | list[bytes],
+    wire_dst: str,
+    final: str,
+    payload: bytes = b"hi",
+    src: str = RT_SRC,
+    sport: int = 1000,
+    dport: int = 2000,
+) -> bytes:
+    """A UDP datagram ``sport`` -> ``dport`` behind ``routing``."""
+    message = udp_message(payload, sport, dport)
+    return build_upper(routing, 17, message, 6, wire_dst, final, src)
+
+
+def wire_checksum(frame: bytes, payload_len: int = 2) -> int:
+    """The UDP checksum of a frame :func:`build_frame` made."""
+    return int.from_bytes(frame[-payload_len - 2 : -payload_len], "big")
+
+
+def zero_udp_checksum(frame: bytes, payload_len: int = 2) -> bytes:
+    at = len(frame) - payload_len - 2
+    return frame[:at] + b"\x00\x00" + frame[at + 2 :]
+
+
+#: (id, routing header, ip.dst on the wire, the destination RFC 8200
+#: §8.1 puts in the pseudo-header)
+ROUTES = [
+    (
+        "type0",
+        routing_type0(["2001:db8::50", RT_NEXT_HOP, RT_FINAL], 2),
+        "2001:db8::50",
+        RT_FINAL,
+    ),
+    ("type2", routing_type2(RT_FINAL), RT_NEXT_HOP, RT_FINAL),
+    (
+        # CmprI 0 (Address[1] whole), CmprE 8 (Address[2] its last 8
+        # octets): the final address borrows dst's first 8 octets.
+        "rpl-cmpr-i0-e8",
+        routing_rpl(
+            0,
+            8,
+            0,
+            pton("2001:db8:0:0:0:0:0:50") + pton(RT_FINAL)[8:],
+            2,
+        ),
+        "2001:db8:0:0:0:0:0:5",
+        "2001:db8::99",
+    ),
+    (
+        # CmprI 12, CmprE 12: one 4-octet entry (the last) and 4 Pad
+        # octets after it.
+        "rpl-pad",
+        routing_rpl(12, 12, 4, pton("2001:db8::99")[12:], 1),
+        "2001:db8::5",
+        "2001:db8::99",
+    ),
+    (
+        "rpl-two-entries",
+        routing_rpl(
+            12, 12, 0, pton("2001:db8::50")[12:] + pton("2001:db8::99")[12:], 2
+        ),
+        "2001:db8::5",
+        "2001:db8::99",
+    ),
+    (
+        "srh",
+        routing_srh([RT_FINAL, "2001:db8::77", RT_NEXT_HOP], 2),
+        RT_NEXT_HOP,
+        RT_FINAL,
+    ),
+    (
+        "srh-one-hop",
+        routing_srh([RT_FINAL, RT_NEXT_HOP], 1),
+        RT_NEXT_HOP,
+        RT_FINAL,
+    ),
+]
+ROUTE_IDS = [route[0] for route in ROUTES]
+ROUTE_BY_ID = {route[0]: route[1:] for route in ROUTES}
+
+#: transport kind -> (next header, message with a zeroed checksum, the
+#: checksum field's offset in it, the bytes ``compute`` is passed as
+#: ``payload``: TCP and UDP decode the header alone, the others hold
+#: their whole message)
+TRANSPORTS = {
+    "udp": (17, udp_message(), 6, b"hi"),
+    "tcp": (
+        6,
+        struct.pack("!HHIIBBHHH", 1000, 2000, 1, 0, 5 << 4, 0x18, 8192, 0, 0)
+        + b"hi",
+        16,
+        b"hi",
+    ),
+    # Echo Request, identifier 1, sequence 2.
+    "icmpv6": (58, bytes([128, 0, 0, 0, 0, 1, 0, 2]) + b"hi", 2, b""),
+    # PIM Hello, version 2, Hold Time option (1) of 105 s (RFC 7761).
+    "pim": (
+        103,
+        bytes([0x20, 0, 0, 0]) + struct.pack("!HHH", 1, 2, 105),
+        2,
+        b"",
+    ),
+    # VRRPv3 advert: VRID 7, priority 200, one address, 100 cs.
+    "vrrp": (
+        112,
+        struct.pack("!BBBBHH", 0x31, 7, 200, 1, 100, 0) + pton("2001:db8::100"),
+        6,
+        b"",
+    ),
+}
+
+#: (route id, transport kind): every transport behind types 0, 2, 3 and
+#: 4, and PIM and VRRP behind an SRH with one segment left.
+TRANSPORT_ROWS = [
+    (route, kind)
+    for route in ("type0", "type2", "rpl-cmpr-i0-e8", "srh")
+    for kind in ("udp", "tcp", "icmpv6")
+] + [("srh-one-hop", "pim"), ("srh-one-hop", "vrrp")]
+
+
+class TestRoutingIssueFrame:
+    def test_wire_checksum_verifies(self):
+        p = decode_frame(ISSUE_FRAME, start=IPv6)
+        assert wire_checksum(ISSUE_FRAME) == 0x2FAD
+        assert p[UDP].checksum == 0x2FAD
+        routing = p[IPv6Routing]
+        assert verify(p[UDP], ip=p[IPv6], routing=routing, payload=b"hi")
+        assert (
+            compute(p[UDP], ip=p[IPv6], routing=routing, payload=b"hi")
+            == 0x2FAD
+        )
+
+    def test_without_routing_it_is_the_old_value(self):
+        p = decode_frame(ISSUE_FRAME, start=IPv6)
+        assert compute(p[UDP], ip=p[IPv6], payload=b"hi") == 0x3044
+        assert not verify(p[UDP], ip=p[IPv6], payload=b"hi")
+
+    def test_reference_agrees_with_the_issue_frame(self):
+        udp = udp_message()
+        assert ref_checksum(RT_SRC, RT_FINAL, 17, udp) == 0x2FAD
+        assert ref_checksum(RT_SRC, RT_NEXT_HOP, 17, udp) == 0x3044
+
+    def test_with_checksums_rewrites_a_wrong_value(self):
+        p = decode_frame(ISSUE_FRAME, start=IPv6)
+        bad = Packet(
+            *[
+                replace(layer, checksum=1) if isinstance(layer, UDP) else layer
+                for layer in p.layers
+            ]
+        )
+        fixed = bad.with_checksums(payload=b"hi")
+        assert bytes(fixed) + b"hi" == ISSUE_FRAME
+
+
+@pytest.mark.parametrize(
+    ("name", "routing", "wire_dst", "final"), ROUTES, ids=ROUTE_IDS
+)
+class TestRoutingEachType:
+    def test_compute_verify_use_the_final_destination(
+        self, name, routing, wire_dst, final
+    ):
+        frame = build_frame(routing, wire_dst, final)
+        p = decode_frame(frame, start=IPv6)
+        assert p[IPv6].dst == IPv6Address(wire_dst).compressed
+        header = p[IPv6Routing]
+        assert header.final_destination(p[IPv6].dst) == final
+        got = compute(p[UDP], ip=p[IPv6], routing=header, payload=b"hi")
+        assert got == wire_checksum(frame)
+        assert verify(p[UDP], ip=p[IPv6], routing=header, payload=b"hi")
+        # Without the routing header the next hop is used: wrong.
+        assert not verify(p[UDP], ip=p[IPv6], payload=b"hi")
+
+    def test_with_checksums_through_decode_frame(
+        self, name, routing, wire_dst, final
+    ):
+        frame = build_frame(routing, wire_dst, final)
+        p = decode_frame(zero_udp_checksum(frame), start=IPv6)
+        assert p[UDP].checksum == 0
+        fixed = p.with_checksums(payload=b"hi")
+        assert bytes(fixed) + b"hi" == frame
+
+    def test_memoryview_decode(self, name, routing, wire_dst, final):
+        frame = build_frame(routing, wire_dst, final)
+        p = decode_frame(memoryview(frame), start=IPv6)
+        header = p[IPv6Routing]
+        assert header.final_destination(p[IPv6].dst) == final
+        assert verify(p[UDP], ip=p[IPv6], routing=header, payload=b"hi")
+
+
+@pytest.mark.parametrize(
+    ("route", "kind"),
+    TRANSPORT_ROWS,
+    ids=[f"{route}-{kind}" for route, kind in TRANSPORT_ROWS],
+)
+class TestRoutingEveryTransport:
+    """TCP, ICMPv6, VRRPv3 and PIM take the final destination as UDP
+    does, through ``compute``, ``verify`` and ``Packet.with_checksums``;
+    each is checksummed independently by :func:`ref_checksum`."""
+
+    def frame(self, route: str, kind: str) -> tuple[bytes, int, bytes]:
+        routing, wire_dst, final = ROUTE_BY_ID[route]
+        next_header, message, offset, tail = TRANSPORTS[kind]
+        frame = build_upper(
+            routing, next_header, message, offset, wire_dst, final
+        )
+        return frame, len(frame) - len(message) + offset, tail
+
+    def test_compute_and_verify(self, route, kind):
+        frame, at, tail = self.frame(route, kind)
+        wire = int.from_bytes(frame[at : at + 2], "big")
+        p = decode_frame(frame, start=IPv6)
+        layer, ip, routing = p.layers[-1], p[IPv6], p[IPv6Routing]
+        assert ip.dst != ROUTE_BY_ID[route][2]
+        assert compute(layer, ip=ip, routing=routing, payload=tail) == wire
+        assert verify(layer, ip=ip, routing=routing, payload=tail)
+        assert not verify(
+            replace(layer, checksum=wire ^ 1),
+            ip=ip,
+            routing=routing,
+            payload=tail,
+        )
+        # The next hop, which is all `ip` says, is the wrong address.
+        assert compute(layer, ip=ip, payload=tail) != wire
+        assert not verify(layer, ip=ip, payload=tail)
+
+    def test_with_checksums(self, route, kind):
+        frame, at, tail = self.frame(route, kind)
+        zeroed = frame[:at] + b"\x00\x00" + frame[at + 2 :]
+        p = decode_frame(zeroed, start=IPv6)
+        assert p.layers[-1].checksum == 0
+        assert bytes(p.with_checksums(tail)) + tail == frame
+
+
+class TestRoutingFallsBackToIpDst:
+    def test_segments_left_zero_uses_ip_dst(self):
+        # The last hop: ip.dst IS the final destination, while the
+        # list's final entry deliberately differs, to pin the `> 0`.
+        for routing in (
+            routing_srh(["2001:db8::77", RT_FINAL], 0),
+            routing_type0(["2001:db8::77"], 0),
+            routing_type2("2001:db8::77"),
+        ):
+            routing = routing[:3] + b"\x00" + routing[4:]
+            frame = build_frame(routing, RT_FINAL, RT_FINAL)
+            p = decode_frame(frame, start=IPv6)
+            header = p[IPv6Routing]
+            assert header.segments_left == 0
+            assert header.final_destination(RT_FINAL) == "2001:db8::77"
+            assert verify(p[UDP], ip=p[IPv6], routing=header, payload=b"hi")
+            zeroed = zero_udp_checksum(frame)
+            assert (
+                bytes(decode_frame(zeroed, start=IPv6).with_checksums(b"hi"))
+                + b"hi"
+                == frame
+            )
+
+    def test_unknown_routing_type(self):
+        routing = bytes([17, 1, 253, 1]) + bytes(12)
+        frame = build_frame(routing, RT_NEXT_HOP, RT_NEXT_HOP)
+        p = decode_frame(frame, start=IPv6)
+        header = p[IPv6Routing]
+        assert header.final_destination(RT_NEXT_HOP) is None
+        assert verify(p[UDP], ip=p[IPv6], routing=header, payload=b"hi")
+        zeroed = zero_udp_checksum(frame)
+        assert (
+            bytes(decode_frame(zeroed, start=IPv6).with_checksums(b"hi"))
+            + b"hi"
+            == frame
+        )
+
+    def test_malformed_srh_falls_back(self):
+        # Last Entry 5 but one segment of data.
+        routing = bytes([17, 2, 4, 1, 5, 0, 0, 0]) + pton(RT_FINAL)
+        frame = build_frame(routing, RT_NEXT_HOP, RT_NEXT_HOP)
+        p = decode_frame(frame, start=IPv6)
+        assert p[IPv6Routing].final_destination(RT_NEXT_HOP) is None
+        assert verify(p[UDP], ip=p[IPv6], routing=p[IPv6Routing], payload=b"hi")
+
+    def test_ipv4_ignores_routing(self):
+        ip = IPv4(
+            version=4, ihl=5, dscp=0, ecn=0, total_length=30, identification=0,
+            flags=0, fragment_offset=0, ttl=64, protocol=17, checksum=0,
+            src="10.0.0.1", dst="10.0.0.2",
+        )  # fmt: skip
+        udp = UDP(src_port=1, dst_port=2, length=10, checksum=0)
+        routing = IPv6Routing.decode(routing_srh([RT_FINAL, RT_NEXT_HOP], 1))
+        assert compute(udp, ip=ip, routing=routing, payload=b"hi") == compute(
+            udp, ip=ip, payload=b"hi"
+        )
+
+    def test_the_pseudo_header_layer_is_the_same_object_when_unchanged(self):
+        """``_pseudo_ip`` hands back ``ip`` itself unless the destination
+        changes, so an IPv4 layer is never rebuilt (and revalidated)."""
+        ip4 = IPv4(
+            version=4, ihl=5, dscp=0, ecn=0, total_length=30, identification=0,
+            flags=0, fragment_offset=0, ttl=64, protocol=17, checksum=0,
+            src="10.0.0.1", dst="10.0.0.2",
+        )  # fmt: skip
+        frame = build_frame(
+            routing_srh([RT_FINAL, RT_NEXT_HOP], 1), RT_NEXT_HOP, RT_FINAL
+        )
+        p = decode_frame(frame, start=IPv6)
+        ip6, srh = p[IPv6], p[IPv6Routing]
+        assert _pseudo_ip(ip4, srh) is ip4
+        assert _pseudo_ip(ip6, None) is ip6
+        assert _pseudo_ip(None, srh) is None
+        assert _pseudo_ip(replace(ip6, dst=RT_FINAL), srh).dst == RT_FINAL
+        spent = replace(srh, segments_left=0)
+        assert _pseudo_ip(ip6, spent) is ip6
+        unknown = replace(srh, routing_type=253)
+        assert _pseudo_ip(ip6, unknown) is ip6
+        changed = _pseudo_ip(ip6, srh)
+        assert changed is not ip6
+        assert changed == replace(ip6, dst=RT_FINAL)
+
+    def test_no_ip_with_routing(self):
+        routing = IPv6Routing.decode(routing_srh([RT_FINAL, RT_NEXT_HOP], 1))
+        with pytest.raises(InvalidFieldError, match="requires"):
+            compute(
+                UDP(src_port=1, dst_port=2, length=10, checksum=0),
+                routing=routing,
+                payload=b"hi",
+            )
+
+
+class TestRoutingRPLSourceAndCompression:
+    """RPL's last entry takes its first ``CmprE`` octets from the
+    packet's *destination*, not its source, and the entries before it
+    are ``CmprI`` octets each, not ``CmprE``: the vector has a source
+    prefix unlike the destination's and CmprI 8 against CmprE 6."""
+
+    SRC = "2001:db8:ffff::1"
+    DST = "2001:db8:a:b::11"
+    FINAL = "2001:db8:a:b::99"
+
+    def frame(self) -> bytes:
+        # Address[1], Address[2]: the last 8 octets of ::12 and ::13
+        # (CmprI 8); Address[3]: the last 10 of ::99 (CmprE 6).
+        entries = (
+            pton("2001:db8:a:b::12")[8:]
+            + pton("2001:db8:a:b::13")[8:]
+            + pton(self.FINAL)[6:]
+        )
+        routing = routing_rpl(8, 6, 6, entries, 3)
+        return build_frame(
+            routing,
+            self.DST,
+            self.FINAL,
+            payload=b"hello",
+            src=self.SRC,
+            sport=5353,
+            dport=4242,
+        )
+
+    def test_the_reference_values(self):
+        udp = udp_message(b"hello", 5353, 4242)
+        assert ref_checksum(self.SRC, self.FINAL, 17, udp) == 0x3A66
+        # Prefix from the source, and the "no address" fallback.
+        assert ref_checksum(self.SRC, "2001:db8:ffff:b::99", 17, udp) == 0x3A70
+        assert ref_checksum(self.SRC, self.DST, 17, udp) == 0x3AEE
+
+    def test_the_prefix_comes_from_the_destination(self):
+        frame = self.frame()
+        p = decode_frame(frame, start=IPv6)
+        routing = p[IPv6Routing]
+        assert routing.final_destination(self.DST) == self.FINAL
+        assert wire_checksum(frame, 5) == 0x3A66
+        assert (
+            compute(p[UDP], ip=p[IPv6], routing=routing, payload=b"hello")
+            == 0x3A66
+        )
+        assert verify(p[UDP], ip=p[IPv6], routing=routing, payload=b"hello")
+        zeroed = zero_udp_checksum(frame, 5)
+        fixed = decode_frame(zeroed, start=IPv6).with_checksums(b"hello")
+        assert bytes(fixed) + b"hello" == frame
+
+
+class TestRoutingWhichHeader:
+    """Several Routing headers: a receiver skips one with no segments
+    left (RFC 8200 §4.4 for unrecognized types, and each type's own
+    processing rules: RFC 2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3), so
+    the route ends at the last with some."""
+
+    DST = RT_NEXT_HOP
+    ALIAS = "2001:db8::77"
+    LAST = "2001:db8::aa"
+
+    @pytest.mark.parametrize(
+        ("headers", "expected"),
+        [
+            ([(ALIAS, 0), (LAST, 1)], LAST),  # the first is skipped
+            ([(ALIAS, 1), (LAST, 1)], LAST),  # both have some: the later
+            ([(ALIAS, 1), (LAST, 0)], ALIAS),  # the later is skipped
+            ([(LAST, 1), (ALIAS, 0), (ALIAS, 0)], LAST),
+            ([(ALIAS, 0), (ALIAS, 0)], DST),  # none left: ip.dst
+        ],
+        ids=["0-1", "1-1", "1-0", "1-0-0", "0-0"],
+    )
+    def test_the_last_with_segments_left_wins(self, headers, expected):
+        routings = [routing_srh([last, self.DST], sl) for last, sl in headers]
+        frame = build_frame(routings, self.DST, expected)
+        assert wire_checksum(frame) == ref_checksum(
+            RT_SRC, expected, 17, udp_message()
+        )
+        p = decode_frame(frame, start=IPv6)
+        assert sum(isinstance(x, IPv6Routing) for x in p.layers) == len(headers)
+        fixed = decode_frame(zero_udp_checksum(frame), start=IPv6)
+        assert bytes(fixed.with_checksums(b"hi")) + b"hi" == frame
+        key = p.flow_key()
+        assert key is not None
+        assert expected in (key.addr_a, key.addr_b)
+
+    def test_the_rules_give_different_checksums(self):
+        # So the cases above pin the rule, not a coincidence.
+        values = {
+            ref_checksum(RT_SRC, dst, 17, udp_message())
+            for dst in (self.DST, self.ALIAS, self.LAST)
+        }
+        assert len(values) == 3
+
+    def test_outer_tunnel_routing_is_not_between(self):
+        outer_routing = IPv6Routing.decode(
+            routing_srh(["2001:db8::77", RT_NEXT_HOP], 1)
+        )
+        inner = IPv6(
+            version=6, traffic_class=0, flow_label=0, payload_length=0,
+            next_header=43, hop_limit=64, src=RT_SRC, dst="2001:db8::abcd",
+        )  # fmt: skip
+        outer = replace(inner, dst=RT_NEXT_HOP)
+        udp = UDP(src_port=1000, dst_port=2000, length=10, checksum=0)
+        packet = Packet(outer, outer_routing, inner, udp)
+        fixed = packet.with_checksums(payload=b"hi")
+        assert fixed[UDP].checksum == ref_checksum(
+            RT_SRC, "2001:db8::abcd", 17, udp_message()
+        )

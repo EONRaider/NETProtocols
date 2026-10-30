@@ -290,9 +290,8 @@ class TestHeadersBetweenIPAndTransport:
     transport, so the IP header's protocol field names them, not the
     transport. Behind AH or a Hop-by-Hop header the flow is the same
     conversation with or without them, so it must key the same. (A
-    Routing header with segments left is different: its IP header's
-    destination is the next segment, so only the protocol number is
-    guaranteed there.)"""
+    Routing header with segments left changes the destination the key
+    uses; tests/test_ipv6_routing_final_dst.py covers it.)"""
 
     @pytest.mark.parametrize(
         ("wrapped", "plain", "between", "number"),

@@ -51,6 +51,7 @@ Feed these helpers the payload exactly as it appears on the wire.
 from __future__ import annotations
 
 import struct
+from dataclasses import replace
 from functools import reduce
 
 from netprotocols._base import (
@@ -64,6 +65,7 @@ from netprotocols.layer3.gre import GRE
 from netprotocols.layer3.icmp import ICMPv4, ICMPv6
 from netprotocols.layer3.igmp import IGMP
 from netprotocols.layer3.ip import IPv4, IPv6
+from netprotocols.layer3.ipv6_ext import IPv6Routing, _effective_destination
 from netprotocols.layer3.ospf import OSPF, OSPFLSA
 from netprotocols.layer3.pim import PIM
 from netprotocols.layer3.vrrp import VRRP
@@ -269,6 +271,23 @@ def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
     )
 
 
+def _pseudo_ip(
+    ip: IPv4 | IPv6 | None, routing: IPv6Routing | None
+) -> IPv4 | IPv6 | None:
+    """Return ``ip`` with ``dst`` set to the pseudo-header destination.
+
+    That is the final destination when ``routing`` puts it elsewhere
+    (RFC 8200 §8.1), so that every pseudo-header built from the result
+    uses the right address; ``ip`` itself when nothing changes. The
+    choice is
+    :func:`~netprotocols.layer3.ipv6_ext._effective_destination`.
+    """
+    if routing is None or ip is None:
+        return ip
+    dst = _effective_destination(ip, routing)
+    return ip if dst == ip.dst else replace(ip, dst=dst)
+
+
 def _require_ip(layer: Protocol, ip: IPv4 | IPv6 | None) -> IPv4 | IPv6:
     if ip is None:
         raise InvalidFieldError(
@@ -453,6 +472,7 @@ def compute(
     layer: Protocol,
     *,
     ip: IPv4 | IPv6 | None = None,
+    routing: IPv6Routing | None = None,
     payload: bytes = b"",
 ) -> int:
     """The correct checksum field value for ``layer``.
@@ -485,6 +505,25 @@ def compute(
         and Wireshark sum it (see :func:`_cdp_sum`).
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6,
         VRRPv3, and PIM, whose coverage depends on the family.
+    :param routing: The :class:`~netprotocols.IPv6Routing` header
+        between ``ip`` and ``layer``, if there is one. RFC 8200 §8.1
+        puts the *final* destination in the pseudo-header behind a
+        Routing header, but ``ip.dst`` of a packet in flight is the
+        next hop while ``routing.segments_left`` is above 0. With
+        ``routing`` given, ``ip`` IPv6 and segments left, the
+        pseudo-header uses
+        :meth:`~netprotocols.IPv6Routing.final_destination`; otherwise
+        (no segments left, IPv4, a routing type or data that method
+        cannot resolve) it uses ``ip.dst`` as before. Used only by the
+        layers whose checksum has a pseudo-header
+        (see ``ip``). If several Routing headers precede the layer,
+        pass the last one with segments left, as
+        :meth:`Packet.with_checksums
+        <netprotocols.packet.Packet.with_checksums>` does: a receiver
+        skips a Routing header with none left (RFC 8200 §4.4 for
+        unrecognized types, and each type's own processing rules: RFC
+        2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3), so the route ends at
+        the last that has some.
     :param payload: The bytes following ``layer`` on the wire. A decoded
         ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
         ``SCTP`` packet, already carries its whole body in
@@ -494,6 +533,7 @@ def compute(
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
+    ip = _pseudo_ip(ip, routing)
     if isinstance(layer, IPv4):
         return internet_checksum(_zeroed(bytes(layer), 10))
     if isinstance(layer, ICMPv4):
@@ -526,6 +566,7 @@ def verify(
     layer: Protocol,
     *,
     ip: IPv4 | IPv6 | None = None,
+    routing: IPv6Routing | None = None,
     payload: bytes = b"",
 ) -> bool:
     """Whether ``layer``'s checksum field matches a recomputation.
@@ -548,7 +589,12 @@ def verify(
     reasons"). So a whole-message Register verifies, but
     :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
     the 8-byte form :func:`compute` returns.
+
+    ``routing`` is :func:`compute`'s: behind a Routing header with
+    segments left, the pseudo-header uses the route's final destination
+    (RFC 8200 §8.1).
     """
+    ip = _pseudo_ip(ip, routing)
     if (
         isinstance(layer, UDP)
         and layer.checksum == 0
