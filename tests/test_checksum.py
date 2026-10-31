@@ -868,6 +868,24 @@ class TestChecksumRules:
         udp, ip = self.make_udp(0)
         assert verify(udp, ip=ip, payload=b"1234")
 
+    def test_udp_zero_checksum_fails_over_ipv6(self):
+        """Over IPv6 the UDP checksum is mandatory (RFC 8200 §8.1), so
+        a zero is a wrong checksum, not an absent one: the rule that
+        spares IPv4 must be handed the enclosing IP layer."""
+        udp, _ = self.make_udp(0)
+        ip = IPv6(
+            version=6,
+            traffic_class=0,
+            flow_label=0,
+            payload_length=12,
+            next_header=17,
+            hop_limit=64,
+            src="2001:db8::1",
+            dst="2001:db8::2",
+        )
+        assert compute(udp, ip=ip, payload=b"1234") != 0
+        assert not verify(udp, ip=ip, payload=b"1234")
+
     def test_udp_never_computes_zero(self):
         """Search for a payload whose raw sum folds to 0xFFFF: the UDP
         arm must substitute 0xFFFF, never emit 0x0000."""
