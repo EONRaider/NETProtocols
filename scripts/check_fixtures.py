@@ -639,19 +639,25 @@ _VXLAN_PORT = 4789
 #: RIP's port (RFC 2453 §3.9.1 for RIPv2, RFC 1058 §3.1 for RIPv1).
 _RIP_PORT = 520
 
+#: NTP's port (RFC 5905).
+_NTP_PORT = 123
+
 
 def _check_udp_payload(
     datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate what a UDP datagram carries, where it is something this
     checker can verify past the UDP checksum: a VXLAN tunnel (see
-    :func:`_check_vxlan`) or a RIPv2 message's keyed digest (see
-    :func:`_check_rip`)."""
+    :func:`_check_vxlan`), a RIPv2 message's keyed digest (see
+    :func:`_check_rip`) or an NTP message's MAC (see
+    :func:`_check_ntp`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
+    if _NTP_PORT in (src_port, dst_port):
+        return _check_ntp(datagram, stats)
     return []
 
 
@@ -737,6 +743,73 @@ def _check_rip(datagram: bytes, stats: Counter) -> list[str]:
     digest = _rip_digest(algorithm, key, rip[: trailer + 4])
     if not hmac.compare_digest(digest, rip[trailer + 4 :]):
         return [f"rip-{algorithm}"]
+    return []
+
+
+#: The symmetric keys of the corpus's NTP MACs, by Key ID: the test
+#: keys published in tests/fixtures/MANIFEST.md, as chrony and ntpdig
+#: were configured with them.
+_NTP_KEYS = {
+    1: ("md5", b"np191-md5-key"),
+    2: ("sha1", b"np191-sha1-key"),
+}
+
+
+def _ntp_mac_offset(ntp: bytes, stats: Counter) -> int | None:
+    """Where an NTP message's MAC would start: after the 48-byte header
+    and, in NTPv4, the extension fields (RFC 7822 §3), each a 2-byte
+    type and a 2-byte Length counting its header, at least 16 and a
+    multiple of 4. The walk stops when 24 bytes or fewer are left, the
+    most a MAC takes (a Key ID and a SHA-1 digest), since the last
+    extension field of a message without a MAC is longer than that.
+    ``None`` when an extension field's Length breaks those rules."""
+    offset = 48
+    if (ntp[0] >> 3) & 0x07 != 4:
+        return offset
+    while len(ntp) - offset > 24:
+        length = struct.unpack_from("!H", ntp, offset + 2)[0]
+        if length < 16 or length % 4 or offset + length > len(ntp):
+            return None
+        stats["ntp-extension-field"] += 1
+        offset += length
+    return offset
+
+
+def _check_ntp(datagram: bytes, stats: Counter) -> list[str]:
+    """Verify an NTP message's MAC, if it carries one.
+
+    The UDP checksum already covers every NTP byte; this checks the
+    MAC on top of it. A MAC is a 4-byte Key ID and a digest of the key
+    followed by everything before the MAC, as RFC 5905's reference
+    implementation computes it: MD5's 16 bytes or SHA-1's 20. A message
+    ends at its header and extension fields, or in a MAC of one of
+    those two lengths; anything else is a failure, and so is a Key ID
+    with no published key, as an unknown IPsec SPI is (see
+    :func:`_verify_icv`)."""
+    ntp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["ntp"] += 1
+    if len(ntp) < 48:
+        return ["ntp-truncated"]
+    offset = _ntp_mac_offset(ntp, stats)
+    if offset is None:
+        return ["ntp-extension-field"]
+    mac = ntp[offset:]
+    if not mac:
+        return []
+    if len(mac) not in (20, 24):
+        return ["ntp-trailer"]
+    sa = _NTP_KEYS.get(struct.unpack_from("!I", mac)[0])
+    if sa is None:
+        return ["ntp-unknown-key"]
+    algorithm, key = sa
+    stats[f"ntp-{algorithm}"] += 1
+    # MD5 and SHA-1 are what the senders used; this only checks the MAC
+    # they sent, so it is not a security use.
+    digest = hashlib.new(
+        algorithm, key + ntp[:offset], usedforsecurity=False
+    ).digest()
+    if not hmac.compare_digest(digest, mac[4:]):
+        return [f"ntp-{algorithm}"]
     return []
 
 

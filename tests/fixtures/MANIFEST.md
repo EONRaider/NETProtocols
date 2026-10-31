@@ -7,16 +7,17 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
-as does every IPsec ICV, every RIPv2 keyed digest and every OSPF MD5
-digest, with the test keys published below. Frames
+as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
+digest and every NTP MAC, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 293 frames across 30
+frames routinely leave checksums to NIC offload. 310 frames across 31
 scenarios. Addresses are as-captured from the capture host's network.
 
-Seventeen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Eighteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`) are captured
+`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `ntp.pcap`) are
+captured
 separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
@@ -26,8 +27,9 @@ sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
 two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
 three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
-LLDP agents, and two STP bridges with lldpd speaking CDP — see their
-rows and the notes below.
+LLDP agents, two STP bridges with lldpd speaking CDP, and a chronyd
+NTP server queried by ntpdig and chronyd clients — see their rows and
+the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -53,6 +55,7 @@ rows and the notes below.
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
+| `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `mpls.pcap` | 8 | MPLS label stacks (RFC 3032) over Ethernet: one label (`0x12345`) carrying an ICMPv4 echo; two labels (16001, 16002) carrying UDP; three labels (16001-16003, traffic classes 5/3/0) carrying an echo; an Entropy Label Indicator (7) and an entropy label (RFC 6790) carrying an echo; an IPv4 Explicit NULL bottom label (0) carrying a UDP datagram of 2 bytes of payload, zero padded to 60 bytes; an IPv6 Explicit NULL bottom label (2) carrying an IPv6 UDP datagram; EtherType `0x8848` to a multicast MAC carrying an echo; and an Ethernet pseudowire, a control word (RFC 4448 §4.6) and a whole Ethernet frame — `Ethernet→MPLS→IPv4→ICMPv4` / `→IPv4→UDP` / `→IPv6→UDP`, and `Ethernet→MPLS`, where the walk stops at the control word; **script-built label stacks around kernel-built IPv4 datagrams**, the IPv6 datagram script-built (see MPLS note) |
@@ -562,6 +565,55 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   address, Port ID, Capabilities, Software version, Platform), and the
   forms they do not, such as an IPv6 address, are built in the tests
   (the kernel boots with IPv6 disabled).
+
+- `ntp.pcap` was produced by `scripts/capture_fixtures_ntp.sh`: a
+  chronyd 4.5 server (`local stratum 8`, `allow all`, a keyfile and a
+  throwaway NTS certificate, all in a scratch directory) in one netns
+  over a veth pair, and clients in the other: ntpdig from ntpsec, plain
+  and with each published key, then chronyd with `-Q`, which only
+  measures, as an NTPv3 client (`version 3`), with `extfield F323`
+  and with `nts`, then chronyd as a symmetric active peer, then the
+  server restarted with `broadcast`. Every chronyd runs with `-x`, so
+  none touches the system clock. tcpdump captures `udp port 123` on the
+  server's side of the pair, offload disabled on both ends, one scratch
+  file per scenario, and the script keeps a fixed selection and asserts
+  it exactly (sender, version, mode, stratum and length after the
+  header): per client scenario the first request and the server's
+  answer to it, found by its Origin Timestamp, which is the request's
+  Transmit Timestamp (RFC 5905 §8); the peer's first packet at stratum
+  0 and its first at stratum 9, each with the answer; and the first
+  broadcast. The NTS-KE handshake that precedes the NTS exchange runs
+  over TCP 4460 and is left out by the filter. **chronyd and ntpdig
+  built every NTP byte**, MACs, extension fields and NTS cookies
+  included; **the kernel built the UDP header** (its checksum computed
+  in software, and verified by `check_fixtures`), **the IPv4 header and
+  the Ethernet header**. `check_fixtures` also walks every NTPv4
+  message's extension fields (RFC 7822 §3's Length rules) and verifies
+  each MAC with the published keys: the digest of the key followed by
+  the message before the MAC, which ntpdig's requests and chronyd's
+  answers both compute that way. ntpdig puts the current time in its
+  Transmit Timestamp, so `tests/test_ntp.py` holds its conversion
+  against the pcap timestamps; chrony's client puts random bits there,
+  which its server echoes. A re-capture differs in every timestamp, the
+  random Transmit Timestamps, the NTS keys, cookies and ciphertext, the
+  digests, the IPv4 identification and the client's source ports.
+  Everything here is IPv4 (the container's kernel had IPv6 disabled),
+  and veth does not pad, so no frame carries an FCS: the 48-byte header
+  already fills Ethernet's minimum frame, and `tests/test_ntp.py`
+  builds the trailers, a crypto-NAK, a Kiss-o'-Death and the control
+  messages (modes 6 and 7) the decoder rejects, none of which these
+  daemons send.
+
+### NTP test keys
+
+Published so anyone can verify the captures: these keys protect
+nothing. `check_fixtures` and `tests/test_ntp.py` both hard-code them,
+independently, and verify every MAC in `ntp.pcap` with them.
+
+| Key ID | Algorithm | Key (ASCII) |
+|---|---|---|
+| 1 | MD5 | `np191-md5-key` |
+| 2 | SHA-1 | `np191-sha1-key` |
 
 ### RIP test keys
 
