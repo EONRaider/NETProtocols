@@ -25,6 +25,7 @@ from netprotocols import (
     DNS,
     ESP,
     GRE,
+    HSRP,
     HTTP,
     IGMP,
     LLC,
@@ -1017,6 +1018,27 @@ def ntp_messages(draw: st.DrawFn) -> NTP:
     )
 
 
+@st.composite
+def hsrp_messages(draw: st.DrawFn) -> HSRP:
+    # Every field is a whole byte, so any value of each is canonical
+    # but the three decode() judges: Version 0, an Op Code of 0-2 and
+    # one of RFC 2281's six States (the constructor accepts others;
+    # test_hsrp.py covers those). The Authentication Data is any 8
+    # bytes, not only a password.
+    return HSRP(
+        version=0,
+        opcode=draw(st.integers(0, 2)),
+        state=draw(st.sampled_from([0, 1, 2, 4, 8, 16])),
+        hellotime=draw(st.integers(0, 0xFF)),
+        holdtime=draw(st.integers(0, 0xFF)),
+        priority=draw(st.integers(0, 0xFF)),
+        group=draw(st.integers(0, 0xFF)),
+        reserved=draw(st.integers(0, 0xFF)),
+        auth_data=draw(st.binary(min_size=8, max_size=8)),
+        virtual_ip=draw(ipv4_strings()),
+    )
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -1057,5 +1079,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "RADIUS": radius_packets(),
     "STUN": stun_messages(),
     "NTP": ntp_messages(),
+    "HSRP": hsrp_messages(),
     "BGP": bgp_messages(),
 }

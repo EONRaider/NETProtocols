@@ -122,6 +122,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.bgp import BGP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.hsrp import HSRP
     from netprotocols.layer7.ntp import NTP
     from netprotocols.layer7.radius import RADIUS
     from netprotocols.layer7.rip import RIP
@@ -237,6 +238,11 @@ def install(registry: Registry) -> None:
     # an ephemeral port or from 123, and symmetric peers and broadcast
     # servers send from and to 123, so either port finds it.
     add(TABLE_UDP_PORT, 123, NTP)
+    # HSRP (RFC 2281 §5.1): every message is sent from and to port
+    # 1985. HSRPv2 shares the port and is rejected by HSRP.decode() at
+    # its first byte, as Cisco's Op Code 3 Advertise is at its second
+    # (see layer7/hsrp.py).
+    add(TABLE_UDP_PORT, 1985, HSRP)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

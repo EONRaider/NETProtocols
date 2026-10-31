@@ -12,14 +12,15 @@ digest, every RADIUS authenticator a frame holds alone, every STUN
 MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
 below, and every STUN FINGERPRINT. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 367 frames across 34
+frames routinely leave checksums to NIC offload. 379 frames across 35
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-one scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-two scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
-`radius.pcap`, `stun.pcap`, `ntp.pcap`) are captured separately by
+`radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`) are captured
+separately by
 their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
@@ -31,8 +32,9 @@ three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
 server with tftp-hpa and curl clients, a FreeRADIUS server answering
-radclient, coturn answering STUN clients, and a chronyd NTP server
-queried by ntpdig and chronyd clients — see their rows and the notes
+radclient, coturn answering STUN clients, a chronyd NTP server
+queried by ntpdig and chronyd clients, and HSRP messages crafted by
+Yersinia and sent between two netns — see their rows and the notes
 below.
 
 | File | Frames | Contents |
@@ -71,6 +73,7 @@ below.
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and its Access-Accept; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
+| `hsrp.pcap` | 12 | HSRPv1 (RFC 2281) messages crafted by Yersinia 0.8.2, every one to 224.0.0.2 (TTL 1) from and to UDP 1985 with Hellotime 3 and Holdtime 10, staging an election and a failover in two standby groups: group 1 (virtual IP 10.9.195.254, the default authentication data `cisco`) — R1 (10.9.195.11, priority 120) and R2 (10.9.195.12, priority 100) Hellos in Speak, R1 in Standby then Active, R2 in Standby, R1's Resign from Active, R2 in Speak then Active, then R3 (10.9.195.13, priority 200) preempting with a Coup and its Active Hello; group 2 (virtual IP 10.9.195.253, the configured password `spark`) — R4 (10.9.195.21, priority 110) Active and R5 (10.9.195.22, priority 90) Standby — 10 Hellos, 1 Coup, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **direct capture of script-built frames**, every byte Yersinia's (see HSRP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -763,6 +766,54 @@ values are also hard-coded, independently, in
 | user | `np193-user` |
 | its password (PAP and CHAP) | `np193-pass` |
 | the wrong password (PAP, rejected) | `np193-wrong` |
+
+- `hsrp.pcap` was produced by `scripts/capture_fixtures_hsrp.sh`.
+  RFC 2281's HSRP is Cisco's and no open-source router speaks it, so
+  there is no daemon to run between two netns as the other scenarios
+  do. Yersinia 0.8.2's HSRP attack 0 sends one raw HSRPv1 message per
+  invocation, every field set from its command line, and the script
+  runs it twelve times, one invocation per frame, in one netns, out a
+  veth pair whose other end, in a second netns, tcpdump captures on,
+  offload disabled on both ends. **What Yersinia built: every byte of
+  every frame**, the Ethernet, IPv4 and UDP headers and their
+  checksums included (it writes raw frames, so the kernel builds
+  nothing); `check_fixtures` verifies every IPv4 header checksum and
+  UDP checksum in the file. The source MAC addresses are pinned on the
+  command line, since Yersinia randomizes them otherwise, so a
+  re-capture is byte for byte the same but for the pcap record
+  timestamps. Yersinia sets the TTL to 1, as RFC 2281 §5.1 says, the
+  IPv4 identification to 0 and the ToS to 0x10 (DSCP 4) rather than
+  the CS6 a Cisco router uses. The script asserts the twelve frames
+  one by one, by sender, Op Code, State, priority, timers, group,
+  virtual IP, authentication data, addresses, ports, Version and the
+  Reserved and TTL bytes, parsing the pcap with the standard library,
+  and then runs `check_fixtures` over it. HSRP has no checksum of its
+  own, so `check_fixtures` checks each message's fields instead (see
+  `_check_hsrp`): exactly 20 bytes, from and to port 1985, Version 0,
+  a known Op Code and State and, in a Hello, a Holdtime above the
+  Hellotime, which RFC 2281 requires, and, as this corpus's
+  conventions rather than the RFC's, a zero Reserved byte and
+  clear-text Authentication Data. No router's state machine sent these
+  frames: they are a scripted sequence of Hello, Coup and Resign
+  messages, not a faithful run of RFC 2281's state machine (frame 7
+  has R2 go from Standby to Speak after R1's Resign, where §5.7's
+  table takes a Standby router straight to Active), and every sender
+  uses its own MAC address, Active or not, where §6.1 has an Active
+  router send from the group's virtual MAC address
+  (`00:00:0c:07:ac:01` for group 1), and keeps the 3 s / 10 s timers
+  throughout. `tests/test_hsrp.py` therefore builds, as
+  constructed frames, an exchange modelling behaviour reported for
+  Cisco routers (TTL 2, the virtual MAC as the Active router's source,
+  timers moving to 5 s / 15 s on becoming Active, a Coup from Listen
+  preempting the Active router and its Resign), and what neither
+  holds: the Initial and Learn states, HSRPv2, an Op Code 3 Advertise,
+  the MD5 Authentication TLV and other trailers. Nothing in the frames
+  is sensitive: the addresses are in 10.9.195.0/24, the MAC addresses
+  locally administered, and the passwords `cisco` (§5.1's default) and
+  `spark` protect nothing. Everything here is IPv4 and untagged, and
+  no frame carries Ethernet padding or an FCS: a 20-byte HSRP message
+  behind UDP's 8 bytes and IPv4's 20 already fills Ethernet's 46-byte
+  minimum payload, and tcpdump on a veth device captures no FCS.
 
 ## HTTP captures (`tests/fixtures/http/`)
 

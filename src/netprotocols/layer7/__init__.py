@@ -13,6 +13,7 @@ from netprotocols.layer7.dns import (
     MXRecord,
     SOARecord,
 )
+from netprotocols.layer7.hsrp import HSRP
 from netprotocols.layer7.http import (
     HTTP,
     HTTPAnomaly,
@@ -32,6 +33,7 @@ __all__ = [
     "BGP",
     "DHCP",
     "DNS",
+    "HSRP",
     "HTTP",
     "NTP",
     "NTPMAC",

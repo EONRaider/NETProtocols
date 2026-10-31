@@ -279,6 +279,16 @@ def raw_mpls_stack() -> bytes:
 
 
 @pytest.fixture
+def raw_hsrp_hello() -> bytes:
+    """A constructed HSRPv1 Hello (RFC 2281 §5.1's layout): Speak state
+    for group 1 (Hellotime 3, Holdtime 10, priority 100), the default
+    Authentication Data ``cisco`` and virtual IP 192.0.2.1. Built by
+    hand rather than cut from tests/fixtures/hsrp.pcap, so the tests
+    that use it do not depend on the capture."""
+    return bytes.fromhex("000004030a640100636973636f000000c0000201")
+
+
+@pytest.fixture
 def raw_ntp_message() -> bytes:
     """NTPv4 server answer from tests/fixtures/ntp.pcap: chronyd at
     stratum 8 on its local reference (Reference ID 127.127.1.1), the

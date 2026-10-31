@@ -103,6 +103,7 @@ class TestCorpusFiguresInDocs:
             "rip.py",
             "stun.py",
             "ntp.py",
+            "hsrp.py",
             "vrrp.py",
             "bgp.py",
             "mpls.py",

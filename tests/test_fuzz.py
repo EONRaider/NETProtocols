@@ -44,6 +44,7 @@ from netprotocols import (
     DNS,
     ESP,
     GRE,
+    HSRP,
     HTTP,
     IGMP,
     LLC,
@@ -101,6 +102,7 @@ from strategies import (
     bgp_path_attributes,
     bgp_prefixes,
     cdp_pdus,
+    hsrp_messages,
     http_context_responses,
     http_messages,
     http_wire,
@@ -151,6 +153,7 @@ ALL_PROTOCOLS = (
     RIP,
     RADIUS,
     NTP,
+    HSRP,
     VRRP,
     VRRPv6,
     BGP,
@@ -1313,6 +1316,132 @@ class TestNTPAccessorSafety:
         event(f"NTP extension fields: {len(ntp.extension_fields)}")
         event(f"NTP MAC: {None if mac is None else len(bytes(mac))}")
         event(f"NTP remainder: {bool(ntp.remainder)}")
+
+
+#: Constructed HSRP messages, packed by hand rather than cut from
+#: tests/fixtures/hsrp.pcap: every Op Code in every one of RFC 2281's
+#: States, under the default Authentication Data, a configured password
+#: and an empty one, with the recommended timers.
+_HSRP_MESSAGES = [
+    bytes([0, opcode, state, 3, 10, 100, 1, 0]) + auth + bytes([192, 0, 2, 1])
+    for opcode in (0, 1, 2)
+    for state in (0, 1, 2, 4, 8, 16)
+    for auth in (b"cisco\x00\x00\x00", b"spark\x00\x00\x00", bytes(8))
+]
+
+#: The values HSRP.decode() weighs in its first three bytes, the ones
+#: either side of what it accepts among them, and a few others.
+_hsrp_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 8, 15, 16, 17, 255])
+
+
+@st.composite
+def _hsrp_seeded(draw: st.DrawFn) -> bytes:
+    """A constructed HSRP message, now and then a Version, Op Code or
+    State redrawn near the values decode() accepts and a later byte
+    changed, cut anywhere and followed by nothing, an FCS-like 4 bytes
+    or free bytes: the guard's boundaries, which free bytes rarely
+    reach, and every length."""
+    raw = bytearray(draw(st.sampled_from(_HSRP_MESSAGES)))
+    for position in range(3):
+        if draw(st.integers(0, 3)) == 0:
+            raw[position] = draw(_hsrp_lead)
+    if draw(st.booleans()):
+        raw[draw(st.integers(3, 19))] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=40)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+#: HSRP's display accessors, every one of which must answer on any
+#: decoded or constructed instance.
+_HSRP_ACCESSORS = (
+    "opcode_name",
+    "state_name",
+    "password",
+    "auth_data_str",
+    "is_default_auth",
+    "virtual_mac",
+    "header_len",
+)
+
+
+def _hsrp_rejection(data: bytes) -> str | None:
+    """What HSRP.decode() must reject ``data`` for, judged in its order,
+    each once its byte is present: ``"version"`` other than 0, then
+    ``"opcode"`` outside 0-2, then ``"state"`` not one of RFC 2281's
+    six; then ``"truncated"``, shorter than 20 bytes; or ``None``."""
+    if len(data) > 0 and data[0] != 0:
+        return "version"
+    if len(data) > 1 and data[1] > 2:
+        return "opcode"
+    if len(data) > 2 and data[2] not in (0, 1, 2, 4, 8, 16):
+        return "state"
+    return "truncated" if len(data) < 20 else None
+
+
+def _hsrp_decode(data: bytes) -> HSRP | str:
+    """Decode ``data``, or say what HSRP.decode() rejected it for, in
+    :func:`_hsrp_rejection`'s words."""
+    try:
+        return HSRP.decode(data)
+    except TruncatedHeaderError:
+        return "truncated"
+    except InvalidFieldError as error:
+        return str(error.field)
+
+
+class TestHSRPAccessorSafety:
+    @given(data=st.one_of(_hsrp_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for the first reason that applies (a
+        Version other than 0, then an Op Code outside 0-2, then an
+        unknown State, at any length, then too short), takes exactly 20
+        bytes and leaves the rest; the accessors never raise."""
+        hsrp = _hsrp_decode(data)
+        if not isinstance(hsrp, HSRP):
+            assert hsrp == _hsrp_rejection(data)
+            event(f"HSRP rejected: {hsrp}")
+            return
+        assert _hsrp_rejection(data) is None
+        assert bytes(hsrp) == data[:20]
+        assert HSRP.decode(bytes(hsrp)) == hsrp
+        assert hsrp.header_len == 20
+        for name in _HSRP_ACCESSORS:
+            getattr(hsrp, name)
+        assert hsrp.virtual_mac.endswith(f":{hsrp.group:02x}")
+        assert hsrp.password == hsrp.auth_data.rstrip(b"\x00")
+        event(f"HSRP {hsrp.opcode_name} in {hsrp.state_name}")
+
+    @given(header=hsrp_messages(), trailer=st.binary(max_size=60))
+    def test_trailing_bytes_stay_out_of_the_message(
+        self, header: HSRP, trailer: bytes
+    ) -> None:
+        """The message is always 20 bytes, so whatever follows (an FCS,
+        an MD5 Authentication TLV, anything) is left undecoded."""
+        decoded = HSRP.decode(bytes(header) + trailer)
+        assert decoded == header
+        assert decoded.header_len == 20
+
+    @given(
+        opcode=st.integers(3, 0xFF),
+        state=st.integers(0, 0xFF).filter(
+            lambda value: value not in (0, 1, 2, 4, 8, 16)
+        ),
+    )
+    def test_constructed_unknown_values_display(
+        self, opcode: int, state: int
+    ) -> None:
+        """Construction accepts values decode() rejects, and the display
+        helpers name them as unknown rather than raising."""
+        hsrp = HSRP(0, opcode, state, 3, 10, 100, 1, 0, bytes(8), "0.0.0.0")
+        assert hsrp.opcode_name == f"unknown ({opcode})"
+        assert hsrp.state_name == f"unknown ({state})"
+        for name in _HSRP_ACCESSORS:
+            getattr(hsrp, name)
 
 
 #: VRRP's display and per-version accessors, every one of which must
