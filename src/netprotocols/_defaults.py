@@ -124,6 +124,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.dns import DNS, DNSOverTCP
     from netprotocols.layer7.radius import RADIUS
     from netprotocols.layer7.rip import RIP
+    from netprotocols.layer7.stun import STUN
     from netprotocols.layer7.tftp import TFTP
     from netprotocols.layer7.vxlan import VXLAN
 
@@ -227,6 +228,10 @@ def install(registry: Registry) -> None:
     # Dynamic Authorization's 3799 (RFC 5176) are not registered:
     # decode_as adds them per walk.
     register_all(TABLE_UDP_PORT, (1812, 1813), RADIUS, registry=registry)
+    # STUN (RFC 8489 §6, RFC 5389 §7): a server listens on 3478 and a
+    # client sends from an ephemeral port, so the destination-first
+    # lookup finds it in both directions.
+    add(TABLE_UDP_PORT, 3478, STUN)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS
@@ -238,3 +243,8 @@ def install(registry: Registry) -> None:
     # destination-first lookup finds it in both directions. Each message
     # decodes as one layer and chains to the next one in the segment.
     add(TABLE_TCP_PORT, 179, BGP)
+
+    # STUN over TCP (RFC 8489 §6.2.2) has no framing but its own Message
+    # Length, so it is the same class as over UDP, and like BGP chains
+    # to the next message in the segment.
+    add(TABLE_TCP_PORT, 3478, STUN)

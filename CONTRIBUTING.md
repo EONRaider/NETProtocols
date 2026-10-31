@@ -42,14 +42,15 @@ src/netprotocols/
                   display names
   checksum.py     RFC 1071 internet checksum, SCTP's CRC32c, the
                   Fletcher checksum of OSPF's LSAs, compute()/verify()
-                  (CDP's odd-byte variant among them)
+                  (CDP's odd-byte variant and STUN's FINGERPRINT among
+                  them)
   packet.py       Packet: an ordered stack of headers, with_checksums()
   layer2/         Ethernet, VLAN, ARP, LLC + SNAP (802.2), STP (802.1D),
                   LLDP, MPLS, CDP
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
                   GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)
-  layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP, TFTP, RADIUS
+  layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP, TFTP, RADIUS, STUN
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
 scripts/          fixture capture + validation

@@ -338,3 +338,18 @@ def raw_tftp_rrq() -> bytes:
         b"\x00\x01boot.bin\x00octet\x00"
         b"tsize\x000\x00blksize\x001024\x00timeout\x006\x00"
     )
+
+
+@pytest.fixture
+def raw_stun_message() -> bytes:
+    """Binding Success Response from tests/fixtures/stun.pcap: coturn's
+    XOR-MAPPED-ADDRESS and MAPPED-ADDRESS (10.9.194.1:36125),
+    RESPONSE-ORIGIN, SOFTWARE and FINGERPRINT."""
+    return bytes.fromhex(
+        "010100442112a442d6f0c4b3d2008e560d5787f8"
+        "002000080001ac0f2b1b6643"
+        "0001000800018d1d0a09c201"
+        "802b000800010d960a09c202"
+        "80220014436f7475726e2d342e362e312027476f72737427"
+        "80280004d28d393d"
+    )

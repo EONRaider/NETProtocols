@@ -28,6 +28,7 @@ from netprotocols import (
     SCTP,
     SNAP,
     STP,
+    STUN,
     TCP,
     TFTP,
     UDP,
@@ -131,6 +132,7 @@ class TestCorpusCoverage:
             STP,
             CDP,
             TFTP,
+            STUN,
         } <= seen
 
     def test_arp_covers_both_operations(self):

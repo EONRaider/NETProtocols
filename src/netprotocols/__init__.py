@@ -96,6 +96,7 @@ from netprotocols.layer7.http import (
 )
 from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
+from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
 from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
@@ -162,6 +163,7 @@ __all__ = [
     "SCTP",
     "SNAP",
     "STP",
+    "STUN",
     "TCP",
     "TFTP",
     "UDP",
@@ -237,6 +239,8 @@ __all__ = [
     "RegistryConflictError",
     "SCTPChunk",
     "SOARecord",
+    "STUNAddress",
+    "STUNAttribute",
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",

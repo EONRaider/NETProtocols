@@ -482,3 +482,96 @@ class TestTwoByteWidth:
         assert str(excinfo.value) == (
             "_Protocol option value runs past the options bytes"
         )
+
+
+def walk_aligned(raw: bytes, **overrides: object) -> list[tuple[int, bytes]]:
+    """Run the walker in STUN's shape: PIM Hello's, with each value
+    padded to a multiple of 4 bytes (RFC 8489 §14)."""
+    kwargs: dict[str, object] = {"align": 4}
+    kwargs.update(overrides)
+    return walk16(raw, **kwargs)
+
+
+class TestAlignment:
+    @pytest.mark.parametrize("size", range(9))
+    def test_each_value_is_followed_by_its_padding(self, size):
+        """A value of ``size`` bytes is padded by ``-size % 4``, which
+        the walk skips to reach the next option."""
+        value = bytes(range(0xA0, 0xA0 + size))
+        padding = b"\xee" * (-size % 4)
+        raw = b"\x00\x01" + size.to_bytes(2) + value + padding
+        raw += b"\x00\x02\x00\x01\x55\xee\xee\xee"
+        assert walk_aligned(raw) == [(1, value), (2, b"\x55")]
+
+    def test_padding_is_never_yielded_or_inspected(self):
+        """Padding bytes that would read as an option header are
+        skipped all the same."""
+        raw = b"\x00\x01\x00\x01\x55\x00\x09\xff" + b"\x00\x02\x00\x00"
+        assert walk_aligned(raw) == [(1, b"\x55"), (2, b"")]
+
+    def test_alignment_counts_from_the_start_of_raw(self):
+        """Ends at 5, 12 and 17 are padded to 8, 12 and 20."""
+        raw = (
+            b"\x00\x01\x00\x01\x11\x00\x00\x00"
+            + b"\x00\x02\x00\x00"
+            + b"\x00\x03\x00\x01\x33\x00\x00\x00"
+            + b"\x00\x04\x00\x00"
+        )
+        assert walk_aligned(raw) == [
+            (1, b"\x11"),
+            (2, b""),
+            (3, b"\x33"),
+            (4, b""),
+        ]
+
+    @pytest.mark.parametrize("cut", [5, 6, 7])
+    def test_padding_cut_short_ends_the_walk(self, cut):
+        """The last value's padding need not be there whole."""
+        raw = b"\x00\x01\x00\x01\x55\x00\x00\x00"[:cut]
+        assert walk_aligned(raw) == [(1, b"\x55")]
+
+    def test_a_value_running_past_the_buffer_still_raises(self):
+        """Only the value must fit; its padding need not."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            walk_aligned(
+                b"\x00\x01\x00\x01\x55\x00\x00\x00\x00\x02\x00\x05abcd"
+            )
+        err = excinfo.value
+        assert err.offset == 8
+        assert str(err) == "_Protocol option data runs past the header"
+
+    def test_an_error_after_padding_is_offset_past_it(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            walk_aligned(b"\x00\x01\x00\x02\x55\x55\x00\x00\x00\x02")
+        assert excinfo.value.offset == 8
+
+    def test_lone_kinds_are_not_padded(self):
+        """The lone kind is not padded; the option after it, ending at
+        byte 7, is padded to 8, by one byte."""
+        raw = b"\x00\x07\x00\x01\x00\x01\x55\x00"
+        assert walk_aligned(raw, lone_byte_kinds=frozenset({7})) == [
+            (7, b""),
+            (1, b"\x55"),
+        ]
+
+    def test_align_8(self):
+        raw = b"\x00\x01\x00\x01\x55" + bytes(3) + b"\x00\x02\x00\x00"
+        assert walk_aligned(raw, align=8) == [(1, b"\x55"), (2, b"")]
+
+    def test_byte_wide_alignment(self):
+        """Alignment applies to byte-wide options too."""
+        raw = b"\x05\x01\xaa\xff\x06\x00"
+        assert walk(
+            raw,
+            lone_byte_kinds=frozenset(),
+            terminator_kind=None,
+            min_option_length=None,
+            length_includes_header=False,
+            align=2,
+        ) == [(5, b"\xaa"), (6, b"")]
+
+    def test_the_default_pads_nothing(self):
+        assert walk16(b"\x00\x01\x00\x01\x55\x00\x02\x00\x00") == [
+            (1, b"\x55"),
+            (2, b""),
+        ]
