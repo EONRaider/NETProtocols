@@ -861,11 +861,15 @@ STUN below: its first three bytes must be a Version of 0, one of the
 three Op Codes (Hello, Coup, Resign) and one of the six States, which
 18 of the 2^24 values of those bytes are, about one in 932,000, and
 the payload must then hold the whole 20-byte message. Measured the
-same way, every walk to port 1985 ended with `stopped_by` set and none
-decoded an HSRP layer, over 10,000 random 300-byte payloads and 10,000
-of uniformly random length 0-600, padded or not (`random.Random` seeds
-0-2); padding cannot make a message, since a minimum-size frame leaves
-18 bytes after the UDP header. With the Version forced to 0,
+same way (`random.Random` seeds 0-2, each 10,000 random 300-byte
+payloads and 10,000 of uniformly random length 0-600, the latter
+walked both unpadded and padded: 90,000 walks to port 1985 in all), at
+18 in 2^24 a walk about 0.1 walks are expected to decode an HSRP layer
+(0.097), and 2 did: the same 46-byte payload of seed 2, whose first
+bytes, `00 00 04`, are a Hello in Speak, once unpadded and once padded.
+The other 89,998 ended with `stopped_by` set. Padding cannot make a message,
+since a minimum-size frame leaves 18 bytes after the UDP header. With
+the Version forced to 0,
 `HSRP.decode()` accepted 31 of 100,000 random 300-byte payloads
 (`random.Random(0)`), near the 27 expected. Past those three bytes any
 17 are a message: the timers, the Priority, the Group, the Reserved

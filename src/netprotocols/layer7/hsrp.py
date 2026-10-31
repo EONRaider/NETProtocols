@@ -7,7 +7,8 @@ when the Active one stops sending Hellos. RFC 2281 is Informational: it
 documents Cisco's protocol, which Cisco calls version 0 on the wire and
 HSRPv1 everywhere else. Every message is a 20-byte UDP payload, sent
 from and to port 1985, to 224.0.0.2 with TTL 1 (§5.1; some Cisco
-releases send TTL 2), laid out as::
+releases send TTL 2, which decodes the same, since the TTL is IPv4's
+and not HSRP's), laid out as::
 
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -42,11 +43,15 @@ integers, the Authentication Data as its raw 8 bytes and the Virtual IP
 Address as a dotted-decimal string, so
 ``bytes(HSRP.decode(x)) == x[:20]`` holds by construction. The message
 has no length field, and needs none: it is always 20 bytes, so the
-decode contract's rule 3 holds as for any fixed header, and whatever
-follows is left undecoded: an Ethernet FCS a capture kept, or the
-30-byte MD5 Authentication TLV that some Cisco releases append after
-the 20 bytes (Wireshark's packet-hsrp.c reads it when a message is
-exactly 50 bytes long), which is not decoded. Ethernet's padding never
+decode contract's rule 3 holds as for any fixed header. The layer is
+those 20 bytes and nothing more: :attr:`HSRP.header_len` is 20, and
+whatever follows stays outside the layer, after it and past a walk's
+``packet.consumed``, undecoded and not kept, as VRRP and STP leave what
+follows theirs. That is an Ethernet FCS a capture kept, or the 30-byte
+MD5 Authentication TLV that some Cisco releases append after the 20
+bytes (Wireshark's packet-hsrp.c reads it when a message is exactly 50
+bytes long), which is not decoded; a caller who wants it reads it from
+the frame, after ``packet.consumed``. Ethernet's padding never
 reaches HSRP: the 20 bytes, behind UDP's 8 and IPv4's 20, already fill
 Ethernet's 46-byte minimum payload.
 
@@ -64,9 +69,13 @@ another kind is reported as that (``InvalidFieldError``, ``offset`` 0,
 buffer whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States
 pass of the 16,777,216 values the first three bytes can take, so a
 random datagram on port 1985 is rejected all but 18 times in that many
-(about 1 in 932,000), and always when it is shorter than 20 bytes. The
-other fields are not judged: any Hellotime, Holdtime, Priority, Group,
-Reserved byte, Authentication Data and Virtual IP Address decodes.
+(about 1 in 932,000), and always when it is shorter than 20 bytes.
+That is rare, not never: of the 90,000 random walks to port 1985
+ARCHITECTURE.md describes, about 0.1 are expected to decode an HSRP
+layer (90,000 x 18 / 2^24), and 2 did, one 46-byte payload walked both
+unpadded and padded. The other fields are not judged: any Hellotime,
+Holdtime, Priority, Group, Reserved byte, Authentication Data and
+Virtual IP Address decodes.
 
 Two kinds of message on the same port are not HSRPv1, and are rejected
 by that guard rather than misread as it:
