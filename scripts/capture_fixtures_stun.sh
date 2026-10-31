@@ -219,7 +219,9 @@ elif mode == "secure":
         realm, nonce = challenge[0x0014], challenge[0x0015]
         user, password = sys.argv[3].encode(), sys.argv[4].encode()
         # The long-term key (RFC 5389 §15.4): MD5(username:realm:password).
-        key = hashlib.md5(b":".join([user, realm, password])).digest()
+        key = hashlib.md5(
+            b":".join([user, realm, password]), usedforsecurity=False
+        ).digest()
         exchange(
             sock,
             request(

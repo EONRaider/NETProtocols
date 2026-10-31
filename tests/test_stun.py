@@ -63,7 +63,9 @@ SECURE = (8, 9, 10, 11)
 #: The test credential coturn was configured with, published in
 #: MANIFEST.md, and the long-term key it gives (RFC 8489 §9.2.2).
 USERNAME, REALM, PASSWORD = b"npstun", b"np194.test", b"np194-pass"
-LONG_TERM_KEY = hashlib.md5(b"npstun:np194.test:np194-pass").digest()
+LONG_TERM_KEY = hashlib.md5(
+    b"npstun:np194.test:np194-pass", usedforsecurity=False
+).digest()
 
 CLIENT, SERVER = "10.9.194.1", "10.9.194.2"
 COTURN = "Coturn-4.6.1 'Gorst'"

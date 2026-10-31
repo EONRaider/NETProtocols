@@ -813,8 +813,11 @@ def _stun_integrity_verifies(message: bytes, offset: int, mac: bytes) -> bool:
     of the attribute (RFC 8489 §14.5, RFC 5389 §15.4), keyed by the
     long-term key MD5(username ":" realm ":" password) (RFC 8489
     §9.2.2, RFC 5389 §15.4)."""
+    # MD5 is what RFC 8489 §9.2.2 mandates for the long-term key; this
+    # only rebuilds coturn's key from the published test credential.
     key = hashlib.md5(
-        b":".join([_STUN_USERNAME, _STUN_REALM, _STUN_PASSWORD])
+        b":".join([_STUN_USERNAME, _STUN_REALM, _STUN_PASSWORD]),
+        usedforsecurity=False,
     ).digest()
     covered = (
         message[:2] + struct.pack("!H", offset + 24 - 20) + message[4:offset]
