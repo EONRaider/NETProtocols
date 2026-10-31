@@ -16,6 +16,11 @@ PIM Hello options (RFC 7761 §4.9.2) are the same shape with wider
 fields: a 2-byte type and a 2-byte length counting only the value, with
 no lone-byte kinds, no terminator and no length floor. ``width`` covers
 that, and every byte-wide caller keeps the default of ``1``.
+
+STUN attributes (RFC 8489 §14, RFC 5389 §15) are PIM's shape again, but
+each value is padded to a multiple of 4 bytes and the padding is not
+counted in its length. ``align`` covers that, and every other caller
+keeps the default of ``1``, which pads nothing.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ def walk_kind_length_value(
     protocol: type,
     field: str = "options",
     width: int = 1,
+    align: int = 1,
 ) -> Iterator[tuple[int, bytes]]:
     """Walk a TLV-encoded options blob, yielding ``(kind, data)`` pairs
     in wire order.
@@ -69,6 +75,12 @@ def walk_kind_length_value(
         options. Every offset above that says ``2`` is ``2 * width``:
         the header the length does or does not count, the data's start,
         and the structural floor when the length counts the header.
+    :param align: The boundary, counted from the start of ``raw``, that
+        each option's end is padded to before the next one starts:
+        ``4`` for STUN attributes, ``1`` (no padding) for every other
+        caller. The padding is skipped, never yielded or inspected, and
+        padding that ``raw`` ends before completing ends the walk
+        without an error. A lone-byte kind is not padded.
 
     :raises InvalidFieldError: if a kind byte has no following length
         byte, if a length is below ``min_option_length``, or if a
@@ -115,7 +127,7 @@ def walk_kind_length_value(
                 overrun, protocol=protocol, field=field, offset=cursor
             )
         yield kind, raw[cursor + header : end]
-        cursor = end
+        cursor = end + -end % align
 
 
 def _layout(

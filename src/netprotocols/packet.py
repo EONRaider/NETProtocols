@@ -212,6 +212,9 @@ class Packet:
         covers the final bytes of everything that follows it; ``payload``
         is whatever comes after the last layer on the wire. Instances
         are frozen, so layers are rebuilt via :func:`dataclasses.replace`.
+        A STUN message's FINGERPRINT attribute is recomputed when it
+        has one, last; its MESSAGE-INTEGRITY, which needs a key, is
+        left as it is.
         """
         from netprotocols.checksum import compute
         from netprotocols.layer2.cdp import CDP
@@ -223,6 +226,7 @@ class Packet:
         from netprotocols.layer4.sctp import SCTP
         from netprotocols.layer4.tcp import TCP
         from netprotocols.layer4.udp import UDP
+        from netprotocols.layer7.stun import STUN
 
         rebuilt: list[Protocol] = []
         trailing = payload
@@ -241,6 +245,12 @@ class Packet:
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):
                 layer = replace(layer, checksum=compute(layer))
+            elif isinstance(layer, STUN) and layer.fingerprint is not None:
+                # FINGERPRINT is the last 4 bytes of the attributes.
+                fingerprint = compute(layer).to_bytes(4, "big")
+                layer = replace(
+                    layer, attributes=layer.attributes[:-4] + fingerprint
+                )
             rebuilt.append(layer)
             trailing = bytes(layer) + trailing
         return type(self)(*reversed(rebuilt), stopped_by=self.stopped_by)

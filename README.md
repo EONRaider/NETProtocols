@@ -178,6 +178,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
 | 7 | RIP | `RIP` | RFC 1058/2453, RIPv1 and RIPv2 over UDP 520; route entries (`RIPEntry`) and the authentication entry (`RIPAuthentication`: plain-text password, RFC 4822 keyed MD5/HMAC-SHA) parsed on demand; RIPng is not decoded |
 | 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; no reassembly |
+| 7 | STUN | `STUN` | RFC 8489 (and RFC 5389, which it obsoletes), over UDP and TCP 3478; the 20-byte header with its magic cookie verified (RFC 3489 messages, which have none, are rejected), the message type split into class and method by accessors, attributes (`STUNAttribute`) parsed on demand with their 4-byte padding kept raw; MAPPED-ADDRESS and XOR-MAPPED-ADDRESS (`STUNAddress`, un-XORed for IPv4 and IPv6), SOFTWARE, ERROR-CODE, UNKNOWN-ATTRIBUTES; MESSAGE-INTEGRITY kept raw (it needs a key), FINGERPRINT compute/verify; over TCP one layer per message, chaining to the next in the same segment |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
 
 ## Decoding a captured frame

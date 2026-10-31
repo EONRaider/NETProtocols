@@ -2,13 +2,15 @@
 real-capture corpus: every checksummed inbound frame must recompute to
 its captured value. SCTP's CRC32c is tested here too, not in
 test_sctp.py, because this file is in the mutation audit's test
-selection (pyproject.toml's [tool.mutmut]); so is CDP's checksum."""
+selection (pyproject.toml's [tool.mutmut]); so are CDP's checksum and
+STUN's FINGERPRINT."""
 
 import hashlib
 import hmac
 import importlib.util
 import socket
 import struct
+import zlib
 from dataclasses import replace
 from ipaddress import IPv6Address
 from pathlib import Path
@@ -29,6 +31,7 @@ from netprotocols import (
     PIM,
     SCTP,
     SNAP,
+    STUN,
     TCP,
     UDP,
     VRRP,
@@ -44,6 +47,7 @@ from netprotocols import (
     Packet,
     ProtocolError,
     SCTPChunk,
+    STUNAttribute,
     VRRPv6,
     compute,
     crc32c,
@@ -60,6 +64,7 @@ from netprotocols.checksum import (
 )
 from test_corpus import walk
 from test_esp import ESP_KEYS, ICV_LEN, null_esp_payload
+from test_stun import RFC5769_IPV4, RFC5769_IPV6, RFC5769_REQUEST
 from test_vrrp import (
     V6_GROUP,
     V6_SRC,
@@ -277,8 +282,6 @@ class TestCRC32c:
         assert crc32c(memoryview(b"123456789")) == 0xE3069283
 
     def test_is_not_the_ieee_crc(self):
-        import zlib
-
         assert crc32c(b"123456789") != zlib.crc32(b"123456789")
 
 
@@ -2212,3 +2215,180 @@ class TestRoutingIndependentChecker:
         )
         alias = build_frame(routing, RT_FINAL, "2001:db8::77")
         assert self.check(check_fixtures, alias) == ["udp6-checksum"]
+
+
+#: Every STUN message in the corpus, the two TCP segments' two each.
+STUN_MESSAGES = [
+    layer
+    for frame in pcap_frames(FIXTURES / "stun.pcap")
+    for layer in walk(frame)[0]
+    if isinstance(layer, STUN)
+]
+
+
+def stun_with_fingerprint(attributes: bytes, value: bytes = bytes(4)) -> STUN:
+    """A Binding Request of ``attributes`` and then a FINGERPRINT."""
+    return STUN(
+        0x0001,
+        transaction_id=bytes(range(12)),
+        attributes=attributes + bytes(STUNAttribute(STUN.FINGERPRINT, value)),
+    )
+
+
+class TestSTUNFingerprint:
+    """STUN's FINGERPRINT: the IEEE CRC-32 of the message up to the
+    attribute, XORed with 0x5354554E (RFC 8489 §14.7, RFC 5389
+    §15.5)."""
+
+    def test_the_corpus_carries_eleven(self):
+        carrying = [m for m in STUN_MESSAGES if m.fingerprint is not None]
+        assert len(STUN_MESSAGES) == 14
+        assert len(carrying) == 11
+
+    @pytest.mark.parametrize("index", range(14))
+    def test_every_captured_message_verifies(self, index):
+        message = STUN_MESSAGES[index]
+        assert verify(message)
+        if message.fingerprint is not None:
+            assert compute(message) == message.fingerprint
+
+    @pytest.mark.parametrize(
+        ("raw", "wire"),
+        [
+            (RFC5769_REQUEST, 0xE57A3BCF),
+            (RFC5769_IPV4, 0xC07D4C96),
+            (RFC5769_IPV6, 0xC8FB0B4C),
+        ],
+        ids=["request", "ipv4-response", "ipv6-response"],
+    )
+    def test_rfc_5769_vectors(self, raw, wire):
+        message = STUN.decode(raw)
+        assert message.fingerprint == wire
+        assert compute(message) == wire
+        assert verify(message)
+
+    def test_the_crc_is_ieee_crc32_xored(self):
+        """Independently: zlib's CRC-32 of the message but its last 8
+        bytes, XORed with "STUN" in ASCII."""
+        for message in STUN_MESSAGES:
+            if message.fingerprint is not None:
+                assert compute(message) == (
+                    zlib.crc32(bytes(message)[:-8]) ^ int.from_bytes(b"STUN")
+                )
+
+    def test_the_header_and_its_length_are_covered(self):
+        """The CRC covers the 20-byte header, whose Length already
+        counts the FINGERPRINT attribute (RFC 8489 §14.7)."""
+        message = stun_with_fingerprint(bytes(STUNAttribute(0x8022, b"np")))
+        filled = Packet(message).with_checksums()[STUN]
+        assert verify(filled)
+        for change in (
+            replace(filled, message_type=0x0011),
+            replace(filled, transaction_id=bytes(12)),
+            replace(filled, magic_cookie=0x2112A443),
+        ):
+            assert not verify(change)
+            assert compute(change) != filled.fingerprint
+        assert compute(filled) == zlib.crc32(bytes(filled)[:-8]) ^ 0x5354554E
+        assert bytes(filled)[2:4] == (16).to_bytes(2, "big")
+
+    def test_a_flipped_bit_is_detected(self):
+        message = STUN.decode(RFC5769_IPV4)
+        raw = bytearray(bytes(message))
+        raw[24] ^= 0x01
+        assert not verify(STUN.decode(bytes(raw)))
+
+    def test_the_fingerprint_itself_is_excluded(self):
+        message = STUN.decode(RFC5769_IPV6)
+        other = replace(
+            message, attributes=message.attributes[:-4] + b"\xff" * 4
+        )
+        assert compute(other) == compute(message)
+        assert not verify(other)
+
+    def test_ip_and_payload_are_ignored(self):
+        message = STUN.decode(RFC5769_REQUEST)
+        ip = walk(pcap_frames(FIXTURES / "stun.pcap")[1])[0][1]
+        assert compute(message, ip=ip, payload=b"xyz") == compute(message)
+        assert verify(message, ip=ip, payload=b"xyz")
+
+    def test_a_message_without_one_verifies_vacuously(self):
+        message = STUN(0x0001, attributes=bytes(STUNAttribute(0x8022, b"x")))
+        assert verify(message)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            compute(message)
+        err = excinfo.value
+        assert (err.protocol, err.field) == (STUN, "attributes")
+        assert str(err) == (
+            "Computing a STUN fingerprint requires a FINGERPRINT "
+            "attribute, last in the message (RFC 8489 §14.7)"
+        )
+
+    def test_a_fingerprint_that_is_not_last_fails(self):
+        """RFC 8489 §14.7: it must be the last attribute."""
+        message = stun_with_fingerprint(b"")
+        message = Packet(message).with_checksums()[STUN]
+        moved = replace(
+            message,
+            attributes=message.attributes + bytes(STUNAttribute(0x8022, b"x")),
+        )
+        assert moved.fingerprint is None
+        assert not verify(moved)
+        with pytest.raises(InvalidFieldError):
+            compute(moved)
+
+    @pytest.mark.parametrize("value", [b"", b"\x00\x00\x00", bytes(8)])
+    def test_a_fingerprint_of_another_length_fails(self, value):
+        message = stun_with_fingerprint(b"", value)
+        assert message.fingerprint is None
+        assert not verify(message)
+
+    def test_a_fingerprint_behind_a_malformed_attribute(self):
+        """A FINGERPRINT the walk cannot reach is not one, and the
+        message carries none it can verify; one the walk reaches before
+        the malformed attribute is not last."""
+        hidden = STUN(
+            0x0001,
+            attributes=b"\x80\x22\x00\x20"
+            + bytes(STUNAttribute(STUN.FINGERPRINT, bytes(4))),
+        )
+        assert hidden.fingerprint is None
+        assert verify(hidden)
+        early = STUN(
+            0x0001,
+            attributes=bytes(STUNAttribute(STUN.FINGERPRINT, bytes(4)))
+            + b"\x80\x22\x00\x20",
+        )
+        assert early.fingerprint is None
+        assert not verify(early)
+
+    def test_with_checksums_fills_a_built_message(self):
+        built = stun_with_fingerprint(bytes(STUNAttribute(0x8022, b"np")))
+        filled = Packet(built).with_checksums()
+        message = filled[STUN]
+        assert message.attributes[:-4] == built.attributes[:-4]
+        assert message.fingerprint == compute(built)
+        assert verify(message)
+
+    def test_with_checksums_fills_stun_before_udp(self):
+        """Innermost first: the UDP checksum covers the filled message."""
+        frame = pcap_frames(FIXTURES / "stun.pcap")[1]
+        layers = walk(frame)[0]
+        eth, ip, udp, message = layers
+        zeroed = Packet(
+            eth,
+            ip,
+            replace(udp, checksum=0),
+            replace(message, attributes=message.attributes[:-4] + bytes(4)),
+        )
+        assert bytes(zeroed.with_checksums()) == frame
+
+    def test_with_checksums_leaves_the_rest_alone(self):
+        """No FINGERPRINT: nothing to fill; MESSAGE-INTEGRITY, keyed,
+        is never touched."""
+        plain = STUN(0x0001, attributes=bytes(STUNAttribute(0x8022, b"x")))
+        assert Packet(plain).with_checksums()[STUN] == plain
+        signed = STUN_MESSAGES[-1]
+        assert signed.message_integrity is not None
+        refilled = Packet(signed).with_checksums()[STUN]
+        assert refilled == signed

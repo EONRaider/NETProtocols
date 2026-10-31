@@ -38,6 +38,7 @@ from netprotocols import (
     SCTP,
     SNAP,
     STP,
+    STUN,
     VLAN,
     VRRP,
     VXLAN,
@@ -71,6 +72,7 @@ from netprotocols import (
     PIMRegisterStop,
     Protocol,
     SCTPChunk,
+    STUNAttribute,
     VRRPv6,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
@@ -796,6 +798,34 @@ def rip_messages(draw: st.DrawFn) -> RIP:
 
 
 @st.composite
+def stun_messages(draw: st.DrawFn) -> STUN:
+    # Canonical messages only: the magic cookie, and attributes whose
+    # bytes are a multiple of 4, which decode() requires (the
+    # constructor does not; test_stun.py covers those). Built from
+    # attributes, so the walk usually succeeds, or else free bytes.
+    attributes = draw(
+        st.one_of(
+            st.lists(
+                st.builds(
+                    STUNAttribute,
+                    st.integers(0, 0xFFFF),
+                    st.binary(max_size=_MAX_BLOB),
+                ),
+                max_size=4,
+            ).map(lambda found: b"".join(map(bytes, found))),
+            st.binary(max_size=_MAX_BLOB).map(
+                lambda raw: raw[: len(raw) - len(raw) % 4]
+            ),
+        )
+    )
+    return STUN(
+        message_type=draw(st.integers(0, 0x3FFF)),
+        transaction_id=draw(st.binary(min_size=12, max_size=12)),
+        attributes=attributes,
+    )
+
+
+@st.composite
 def pim_family_addresses(draw: st.DrawFn) -> tuple[int, str]:
     """A PIM address family and an address of it (RFC 7761 §4.9.1)."""
     if draw(st.booleans()):
@@ -937,5 +967,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "VXLAN": vxlan_headers(),
     "OSPF": ospf_packets(),
     "RIP": rip_messages(),
+    "STUN": stun_messages(),
     "BGP": bgp_messages(),
 }

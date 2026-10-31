@@ -123,6 +123,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
     from netprotocols.layer7.rip import RIP
+    from netprotocols.layer7.stun import STUN
     from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
@@ -212,6 +213,10 @@ def install(registry: Registry) -> None:
     # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
     # answer a Request from another port back to it, from 520.
     add(TABLE_UDP_PORT, 520, RIP)
+    # STUN (RFC 8489 §6, RFC 5389 §7): a server listens on 3478 and a
+    # client sends from an ephemeral port, so the destination-first
+    # lookup finds it in both directions.
+    add(TABLE_UDP_PORT, 3478, STUN)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS
@@ -223,3 +228,8 @@ def install(registry: Registry) -> None:
     # destination-first lookup finds it in both directions. Each message
     # decodes as one layer and chains to the next one in the segment.
     add(TABLE_TCP_PORT, 179, BGP)
+
+    # STUN over TCP (RFC 8489 §6.2.2) has no framing but its own Message
+    # Length, so it is the same class as over UDP, and like BGP chains
+    # to the next message in the segment.
+    add(TABLE_TCP_PORT, 3478, STUN)
