@@ -54,8 +54,8 @@ The magic cookie and RFC 3489
 The Magic Cookie is always ``0x2112A442`` (:attr:`STUN.MAGIC_COOKIE`).
 RFC 3489, the first STUN, had a 128-bit transaction ID there instead;
 RFC 5389 §6 carved the cookie out of it so that a receiver can tell the
-revised protocol from the classic one, and RFC 5389 §12 and RFC 8489
-Appendix B describe how a server still answers a classic client.
+revised protocol from the classic one, and RFC 5389 §12, which RFC
+8489 §11 keeps, describes how a server still answers a classic client.
 :meth:`STUN.decode` verifies the cookie and rejects a message without
 it (:class:`~netprotocols.InvalidFieldError`, ``field``
 ``"magic_cookie"``): an RFC 3489 message, whose random transaction ID
@@ -679,7 +679,7 @@ class STUN(Protocol):
 
     @property
     def unknown_attributes(self) -> tuple[int, ...] | None:
-        """UNKNOWN-ATTRIBUTES' types (RFC 8489 §14.9), or ``None``.
+        """UNKNOWN-ATTRIBUTES' types (RFC 8489 §14.13), or ``None``.
 
         A trailing odd byte is not a type, and is left out.
         """
