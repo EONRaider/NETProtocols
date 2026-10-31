@@ -23,6 +23,7 @@ from netprotocols.layer7.http import (
 )
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
+from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
@@ -32,6 +33,7 @@ __all__ = [
     "HTTP",
     "RIP",
     "STUN",
+    "TFTP",
     "VXLAN",
     "BGPOptionalParameter",
     "BGPPathAttribute",

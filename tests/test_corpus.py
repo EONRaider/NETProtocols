@@ -29,6 +29,7 @@ from netprotocols import (
     STP,
     STUN,
     TCP,
+    TFTP,
     UDP,
     VLAN,
     VRRP,
@@ -128,6 +129,7 @@ class TestCorpusCoverage:
             MPLS,
             STP,
             CDP,
+            TFTP,
             STUN,
         } <= seen
 

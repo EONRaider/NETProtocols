@@ -318,6 +318,16 @@ def raw_lldp_shutdown() -> bytes:
 
 
 @pytest.fixture
+def raw_tftp_rrq() -> bytes:
+    """RRQ from ``tftp.pcap``: curl asking for ``boot.bin`` in octet
+    mode with options tsize 0, blksize 1024 and timeout 6."""
+    return (
+        b"\x00\x01boot.bin\x00octet\x00"
+        b"tsize\x000\x00blksize\x001024\x00timeout\x006\x00"
+    )
+
+
+@pytest.fixture
 def raw_stun_message() -> bytes:
     """Binding Success Response from tests/fixtures/stun.pcap: coturn's
     XOR-MAPPED-ADDRESS and MAPPED-ADDRESS (10.9.194.1:36125),
