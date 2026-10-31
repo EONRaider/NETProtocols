@@ -1057,8 +1057,9 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
 
-11 stdlib imports; `socket` used for exactly four
-`inet_pton`/`inet_ntop` calls (`_base.py:55-70`) and no socket ever
+15 stdlib modules imported (`__future__` and the type-checking-only
+`_typeshed` aside); `socket` used for exactly two
+`inet_pton`/`inet_ntop` calls (`_base.py:200-205`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
 
@@ -1129,37 +1130,42 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:70-75` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 293
-frames**, across 30 scenarios captured with tcpdump over real kernel
+`tests/test_corpus.py:85-90` asserts `bytes(layer) ==
+frame[cursor:cursor+layer.header_len]` for **every layer of all 367
+frames**, across 34 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
 script-built MPLS label stacks around kernel-built datagrams, lldpd
-LLDP agents, and Linux STP bridges with lldpd speaking CDP over IEEE
-802.3 LLC/SNAP framing. Every frame's checksums (SCTP's CRC32c,
-VRRP's, PIM's, CDP's, and OSPF's packet and LSA checksums included),
-every ESP and AH ICV, and every RIPv2 and OSPF keyed-MD5 digest verify
-internally (`scripts/check_fixtures.py`).
+LLDP agents, Linux STP bridges with lldpd speaking CDP over IEEE
+802.3 LLC/SNAP framing, a tftpd-hpa server with tftp-hpa and curl
+clients, a FreeRADIUS server answering radclient, coturn answering
+STUN clients, and a chronyd NTP server queried by ntpdig and chronyd
+clients. Every frame's checksums (SCTP's CRC32c, VRRP's, PIM's, CDP's,
+and OSPF's packet and LSA checksums included), every ESP and AH ICV,
+every RIPv2 and OSPF keyed-MD5 digest, every RADIUS authenticator a
+frame holds alone, every STUN MESSAGE-INTEGRITY and FINGERPRINT, and
+every NTP MAC verify internally (`scripts/check_fixtures.py`).
 
 ### 5.2 "Property-based fuzzing of every decoder"
 **Status: VERIFIED**
 
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
-that six TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
-`RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s, `STP`'s and
-`CDP`'s accessors never raise at all, and that
-`bytes(decode(x)) == x` is Hypothesis-generated for **all 36**
+that eight TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
+`RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s, `STP`'s,
+`CDP`'s, `TFTP`'s and `NTP`'s accessors never raise at all, and that
+`bytes(decode(x)) == x` is Hypothesis-generated for **all 40**
 protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 32 without a hand-written one (#97 added the first
+property over the 36 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
 `AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
 21st and 22nd, `RIP` the 23rd, `OSPF` the 24th, `PIM`
 the 25th, `BGP` the 26th, `MPLS` the 27th, `LLDP` the 28th, `LLC` and `SNAP` the 29th and
-30th, `STP` the 31st, `CDP` the 32nd). Reproduce:
+30th, `STP` the 31st, `CDP` the 32nd, `TFTP` the 33rd, `RADIUS` the
+34th, `STUN` the 35th, `NTP` the 36th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -1182,8 +1188,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-5,023 statements, 1 missed (99.98%; re-measured 2026-10-28, after
-CDP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+5,830 statements, 1 missed (99.98%; re-measured 2026-10-31, after
+NTP, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
@@ -1233,7 +1239,7 @@ same public `register()` a third party calls
 (`src/netprotocols/_defaults.py`), so there is no privileged path and
 nothing to fall out of sync.
 
-Reproduce: `uv run pytest tests/test_registry.py` — 40 tests covering
+Reproduce: `uv run pytest tests/test_registry.py` — 66 tests covering
 registration, conflict handling, table inheritance and isolation from
 the process-wide default.
 
@@ -1391,8 +1397,9 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 60 raise sites in the library
-(verified by an AST sweep during development, not just by eye); `field`
+`protocol` is set at every one of the 203 raise sites in the library
+but `random_mac`'s (`utils/mac.py`), which belongs to no protocol
+(verified by an AST sweep, not just by eye); `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
 a single attribute to name. `offset` is honestly scoped: relative to
 the `decode()` buffer for a fixed-header error, relative to the
