@@ -31,6 +31,7 @@ from netprotocols import (
     LLDP,
     LLDPTLV,
     MPLS,
+    NTP,
     OSPF,
     OSPFLSA,
     PIM,
@@ -992,6 +993,30 @@ def pim_headers(draw: st.DrawFn) -> PIM:
     )
 
 
+@st.composite
+def ntp_messages(draw: st.DrawFn) -> NTP:
+    # The body is kept raw whatever it holds, so it is drawn as free
+    # bytes: extension fields, a MAC, a remainder. decode() rejects a
+    # version outside 1-4 and modes 6 and 7 (the constructor does not;
+    # test_ntp.py covers those).
+    return NTP(
+        leap=draw(st.integers(0, 3)),
+        version=draw(st.integers(1, 4)),
+        mode=draw(st.integers(0, 5)),
+        stratum=draw(st.integers(0, 0xFF)),
+        poll=draw(st.integers(-128, 127)),
+        precision=draw(st.integers(-128, 127)),
+        root_delay=draw(st.integers(0, 0xFFFFFFFF)),
+        root_dispersion=draw(st.integers(0, 0xFFFFFFFF)),
+        reference_id=draw(st.integers(0, 0xFFFFFFFF)),
+        reference_timestamp=draw(st.integers(0, (1 << 64) - 1)),
+        origin_timestamp=draw(st.integers(0, (1 << 64) - 1)),
+        receive_timestamp=draw(st.integers(0, (1 << 64) - 1)),
+        transmit_timestamp=draw(st.integers(0, (1 << 64) - 1)),
+        body=draw(st.binary(max_size=_MAX_BLOB * 2)),
+    )
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -1031,5 +1056,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "TFTP": tftp_messages(),
     "RADIUS": radius_packets(),
     "STUN": stun_messages(),
+    "NTP": ntp_messages(),
     "BGP": bgp_messages(),
 }

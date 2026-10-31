@@ -94,6 +94,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
 from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
@@ -155,6 +156,8 @@ __all__ = [
     "LLDPTLV",
     "MAX_DEPTH",
     "MPLS",
+    "NTP",
+    "NTPMAC",
     "OSPF",
     "OSPFLSA",
     "PIM",
@@ -214,6 +217,7 @@ __all__ = [
     "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
+    "NTPExtensionField",
     "OSPFDatabaseDescription",
     "OSPFHello",
     "OSPFLSAHeader",

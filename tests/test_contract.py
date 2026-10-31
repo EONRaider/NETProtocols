@@ -13,6 +13,7 @@ from netprotocols import (
     LLC,
     LLDP,
     MPLS,
+    NTP,
     OSPF,
     PIM,
     RADIUS,
@@ -60,6 +61,7 @@ class TestTruncation:
             (TFTP, "raw_tftp_rrq"),
             (RADIUS, "raw_radius_status_server"),
             (STUN, "raw_stun_message"),
+            (NTP, "raw_ntp_message"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
             (BGP, "raw_bgp_keepalive"),
@@ -233,6 +235,29 @@ class TestDamagedPayload:
         rip = packet[RIP]
         assert len(rip.entries) == (len(raw) - 4) // 20
         assert rip.remainder == raw[4 + 20 * len(rip.entries) :]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "trailer",
+        [
+            pytest.param(b"\xde\xad", id="short"),
+            pytest.param(b"\xde\xad\xbe\xef" * 3, id="not-a-mac"),
+        ],
+    )
+    def test_ntp_keeps_what_follows_its_header(
+        self, raw_ntp_message, trailer, lax
+    ):
+        """NTP has no length field either: past its 48-byte header it
+        keeps everything, and bytes that are neither an extension field
+        nor a MAC are reported as a remainder, not raised."""
+        raw = raw_ntp_message + trailer
+        packet = decode_frame(raw, start=NTP, lax=lax)
+        assert [type(layer) for layer in packet] == [NTP]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw
+        ntp = packet[NTP]
+        assert (ntp.extension_fields, ntp.mac) == ((), None)
+        assert ntp.remainder == trailer
 
 
 class TestDecodeInputs:

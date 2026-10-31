@@ -102,6 +102,7 @@ class TestCorpusFiguresInDocs:
             "sctp.py",
             "rip.py",
             "stun.py",
+            "ntp.py",
             "vrrp.py",
             "bgp.py",
             "mpls.py",

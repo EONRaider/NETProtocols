@@ -279,6 +279,18 @@ def raw_mpls_stack() -> bytes:
 
 
 @pytest.fixture
+def raw_ntp_message() -> bytes:
+    """NTPv4 server answer from tests/fixtures/ntp.pcap: chronyd at
+    stratum 8 on its local reference (Reference ID 127.127.1.1), the
+    48-byte header alone, no extension field or MAC."""
+    return bytes.fromhex(
+        "240800e700000000000000007f7f0101"
+        "ee903023f016af37ee90302594864000"
+        "ee90302594d55999ee90302594f33bb4"
+    )
+
+
+@pytest.fixture
 def raw_rip_message() -> bytes:
     """RIPv2 Response from tests/fixtures/rip.pcap: the header and four
     route entries (10.20.2.0/24, 10.20.1.0/24, 10.20.3.128/25 and

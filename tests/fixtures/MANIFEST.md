@@ -8,19 +8,19 @@ pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
-digest, every RADIUS authenticator a frame holds alone and every STUN
-MESSAGE-INTEGRITY, with the test keys published below, and every STUN
-FINGERPRINT. Frames
+digest, every RADIUS authenticator a frame holds alone, every STUN
+MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
+below, and every STUN FINGERPRINT. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 350 frames across 33
+frames routinely leave checksums to NIC offload. 367 frames across 34
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-one scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
-`radius.pcap`, `stun.pcap`) are captured separately by their own
-`scripts/capture_fixtures_*.sh` over
+`radius.pcap`, `stun.pcap`, `ntp.pcap`) are captured separately by
+their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
@@ -31,8 +31,9 @@ three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
 server with tftp-hpa and curl clients, a FreeRADIUS server answering
-radclient, and coturn answering STUN clients — see their rows and the
-notes below.
+radclient, coturn answering STUN clients, and a chronyd NTP server
+queried by ntpdig and chronyd clients — see their rows and the notes
+below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -69,6 +70,7 @@ notes below.
 | `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST BPDU, which `tests/test_stp.py` builds by hand); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and its Access-Accept; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
+| `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -670,6 +672,57 @@ attribute, the header's Length counting up to the attribute's end. A
 message carrying another USERNAME, or a MESSAGE-INTEGRITY-SHA256,
 which it does not compute, fails. The credential is also hard-coded,
 independently, in `scripts/check_fixtures.py` and `tests/test_stun.py`.
+
+- `ntp.pcap` was produced by `scripts/capture_fixtures_ntp.sh`: a
+  chronyd 4.5 server (`local stratum 8`, `allow all`, a keyfile and a
+  throwaway NTS certificate, all in a scratch directory) in one netns
+  over a veth pair, and clients in the other: ntpdig from ntpsec, plain
+  and with each published key, then chronyd with `-Q`, which only
+  measures, as an NTPv3 client (`version 3`), with `extfield F323`
+  and with `nts`, then chronyd as a symmetric active peer, then the
+  server restarted with `broadcast`. Every chronyd runs with `-x`, so
+  none touches the system clock. tcpdump captures `udp port 123` on the
+  server's side of the pair, offload disabled on both ends, one scratch
+  file per scenario, and the script keeps a fixed selection and asserts
+  it exactly (sender, version, mode, stratum and length after the
+  header): per client scenario the first request and the server's
+  answer to it, found by its Origin Timestamp, which is the request's
+  Transmit Timestamp (RFC 5905 §8); the peer's first packet at stratum
+  0 and its first at stratum 9, each with the answer; and the first
+  broadcast. The NTS-KE handshake that precedes the NTS exchange runs
+  over TCP 4460 and is left out by the filter. **chronyd and ntpdig
+  built every NTP byte**, MACs, extension fields and NTS cookies
+  included; **the kernel built the UDP header** (its checksum computed
+  in software, and verified by `check_fixtures`), **the IPv4 header and
+  the Ethernet header**. `check_fixtures` also walks every NTPv4
+  message's extension fields (RFC 7822 §3's Length rules) and verifies
+  each MAC with the published keys: the digest of the key followed by
+  the message before the MAC, which ntpdig's requests and chronyd's
+  answers both compute that way. ntpdig puts the current time in its
+  Transmit Timestamp, so `tests/test_ntp.py` holds its conversion
+  against the pcap timestamps; chrony's client puts random bits there,
+  which its server echoes. A re-capture differs in every timestamp, the
+  random Transmit Timestamps, the NTS keys, cookies and ciphertext, the
+  digests, the IPv4 identification and the client's source ports.
+  Everything here is IPv4 (the container's kernel had IPv6 disabled).
+  No frame carries Ethernet padding, and none could: the 48-byte NTP
+  header behind IPv4's 20 bytes and UDP's 8 already fills Ethernet's
+  46-byte minimum payload. No frame carries an FCS either, since
+  tcpdump on a veth device captures none. `tests/test_ntp.py` builds
+  the trailers, a crypto-NAK, a Kiss-o'-Death and the control messages
+  the decoder rejects (an ntpq mode 6 request and response, and mode 7
+  requests of 48 and 192 bytes), none of which these daemons send.
+
+### NTP test keys
+
+Published so anyone can verify the captures: these keys protect
+nothing. `check_fixtures` and `tests/test_ntp.py` both hard-code them,
+independently, and verify every MAC in `ntp.pcap` with them.
+
+| Key ID | Algorithm | Key (ASCII) |
+|---|---|---|
+| 1 | MD5 | `np191-md5-key` |
+| 2 | SHA-1 | `np191-sha1-key` |
 
 ### RIP test keys
 

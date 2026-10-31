@@ -214,6 +214,19 @@ raises. Ethernet's zero padding reaches only a message with no entries,
 since one entry already fills the minimum frame. See
 [`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
 
+`NTP` is the same case: after its 48-byte header come NTPv4 extension
+fields (RFC 7822) and a MAC, both optional, up to the end of the UDP
+datagram, which nothing in the message bounds. It keeps the whole
+buffer after the header, so `bytes(NTP.decode(x)) == x`, and its
+accessors split it: extension fields until what is left has a MAC's
+length (4, 20 or 24 bytes, the rule RFC 7822 §3's minimum field length
+is there for), then the MAC, and anything else as `remainder`. A
+4-byte Ethernet FCS after a plain message has a crypto-NAK's length,
+and only the UDP length could tell them apart. Past the header
+neither `decode()` nor any accessor raises, and Ethernet's padding
+never reaches it: the header alone fills the minimum frame. See
+[`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)'s module docstring.
+
 `TFTP` has no length field either, but most of its messages bound
 themselves: an ACK is 4 bytes, an ERROR ends at the zero byte after its
 message, and a request or an OACK after its last whole option pair, a
@@ -482,6 +495,7 @@ flowchart LR
   U -->|520| R[RIP]
   U -->|69, the request only| TF[TFTP]
   U -->|1812, 1813| RAD[RADIUS]
+  U -->|123| NT[NTP]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
   U -->|3478| STUN[STUN message]
@@ -818,6 +832,29 @@ transfer is the caller's, as reassembly is for `HTTP` and `BGP`. A
 server that answers from port 69 itself, which RFC 1350 does not allow,
 has its replies dispatched by the source-port fallback.
 
+NTP on UDP 123 (RFC 5905) rejects less: of the first byte's 256
+values, 96 are a time message, a version from 1 to 4 and a mode other
+than 6 or 7, the control messages (RFC 9327's mode 6, ntpd's private
+mode 7) whose headers `NTP.decode()` does not read; anything shorter
+than the 48-byte header is rejected too. Measured the same way, the
+walk stopped for 61.2-62.9% of the 300-byte payloads (`random.Random`
+seeds 0-2), against the 62.5% the first byte predicts, and for
+65.5-66.3% of the 0-600 byte ones, padded or not: padding never makes
+a payload 48 bytes long. Past the first byte any 47 bytes are a
+header, and the stratum, the Reference ID and the timestamps are not
+judged, so a Kiss-o'-Death and a reserved stratum decode.
+
+The first byte is judged before the length, so every control message
+raises `InvalidFieldError` with `field` `"mode"`, however long, and a
+bad version raises with `field` `"version"`; only a time message's
+first byte, or an empty buffer, can end in `TruncatedHeaderError`.
+That makes real traffic fail a strict walk: `ntpq` (mode 6, a 12-byte
+request and longer responses) and `ntpdc` (mode 7) talk to port 123,
+and `decode_frame()` raises on every one of their messages. Walk them
+with `lax=True`, which keeps Ethernet, IP and UDP and reports the
+rejection as `stopped_by`. A typed way to take a port out of dispatch for one
+walk, and decoding mode 6, are planned follow-ups.
+
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
 bytes match once in 2^128, and then a Length and Type whose bounds
@@ -1046,7 +1083,8 @@ src/netprotocols/
 │                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages),
 │                   tftp.py (TFTP, with RFC 2347 options),
 │                   radius.py (RADIUS + RADIUSAttribute),
-│                   stun.py (STUN messages, over UDP and TCP)
+│                   stun.py (STUN messages, over UDP and TCP),
+│                   ntp.py (NTPv1-v4 time messages)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

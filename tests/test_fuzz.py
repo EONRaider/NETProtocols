@@ -50,6 +50,7 @@ from netprotocols import (
     LLDP,
     LLDPTLV,
     MPLS,
+    NTP,
     OSPF,
     PIM,
     RADIUS,
@@ -91,6 +92,7 @@ from netprotocols import (
     RIPEntry,
     SCTPChunk,
     TCPOption,
+    TruncatedHeaderError,
     VRRPv6,
     decode_frame,
 )
@@ -148,6 +150,7 @@ ALL_PROTOCOLS = (
     OSPF,
     RIP,
     RADIUS,
+    NTP,
     VRRP,
     VRRPv6,
     BGP,
@@ -1200,6 +1203,116 @@ class TestSTUNAccessorSafety:
         assert cursor == stun.length
         event(f"STUN fingerprint: {stun.fingerprint is not None}")
         event(f"STUN attributes: {min(len(attributes), 3)}")
+
+
+#: The captured NTP messages, every one past its UDP header.
+_NTP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "ntp.pcap")]
+
+#: The extension field Lengths and MAC Key IDs a walk has to weigh,
+#: and bytes of either, so that small alphabets reach them.
+_ntp_tail = st.lists(
+    st.sampled_from([0, 0, 0x10, 0x14, 0x18, 0x1C, 0x24, 0x01, 0x04, 0xFF]),
+    max_size=80,
+).map(bytes)
+
+
+@st.composite
+def _ntp_seeded(draw: st.DrawFn) -> bytes:
+    """A captured NTP message, a few bytes after the header changed,
+    cut anywhere past it and followed by nothing, an FCS-like 4 bytes
+    or bytes from a small alphabet: real extension fields and MACs,
+    with Lengths and remainders that free bytes rarely reach."""
+    raw = bytearray(draw(st.sampled_from(_NTP_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        if len(raw) > 48:
+            position = draw(st.integers(48, len(raw) - 1))
+            raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(48, len(raw)))
+    tail = draw(
+        st.one_of(st.just(b""), st.just(b"\xde\xad\xbe\xef"), _ntp_tail)
+    )
+    return bytes(raw[:cut]) + tail
+
+
+#: NTP's display accessors, every one of which must answer on any
+#: decoded instance.
+_NTP_ACCESSORS = (
+    "leap_name",
+    "mode_name",
+    "stratum_name",
+    "poll_seconds",
+    "precision_seconds",
+    "root_delay_seconds",
+    "root_dispersion_seconds",
+    "kiss_code",
+    "reference_id_str",
+    "reference_time",
+    "origin_time",
+    "receive_time",
+    "transmit_time",
+)
+
+
+def _ntp_rejection(data: bytes) -> str | None:
+    """What NTP.decode() must reject ``data`` for, judged in its order:
+    ``"version"`` outside 1-4, then ``"mode"`` 6 or 7, at any length;
+    then ``"truncated"``, shorter than 48 bytes; or ``None``."""
+    if data:
+        version, mode = (data[0] >> 3) & 7, data[0] & 7
+        if not 1 <= version <= 4:
+            return "version"
+        if mode in (6, 7):
+            return "mode"
+    return "truncated" if len(data) < 48 else None
+
+
+def _ntp_decode(data: bytes) -> NTP | str:
+    """Decode ``data``, or say what NTP.decode() rejected it for, in
+    :func:`_ntp_rejection`'s words."""
+    try:
+        return NTP.decode(data)
+    except TruncatedHeaderError:
+        return "truncated"
+    except InvalidFieldError as error:
+        return str(error.field)
+
+
+def _assert_ntp_body_tiles(ntp: NTP) -> None:
+    """The extension fields, the MAC and the remainder tile the body,
+    and every field the walk accepted keeps RFC 7822's Length rules."""
+    fields, mac = ntp.extension_fields, ntp.mac
+    tiled = b"".join(bytes(field) for field in fields)
+    tiled += (bytes(mac) if mac is not None else b"") + ntp.remainder
+    assert tiled == ntp.body
+    assert mac is None or not ntp.remainder
+    assert ntp.version == 4 or not fields
+    for field in fields:
+        assert len(bytes(field)) >= 16 and len(bytes(field)) % 4 == 0
+        assert field.type_name
+
+
+class TestNTPAccessorSafety:
+    @given(data=st.one_of(_ntp_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only on the 48-byte header, for the first
+        reason that applies (a version outside 1-4, then mode 6 or 7,
+        at any length, then too short), and keeps every byte after it;
+        the accessors never raise, and the extension fields, the MAC
+        and the remainder tile the body exactly."""
+        ntp = _ntp_decode(data)
+        if not isinstance(ntp, NTP):
+            assert ntp == _ntp_rejection(data)
+            return
+        assert _ntp_rejection(data) is None
+        assert bytes(ntp) == data
+        assert NTP.decode(bytes(ntp)) == ntp
+        _assert_ntp_body_tiles(ntp)
+        for name in _NTP_ACCESSORS:
+            getattr(ntp, name)
+        mac = ntp.mac
+        event(f"NTP extension fields: {len(ntp.extension_fields)}")
+        event(f"NTP MAC: {None if mac is None else len(bytes(mac))}")
+        event(f"NTP remainder: {bool(ntp.remainder)}")
 
 
 #: VRRP's display and per-version accessors, every one of which must
