@@ -6,7 +6,7 @@ alerts never reach the Security tab, drop too little (or nothing, on
 SARIF it misreads) and the RFC-mandated MD5 in tests/ and scripts/
 turns every pull request red again. Each half gets its own tests here.
 
-tests/fixtures/codeql/python.sarif is unedited CodeQL CLI 2.27.3 output
+tests/fixtures/codeql/python.sarif is CodeQL CLI 2.27.3 output
 (the version the pinned CodeQL Action ran when this was written),
 produced the way the action runs it: ``database analyze`` with
 ``--format=sarif-latest --sarif-add-baseline-file-info
@@ -16,6 +16,9 @@ four-file scratch tree laid out like this repository (RADIUS MD5 in
 tests/, a CHAP vector under a directory with a space in its name, a
 checker in scripts/, password hashing in src/) and two queries:
 py/weak-sensitive-data-hashing and py/clear-text-logging-sensitive-data.
+Two host details are scrubbed and nothing else: the CLI's install
+directory in ``tool.extensions`` (now ``file:///path/to/codeql/``) and
+the kernel version in the ``cli/platform`` notification (now ``0.0.0``).
 """
 
 import copy
@@ -284,6 +287,8 @@ KEPT_LOCATIONS = {
         "uri": f"file://buildhost{CHECKOUT}/tests/test_radius.py"
     },
     "https": {"uri": "https://example.com/tests/test_radius.py"},
+    "http-no-host": {"uri": "http:tests/test_radius.py"},
+    "other-scheme-no-host": {"uri": "git:scripts/check_fixtures.py"},
     "unknown-base-id": {"uri": "tests/x.py", "uriBaseId": "%SYSROOT%"},
     "no-uri": {"index": 3},
     "the-checkout-itself": {"uri": f"file://{CHECKOUT}"},
@@ -500,6 +505,41 @@ class TestMain:
         assert sarif_filter.main([str(tmp_path)]) == 1
         assert sarif.read_bytes() == content
         assert capsys.readouterr().err.startswith(f"FAIL: {sarif}: ")
+
+    def test_files_in_subdirectories_are_filtered_too(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif uploads every ``*.sarif`` under the directory,
+        at any depth, so the filter must reach each one of them."""
+        nested = tmp_path / "python" / "more"
+        nested.mkdir(parents=True)
+        (tmp_path / "a.sarif").write_bytes(FIXTURE.read_bytes())
+        (nested / "b.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        expected = fixture()
+        sarif_filter.filter_log(expected, CHECKOUT)
+        for sarif in (tmp_path / "a.sarif", nested / "b.sarif"):
+            assert json.loads(sarif.read_text()) == expected, sarif
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(":")[0] for line in lines] == [
+            "a.sarif",
+            "b.sarif",
+        ]
+
+    def test_a_directory_with_sarif_only_in_a_subdirectory_is_filtered(
+        self, tmp_path: Path
+    ) -> None:
+        nested = tmp_path / "python"
+        nested.mkdir()
+        (nested / "python.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        results = json.loads((nested / "python.sarif").read_text())["runs"][0][
+            "results"
+        ]
+        assert [primary(r)[1] for r in results] == [
+            "src/netprotocols/auth.py",
+            "tests/test_radius.py",
+        ]
 
     def test_a_directory_without_sarif_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

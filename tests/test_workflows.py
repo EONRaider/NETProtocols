@@ -341,11 +341,16 @@ class TestCodeQLWorkflow:
     """codeql.yml's analyze job writes the SARIF, filters it with
     scripts/filter_codeql_sarif.py, and only then uploads it.
 
-    Every way to get this wrong still runs green: an analyze step that
-    uploads too puts the unfiltered results in first; a filter after
-    the upload, or reading another directory, filters nothing; and a
-    category on either step starts a second analysis beside the first,
-    so every existing alert reappears instead of closing or staying.
+    Almost every way to get this wrong still runs green: a filter after
+    the upload, or reading another directory, filters nothing; a failed
+    filter allowed to pass (``continue-on-error``, or an upload under
+    ``if: always()``) can upload its input unfiltered; and a category on
+    either step starts a second analysis beside the first, so every
+    existing alert reappears instead of closing or staying. The one
+    that does not, ``upload: always`` on analyze, uploads the
+    unfiltered results first and only then fails, when upload-sarif
+    refuses a second upload under the same category; by then the
+    unfiltered alerts are already in.
     """
 
     @pytest.fixture
@@ -439,6 +444,16 @@ class TestCodeQLWorkflow:
             assert re.search(rf"(?m)^  {trigger}:", on), trigger
         for step in steps:
             assert step_key(step, "if") is None, step
+
+    def test_a_failed_filter_or_upload_fails_the_job(self) -> None:
+        """The filter's exit 1 must stop the job before upload-sarif
+        runs, and a failed upload must show: ``continue-on-error`` on
+        the filter, on upload-sarif or on the job would let unfiltered
+        SARIF go up, or a lost upload pass green. No step may set it,
+        and the job may not; no step has an ``if:`` either (see
+        test_every_trigger_filters_and_uploads)."""
+        block = job_blocks(CODEQL)["analyze"]
+        assert step_key(block, "continue-on-error") is None, block
 
     def test_the_job_keeps_its_minimal_permissions(self) -> None:
         block = job_blocks(CODEQL)["analyze"]

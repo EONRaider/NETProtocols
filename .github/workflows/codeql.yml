@@ -50,10 +50,11 @@ jobs:
       # analyze writes the SARIF without uploading it, the filter step
       # drops one query's results on two paths, and upload-sarif uploads
       # what is left. py/weak-sensitive-data-hashing flags the MD5 that
-      # RADIUS, OSPF and RIP require (authenticators, User-Password
-      # hiding, CHAP, keyed digests), which tests/ and
-      # scripts/check_fixtures.py compute over published test secrets
-      # with usedforsecurity=False to verify captured traffic (#265).
+      # protocols such as RADIUS and STUN mandate (RADIUS authenticators,
+      # User-Password hiding and CHAP; STUN's long-term-credential key),
+      # which tests/ and scripts/check_fixtures.py compute over published
+      # test secrets with usedforsecurity=False to verify captured
+      # traffic (#265).
       # The CodeQL config can't scope a query to paths: query-filters
       # drops it everywhere, src/ included, and paths-ignore drops the
       # paths from every query. So the filter removes only that query's
@@ -61,12 +62,14 @@ jobs:
       # query still runs on src/, every other query on all three.
       #
       # upload: failure-only is the action's documented mode for a
-      # workflow that post-processes the SARIF: nothing is uploaded on
-      # success, and if the job fails (the filter included), the init
-      # step's post action still uploads a failed-run SARIF, so the
-      # failure shows on the code scanning tool status page rather than
-      # leaving the last analysis silently standing. (`never` would skip
-      # that too; any unrecognized value means `always`.)
+      # workflow that post-processes the SARIF: analyze uploads nothing
+      # when it succeeds. It still marks the analysis as completed, so
+      # init's post step does not upload a failed-run SARIF for a later
+      # step's failure either: if the filter or upload-sarif fails, the
+      # job goes red, nothing is uploaded, and the previous analysis
+      # stays current. That fails closed; unfiltered SARIF is never
+      # uploaded. (Any value the action does not recognize means
+      # `always`, which would upload before the filter runs.)
       #
       # Neither analyze nor upload-sarif sets `category`, and that is
       # what keeps the analysis the same one: with no category the CLI
@@ -82,9 +85,10 @@ jobs:
         with:
           upload: failure-only
 
-      # Rewrites each *.sarif in analyze's output directory in place and
-      # logs one line per file naming every result it dropped; malformed
-      # SARIF fails the job instead of uploading unfiltered results.
+      # Rewrites each *.sarif under analyze's output directory, at any
+      # depth (as upload-sarif finds them), in place and logs one line
+      # per file naming every result it dropped; malformed SARIF fails
+      # the job instead of uploading unfiltered results.
       # Stdlib only, so the runner's own python3 runs it.
       - name: Drop weak-hashing results on tests/ and scripts/
         env:

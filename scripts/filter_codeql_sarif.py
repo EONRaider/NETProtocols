@@ -5,8 +5,9 @@ and scripts/ from a SARIF file before it is uploaded.
     python3 scripts/filter_codeql_sarif.py SARIF [SARIF ...]
 
 Each argument is a SARIF 2.1.0 file or a directory, which stands for
-every ``*.sarif`` file directly in it (what the CodeQL Action's
-``analyze`` step writes to its ``output`` directory). A result is
+every ``*.sarif`` file under it at any depth: what the CodeQL Action's
+``analyze`` step writes to its ``output`` directory, and every file
+``upload-sarif`` would find there and upload. A result is
 removed when its ``ruleId`` is exactly ``py/weak-sensitive-data-hashing``
 and its primary location (``locations[0]``) is a file under ``tests/``
 or ``scripts/``; every other result, every other field of the run (rule
@@ -244,12 +245,14 @@ def filter_log(log: object, root: str) -> list[str]:
 
 
 def sarif_files(paths: list[Path]) -> list[Path]:
-    """Each file given, and every ``*.sarif`` directly in each directory
-    given; a directory with none is an error, not an empty upload."""
+    """Each file given, and every ``*.sarif`` under each directory
+    given, in subdirectories too (``upload-sarif`` recurses, so a file
+    this skipped would go up unfiltered), in sorted order; a directory
+    with none is an error, not an empty upload."""
     files: list[Path] = []
     for path in paths:
         if path.is_dir():
-            found = sorted(path.glob("*.sarif"))
+            found = sorted(p for p in path.rglob("*.sarif") if p.is_file())
             if not found:
                 raise MalformedSarifError(f"{path}: no *.sarif file in it")
             files += found
