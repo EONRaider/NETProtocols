@@ -32,13 +32,25 @@ Figure 8)::
 Every header field is kept as its raw wire value, so nothing is lost
 in decoding and ``bytes()`` writes it back as it was: Poll and
 Precision as the signed log2 seconds they are, Root Delay and Root
-Dispersion as the 32-bit NTP short format (16.16 fixed point, §6), the
-Reference ID as a 32-bit integer and each timestamp as the 64-bit NTP
-timestamp format (32.32 fixed point, seconds since 1900, §6).
-Properties convert alongside: :attr:`NTP.root_delay_seconds`,
-:attr:`NTP.poll_seconds`, :attr:`NTP.reference_id_str`, and
-:attr:`NTP.transmit_time` and the other three ``*_time`` properties,
-which give a :class:`~datetime.datetime` in UTC.
+Dispersion as the 32 bits of a 16.16 fixed-point number, the Reference
+ID as a 32-bit integer and each timestamp as the 64-bit NTP timestamp
+format (32.32 fixed point, seconds since 1900, §6). Properties convert
+alongside: :attr:`NTP.root_delay_seconds`, :attr:`NTP.poll_seconds`,
+:attr:`NTP.reference_id_str`, and :attr:`NTP.transmit_time` and the
+other three ``*_time`` properties, which give a
+:class:`~datetime.datetime` in UTC.
+
+The versions disagree on the sign of Root Delay. RFC 5905 gives NTPv4
+both delay and dispersion in its NTP short format, whose seconds are
+unsigned (§6), but RFC 1305 for NTPv3, and RFC 2030 for SNTP, define
+Root Delay as a *signed* fixed-point number, which "can take on both
+positive and negative values" (RFC 2030 §4). RFC 5905 obsoletes RFC
+1305 and governs NTPv4 alone, so :attr:`NTP.root_delay_seconds` reads
+Root Delay signed below version 4 and unsigned from it: ``0xffff0000``
+is -1.0 s in an NTPv3 message and 65535.0 s in an NTPv4 one. Root
+Dispersion is never negative in any of them, and
+:attr:`NTP.root_dispersion_seconds` reads it unsigned in every
+version.
 
 Timestamps
 ----------
@@ -76,10 +88,11 @@ without raising:
   Cookies and an NTS Authenticator whose ciphertext holds any further
   fields, which are not decrypted.
 - :attr:`NTP.mac`, the Message Authentication Code: a 32-bit Key
-  Identifier and a digest (RFC 5905 §7.3), 16 bytes for MD5 and 20 for
-  SHA-1 as chrony and ntpsec send them, or none at all: the 4 bytes of
-  the crypto-NAK RFC 5905's reference implementation answers a failed
-  authentication with. NTPv4 tells a MAC from an extension field by
+  Identifier and a digest (RFC 5905 §7.3): 16 bytes for MD5 or for
+  AES-128-CMAC (RFC 8573), 20 for SHA-1, as chrony and ntpsec send
+  them, or none at all, the crypto-NAK, "a MAC consisting of four
+  octets of zeros" with which a server answers a failed authentication
+  (RFC 5905 §9.2). NTPv4 tells a MAC from an extension field by
   length alone, which is why RFC 7822 §3 sets a minimum length for the
   last extension field of a message without a MAC: the walk stops when
   what is left is exactly 4, 20 or 24 bytes, and reads that as the
@@ -104,15 +117,45 @@ NTP is reached through ``udp.port``, which is best-effort (see
 :meth:`NTP.decode` therefore rejects the first-byte values that are not
 an NTP time message: a version outside 1-4 (the versions RFC 5905 and
 its predecessors, RFC 1059, RFC 1119 and RFC 1305, define), and modes 6
-and 7. Those carry control messages (RFC 9327's mode 6, and ntpd's
-private mode 7), whose headers are not this one; reading one as a time
-message would give fields that mean nothing, so they are left
-undecoded, deliberately. Mode 0, reserved, decodes. Of the 256
-first bytes 96 pass (4 Leap Indicators, 4 versions, 6 modes), so a
-random datagram on port 123 is rejected 62.5% of the time, and more
-often when it is shorter than 48 bytes. Nothing else is checked: a
-stratum RFC 5905 reserves (17-255) and a Kiss-o'-Death (stratum 0,
-:attr:`NTP.kiss_code`) decode.
+and 7. Mode 0, reserved, decodes. Of the 256 first bytes 96 pass (4
+Leap Indicators, 4 versions, 6 modes), so a random datagram on port
+123 is rejected 62.5% of the time, and more often when it is shorter
+than 48 bytes. The first byte is checked before the length, so a
+rejected version or mode is reported as such (``InvalidFieldError``,
+``offset`` 0) however short the message, and ``TruncatedHeaderError``
+is left for an empty buffer and for a short one whose first byte
+passes. Nothing else is checked: a stratum RFC 5905 reserves (17-255) and a
+Kiss-o'-Death (stratum 0, :attr:`NTP.kiss_code`) decode.
+
+NTPv1 (RFC 1059) shares the header only by position: it has no Mode
+field, so those three bits are zero and every NTPv1 message decodes
+with mode 0, ``"reserved"``, and its second and third words are a
+Synchronizing Distance and an Estimated Drift Rate, which
+:attr:`NTP.root_delay` and :attr:`NTP.root_dispersion` hold under
+NTPv2-4's names.
+
+Control messages are not decoded
+--------------------------------
+
+Modes 6 and 7 carry control messages: RFC 9327's mode 6, which
+``ntpq`` speaks, and ntpd's private mode 7, which ``ntpdc`` speaks.
+Their headers are not this one (a mode 6 header is 12 bytes, and a
+read-variables request may be nothing more), and reading one as a time
+message would give fields that mean nothing, so :meth:`NTP.decode`
+raises ``InvalidFieldError`` with ``field`` ``"mode"`` for every one,
+whatever its length. A strict ``decode_frame`` therefore raises on
+``ntpq`` and ``ntpdc`` traffic to or from port 123. Two ways around it:
+
+- ``decode_frame(frame, lax=True)`` keeps Ethernet, IP and UDP and
+  reports the rejection as ``stopped_by``, the UDP payload left
+  undecoded;
+- ``decode_frame(frame, decode_as={"udp.port": {123: None}})`` takes
+  port 123 out of dispatch for that walk, so it ends at UDP with
+  nothing stopped. The registry accepts ``None`` here at run time, but
+  ``decode_as`` is annotated with classes only, so a strict type
+  checker needs it silenced.
+
+Decoding mode 6 is a planned follow-up.
 
 Construction checks only that each field fits its width, so a header
 with a version or mode decode rejects builds, and
@@ -155,7 +198,8 @@ _FIELD_HEADER = Struct("!HH")
 _MIN_FIELD_LEN = 16
 
 #: The lengths of an NTPv4 MAC: a crypto-NAK (the Key Identifier
-#: alone), and a Key Identifier with an MD5 or a SHA-1 digest.
+#: alone), and a Key Identifier with a 16-byte digest (MD5 or
+#: AES-128-CMAC, RFC 8573) or a 20-byte one (SHA-1).
 _MAC_LENGTHS_V4 = frozenset({4, 20, 24})
 
 #: NTPv1-3 add RFC 1305 Appendix C's 12-byte DES authenticator.
@@ -185,16 +229,21 @@ _MODE_NAMES: dict[int, str] = {
 #: mode 6; mode 7 is ntpd's private format).
 _CONTROL_MODES = frozenset({6, 7})
 
-#: Extension Field Types: IANA's "NTP Extension Field Types", the
-#: entries RFC 8915 (NTS) and RFC 7821 (Checksum Complement) added. The
-#: Autokey types (RFC 5906) decode unnamed.
+#: Extension Field Types: IANA's "NTP Extension Field Types" as RFC
+#: 9748 left it, the entries RFC 8915 (NTS) and RFC 7821 (UDP Checksum
+#: Complement) added. The Autokey types (RFC 5906) and the values RFC
+#: 9748 marks "Reserved for historic reasons" decode unnamed.
 _FIELD_TYPE_NAMES: dict[int, str] = {
     0x0104: "Unique Identifier",
     0x0204: "NTS Cookie",
     0x0304: "NTS Cookie Placeholder",
     0x0404: "NTS Authenticator and Encrypted Extension Fields",
-    0x2005: "Checksum Complement",
+    0x2005: "UDP Checksum Complement",
 }
+
+#: The Field Types RFC 9748 reserves for experimentation and
+#: development, which IANA cannot assign: 0xF000-0xFFFF.
+_EXPERIMENTAL_FIELD_TYPES = range(0xF000, 0x10000)
 
 
 def _check_range(
@@ -208,6 +257,35 @@ def _check_range(
             field=name,
             expected=f"{low}-{high}",
             actual=value,
+        )
+
+
+def _check_first_byte(owner: type, flags: int) -> None:
+    """Raise :class:`InvalidFieldError` unless ``flags`` opens a time message.
+
+    The version must be 1-4, then the mode must not be 6 or 7. Checked
+    at decode and not in ``__post_init__``, as RIP's version is: a
+    message that fails either is most likely not NTP, or not a time
+    message.
+    """
+    version, mode = (flags >> 3) & 0x07, flags & 0x07
+    if not 1 <= version <= 4:
+        raise InvalidFieldError(
+            f"NTP version must be 1-4, got {version}",
+            protocol=owner,
+            field="version",
+            offset=0,
+            expected="1-4",
+            actual=version,
+        )
+    if mode in _CONTROL_MODES:
+        raise InvalidFieldError(
+            f"NTP mode {mode} is a control message, not decoded",
+            protocol=owner,
+            field="mode",
+            offset=0,
+            expected="0-5",
+            actual=mode,
         )
 
 
@@ -285,11 +363,19 @@ class NTPExtensionField:
     def type_name(self) -> str:
         """Name the Field Type, e.g. ``"NTS Cookie"``.
 
-        Falls back to ``"unknown (0xf323)"``, in hex as the registry
-        writes types, for one not named here.
+        A type in 0xF000-0xFFFF, the range RFC 9748 reserves for
+        Private or Experimental Use, says so, such as chrony's
+        ``"Private or Experimental Use (0xf323)"``; any other type not
+        named here falls back to ``"unknown (0x0002)"``, in hex as the
+        registry writes types.
         """
         name = _FIELD_TYPE_NAMES.get(self.type)
-        return name or f"unknown ({hex_str(self.type, 6)})"
+        if name is not None:
+            return name
+        hex_type = hex_str(self.type, 6)
+        if self.type in _EXPERIMENTAL_FIELD_TYPES:
+            return f"Private or Experimental Use ({hex_type})"
+        return f"unknown ({hex_type})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,8 +384,9 @@ class NTPMAC:
 
     :param key_id: The 32-bit Key Identifier: which symmetric key, and
         so which algorithm, made the digest.
-    :param digest: The message digest, raw: 16 bytes for MD5, 20 for
-        SHA-1, or none in a crypto-NAK. It is not verified.
+    :param digest: The message digest, raw: 16 bytes for MD5 or
+        AES-128-CMAC (RFC 8573), 20 for SHA-1, or none in a crypto-NAK.
+        It is not verified.
     :raises InvalidFieldError: ``key_id`` does not fit 32 bits.
     """
 
@@ -374,7 +461,8 @@ class NTP(Protocol):
     :param version: Version Number, 3 bits: ``4`` (RFC 5905) or ``3``
         (RFC 1305), or ``1``-``2`` from older senders.
     :param mode: Mode, 3 bits: ``3`` client, ``4`` server, ``1``/``2``
-        symmetric active/passive, ``5`` broadcast (see
+        symmetric active/passive, ``5`` broadcast, ``0`` in every NTPv1
+        message, which has no Mode field (see
         :attr:`mode_name`).
     :param stratum: ``1`` for a primary server, ``2``-``15`` for a
         secondary one, ``16`` unsynchronized, ``0`` unspecified or, in a
@@ -384,10 +472,11 @@ class NTP(Protocol):
         seconds (:attr:`poll_seconds`).
     :param precision: The sender's clock precision, in signed log2
         seconds (:attr:`precision_seconds`).
-    :param root_delay: Round-trip delay to the reference clock, raw NTP
-        short format (:attr:`root_delay_seconds`).
+    :param root_delay: Round-trip delay to the reference clock, the
+        raw 32 bits of a 16.16 fixed-point number, which is signed
+        below version 4 (:attr:`root_delay_seconds`).
     :param root_dispersion: Dispersion to the reference clock, raw NTP
-        short format (:attr:`root_dispersion_seconds`).
+        short format, unsigned 16.16 (:attr:`root_dispersion_seconds`).
     :param reference_id: Reference ID, raw: a kiss code, a reference
         clock's ASCII name or an IPv4 address, by stratum (see
         :attr:`reference_id_str`).
@@ -444,11 +533,18 @@ class NTP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the header and keep the rest of ``data`` as the body.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 48 bytes.
+        The first byte is judged before the length (see "Control
+        messages are not decoded" in the module docstring).
+
         :raises InvalidFieldError: the version is outside 1-4 (``field``
-            ``"version"``), or the mode is 6 or 7, a control message
-            (``field`` ``"mode"``); ``offset`` ``0`` for both.
+            ``"version"``), or else the mode is 6 or 7, a control
+            message (``field`` ``"mode"``), at any length; ``offset``
+            ``0`` for both.
+        :raises TruncatedHeaderError: ``data`` is empty, or its first
+            byte passes and it is shorter than 48 bytes.
         """
+        if data:
+            _check_first_byte(cls, data[0])
         (
             flags,
             stratum,
@@ -462,32 +558,10 @@ class NTP(Protocol):
             receive_timestamp,
             transmit_timestamp,
         ) = cls._unpack_fixed(data)
-        version, mode = (flags >> 3) & 0x07, flags & 0x07
-        # Checked here and not in __post_init__, as RIP's version is: a
-        # decoded message that fails either is most likely not NTP, or
-        # not a time message.
-        if not 1 <= version <= 4:
-            raise InvalidFieldError(
-                f"NTP version must be 1-4, got {version}",
-                protocol=cls,
-                field="version",
-                offset=0,
-                expected="1-4",
-                actual=version,
-            )
-        if mode in _CONTROL_MODES:
-            raise InvalidFieldError(
-                f"NTP mode {mode} is a control message, not decoded",
-                protocol=cls,
-                field="mode",
-                offset=0,
-                expected="0-5",
-                actual=mode,
-            )
         return cls(
             leap=flags >> 6,
-            version=version,
-            mode=mode,
+            version=(flags >> 3) & 0x07,
+            mode=flags & 0x07,
             stratum=stratum,
             poll=poll,
             precision=precision,
@@ -567,12 +641,25 @@ class NTP(Protocol):
 
     @property
     def root_delay_seconds(self) -> float:
-        """Return the Root Delay in seconds (NTP short format, §6)."""
-        return self.root_delay / 0x10000
+        """Return the Root Delay in seconds, 16.16 fixed point.
+
+        Signed below version 4, as RFC 1305 and RFC 2030 define it, so
+        ``0xffff0000`` is -1.0; unsigned from version 4, RFC 5905's NTP
+        short format (§6), so the same bits are 65535.0. See the module
+        docstring. :attr:`root_delay` stays the raw 32 bits.
+        """
+        delay = self.root_delay
+        if self.version < 4 and delay >> 31:
+            delay -= 1 << 32
+        return delay / 0x10000
 
     @property
     def root_dispersion_seconds(self) -> float:
-        """Return the Root Dispersion in seconds (NTP short format)."""
+        """Return the Root Dispersion in seconds, unsigned 16.16.
+
+        Unsigned in every version: no NTP or SNTP specification lets it
+        go negative.
+        """
         return self.root_dispersion / 0x10000
 
     @property
@@ -644,9 +731,10 @@ class NTP(Protocol):
         """Return the MAC after the extension fields, if there is one.
 
         ``None`` unless what is left has a MAC's length: 4 bytes (a
-        crypto-NAK), 20 (MD5) or 24 (SHA-1), and below version 4 also 12
-        (DES). A 4-byte Ethernet FCS after a plain message reads as a
-        crypto-NAK (see the module docstring). Never raises.
+        crypto-NAK), 20 (MD5 or AES-128-CMAC) or 24 (SHA-1), and below
+        version 4 also 12 (DES). A 4-byte Ethernet FCS after a plain
+        message reads as a crypto-NAK (see the module docstring). Never
+        raises.
         """
         return _split_body(self.body, self.version)[1]
 

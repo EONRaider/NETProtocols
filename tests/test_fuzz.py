@@ -89,6 +89,7 @@ from netprotocols import (
     RIPEntry,
     SCTPChunk,
     TCPOption,
+    TruncatedHeaderError,
     VRRPv6,
     decode_frame,
 )
@@ -1002,13 +1003,28 @@ _NTP_ACCESSORS = (
 )
 
 
-def _ntp_header_rejected(data: bytes) -> bool:
-    """Whether NTP.decode() may reject ``data``: too short, a version
-    outside 1-4, or mode 6 or 7."""
-    if len(data) < 48:
-        return True
-    version, mode = (data[0] >> 3) & 7, data[0] & 7
-    return not 1 <= version <= 4 or mode in (6, 7)
+def _ntp_rejection(data: bytes) -> str | None:
+    """What NTP.decode() must reject ``data`` for, judged in its order:
+    ``"version"`` outside 1-4, then ``"mode"`` 6 or 7, at any length;
+    then ``"truncated"``, shorter than 48 bytes; or ``None``."""
+    if data:
+        version, mode = (data[0] >> 3) & 7, data[0] & 7
+        if not 1 <= version <= 4:
+            return "version"
+        if mode in (6, 7):
+            return "mode"
+    return "truncated" if len(data) < 48 else None
+
+
+def _ntp_decode(data: bytes) -> NTP | str:
+    """Decode ``data``, or say what NTP.decode() rejected it for, in
+    :func:`_ntp_rejection`'s words."""
+    try:
+        return NTP.decode(data)
+    except TruncatedHeaderError:
+        return "truncated"
+    except InvalidFieldError as error:
+        return str(error.field)
 
 
 def _assert_ntp_body_tiles(ntp: NTP) -> None:
@@ -1028,15 +1044,16 @@ def _assert_ntp_body_tiles(ntp: NTP) -> None:
 class TestNTPAccessorSafety:
     @given(data=st.one_of(_ntp_seeded(), fuzz_input))
     def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
-        """decode() raises only on the 48-byte header (too short, a
-        version outside 1-4, mode 6 or 7) and keeps every byte after
-        it; the accessors never raise, and the extension fields, the
-        MAC and the remainder tile the body exactly."""
-        try:
-            ntp = NTP.decode(data)
-        except ProtocolError:
-            assert _ntp_header_rejected(data)
+        """decode() raises only on the 48-byte header, for the first
+        reason that applies (a version outside 1-4, then mode 6 or 7,
+        at any length, then too short), and keeps every byte after it;
+        the accessors never raise, and the extension fields, the MAC
+        and the remainder tile the body exactly."""
+        ntp = _ntp_decode(data)
+        if not isinstance(ntp, NTP):
+            assert ntp == _ntp_rejection(data)
             return
+        assert _ntp_rejection(data) is None
         assert bytes(ntp) == data
         assert NTP.decode(bytes(ntp)) == ntp
         _assert_ntp_body_tiles(ntp)

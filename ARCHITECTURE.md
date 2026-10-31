@@ -754,13 +754,26 @@ NTP on UDP 123 (RFC 5905) rejects less: of the first byte's 256
 values, 96 are a time message, a version from 1 to 4 and a mode other
 than 6 or 7, the control messages (RFC 9327's mode 6, ntpd's private
 mode 7) whose headers `NTP.decode()` does not read; anything shorter
-than the 48-byte header is rejected too. Measured the same way, the walk stopped for 61.2-62.9%
-of the 300-byte payloads (`random.Random` seeds 0-2), against the
-62.5% the first byte predicts, and for 65.5-66.3% of the 0-600 byte
-ones, padded or not: padding never makes a payload 48 bytes long.
-Past the first byte any 47 bytes are a header, and the stratum, the
-Reference ID and the timestamps are not judged, so a Kiss-o'-Death
-and a reserved stratum decode.
+than the 48-byte header is rejected too. Measured the same way, the
+walk stopped for 61.2-62.9% of the 300-byte payloads (`random.Random`
+seeds 0-2), against the 62.5% the first byte predicts, and for
+65.5-66.3% of the 0-600 byte ones, padded or not: padding never makes
+a payload 48 bytes long. Past the first byte any 47 bytes are a
+header, and the stratum, the Reference ID and the timestamps are not
+judged, so a Kiss-o'-Death and a reserved stratum decode.
+
+The first byte is judged before the length, so every control message
+raises `InvalidFieldError` with `field` `"mode"`, however long, and a
+bad version raises with `field` `"version"`; only a time message's
+first byte can end in `TruncatedHeaderError`. That makes real traffic
+fail a strict walk: `ntpq` (mode 6, a 12-byte request and longer
+responses) and `ntpdc` (mode 7) talk to port 123, and
+`decode_frame()` raises on every one of their messages. Walk them with
+`lax=True`, which keeps Ethernet, IP and UDP and reports the rejection
+as `stopped_by`, or take the port out of dispatch for the walk with
+`decode_as={"udp.port": {123: None}}`, which ends it at UDP; the
+registry accepts that `None` at run time, though `decode_as` is
+annotated with classes only. Decoding mode 6 is a planned follow-up.
 
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random

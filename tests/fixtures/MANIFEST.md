@@ -17,8 +17,7 @@ Eighteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `ntp.pcap`) are
-captured
-separately by their own `scripts/capture_fixtures_*.sh` over
+captured separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
@@ -597,12 +596,14 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   which its server echoes. A re-capture differs in every timestamp, the
   random Transmit Timestamps, the NTS keys, cookies and ciphertext, the
   digests, the IPv4 identification and the client's source ports.
-  Everything here is IPv4 (the container's kernel had IPv6 disabled),
-  and veth does not pad, so no frame carries an FCS: the 48-byte header
-  already fills Ethernet's minimum frame, and `tests/test_ntp.py`
-  builds the trailers, a crypto-NAK, a Kiss-o'-Death and the control
-  messages (modes 6 and 7) the decoder rejects, none of which these
-  daemons send.
+  Everything here is IPv4 (the container's kernel had IPv6 disabled).
+  No frame carries Ethernet padding, and none could: the 48-byte NTP
+  header behind IPv4's 20 bytes and UDP's 8 already fills Ethernet's
+  46-byte minimum payload. No frame carries an FCS either, since
+  tcpdump on a veth device captures none. `tests/test_ntp.py` builds
+  the trailers, a crypto-NAK, a Kiss-o'-Death and the control messages
+  the decoder rejects (an ntpq mode 6 request and response, and mode 7
+  requests of 48 and 192 bytes), none of which these daemons send.
 
 ### NTP test keys
 

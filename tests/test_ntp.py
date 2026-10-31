@@ -94,6 +94,32 @@ def header(first_byte: int = 0x23, **fields: int) -> bytes:
     return bytes(replace(base, **fields))
 
 
+def udp_frame(payload: bytes) -> bytes:
+    """``payload`` in a UDP datagram to port 123, behind the IPv4 and
+    Ethernet headers of the first captured frame, padded to Ethernet's
+    60-byte minimum as a NIC would pad it."""
+    ip = bytearray(FRAMES[SNTP[0]][14:34])
+    ip[2:4] = (20 + 8 + len(payload)).to_bytes(2, "big")
+    ip[10:12] = bytes(2)
+    udp = bytes(
+        UDP(src_port=40000, dst_port=123, length=8 + len(payload), checksum=0)
+    )
+    frame = FRAMES[SNTP[0]][:14] + bytes(ip) + udp + payload
+    return frame + bytes(max(0, 60 - len(frame)))
+
+
+#: Control messages (modes 6 and 7), which NTP.decode() rejects: an
+#: ntpq read-variables request (RFC 9327, a 12-byte header and no data),
+#: a mode 6 response carrying 60 bytes of variables, and mode 7
+#: requests of 48 and 192 bytes.
+CONTROL_MESSAGES = {
+    "mode-6-request-12": bytes.fromhex("160200010000000000000000"),
+    "mode-6-response-72": bytes.fromhex("16820001061500000000003c") + b"v" * 60,
+    "mode-7-request-48": bytes.fromhex("17000310") + bytes(44),
+    "mode-7-request-192": bytes.fromhex("17000310") + bytes(188),
+}
+
+
 def field(field_type: int, value_len: int) -> bytes:
     """An extension field whose value is ``value_len`` bytes of 0xAB."""
     return bytes(NTPExtensionField(field_type, b"\xab" * value_len))
@@ -282,14 +308,14 @@ class TestCapturedMessages:
     def test_chronys_experimental_extension_field(self):
         """chrony's "extfield F323": one 28-byte field each way.
 
-        0xF323 is chrony's own experimental type, which IANA's registry
-        does not name, so it displays in hex.
+        0xF323 is chrony's own experimental type, in the range RFC 9748
+        reserves for Private or Experimental Use, which says so.
         """
         for index in EXTFIELD:
             ntp = ntp_of(index)
             (only,) = ntp.extension_fields
             assert (only.type, len(bytes(only))) == (0xF323, 28)
-            assert only.type_name == "unknown (0xf323)"
+            assert only.type_name == "Private or Experimental Use (0xf323)"
             assert (ntp.mac, ntp.remainder) == (None, b"")
             assert bytes(only) == ntp.body
 
@@ -500,11 +526,19 @@ class TestDecodeGuard:
             version,
         )
 
-    @pytest.mark.parametrize("version", [1, 2])
-    def test_the_oldest_versions_decode(self, version):
-        """NTPv1 (RFC 1059) and NTPv2 (RFC 1119) share the header."""
-        ntp = NTP.decode(bytes([version << 3 | 4]) + bytes(47))
-        assert (ntp.version, ntp.mode_name) == (version, "server")
+    def test_ntpv2_decodes(self):
+        """NTPv2 (RFC 1119) has the Mode field and the header."""
+        ntp = NTP.decode(bytes([2 << 3 | 4]) + bytes(47))
+        assert (ntp.version, ntp.mode_name) == (2, "server")
+
+    def test_ntpv1_decodes_as_mode_0(self):
+        """NTPv1 (RFC 1059) shares the header only by position.
+
+        It has no Mode field, so the three bits are zero and a real
+        NTPv1 message reads as mode 0, reserved.
+        """
+        ntp = NTP.decode(bytes([1 << 3]) + bytes(47))
+        assert (ntp.version, ntp.mode, ntp.mode_name) == (1, 0, "reserved")
 
     @pytest.mark.parametrize("mode", [6, 7])
     def test_control_messages_are_not_decoded(self, mode):
@@ -513,17 +547,87 @@ class TestDecodeGuard:
             NTP.decode(bytes([0x20 | mode]) + bytes(47))
         assert (caught.value.field, caught.value.actual) == ("mode", mode)
 
-    def test_a_mode_6_read_variables_request(self):
-        """An RFC 9327 request: a 12-byte header, read variables.
+    @pytest.mark.parametrize(
+        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+    )
+    def test_a_control_message_is_rejected_at_any_length(self, message):
+        """ntpq's and ntpdc's messages raise for their mode, whether
+        shorter than 48 bytes, exactly 48 or longer."""
+        with pytest.raises(InvalidFieldError) as caught:
+            NTP.decode(message)
+        error = caught.value
+        assert (error.field, error.offset, error.expected) == (
+            "mode",
+            0,
+            "0-5",
+        )
+        assert error.actual == message[0] & 7
 
-        Its header is not this one, so it is rejected, whatever its
-        length; a 12-byte one is truncated before it gets that far.
+    @pytest.mark.parametrize(
+        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+    )
+    def test_a_strict_walk_raises_on_a_control_message(self, message):
+        """Port 123 dispatches ntpq's traffic to NTP, which rejects it
+        for its mode, at the NTP header, not for its length."""
+        with pytest.raises(InvalidFieldError) as caught:
+            decode_frame(udp_frame(message))
+        error = caught.value
+        assert (error.field, error.frame_offset) == ("mode", NTP_START)
+
+    @pytest.mark.parametrize(
+        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+    )
+    def test_a_lax_walk_stops_at_udp(self, message):
+        """lax=True keeps Ethernet, IPv4 and UDP and says why it stopped."""
+        packet = decode_frame(udp_frame(message), lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
+        assert isinstance(packet.stopped_by, InvalidFieldError)
+        assert packet.stopped_by.field == "mode"
+        assert packet.stopped_by.frame_offset == NTP_START
+
+    @pytest.mark.parametrize(
+        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+    )
+    def test_decode_as_none_takes_port_123_out(self, message):
+        """decode_as={"udp.port": {123: None}} ends a strict walk at UDP.
+
+        The registry accepts None at run time, though decode_as is
+        annotated with classes only; the module docstring says so.
         """
-        request = bytes.fromhex("160200010000000000000000")
-        with pytest.raises(TruncatedHeaderError):
-            NTP.decode(request)
-        with pytest.raises(InvalidFieldError):
-            NTP.decode(request + bytes(36))
+        packet = decode_frame(
+            udp_frame(message),
+            decode_as={"udp.port": {123: None}},  # type: ignore[dict-item]
+        )
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
+        assert packet.stopped_by is None
+
+    def test_the_first_byte_is_judged_before_the_length(self):
+        """Version, then mode, then length, whatever the length."""
+        with pytest.raises(InvalidFieldError) as caught:
+            NTP.decode(bytes([0x3E]))  # version 7, mode 6
+        assert (caught.value.field, caught.value.actual) == ("version", 7)
+        with pytest.raises(InvalidFieldError) as caught:
+            NTP.decode(bytes([0x07]) + bytes(60))  # version 0, mode 7
+        assert caught.value.field == "version"
+        with pytest.raises(InvalidFieldError) as caught:
+            NTP.decode(bytes([0x27]))  # version 4, mode 7
+        assert (caught.value.field, caught.value.actual) == ("mode", 7)
+
+    @pytest.mark.parametrize("first", [0x23, 0x24, 0x1B, 0x20, 0x08])
+    def test_a_short_time_message_is_truncated(self, first):
+        """A first byte that passes, and fewer than 48 bytes."""
+        for length in (1, 12, 47):
+            with pytest.raises(TruncatedHeaderError) as caught:
+                NTP.decode(bytes([first]) + bytes(length - 1))
+            error = caught.value
+            assert (error.offset, error.expected) == (0, 48)
+            assert error.actual == length
+
+    def test_an_empty_buffer_is_truncated(self):
+        """No first byte to judge."""
+        with pytest.raises(TruncatedHeaderError) as caught:
+            NTP.decode(b"")
+        assert (caught.value.expected, caught.value.actual) == (48, 0)
 
     def test_mode_0_decodes(self):
         """Mode 0 is reserved, not a control message."""
@@ -625,6 +729,40 @@ class TestDisplay:
         assert ntp.reference_id_str == "73.78.73.84"
         assert ntp.kiss_code is None
 
+    @pytest.mark.parametrize(
+        "version,seconds",
+        [(1, -1.0), (2, -1.0), (3, -1.0), (4, 65535.0)],
+    )
+    def test_root_delay_is_signed_below_version_4(self, version, seconds):
+        """RFC 1305 and RFC 2030: a signed 16.16 Root Delay; RFC 5905's
+        short format for NTPv4 is unsigned. The raw field is the same."""
+        ntp = NTP(0, version, 4, root_delay=0xFFFF0000)
+        assert ntp.root_delay == 0xFFFF0000
+        assert ntp.root_delay_seconds == seconds
+        decoded = NTP.decode(bytes(ntp))
+        assert (decoded.root_delay, decoded.root_delay_seconds) == (
+            0xFFFF0000,
+            seconds,
+        )
+
+    @pytest.mark.parametrize("version", [3, 4])
+    def test_root_delay_signs_agree_below_the_top_bit(self, version):
+        """Below 0x80000000 both readings give the same seconds."""
+        ntp = NTP(0, version, 4, root_delay=0x7FFF8000)
+        assert ntp.root_delay_seconds == 32767.5
+
+    def test_the_smallest_negative_ntpv3_root_delay(self):
+        """0x80000000 is -32768 seconds signed."""
+        assert NTP(0, 3, 4, root_delay=0x80000000).root_delay_seconds == (
+            -32768.0
+        )
+
+    def test_root_dispersion_is_unsigned_in_every_version(self):
+        """No version lets the dispersion go negative."""
+        for version in (1, 2, 3, 4):
+            ntp = NTP(0, version, 4, root_dispersion=0xFFFF0000)
+            assert ntp.root_dispersion_seconds == 65535.0
+
     def test_short_format_and_log2_seconds(self):
         """Root Delay and Dispersion are 16.16; Poll and Precision log2."""
         ntp = NTP(
@@ -641,10 +779,19 @@ class TestDisplay:
         assert ntp.root_dispersion_seconds == 0xFFFFFFFF / 65536
 
     def test_extension_field_names(self):
-        """IANA's names; anything else in hex."""
+        """IANA's names as RFC 9748 left them; anything else in hex."""
         assert NTPExtensionField(0x0304).type_name == "NTS Cookie Placeholder"
-        assert NTPExtensionField(0x2005).type_name == "Checksum Complement"
+        assert NTPExtensionField(0x2005).type_name == "UDP Checksum Complement"
         assert NTPExtensionField(0x0002).type_name == "unknown (0x0002)"
+        assert NTPExtensionField(0xEFFF).type_name == "unknown (0xefff)"
+
+    @pytest.mark.parametrize("field_type", [0xF000, 0xF323, 0xFFFF])
+    def test_the_experimental_range_is_named(self, field_type):
+        """RFC 9748 reserves 0xF000-0xFFFF for Private or Experimental
+        Use; IANA cannot assign them."""
+        assert NTPExtensionField(field_type).type_name == (
+            f"Private or Experimental Use ({field_type:#06x})"
+        )
 
 
 class TestConstruction:
