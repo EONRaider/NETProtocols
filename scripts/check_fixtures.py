@@ -930,10 +930,13 @@ def _check_ipv6(
     stats["ipv6"] += 1
     payload_length, next_header = struct.unpack_from("!HB", payload, 4)
     upper = payload[40 : 40 + payload_length]
+    final_dst = None
     # Walk extension headers (hop-by-hop 0, routing 43, dest-opts 60).
     while next_header in (0, 43, 60) and len(upper) >= 8:
         stats["ipv6-ext-header"] += 1
         ext_len = (upper[1] + 1) * 8
+        if next_header == 43:
+            final_dst = _route_end(upper[:ext_len], payload[24:40], final_dst)
         next_header, upper = upper[0], upper[ext_len:]
     if next_header == 44 and len(upper) >= 8:
         if struct.unpack_from("!H", upper, 2)[0] & 0xFFF8:
@@ -944,9 +947,84 @@ def _check_ipv6(
         # The upper-layer checksum spans the reassembled datagram, not
         # this fragment's slice: nothing verifiable here.
         return failures + (["unchecked-fragment"] if strict else [])
+    # RFC 8200 §8.1: behind a route with segments left, every
+    # pseudo-header below, transport mode under ESP's included, takes
+    # the route's end for the Destination Address, so the header is
+    # passed on as the pseudo-header sees it. Nothing below reads the
+    # wire address from it: ESP's ICV covers only ESP, AH over IPv6 is
+    # not verified, and a tunnelled packet brings its own header.
+    seen = payload[:24] + (final_dst or payload[24:40])
     return failures + _check_upper_v6(
-        next_header, payload[:40], upper, stats, depth, strict=strict
+        next_header, seen, upper, stats, depth, strict=strict
     )
+
+
+def _rh0_final(data: bytes, dst: bytes) -> bytes | None:
+    """Type 0 (RFC 2460 §4.4): 4 reserved octets, then the addresses
+    in visiting order; the last is the final destination."""
+    addresses = data[4:]
+    if not addresses or len(addresses) % 16:
+        return None
+    return addresses[-16:]
+
+
+def _mobile_ipv6_final(data: bytes, dst: bytes) -> bytes | None:
+    """Type 2 (RFC 6275 §6.4): 4 reserved octets and one Home Address."""
+    return data[4:] if len(data) == 20 else None
+
+
+def _rpl_final(data: bytes, dst: bytes) -> bytes | None:
+    """Type 3 (RFC 6554 §3): ``Address[1..n-1]`` take ``16 - CmprI``
+    octets each and ``Address[n]`` takes ``16 - CmprE``, then ``Pad``
+    octets end the header. ``Address[n]`` is completed with the first
+    ``CmprE`` octets of the packet's Destination Address. Entries that
+    do not tile the area resolve nothing."""
+    cmpr_i, cmpr_e, pad = data[0] >> 4, data[0] & 0x0F, data[1] >> 4
+    entries = data[4:]
+    size = 16 - cmpr_e
+    start = len(entries) - pad - size
+    if start < 0 or start % (16 - cmpr_i):
+        return None
+    return dst[:cmpr_e] + entries[start : start + size]
+
+
+def _srh_final(data: bytes, dst: bytes) -> bytes | None:
+    """Type 4 (RFC 8754 §2): Last Entry, Flags and Tag, then the Segment
+    List in reverse order; Segment List[0] is the final destination,
+    and must lie inside a list Last Entry says is there."""
+    if len(data) < 4 + (data[0] + 1) * 16:
+        return None
+    return data[4:20]
+
+
+#: The IPv6 Routing header types whose final destination is resolved
+#: (RFC 8200 §8.1), each by its own rule; any other leaves ``dst``.
+_ROUTING_FINAL = {
+    0: _rh0_final,
+    2: _mobile_ipv6_final,
+    3: _rpl_final,
+    4: _srh_final,
+}
+
+
+def _route_end(
+    header: bytes, dst: bytes, current: bytes | None
+) -> bytes | None:
+    """The pseudo-header destination after the Routing header ``header``.
+
+    RFC 8200 §8.1 puts the final destination of a route in the
+    pseudo-header. A receiver skips a Routing header with no segments
+    left (RFC 8200 §4.4; RFC 2460 §4.4, RFC 6554 §4.2, RFC 8754 §4.3),
+    so the last one with segments left decides, and ``current`` (the
+    choice so far) stands when ``header`` has none, or is cut short.
+    A route it cannot resolve, of an unknown type or the wrong shape,
+    falls back to ``dst``, the IPv6 header's Destination Address.
+    """
+    if len(header) < (header[1] + 1) * 8 or not header[3]:
+        return current
+    resolve = _ROUTING_FINAL.get(header[2])
+    final = resolve(header[4:], dst) if resolve else None
+    return final or dst
 
 
 def _check_transport_v6(
@@ -985,7 +1063,13 @@ def _check_upper_v6(
     strict: bool = False,
 ) -> list[str]:
     """The IPv6 counterpart of :func:`_check_upper_v4`, bounding
-    nesting and honouring ``strict`` the same way."""
+    nesting and honouring ``strict`` the same way.
+
+    ``ip_header`` is the IPv6 header as its pseudo-headers see it: its
+    Destination Address is the end of a route (see :func:`_route_end`)
+    when the packet has one, and ESP in transport mode passes it back
+    here unchanged, so the payload it protects is summed the same way.
+    """
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
     src, dst = ip_header[8:24], ip_header[24:40]
