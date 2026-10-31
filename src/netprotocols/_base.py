@@ -86,6 +86,14 @@ the end of the datagram, so it keeps the rest of the buffer, and its
 accessors report what is neither as a remainder. See
 :mod:`netprotocols.layer7.ntp`.
 
+``TFTP`` is port-dispatched too, but bounds most of its messages by
+their structure: an ACK's 4 bytes, an ERROR's terminated message, a
+request's or an OACK's last whole option pair; step 3 holds after them.
+Its strings are zero-terminated, so a missing terminator is its
+truncation case, as a lying length is in step 2. A DATA message's data
+has no terminator and runs to the end of the buffer. See
+:mod:`netprotocols.layer7.tftp`.
+
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.

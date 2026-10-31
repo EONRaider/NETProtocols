@@ -22,11 +22,13 @@ the same failure mode as ALL_PROTOCOLS silently skipping DNSOverTCP
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
 
-WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOWS = ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
 FUZZ = WORKFLOWS / "fuzz.yml"
@@ -732,6 +734,100 @@ class TestMutationWorkflow:
             AssertionError, match="not a single-quoted filter argument"
         ):
             self._parse_mutmut_run_filters(malformed)
+
+
+# mutmut runs the selected tests from its mutants/ copy of the repo,
+# which holds the source paths, plus what mutmut copies by default
+# (mutmut/configuration.py) and whatever [tool.mutmut]'s also_copy
+# names. A selected test that loads any other repo file by a path
+# relative to itself dies there with FileNotFoundError -- which is how
+# #263's scripts/check_fixtures.py fixture broke the nightly run.
+MUTMUT_DEFAULT_COPIES = (
+    "tests",
+    "test",
+    "setup.cfg",
+    "pyproject.toml",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "pdm.lock",
+)
+
+# The repo root as the tests spell it: Path(__file__), optionally
+# .resolve(), then .parent.parent (this file's own ROOT is the same).
+_REPO_ROOT_EXPR = r"Path\(__file__\)(?:\.resolve\(\))?\.parent\.parent"
+# One or more `/ "segment"` joins after a root, e.g.
+# `/ "scripts/check_fixtures.py"` or `/ "scripts" / "check_fixtures.py"`.
+_JOINS = r"((?:\s*/\s*\"[^\"]+\")+)"
+
+
+def repo_paths_loaded_by(test_file: Path) -> set[str]:
+    """Repo-relative paths ``test_file`` builds from the repo root.
+
+    Matches joins on the root expression itself and on any name bound
+    to it alone (``ROOT = Path(__file__).resolve().parent.parent``,
+    then ``ROOT / "scripts" / "x.py"``). A path built some other way
+    is not found, so test_mutmut_copies_what_selected_tests_load
+    checks that the one known load is found.
+    """
+    source = test_file.read_text()
+    roots = [_REPO_ROOT_EXPR]
+    roots += [
+        re.escape(name)
+        for name in re.findall(
+            rf"(?m)^(\w+)\s*=\s*{_REPO_ROOT_EXPR}\s*$", source
+        )
+    ]
+    found = set()
+    for root in roots:
+        for joins in re.findall(rf"\b{root}{_JOINS}", source):
+            segments = re.findall(r"\"([^\"]+)\"", joins)
+            found.add("/".join(segments))
+    return found
+
+
+class TestMutmutAlsoCopy:
+    @staticmethod
+    def _mutmut_config() -> dict:
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            return tomllib.load(handle)["tool"]["mutmut"]
+
+    def test_the_scan_finds_the_known_checker_load(self) -> None:
+        """Guards the scan below against passing vacuously: if the
+        regex stops matching how the tests spell a root-relative path,
+        this fails instead of the real check finding nothing to check."""
+        assert "scripts/check_fixtures.py" in repo_paths_loaded_by(
+            ROOT / "tests" / "test_checksum.py"
+        )
+
+    def test_mutmut_copies_what_selected_tests_load(self) -> None:
+        """Every repo file a mutation-selected test loads from outside
+        what mutants/ always holds lies under a *directory* entry of
+        also_copy. A file entry is not enough: mutmut (3.8.1) copies
+        one with shutil.copy2 and never creates its parent directory,
+        so ``also_copy = ["scripts/check_fixtures.py"]`` fails just as
+        a missing entry does."""
+        config = self._mutmut_config()
+        always_there = [*config.get("source_paths", []), *MUTMUT_DEFAULT_COPIES]
+        copied_dirs = [
+            Path(entry)
+            for entry in config.get("also_copy", [])
+            if (ROOT / entry).is_dir()
+        ]
+        missing = []
+        for test in config["pytest_add_cli_args_test_selection"]:
+            for loaded in sorted(repo_paths_loaded_by(ROOT / test)):
+                path = Path(loaded)
+                if any(path.is_relative_to(p) for p in always_there):
+                    continue
+                if not any(path.is_relative_to(d) for d in copied_dirs):
+                    missing.append(f"{test} loads {loaded}")
+        assert not missing, (
+            "these files are absent from mutmut's mutants/ copy, so the "
+            "nightly mutation run's stats phase dies with "
+            "FileNotFoundError; add their directory (not the file) to "
+            f"[tool.mutmut] also_copy in pyproject.toml: {missing}"
+        )
 
 
 # Each new workflow file's defining job, and one distinctive thing that

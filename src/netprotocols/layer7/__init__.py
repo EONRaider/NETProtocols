@@ -23,6 +23,7 @@ from netprotocols.layer7.http import (
 )
 from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
+from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "NTP",
     "NTPMAC",
     "RIP",
+    "TFTP",
     "VXLAN",
     "BGPOptionalParameter",
     "BGPPathAttribute",

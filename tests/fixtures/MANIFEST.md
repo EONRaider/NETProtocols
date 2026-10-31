@@ -10,13 +10,14 @@ verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
 digest and every NTP MAC, with the test keys published below. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 310 frames across 31
+frames routinely leave checksums to NIC offload. 343 frames across 32
 scenarios. Addresses are as-captured from the capture host's network.
 
-Eighteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Nineteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `ntp.pcap`) are
+`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
+`ntp.pcap`) are
 captured separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
@@ -26,9 +27,9 @@ sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
 two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
 three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
-LLDP agents, two STP bridges with lldpd speaking CDP, and a chronyd
-NTP server queried by ntpdig and chronyd clients — see their rows and
-the notes below.
+LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
+server with tftp-hpa and curl clients, and a chronyd NTP server queried
+by ntpdig and chronyd clients — see their rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -54,6 +55,7 @@ the notes below.
 | `esp.pcap` | 6 | IPsec ESP (RFC 4303), NULL encryption + HMAC-SHA-256-128, two SAs: transport mode carrying ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000001`, sequence 1-3), tunnel mode carrying inner IPv4 with ICMPv4 echo ×2 and UDP ×1 (SPI `0x10000002`, sequence 1-3) — `Ethernet→IPv4→ESP`, where the walk ends by design; **direct capture** of script-built ESP (see IPsec note) |
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
+| `tftp.pcap` | 33 | Six TFTP (RFC 1350) transfers between tftpd-hpa 5.2 and two clients, each a request to UDP 69 followed by the transfer between two ephemeral ports: an RRQ in octet mode for a 1300-byte file (DATA blocks of 512, 512 and 276 bytes, each ACKed); an RRQ for a 1024-byte file, ending in an empty DATA block 3; a WRQ of 600 bytes (ACK of block 0, then DATA of 512 and 88); an RRQ for a missing file (ERROR code 1, `File not found`) and one for a file the server cannot open (ERROR code 0, `Permission denied`), each followed by the tftp-hpa client's ACK of block 1; and curl's RRQ with RFC 2347 options `tsize` 0, `blksize` 1024 and `timeout` 6, answered by an OACK (`tsize` 1300) and ACKed with block 0, then DATA of 1024 and 276 bytes — `Ethernet→IPv4→UDP→TFTP` for the 6 requests, `Ethernet→IPv4→UDP` for the other 27, which no port names; **direct capture**, both directions (see TFTP note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
@@ -503,6 +505,32 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   does not pad, so no frame carries Ethernet padding or an FCS;
   `tests/test_rip.py` appends a 4-byte trailer to every frame and cuts
   one inside an entry to cover both.
+
+- `tftp.pcap` was produced by `scripts/capture_fixtures_tftp.sh`:
+  in.tftpd from tftpd-hpa 5.2 (`--secure --create`, as user `nobody`,
+  on a scratch directory) in one netns and the tftp-hpa 5.2 client and
+  curl 8.5.0 in another, over a veth pair with offload disabled on both
+  ends, tcpdump on the server's side filtering on the two hosts rather
+  than on port 69, so the whole transfer is kept: **the clients and the
+  server built every TFTP byte; the kernel built the UDP header** (its
+  checksum computed in software, and verified by `check_fixtures`),
+  **the IPv4 header and the Ethernet header**. A transfer is lockstep,
+  so the capture is kept whole, and the script asserts its composition
+  exactly, frame by frame: direction, whether port 69 is one of the
+  ports, opcode, block number, data length, error code and option names;
+  it also checks that each file arrived intact. Only the requests go to
+  port 69 (RFC 1350 §4), so a default walk decodes a `TFTP` layer for
+  those 6 alone and stops at UDP for the other 27; `tests/test_tftp.py`
+  decodes them by naming the server's port with `decode_as`. Two
+  behaviours are the programs' own and kept as sent: tftpd-hpa reports a
+  file it cannot open as ERROR code 0 with `strerror`'s text, not as
+  code 2, and the tftp-hpa client answers either ERROR with an ACK of
+  block 1, as BSD tftp's `recvfile` does. The file contents are fixed
+  text the script writes; the ports, the IPv4 identification and the
+  timestamps differ in a re-capture. veth does not pad, so no frame
+  carries Ethernet padding (every ACK here, 4 bytes in an untagged
+  frame over IPv4 with no options, would get 14 bytes of it on a wire)
+  or an FCS; `tests/test_tftp.py` appends both.
 
 - `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
   netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s

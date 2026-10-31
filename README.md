@@ -177,6 +177,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
 | 7 | RIP | `RIP` | RFC 1058/2453, RIPv1 and RIPv2 over UDP 520; route entries (`RIPEntry`) and the authentication entry (`RIPAuthentication`: plain-text password, RFC 4822 keyed MD5/HMAC-SHA) parsed on demand; RIPng is not decoded |
+| 7 | TFTP | `TFTP` | RFC 1350, over UDP 69; RRQ, WRQ, DATA, ACK, ERROR and the RFC 2347 OACK, fields read on demand (filename, mode, block, data, error code and message), options as name/value pairs with `blksize`, `timeout`, `tsize` (RFC 2348/2349) and `windowsize` (RFC 7440) as numbers; port 69 reaches the request only, since the transfer runs between two ephemeral ports (RFC 1350 §4) — the rest needs `decode_as` with the server's port |
 | 7 | NTP | `NTP` | RFC 5905 (NTPv4) and RFC 1305 (NTPv3), over UDP 123; the 48-byte header with every field raw, timestamps also as UTC `datetime`s (`transmit_time` and the rest, RFC 4330's era rule past 2036), Root Delay in seconds (signed below NTPv4, as RFC 1305 and RFC 2030 define it), stratum, kiss code and Reference ID display; RFC 7822 extension fields (`NTPExtensionField`, NTS's named, RFC 9748's experimental range said so) and the symmetric-key MAC (`NTPMAC`, not verified) parsed on demand; mode 6 and 7 control messages (RFC 9327's mode 6 from `ntpq`, mode 7 from `ntpdc`) are not decoded, so a strict walk raises `InvalidFieldError` on them: walk with `lax=True`; a typed per-walk port opt-out and decoding mode 6 are planned follow-ups |
 | 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; no reassembly |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
@@ -548,7 +549,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 `uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
 enforced by CI; the test suite runs across Python 3.12–3.14, while
 `mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-310-frame corpus of real captured traffic across 31 scenarios
+343-frame corpus of real captured traffic across 32 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See
