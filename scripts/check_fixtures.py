@@ -665,6 +665,9 @@ _STUN_PORT = 3478
 #: NTP's port (RFC 5905).
 _NTP_PORT = 123
 
+#: HSRP's port (RFC 2281 §5.1).
+_HSRP_PORT = 1985
+
 
 def _check_udp_payload(
     datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
@@ -674,8 +677,9 @@ def _check_udp_payload(
     :func:`_check_vxlan`), a RIPv2 message's keyed digest (see
     :func:`_check_rip`), a RADIUS packet's keyed authenticators (see
     :func:`_check_radius`), a STUN message's FINGERPRINT and
-    MESSAGE-INTEGRITY (see :func:`_check_stun`) or an NTP message's
-    MAC (see :func:`_check_ntp`)."""
+    MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP message's
+    MAC (see :func:`_check_ntp`) or an HSRP message's fields (see
+    :func:`_check_hsrp`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
@@ -688,6 +692,8 @@ def _check_udp_payload(
         return _check_stun(datagram[8:end], stats, stream=False)
     if _NTP_PORT in (src_port, dst_port):
         return _check_ntp(datagram, stats)
+    if _HSRP_PORT in (src_port, dst_port):
+        return _check_hsrp(datagram, stats)
     return []
 
 
@@ -1075,6 +1081,54 @@ def _check_ntp(datagram: bytes, stats: Counter) -> list[str]:
     ).digest()
     if not hmac.compare_digest(digest, mac[4:]):
         return [f"ntp-{algorithm}"]
+    return []
+
+
+#: HSRP's Op Codes (RFC 2281 §5.1), by the counter each one counts.
+_HSRP_OP_CODES = {0: "hello", 1: "coup", 2: "resign"}
+
+#: HSRP's states (RFC 2281 §5.1): Initial, Learn, Listen, Speak,
+#: Standby and Active.
+_HSRP_STATES = (0, 1, 2, 4, 8, 16)
+
+
+def _check_hsrp(datagram: bytes, stats: Counter) -> list[str]:
+    """Validate an HSRPv1 message (RFC 2281 §5.1).
+
+    HSRP carries no checksum of its own, and the UDP checksum already
+    covers every HSRP byte, so this checks the message's fields
+    instead. It must be the whole UDP payload, exactly 20 bytes, sent
+    from and to port 1985 (no MD5 Authentication TLV, which some Cisco
+    releases append, follows any message here), with Version 0, an Op
+    Code of Hello, Coup or Resign, a State the RFC defines and a zero
+    Reserved byte; a Hello's Holdtime must exceed its Hellotime, which
+    the RFC says only for Hellos, and the Authentication Data must be a
+    clear-text password, printable ASCII padded with NUL bytes. The
+    Reserved and Holdtime checks are on what the sender transmitted,
+    not on what a receiver requires: nothing in RFC 2281 tells a
+    receiver to drop a message that breaks them. HSRPv2, a sequence of
+    TLVs whose Group State TLV alone is 42 bytes, fails too."""
+    hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["hsrp"] += 1
+    if len(hsrp) != 20:
+        return ["hsrp-length"]
+    if struct.unpack_from("!HH", datagram) != (_HSRP_PORT, _HSRP_PORT):
+        return ["hsrp-port"]
+    version, op_code, state, hellotime, holdtime = hsrp[:5]
+    if version != 0:
+        return ["hsrp-version"]
+    if op_code not in _HSRP_OP_CODES:
+        return ["hsrp-op-code"]
+    stats[f"hsrp-{_HSRP_OP_CODES[op_code]}"] += 1
+    if state not in _HSRP_STATES:
+        return ["hsrp-state"]
+    if hsrp[7] != 0:
+        return ["hsrp-reserved"]
+    if op_code == 0 and holdtime <= hellotime:
+        return ["hsrp-holdtime"]
+    password = hsrp[8:16].rstrip(b"\x00")
+    if b"\x00" in password or not all(0x20 <= b < 0x7F for b in password):
+        return ["hsrp-auth-data"]
     return []
 
 

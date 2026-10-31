@@ -9,6 +9,7 @@ from netprotocols import (
     BGP,
     CDP,
     ESP,
+    HSRP,
     HTTP,
     LLC,
     LLDP,
@@ -62,6 +63,7 @@ class TestTruncation:
             (RADIUS, "raw_radius_status_server"),
             (STUN, "raw_stun_message"),
             (NTP, "raw_ntp_message"),
+            (HSRP, "raw_hsrp_hello"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
             (BGP, "raw_bgp_keepalive"),
@@ -170,6 +172,28 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "trailer",
+        [
+            pytest.param(b"\xde\xad\xbe\xef", id="fcs"),
+            pytest.param(bytes(26), id="padding"),
+            pytest.param(b"\x04\x1c\x01\x00" + bytes(26), id="md5-tlv"),
+        ],
+    )
+    def test_hsrp_leaves_what_follows_its_message(
+        self, raw_hsrp_hello, trailer, lax
+    ):
+        """HSRP has no length field and needs none: its message is
+        always 20 bytes, so an FCS, zero bytes or the MD5 Authentication
+        TLV some Cisco releases append are left undecoded."""
+        raw = raw_hsrp_hello + trailer
+        packet = decode_frame(raw, start=HSRP, lax=lax)
+        assert [type(layer) for layer in packet] == [HSRP]
+        assert packet.stopped_by is None
+        assert packet.consumed == 20
+        assert bytes(packet) == raw_hsrp_hello
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(

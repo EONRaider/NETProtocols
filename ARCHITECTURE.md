@@ -496,6 +496,7 @@ flowchart LR
   U -->|69, the request only| TF[TFTP]
   U -->|1812, 1813| RAD[RADIUS]
   U -->|123| NT[NTP]
+  U -->|1985| HS[HSRP]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
   U -->|3478| STUN[STUN message]
@@ -855,6 +856,33 @@ with `lax=True`, which keeps Ethernet, IP and UDP and reports the
 rejection as `stopped_by`. A typed way to take a port out of dispatch for one
 walk, and decoding mode 6, are planned follow-ups.
 
+HSRP on UDP 1985 (RFC 2281) rejects far more, though less than BGP and
+STUN below: its first three bytes must be a Version of 0, one of the
+three Op Codes (Hello, Coup, Resign) and one of the six States, which
+18 of the 2^24 values of those bytes are, about one in 932,000, and
+the payload must then hold the whole 20-byte message. Measured the
+same way, every walk to port 1985 ended with `stopped_by` set and none
+decoded an HSRP layer, over 10,000 random 300-byte payloads and 10,000
+of uniformly random length 0-600, padded or not (`random.Random` seeds
+0-2); padding cannot make a message, since a minimum-size frame leaves
+18 bytes after the UDP header. With the Version forced to 0,
+`HSRP.decode()` accepted 31 of 100,000 random 300-byte payloads
+(`random.Random(0)`), near the 27 expected. Past those three bytes any
+17 are a message: the timers, the Priority, the Group, the Reserved
+byte, the Authentication Data and the Virtual IP Address are not
+judged.
+
+The guard is also what keeps HSRPv2 (Cisco's TLV-based successor,
+sent to 224.0.0.102 on the same port) from being read as HSRPv1: an
+HSRPv2 message starts with a TLV type, 1, where HSRPv1 has its
+Version, so `HSRP.decode()` rejects every one at `version`, and it
+rejects Cisco's Op Code 3 interface-state Advertise, version 0 but
+laid out as a TLV, at `opcode`. Each byte is judged before the length,
+so either is reported as what it is however short. Neither is decoded,
+and as with NTP's control messages a strict walk raises on them: walk
+such traffic with `lax=True`. Only 1985 is registered; HSRPv2 over
+IPv6 uses port 2029, which nothing here decodes.
+
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
 bytes match once in 2^128, and then a Length and Type whose bounds
@@ -1084,7 +1112,8 @@ src/netprotocols/
 │                   tftp.py (TFTP, with RFC 2347 options),
 │                   radius.py (RADIUS + RADIUSAttribute),
 │                   stun.py (STUN messages, over UDP and TCP),
-│                   ntp.py (NTPv1-v4 time messages)
+│                   ntp.py (NTPv1-v4 time messages),
+│                   hsrp.py (HSRPv1 Hello, Coup and Resign)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

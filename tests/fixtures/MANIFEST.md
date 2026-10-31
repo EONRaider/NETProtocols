@@ -12,8 +12,14 @@ digest, every RADIUS authenticator a frame holds alone, every STUN
 MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
 below, and every STUN FINGERPRINT. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 367 frames across 34
+frames routinely leave checksums to NIC offload. 394 frames across 35
 scenarios. Addresses are as-captured from the capture host's network.
+One scenario, `hsrp.pcap`, was not captured here at all: no
+open-source HSRP speaker exists, so it is a public capture of two Cisco
+routers from the Wireshark wiki, trimmed by
+`scripts/fetch_fixtures_hsrp.sh` and distributed under the terms the
+wiki gives it, the GNU General Public License, not this repository's
+MIT license; see the HSRP note below.
 
 Twenty-one scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
@@ -71,6 +77,7 @@ below.
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and its Access-Accept; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
+| `hsrp.pcap` | 27 | HSRPv1 (RFC 2281) between two Cisco routers on one LAN, every message to 224.0.0.2 from and to UDP 1985 (with TTL 2, where RFC 2281 says 1), for group 1 and virtual IP 192.168.23.250, with the default authentication data `cisco`: router B (192.168.23.2, priority 100) alone — Hellos in Speak ×4 (Hellotime 3, Holdtime 10) and Standby ×1, then Active ×9 from the virtual MAC `00:00:0c:07:ac:01` (Hellotime 5, Holdtime 15); then router A (192.168.23.1, priority 110) preempting it — a Coup from Listen, A's first Active Hello, B's Resign from Speak, B's Speak Hello, A's second Coup, from Active, then Hellos alternating A Active ×4 and B Speak ×3, and B's first Standby Hello under A — 24 Hellos, 2 Coups, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **a public capture, not taken here**: the first 27 HSRP frames of the Wireshark wiki's `hsrp-and-ospf-in-LAN`, its OSPF frames left out, under the GNU GPL (see HSRP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -763,6 +770,99 @@ values are also hard-coded, independently, in
 | user | `np193-user` |
 | its password (PAP and CHAP) | `np193-pass` |
 | the wrong password (PAP, rejected) | `np193-wrong` |
+
+- `hsrp.pcap` was **not captured here**. RFC 2281's HSRP is Cisco's,
+  and no open-source implementation of it exists to run between two
+  netns as the other scenarios' daemons run, so this fixture is a
+  public capture of two real Cisco routers, taken by someone else and
+  published on the Wireshark wiki's SampleCaptures page
+  (<https://gitlab.com/wireshark/wireshark/-/wikis/SampleCaptures>, the
+  wiki's current home; `wiki.wireshark.org/SampleCaptures` is the same
+  page), in its HSRP entries:
+
+  > [hsrp-and-ospf-in-LAN](uploads/__moin_import__/attachments/SampleCaptures/hsrp-and-ospf-in-LAN)
+  > (libpcap) HSRP state changes and OSPF LSAs sent during link
+  > up/down/up.
+
+  | What | Value |
+  |---|---|
+  | Source | <https://gitlab.com/wireshark/wireshark/-/wikis/uploads/__moin_import__/attachments/SampleCaptures/hsrp-and-ospf-in-LAN> |
+  | Original filename | `hsrp-and-ospf-in-LAN` (17,392 bytes, 198 frames: 117 HSRP, 81 OSPFv2) |
+  | SHA-256 of the original | `757bc3e6acd7122a253393c10463765ebd76eeceef1e56ad1963b6465ecb4909` |
+  | Format | classic pcap, little-endian, microsecond timestamps, link type 1 (Ethernet), snap length 65535 |
+  | Captured | 2006-05-27, 01:43:03-01:47:45 UTC by the pcap timestamps; the 27 frames kept span 01:43:09-01:44:11 |
+  | Trimmed with | `tcpdump -r hsrp-and-ospf-in-LAN -w hsrp.pcap -c 27 'udp port 1985'` (tcpdump 4.99.4, libpcap 1.10.4) |
+  | SHA-256 of `hsrp.pcap` | `716b445607a68551f1dee6190fb5fdf07fe6bb108ae4e69f66a7248464792b8f` |
+  | License | GNU General Public License, per the Wireshark wiki's License page (below) |
+
+  `scripts/fetch_fixtures_hsrp.sh` reproduces the file: it downloads
+  the original, checks its SHA-256, runs that tcpdump command and checks
+  that the output is the original's 24-byte file header followed by its
+  first 27 records on UDP port 1985, byte for byte, timestamps included,
+  so **no byte of a kept frame was changed**; what the trim removed is
+  the 81 OSPF frames among them and the 90 later HSRP frames, steady
+  Hellos from both routers after B settles in Standby, as above. It
+  then asserts the selection, frame by frame, by sender, Op Code,
+  State, Hellotime, Holdtime and priority. **What the routers built:
+  every byte of every frame**, the Ethernet, IPv4 and UDP headers
+  included. Which device ran the capture, a third host on the LAN or a
+  switch's monitor port, the page does not say, so the inbound-only
+  rule above cannot be shown to hold; the checksums show what it is
+  for: `check_fixtures` verifies every IPv4 header checksum and UDP
+  checksum in the file, and all 27 of each verify, so no offload left
+  one unfilled. HSRP has no checksum of its own, so `check_fixtures`
+  checks each message's fields instead (see `_check_hsrp`): exactly 20
+  bytes, from and to port 1985, Version 0, a known Op Code and State,
+  a zero Reserved byte, a Hello's Holdtime above its Hellotime, and
+  clear-text Authentication Data. `tests/test_hsrp.py` checks what
+  that cannot see: every message goes to 224.0.0.2 from the sender's
+  own address, and a router uses the group's virtual MAC address as its
+  Ethernet source if and only if it reports the Active state (RFC 2281
+  §5.1, §6.1), in Coups as in Hellos. One thing departs from the RFC
+  and is kept as sent: both routers send every HSRP message with an
+  IPv4 TTL of 2, where §5.1 says TTL 1 (their OSPF packets carry TTL
+  1); the tests pin it. Nothing in the frames is sensitive: the
+  addresses are RFC 1918 ones, the MAC addresses the routers' own
+  Cisco ones, and the Authentication Data is `cisco` NUL-padded, the
+  default RFC 2281 §5.1 recommends. Router B's Hellotime and Holdtime
+  are 3 s and 10 s, the defaults RFC 2281 §5.1 recommends, until it
+  becomes Active, and 5 s and 15 s from then on, as in every message
+  from A; they are kept as sent. Everything here is IPv4 and untagged,
+  and no frame carries Ethernet padding or an FCS: a 20-byte HSRP
+  message behind UDP's 8 bytes and IPv4's 20 already fills Ethernet's
+  46-byte minimum payload. None of the capture's HSRP frames is an
+  Op Code 3 Advertise (the page's other HSRP capture, `hsrp.pcap`,
+  holds those) or HSRPv2 (no public capture of it was found), so
+  `tests/test_hsrp.py` builds both, and the trailers, by hand.
+
+### HSRP capture license
+
+The fixture is third-party content, and its terms are the Wireshark
+wiki's, not this repository's: the MIT license in `LICENSE` and
+CONTRIBUTING.md's contribution terms do not cover it. The wiki's
+License page
+(<https://gitlab.com/wireshark/wireshark/-/wikis/License>, "Wireshark
+Wiki License") reads, in full:
+
+> Original content on this site (that is, any content that did not
+> come with the original [MoinMoin](http://moinmoin.wikiwikiweb.de/)
+> installation) is available under the [GNU General Public
+> License](http://www.gnu.org/licenses/gpl.html).
+>
+> By contributing to this site, you agree to the terms of the GNU GPL.
+> Furthermore, you grant the operators of this web site a
+> non-exclusive, perpetual, and royalty-free license to redistribute
+> this content, either all or in part, under the terms of the GNU GPL.
+>
+> If you wish to use original content from this site, you must abide
+> by the terms of the GNU GPL.
+
+The SampleCaptures page states no other terms for its attachments. The
+License page names no GPL version, and under the GPL's own terms
+(GPLv2 §9, GPLv3 §14) a recipient may then choose any version the Free
+Software Foundation has published. `hsrp.pcap` and its
+copy in `staging/` are distributed under those terms, unmodified but
+for the trim recorded above, which leaves every kept record intact.
 
 ## HTTP captures (`tests/fixtures/http/`)
 
