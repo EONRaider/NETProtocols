@@ -50,11 +50,9 @@ jobs:
       # analyze writes the SARIF without uploading it, the filter step
       # drops one query's results on two paths, and upload-sarif uploads
       # what is left. py/weak-sensitive-data-hashing flags the MD5 that
-      # protocols such as RADIUS and STUN mandate (RADIUS authenticators,
-      # User-Password hiding and CHAP; STUN's long-term-credential key),
-      # which tests/ and scripts/check_fixtures.py compute over published
-      # test secrets with usedforsecurity=False to verify captured
-      # traffic (#265).
+      # RADIUS (#265) and STUN (#267) mandate, which their tests and
+      # scripts/check_fixtures.py compute over published test secrets
+      # with usedforsecurity=False to verify captured traffic.
       # The CodeQL config can't scope a query to paths: query-filters
       # drops it everywhere, src/ included, and paths-ignore drops the
       # paths from every query. So the filter removes only that query's
@@ -66,8 +64,9 @@ jobs:
       # when it succeeds. It still marks the analysis as completed, so
       # init's post step does not upload a failed-run SARIF for a later
       # step's failure either: if the filter or upload-sarif fails, the
-      # job goes red, nothing is uploaded, and the previous analysis
-      # stays current. That fails closed; unfiltered SARIF is never
+      # job goes red and no new analysis replaces the previous one
+      # (upload-sarif can fail after uploading, while it waits for
+      # processing). That fails closed; unfiltered SARIF is never
       # uploaded. (Any value the action does not recognize means
       # `always`, which would upload before the filter runs.)
       #
@@ -86,8 +85,9 @@ jobs:
           upload: failure-only
 
       # Rewrites each *.sarif under analyze's output directory, at any
-      # depth (as upload-sarif finds them), in place and logs one line
-      # per file naming every result it dropped; malformed SARIF fails
+      # depth and skipping symlinks (as upload-sarif finds them), in
+      # place and logs one line per file, by its path under the
+      # directory, naming every result it dropped; malformed SARIF fails
       # the job instead of uploading unfiltered results.
       # Stdlib only, so the runner's own python3 runs it.
       - name: Drop weak-hashing results on tests/ and scripts/

@@ -523,8 +523,74 @@ class TestMain:
         lines = capsys.readouterr().out.splitlines()
         assert [line.partition(":")[0] for line in lines] == [
             "a.sarif",
-            "b.sarif",
+            "python/more/b.sarif",
         ]
+
+    def test_files_are_logged_by_their_path_under_the_directory(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Two files of one name in different subdirectories must not
+        log as the same file."""
+        for name in ("a", "b"):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "x.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == [
+            "a/x.sarif",
+            "b/x.sarif",
+        ]
+
+    def test_a_directory_named_like_sarif_is_searched_not_read(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif takes only regular files (``Dirent.isFile()``),
+        and recurses into a directory whatever its name."""
+        nested = tmp_path / "x.sarif"
+        nested.mkdir()
+        (nested / "python.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        expected = fixture()
+        sarif_filter.filter_log(expected, CHECKOUT)
+        assert json.loads((nested / "python.sarif").read_text()) == expected
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == [
+            "x.sarif/python.sarif"
+        ]
+
+    def test_a_symlinked_sarif_file_is_left_alone(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif does not follow symlinks (``Dirent.isFile()`` is
+        false for one), so it never uploads what this one points to,
+        and the filter must not rewrite a file outside its directory."""
+        target = tmp_path / "elsewhere" / "target.sarif"
+        target.parent.mkdir()
+        target.write_bytes(FIXTURE.read_bytes())
+        output = tmp_path / "output"
+        output.mkdir()
+        (output / "python.sarif").write_bytes(FIXTURE.read_bytes())
+        try:
+            (output / "link.sarif").symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not supported here")
+        assert sarif_filter.main([str(output)]) == 0
+        assert target.read_bytes() == FIXTURE.read_bytes()
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == ["python.sarif"]
+
+    def test_a_file_named_just_dot_sarif_is_ignored(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Node's ``path.extname(".sarif")`` is ``""``, so upload-sarif
+        does not upload a file of that name; the ``*.sarif`` glob would
+        match it."""
+        (tmp_path / ".sarif").write_text("not SARIF")
+        (tmp_path / "python.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        assert (tmp_path / ".sarif").read_text() == "not SARIF"
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == ["python.sarif"]
 
     def test_a_directory_with_sarif_only_in_a_subdirectory_is_filtered(
         self, tmp_path: Path

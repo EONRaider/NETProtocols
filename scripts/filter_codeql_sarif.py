@@ -6,15 +6,18 @@ and scripts/ from a SARIF file before it is uploaded.
 
 Each argument is a SARIF 2.1.0 file or a directory, which stands for
 every ``*.sarif`` file under it at any depth: what the CodeQL Action's
-``analyze`` step writes to its ``output`` directory, and every file
-``upload-sarif`` would find there and upload. A result is
+``analyze`` step writes to its ``output`` directory, and exactly the
+files ``upload-sarif`` would find there and upload (regular files, not
+symlinks, named with a ``.sarif`` extension, in directories reached
+without following a symlink). A result is
 removed when its ``ruleId`` is exactly ``py/weak-sensitive-data-hashing``
 and its primary location (``locations[0]``) is a file under ``tests/``
 or ``scripts/``; every other result, every other field of the run (rule
 definitions, invocations, artifacts, properties) and every file with
 nothing to drop are left byte for byte as they were. A file that loses
-results is rewritten in place, and one line per file says what was
-dropped, so the CI log records it.
+results is rewritten in place, and one line per file, naming it by its
+path under the directory given, says what was dropped, so the CI log
+records it.
 
 Why this exists rather than a CodeQL config: ``query-filters`` drops a
 query everywhere, src/ included, and ``paths-ignore`` drops paths from
@@ -40,13 +43,14 @@ from typing import Any
 from urllib.parse import unquote, urljoin, urlsplit
 
 #: The query whose results this filters, and only on PATH_PREFIXES. The
-#: RADIUS (RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP), OSPF and
-#: RIP checks in tests/ and scripts/check_fixtures.py compute the MD5
-#: those RFCs require, over published test secrets and with
-#: ``usedforsecurity=False``, to verify captured traffic; NTP and STUN
-#: MACs will do the same. The query reads a variable named like a
-#: secret or password as sensitive data and flags every one of them
-#: (#265), so its findings there are noise; in src/ they would not be.
+#: OSPF and RIP checks in tests/ and scripts/check_fixtures.py compute
+#: the MD5 their RFCs require, over published test secrets and with
+#: ``usedforsecurity=False``, to verify captured traffic, as do those of
+#: RADIUS (#265: RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP) and
+#: STUN (#267: the long-term-credential key). The query reads a variable
+#: named like a secret or password as sensitive data and flags every one
+#: of them (#265), so its findings there are noise; in src/ they would
+#: not be.
 RULE_ID = "py/weak-sensitive-data-hashing"
 #: Repository-relative directories, each with its trailing slash so
 #: that ``tests_more/`` or ``scriptsfoo.py`` cannot match.
@@ -244,27 +248,55 @@ def filter_log(log: object, root: str) -> list[str]:
     return dropped
 
 
-def sarif_files(paths: list[Path]) -> list[Path]:
-    """Each file given, and every ``*.sarif`` under each directory
-    given, in subdirectories too (``upload-sarif`` recurses, so a file
-    this skipped would go up unfiltered), in sorted order; a directory
-    with none is an error, not an empty upload."""
-    files: list[Path] = []
+#: The extension ``upload-sarif`` looks for, compared as Node's
+#: ``path.extname`` does: case-sensitively, and never matching a name
+#: that is nothing but the extension. ``Path.suffix`` agrees on both
+#: (``Path(".sarif").suffix == ""``), where the ``*.sarif`` glob alone
+#: would match ``.sarif`` too.
+SARIF_SUFFIX = ".sarif"
+
+
+def _uploaded(path: Path) -> bool:
+    """Whether ``upload-sarif`` would upload ``path``, found under a
+    directory it was given: it walks with ``Dirent.isFile()``, which
+    is false for a symlink (to a file or not) and for a directory named
+    ``x.sarif``, and matches on ``path.extname``."""
+    return (
+        path.suffix == SARIF_SUFFIX and not path.is_symlink() and path.is_file()
+    )
+
+
+def sarif_files(paths: list[Path]) -> list[tuple[Path, str]]:
+    """Each file given, and every file ``upload-sarif`` would upload
+    from each directory given, in subdirectories too (it recurses, so a
+    file this skipped would go up unfiltered), in sorted order, each
+    with the name to log it by: a file's name, or its path relative to
+    the directory it was found under, so that ``a/x.sarif`` and
+    ``b/x.sarif`` log apart. ``rglob`` does not descend into a
+    symlinked directory (on 3.12, the oldest Python this project and
+    the runner's python3 run, and on later ones its
+    ``recurse_symlinks=False`` default), and neither does
+    ``upload-sarif``. A directory with none is an error, not an empty
+    upload."""
+    files: list[tuple[Path, str]] = []
     for path in paths:
         if path.is_dir():
-            found = sorted(p for p in path.rglob("*.sarif") if p.is_file())
+            found = sorted(
+                p for p in path.rglob("*" + SARIF_SUFFIX) if _uploaded(p)
+            )
             if not found:
                 raise MalformedSarifError(f"{path}: no *.sarif file in it")
-            files += found
+            files += [(p, p.relative_to(path).as_posix()) for p in found]
         elif path.is_file():
-            files.append(path)
+            files.append((path, path.name))
         else:
             raise MalformedSarifError(f"{path}: no such file or directory")
     return files
 
 
-def filter_file(path: Path, root: str) -> str:
-    """Filter one SARIF file in place; the summary line for it."""
+def filter_file(path: Path, root: str, name: str) -> str:
+    """Filter one SARIF file in place; the summary line for it, which
+    calls the file ``name``."""
     try:
         log = json.loads(path.read_text(encoding="utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -280,7 +312,7 @@ def filter_file(path: Path, root: str) -> str:
         )
     where = ", ".join(PATH_PREFIXES)
     summary = (
-        f"{path.name}: dropped {len(dropped)} {RULE_ID} result(s) under {where}"
+        f"{name}: dropped {len(dropped)} {RULE_ID} result(s) under {where}"
     )
     return summary + (f": {', '.join(dropped)}" if dropped else "")
 
@@ -304,8 +336,8 @@ def main(argv: list[str] | None = None) -> int:
     root = os.path.abspath(args.source_root)
 
     try:
-        for path in sarif_files(args.sarif):
-            print(filter_file(path, root))
+        for path, name in sarif_files(args.sarif):
+            print(filter_file(path, root, name))
     except (MalformedSarifError, OSError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
