@@ -11,6 +11,8 @@ The tftpd-hpa, tftp-hpa and curl transfers in tests/fixtures/tftp.pcap
 cases those programs do not send are built here.
 """
 
+import inspect
+import sys
 from dataclasses import replace
 
 import pytest
@@ -374,10 +376,24 @@ class TestExtent:
         ids=["leading-zero", "one-zero-mid", "one-zero-last"],
     )
     def test_an_fcs_short_of_an_option_is_left_undecoded(self, index, fcs):
-        """An FCS that starts with a zero byte, or holds fewer than two,
-        is left undecoded."""
+        """After whole option pairs, an FCS that starts with a zero
+        byte, or holds fewer than two, is left undecoded."""
         tftp = TFTP.decode(message_bytes(index) + fcs)
         assert tftp == tftp_of(index)
+
+    @pytest.mark.parametrize(
+        "fcs,value,taken",
+        [(b"\x12\x34\x56\x00", "\x124V", 4), (b"\x00\x12\x00\x34", "", 1)],
+        ids=["zero-last", "zero-first"],
+    )
+    def test_an_fcs_ends_a_name_left_without_a_value(self, fcs, value, taken):
+        """After a name with no value, an FCS's first zero byte ends
+        that value, so any trailer holding a zero byte can be read in
+        (#235)."""
+        raw = b"\x00\x01f\x00octet\x00blksize\x00512\x00tsize\x00"
+        tftp = TFTP.decode(raw + fcs)
+        assert tftp.options == (("blksize", "512"), ("tsize", value))
+        assert tftp.header_len == len(raw) + taken
 
 
 class TestTruncation:
@@ -693,3 +709,24 @@ class TestConstruction:
                 assert body == b"boot.bin\x00octet\x00"
             case _:
                 pytest.fail("the RRQ did not match")
+
+
+class TestDocstrings:
+    def test_no_control_characters_but_newline(self):
+        """The module's, the class's and every method's and property's
+        docstring: one that is not raw turns a single-backslash escape
+        such as ``\\x00`` into the byte itself; write ``\\\\x00``."""
+        module = sys.modules[TFTP.__module__]
+        docs = {"module": module.__doc__, "TFTP": TFTP.__doc__}
+        for name, member in [*vars(module).items(), *vars(TFTP).items()]:
+            if isinstance(member, (classmethod, staticmethod)):
+                member = member.__func__
+            if isinstance(member, property) or (
+                inspect.isfunction(member)
+                and member.__module__ == module.__name__
+            ):
+                docs[name] = member.__doc__
+        assert len(docs) > 20
+        for name, doc in docs.items():
+            controls = [c for c in doc or "" if ord(c) < 32 and c != "\n"]
+            assert not controls, name

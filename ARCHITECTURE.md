@@ -221,14 +221,15 @@ zero byte where the next name would start ending the options. So it
 obeys rule 3 like a header with a length field,
 `bytes(TFTP.decode(x)) == x[:header_len]`, and leaves Ethernet's
 padding (which every ACK, at 4 bytes, gets in an untagged frame over
-IPv4 with no options) and an FCS
-undecoded, with two exceptions only the UDP length could rule out
-(#235): padding after a name with no value ends that value, so
-`("tsize", "")` decodes and takes one padding byte, and an FCS after
-option pairs that holds a name, a zero byte, a value and a zero byte,
-such as `12 00 34 00`, reads as one more pair. A DATA message cannot
-bound itself at all: its data has no terminator, so it runs to the end
-of the buffer, and a trailer joins it, as it joins an ICMP `body`. Its
+IPv4 with no options) and an FCS undecoded, except that a trailer
+holding a zero byte can be read in, which only the UDP length could
+rule out (#235): after a name with no value, the trailer's first zero
+byte ends that value, so padding decodes `("tsize", "")` and takes one
+byte, and after whole pairs an FCS that holds a name, a zero byte, a
+value and a zero byte, such as `12 00 34 00`, reads as one more pair. A
+DATA message cannot bound itself at all: its data has no terminator, so
+it runs to the end of the buffer, and a trailer joins it, as it joins
+an ICMP `body`. Its
 strings are terminated rather than length-prefixed, so a missing
 terminator is TFTP's truncation case: a filename, mode or error message
 with no zero byte after it raises `TruncatedHeaderError`, as a lying

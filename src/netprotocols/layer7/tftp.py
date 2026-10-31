@@ -32,10 +32,10 @@ each acknowledged before the next is sent. Every message starts with a
 Strings are terminated by a zero byte, not prefixed by a length, so
 they are found with ``bytes.find`` rather than the TLV walker other
 modules share. The mode is ``netascii``, ``octet`` or ``mail`` (§5, in
-any case; §1 calls ``mail`` obsolete). Option negotiation (RFC 2347) appends
-name/value string pairs to a request, and the server answers with an
-OACK (opcode 6) naming the options it accepted, or ignores them; the
-values are decimal strings for the options defined so far:
+any case; §1 calls ``mail`` obsolete). Option negotiation (RFC 2347)
+appends name/value string pairs to a request, and the server answers
+with an OACK (opcode 6) naming the options it accepted, or ignores
+them; the values are decimal strings for the options defined so far:
 ``blksize`` (RFC 2348), ``timeout`` and ``tsize`` (RFC 2349) and
 ``windowsize`` (RFC 7440). Option names and values are
 case-insensitive ASCII (RFC 2347), so :meth:`TFTP.option` matches
@@ -105,18 +105,21 @@ leaves what follows undecoded, past :attr:`TFTP.header_len`, so
   is not in the DATA itself, no accessor says whether a block is the
   last one (RFC 1350 §6: a block shorter than the block size is).
 
-Structure bounds a request or an OACK only so far; two trailers still
-read as options, and only the UDP length could tell them apart (#235):
+Structure bounds a request or an OACK only so far: a trailer holding a
+zero byte can be read in as option bytes, and only the UDP length could
+tell (#235).
 
-- A message whose options end with a name and no value (an odd number
-  of option strings) takes the first byte of zero padding after it as
-  that value's terminator: ``...tsize\x00`` plus padding decodes the
-  option ``("tsize", "")`` and keeps one padding byte, where without
-  the padding the name is left undecoded as an option cut short.
-- A trailer that holds a name, a zero byte, a value and a zero byte
-  reads as one more option: an FCS ``12 00 34 00`` decodes as
-  ``("\x12", "4")``. An FCS that starts with a zero byte, or holds
-  fewer than two, is left undecoded.
+- After whole option pairs, a trailer reads as one more option when it
+  holds a name, a zero byte, a value and a zero byte: an FCS
+  ``12 00 34 00`` decodes as ``("\\x12", "4")``. One that starts with a
+  zero byte, as padding does, or holds fewer than two is left
+  undecoded.
+- After a name with no value (an odd number of option strings), the
+  trailer's first zero byte ends that value. ``...tsize\\x00`` plus zero
+  padding decodes ``("tsize", "")`` and keeps one padding byte, and plus
+  an FCS ``12 34 56 00`` decodes ``("tsize", "\\x124V")`` and keeps all
+  four; with no trailer the name is left undecoded as an option cut
+  short.
 
 Decoding a guess
 ----------------
