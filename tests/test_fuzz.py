@@ -57,6 +57,7 @@ from netprotocols import (
     SNAP,
     STP,
     TCP,
+    TFTP,
     UDP,
     VLAN,
     VRRP,
@@ -147,6 +148,7 @@ ALL_PROTOCOLS = (
     VRRP,
     VRRPv6,
     BGP,
+    TFTP,
 )
 
 
@@ -950,6 +952,111 @@ class TestRIPAccessorSafety:
         event(f"RIP authentication type: {auth and auth.auth_type}")
         event(f"RIP trailer located: {trailer is not None}")
         event(f"RIP remainder: {bool(rip.remainder)}")
+
+
+#: The captured TFTP messages, every one past its UDP header: requests
+#: with and without options, DATA, ACK, ERROR and OACK.
+_TFTP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "tftp.pcap")]
+
+#: Bytes from a small alphabet, zero bytes frequent, so strings,
+#: empty strings and option pairs turn up far more often than in free
+#: bytes. Led by an opcode decode accepts.
+_tftp_like = st.tuples(
+    st.sampled_from([bytes([0, opcode]) for opcode in range(1, 7)]),
+    st.lists(
+        st.sampled_from([0, 0, 0, 0x61, 0x62, 0x31, 0x32, 0xFF]),
+        max_size=40,
+    ).map(bytes),
+).map(b"".join)
+
+
+@st.composite
+def _tftp_seeded(draw: st.DrawFn) -> bytes:
+    """A captured TFTP message, a few bytes past the opcode changed
+    (often to zero), cut anywhere and followed by nothing, Ethernet-like
+    zero padding, an FCS-like 4 bytes or a few free bytes."""
+    raw = bytearray(draw(st.sampled_from(_TFTP_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(2, len(raw) - 1))
+        raw[position] = draw(st.sampled_from([0, draw(st.integers(0, 255))]))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""),
+            st.binary(min_size=1, max_size=14).map(lambda b: bytes(len(b))),
+            st.just(b"\xde\xad\xbe\xef"),
+            st.binary(max_size=8),
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+@st.composite
+def _tftp_long_numbers(draw: st.DrawFn) -> bytes:
+    """A request or an OACK whose number option holds a run of digits,
+    as often past int()'s 4,300-digit limit as short, leading zeros or
+    not."""
+    opcode = draw(st.sampled_from([1, 2, 6]))
+    name = draw(st.sampled_from(["blksize", "TIMEOUT", "tsize", "windowSize"]))
+    zeros = draw(st.sampled_from([0, 1, 4300, 5000]))
+    width = draw(
+        st.one_of(
+            st.integers(0, 25), st.integers(4290, 4310), st.integers(4311, 6000)
+        )
+    )
+    digit = draw(st.sampled_from("0123456789"))
+    value = "0" * zeros + digit * width
+    request = b"" if opcode == 6 else b"f\x00octet\x00"
+    option = f"{name}\x00{value}\x00".encode()
+    return bytes([0, opcode]) + request + option
+
+
+def _tftp_rebuilt(tftp: TFTP) -> bytes:
+    """Rebuild a decoded message's body from its accessors alone.
+
+    Exact for a body of ASCII bytes, which the accessors read verbatim;
+    an accessor answering None for its own opcode fails the rebuild.
+    """
+    options = b"".join(
+        f"{name}\x00{value}\x00".encode() for name, value in tftp.options
+    )
+    if tftp.opcode in (1, 2):
+        return f"{tftp.filename}\x00{tftp.mode}\x00".encode() + options
+    if tftp.opcode == 6:
+        return options
+    if tftp.opcode == 5:
+        message = f"{tftp.error_message}\x00".encode()
+        return tftp.error_code.to_bytes(2, "big") + message
+    tail = tftp.data if tftp.opcode == 3 else b""
+    return tftp.block.to_bytes(2, "big") + tail
+
+
+class TestTFTPAccessorSafety:
+    @given(
+        data=st.one_of(
+            _tftp_seeded(), _tftp_like, _tftp_long_numbers(), fuzz_input
+        )
+    )
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for an opcode other than 1-6 or a
+        mandatory field cut short, keeps a prefix of the buffer that
+        round-trips, and every accessor answers; for an ASCII body the
+        accessors describe every byte of it."""
+        try:
+            tftp = TFTP.decode(data)
+        except ProtocolError:
+            return
+        assert 1 <= tftp.opcode <= 6
+        assert bytes(tftp) == data[: tftp.header_len]
+        assert TFTP.decode(bytes(tftp)) == tftp
+        assert tftp.opcode_name
+        _ = (tftp.blksize, tftp.timeout, tftp.tsize, tftp.windowsize)
+        _ = (tftp.error_name, tftp.option("blksize"))
+        rebuilt = _tftp_rebuilt(tftp)
+        assert rebuilt == tftp.body or not tftp.body.isascii()
+        event(f"TFTP opcode: {tftp.opcode_name}")
+        event(f"TFTP options: {len(tftp.options)}")
+        event(f"TFTP left undecoded: {len(data) > tftp.header_len}")
 
 
 #: VRRP's display and per-version accessors, every one of which must
