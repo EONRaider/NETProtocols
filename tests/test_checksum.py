@@ -20,6 +20,7 @@ import pytest
 from conftest import FIXTURES, corpus_frames, pcap_frames
 from netprotocols import (
     ARP,
+    BGP,
     CDP,
     CDPTLV,
     ESP,
@@ -2487,6 +2488,34 @@ class TestSTUNFingerprint:
             replace(message, attributes=message.attributes[:-4] + bytes(4)),
         )
         assert bytes(zeroed.with_checksums()) == frame
+
+    @pytest.mark.parametrize("index", [6, 7])
+    def test_with_checksums_keeps_the_tcp_chain(self, index):
+        """Two messages in one TCP segment: the first, whose
+        FINGERPRINT is refilled when it has one, still names the second
+        as next, a record of decode that dataclasses.replace() would
+        otherwise drop."""
+        frame = pcap_frames(FIXTURES / "stun.pcap")[index]
+        packet = decode_frame(frame)
+        first, second = (x for x in packet.layers if isinstance(x, STUN))
+        filled = packet.with_checksums()
+        assert bytes(filled) == frame
+        assert filled == packet
+        refilled = [x for x in filled.layers if isinstance(x, STUN)]
+        assert [x.next_protocol() for x in refilled] == [STUN, None]
+        assert first.next_protocol() is STUN
+        assert second.next_protocol() is None
+
+    def test_with_checksums_keeps_the_bgp_chain(self):
+        """BGP records the same; it has no checksum to fill and was
+        never rebuilt, and still names each next message."""
+        frame = pcap_frames(FIXTURES / "bgp.pcap")[4]
+        packet = decode_frame(frame)
+        chain = [x.next_protocol() for x in packet.layers]
+        filled = packet.with_checksums()
+        assert bytes(filled) == frame
+        assert [x.next_protocol() for x in filled.layers] == chain
+        assert chain[-6:] == [BGP] * 5 + [None]
 
     def test_with_checksums_leaves_the_rest_alone(self):
         """No FINGERPRINT: nothing to fill; MESSAGE-INTEGRITY, keyed,

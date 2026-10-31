@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import MISSING, fields, replace
 from typing import TYPE_CHECKING, Self
 
 from netprotocols._base import Protocol
@@ -12,11 +12,33 @@ from netprotocols.utils.exceptions import (
 )
 
 if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
+
     from netprotocols.flow import FlowKey
     from netprotocols.layer3.ip import IPv4, IPv6
     from netprotocols.layer3.ipv6_ext import IPv6Routing
 
 __all__ = ["Packet"]
+
+
+def _refilled[P: DataclassInstance](layer: P, **changes: object) -> P:
+    """Rebuild ``layer`` with ``changes``, keeping its decode context.
+
+    :func:`dataclasses.replace` resets every field outside
+    ``__init__`` to its default, so the decode context some layers keep
+    there (``STUN``'s and ``BGP``'s record that another message follows
+    in the segment, ``MPLS``'s and ``LLC``'s view of their payload; see
+    :mod:`netprotocols._base`) would be lost, and a rebuilt STUN message
+    would end the walk. Filling a checksum changes no byte that context
+    was read from, so it is carried across. A field outside
+    ``__init__`` with no default is derived in ``__post_init__`` from
+    the others, and is left to it.
+    """
+    rebuilt = replace(layer, **changes)
+    for spec in fields(layer):
+        if not spec.init and spec.default is not MISSING:
+            object.__setattr__(rebuilt, spec.name, getattr(layer, spec.name))
+    return rebuilt
 
 
 def _enclosing_ip(
@@ -211,7 +233,10 @@ class Packet:
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
         is whatever comes after the last layer on the wire. Instances
-        are frozen, so layers are rebuilt via :func:`dataclasses.replace`.
+        are frozen, so layers are rebuilt via :func:`dataclasses.replace`,
+        keeping the decode context a layer records outside its fields,
+        such as whether another STUN message follows it in a TCP
+        segment.
         A STUN message's FINGERPRINT attribute is recomputed when it
         has one, last; its MESSAGE-INTEGRITY, which needs a key, is
         left as it is.
@@ -234,7 +259,7 @@ class Packet:
             layer = self.layers[index]
             if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4, VRRP, PIM)):
                 enclosing, routing = _enclosing_ip(self.layers, index)
-                layer = replace(
+                layer = _refilled(
                     layer,
                     checksum=compute(
                         layer, ip=enclosing, routing=routing, payload=trailing
@@ -244,11 +269,11 @@ class Packet:
                 isinstance(layer, OSPF)
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):
-                layer = replace(layer, checksum=compute(layer))
+                layer = _refilled(layer, checksum=compute(layer))
             elif isinstance(layer, STUN) and layer.fingerprint is not None:
                 # FINGERPRINT is the last 4 bytes of the attributes.
                 fingerprint = compute(layer).to_bytes(4, "big")
-                layer = replace(
+                layer = _refilled(
                     layer, attributes=layer.attributes[:-4] + fingerprint
                 )
             rebuilt.append(layer)
