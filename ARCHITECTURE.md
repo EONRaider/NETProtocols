@@ -214,6 +214,19 @@ raises. Ethernet's zero padding reaches only a message with no entries,
 since one entry already fills the minimum frame. See
 [`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
 
+`NTP` is the same case: after its 48-byte header come NTPv4 extension
+fields (RFC 7822) and a MAC, both optional, up to the end of the UDP
+datagram, which nothing in the message bounds. It keeps the whole
+buffer after the header, so `bytes(NTP.decode(x)) == x`, and its
+accessors split it: extension fields until what is left has a MAC's
+length (4, 20 or 24 bytes, the rule RFC 7822 §3's minimum field length
+is there for), then the MAC, and anything else as `remainder`. A
+4-byte Ethernet FCS after a plain message has a crypto-NAK's length,
+and only the UDP length could tell them apart. Past the header
+neither `decode()` nor any accessor raises, and Ethernet's padding
+never reaches it: the header alone fills the minimum frame. See
+[`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)'s module docstring.
+
 `VRRP` has no length field either, but needs no walk: its version and
 address count give its exact length (8 bytes, the addresses, and
 VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
@@ -453,6 +466,7 @@ flowchart LR
   U -->|4789| VX[VXLAN]
   VX -->|always| E
   U -->|520| R[RIP]
+  U -->|123| NT[NTP]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
 ```
@@ -736,6 +750,18 @@ does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
 tells a receiver to ignore but a decoder should show. Past the header,
 any 20 bytes are an entry.
 
+NTP on UDP 123 (RFC 5905) rejects less: of the first byte's 256
+values, 96 are a time message, a version from 1 to 4 and a mode other
+than 6 or 7, the control messages (RFC 9327's mode 6, ntpd's private
+mode 7) whose headers `NTP.decode()` does not read; anything shorter
+than the 48-byte header is rejected too. Measured the same way, the walk stopped for 61.2-62.9%
+of the 300-byte payloads (`random.Random` seeds 0-2), against the
+62.5% the first byte predicts, and for 65.5-66.3% of the 0-600 byte
+ones, padded or not: padding never makes a payload 48 bytes long.
+Past the first byte any 47 bytes are a header, and the stratum, the
+Reference ID and the timestamps are not judged, so a Kiss-o'-Death
+and a reserved stratum decode.
+
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
 bytes match once in 2^128, and then a Length and Type whose bounds
@@ -923,7 +949,8 @@ src/netprotocols/
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
 │                   and the HTTP codec class), vxlan.py, rip.py
-│                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages)
+│                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages),
+│                   ntp.py (NTPv1-v4 time messages)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

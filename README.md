@@ -177,6 +177,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
 | 7 | RIP | `RIP` | RFC 1058/2453, RIPv1 and RIPv2 over UDP 520; route entries (`RIPEntry`) and the authentication entry (`RIPAuthentication`: plain-text password, RFC 4822 keyed MD5/HMAC-SHA) parsed on demand; RIPng is not decoded |
+| 7 | NTP | `NTP` | RFC 5905 (NTPv4) and RFC 1305 (NTPv3), over UDP 123; the 48-byte header with every field raw, timestamps also as UTC `datetime`s (`transmit_time` and the rest, RFC 4330's era rule past 2036), stratum, kiss code and Reference ID display; RFC 7822 extension fields (`NTPExtensionField`, NTS's named) and the symmetric-key MAC (`NTPMAC`, not verified) parsed on demand; mode 6 and 7 control messages are not decoded |
 | 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; no reassembly |
 | 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
 

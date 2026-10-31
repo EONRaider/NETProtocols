@@ -122,6 +122,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.bgp import BGP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.ntp import NTP
     from netprotocols.layer7.rip import RIP
     from netprotocols.layer7.vxlan import VXLAN
 
@@ -212,6 +213,10 @@ def install(registry: Registry) -> None:
     # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
     # answer a Request from another port back to it, from 520.
     add(TABLE_UDP_PORT, 520, RIP)
+    # NTP (RFC 5905): a server listens on 123, a client sends from
+    # an ephemeral port or from 123, and symmetric peers and broadcast
+    # servers send from and to 123, so either port finds it.
+    add(TABLE_UDP_PORT, 123, NTP)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

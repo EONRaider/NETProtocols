@@ -101,6 +101,7 @@ class TestCorpusFiguresInDocs:
             "_tlv.py",
             "sctp.py",
             "rip.py",
+            "ntp.py",
             "vrrp.py",
             "bgp.py",
             "mpls.py",

@@ -21,6 +21,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.vxlan import VXLAN
 
@@ -29,6 +30,8 @@ __all__ = [
     "DHCP",
     "DNS",
     "HTTP",
+    "NTP",
+    "NTPMAC",
     "RIP",
     "VXLAN",
     "BGPOptionalParameter",
@@ -44,6 +47,7 @@ __all__ = [
     "HTTPFraming",
     "HTTPHeaderField",
     "MXRecord",
+    "NTPExtensionField",
     "RIPAuthentication",
     "RIPEntry",
     "SOARecord",

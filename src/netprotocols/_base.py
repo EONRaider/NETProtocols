@@ -80,7 +80,11 @@ is kept whole. See :mod:`netprotocols.layer3.pim`.
 which the walk does not trim to UDP's length either. It keeps the whole
 buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
 report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
-instead of raising. See :mod:`netprotocols.layer7.rip`.
+instead of raising. See :mod:`netprotocols.layer7.rip`. ``NTP`` is the
+same case after its 48-byte header: its extension fields and MAC run to
+the end of the datagram, so it keeps the rest of the buffer, and its
+accessors report what is neither as a remainder. See
+:mod:`netprotocols.layer7.ntp`.
 
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
