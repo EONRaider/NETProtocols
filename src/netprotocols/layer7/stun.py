@@ -661,12 +661,19 @@ class STUN(Protocol):
         """ERROR-CODE's code, ``300``-``699`` (RFC 8489 §14.8).
 
         That is the Class times 100 plus the Number. ``None`` without
-        the attribute, or with one shorter than 4 bytes.
+        the attribute, with one shorter than 4 bytes, or with one whose
+        Class is not 3-6 or whose Number is above 99, which RFC 8489
+        §14.8 rules out and which would otherwise read as a code of
+        0-955, or as another, valid code (Class 3, Number 150 as 450).
+        :attr:`error_reason` reads the reason phrase all the same.
         """
         found = self._error
         if found is None:
             return None
-        return (found.value[2] & 0x07) * 100 + found.value[3]
+        klass, number = found.value[2] & 0x07, found.value[3]
+        if not 3 <= klass <= 6 or number > 99:
+            return None
+        return klass * 100 + number
 
     @property
     def error_reason(self) -> str | None:

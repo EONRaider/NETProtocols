@@ -739,6 +739,20 @@ class TestAttributes:
             assert stun.error_code == code
             assert stun.error_reason == "why"
 
+    @pytest.mark.parametrize(
+        ("klass", "number"),
+        [(0, 0), (2, 99), (7, 0), (7, 255), (3, 100), (4, 150), (6, 255)],
+    )
+    def test_an_error_code_out_of_range_answers_none(self, klass, number):
+        """RFC 8489 §14.8: the Class is 3-6 and the Number 0-99. Any
+        other reads as None, not as a code of 0-955 or as a valid code
+        it is not (Class 4, Number 150, is not 550); the reason phrase
+        is still read."""
+        value = bytes([0, 0, klass, number])
+        stun = STUN.decode(message(attr(0x0009, value + b"why")))
+        assert stun.error_code is None
+        assert stun.error_reason == "why"
+
     def test_a_short_error_code_answers_none(self):
         stun = STUN.decode(message(attr(0x0009, b"\x00\x00\x04")))
         assert stun.error_code is None
