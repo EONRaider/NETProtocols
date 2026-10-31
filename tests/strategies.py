@@ -34,6 +34,7 @@ from netprotocols import (
     OSPF,
     OSPFLSA,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
@@ -840,6 +841,22 @@ def tftp_messages(draw: st.DrawFn) -> TFTP:
 
 
 @st.composite
+def radius_packets(draw: st.DrawFn) -> RADIUS:
+    # The attributes are kept raw whatever they hold, so they are drawn
+    # as free bytes, any length; parsed_attributes, not decode(), walks
+    # them. Any code decodes, and the Length is the one value the
+    # constructor accepts.
+    attributes = draw(st.binary(max_size=_MAX_BLOB * 2))
+    return RADIUS(
+        code=draw(st.integers(0, 0xFF)),
+        identifier=draw(st.integers(0, 0xFF)),
+        length=20 + len(attributes),
+        authenticator=draw(st.binary(min_size=16, max_size=16)),
+        attributes=attributes,
+    )
+
+
+@st.composite
 def pim_family_addresses(draw: st.DrawFn) -> tuple[int, str]:
     """A PIM address family and an address of it (RFC 7761 §4.9.1)."""
     if draw(st.booleans()):
@@ -982,5 +999,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "OSPF": ospf_packets(),
     "RIP": rip_messages(),
     "TFTP": tftp_messages(),
+    "RADIUS": radius_packets(),
     "BGP": bgp_messages(),
 }

@@ -52,6 +52,7 @@ from netprotocols import (
     MPLS,
     OSPF,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
@@ -145,6 +146,7 @@ ALL_PROTOCOLS = (
     VXLAN,
     OSPF,
     RIP,
+    RADIUS,
     VRRP,
     VRRPv6,
     BGP,
@@ -1057,6 +1059,69 @@ class TestTFTPAccessorSafety:
         event(f"TFTP opcode: {tftp.opcode_name}")
         event(f"TFTP options: {len(tftp.options)}")
         event(f"TFTP left undecoded: {len(data) > tftp.header_len}")
+
+
+#: The captured RADIUS packets, every one past its UDP header.
+_RADIUS_PACKETS = [
+    frame[42:] for frame in pcap_frames(FIXTURES / "radius.pcap")
+]
+
+
+@st.composite
+def _radius_seeded(draw: st.DrawFn) -> bytes:
+    """A captured RADIUS packet, a few bytes changed (the Length and
+    the attribute headers among them), cut anywhere and followed by
+    nothing, an FCS-like 4 bytes or up to 23 more: well-formed and
+    broken attribute lists, and Lengths near the buffer's, which free
+    bytes rarely reach."""
+    raw = bytearray(draw(st.sampled_from(_RADIUS_PACKETS)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(0, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+def _read_every_radius_attribute(radius: RADIUS) -> None:
+    """Walk the attributes and read every value and display accessor:
+    the walk either tiles the attributes exactly or raises
+    InvalidFieldError, and nothing else raises."""
+    try:
+        attributes = radius.parsed_attributes
+    except InvalidFieldError:
+        event("RADIUS attributes: malformed")
+        return
+    assert b"".join(map(bytes, attributes)) == radius.attributes
+    for found in attributes:
+        assert found.type_name
+        _ = found.value
+    _ = (radius.user_name, radius.nas_ip_address)
+    _ = (radius.nas_port, radius.framed_ip_address)
+    event(f"RADIUS attributes: {len(attributes)}")
+
+
+class TestRADIUSAccessorSafety:
+    @given(data=st.one_of(_radius_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for a Length below 20 or past the
+        buffer, and keeps exactly the bytes the Length covers; the
+        attribute walk and the accessors are total (see
+        _read_every_radius_attribute)."""
+        try:
+            radius = RADIUS.decode(data)
+        except ProtocolError:
+            length = int.from_bytes(data[2:4]) if len(data) >= 4 else 0
+            assert len(data) < 20 or not 20 <= length <= len(data)
+            return
+        assert bytes(radius) == data[: radius.length]
+        assert RADIUS.decode(bytes(radius)) == radius
+        assert radius.code_name
+        _read_every_radius_attribute(radius)
 
 
 #: VRRP's display and per-version accessors, every one of which must

@@ -94,6 +94,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
@@ -156,6 +157,7 @@ __all__ = [
     "OSPF",
     "OSPFLSA",
     "PIM",
+    "RADIUS",
     "RIP",
     "SCTP",
     "SNAP",
@@ -228,6 +230,7 @@ __all__ = [
     "Packet",
     "Protocol",
     "ProtocolError",
+    "RADIUSAttribute",
     "RIPAuthentication",
     "RIPEntry",
     "Registry",

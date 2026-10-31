@@ -21,6 +21,7 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
+from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
@@ -30,6 +31,7 @@ __all__ = [
     "DHCP",
     "DNS",
     "HTTP",
+    "RADIUS",
     "RIP",
     "TFTP",
     "VXLAN",
@@ -46,6 +48,7 @@ __all__ = [
     "HTTPFraming",
     "HTTPHeaderField",
     "MXRecord",
+    "RADIUSAttribute",
     "RIPAuthentication",
     "RIPEntry",
     "SOARecord",

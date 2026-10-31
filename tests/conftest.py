@@ -293,6 +293,19 @@ def raw_rip_message() -> bytes:
 
 
 @pytest.fixture
+def raw_radius_status_server() -> bytes:
+    """Status-Server from tests/fixtures/radius.pcap: the 20-byte header
+    (Code 12, Identifier 228, Length 38, the random Request
+    Authenticator) and its one attribute, a Message-Authenticator."""
+    return bytes.fromhex(
+        "0ce40026"
+        "88699679518971d08ca160f10302d1c5"
+        "5012"
+        "85541b6f94ed552994cbc2c449000a22"
+    )
+
+
+@pytest.fixture
 def raw_vrrpv2_advert() -> bytes:
     """VRRPv2 advert from ``vrrp.pcap``: VRID 51, priority 200, Auth
     Type 1 (PASS), Adver Int 1 s, two addresses, then the null-padded
