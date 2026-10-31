@@ -24,10 +24,11 @@
 #             but STUN's own Message Length).
 #   secure    A second server, --secure-stun with the long-term
 #             credential mechanism (RFC 5389 §10.2) and one published
-#             test user: an unauthenticated Binding Request draws error
-#             401 with REALM and NONCE, and a script-built request
-#             repeating them with USERNAME and MESSAGE-INTEGRITY draws a
-#             Success Response with MESSAGE-INTEGRITY of its own.
+#             test user: a script-built Binding Request carrying only a
+#             FINGERPRINT draws error 401 with REALM and NONCE, and a
+#             second one repeating them with USERNAME and
+#             MESSAGE-INTEGRITY draws a Success Response with
+#             MESSAGE-INTEGRITY of its own.
 #   classic   The `stun` client (stun-client 0.97), which speaks RFC
 #             3489: no magic cookie, a 16-byte transaction ID. coturn
 #             answers it in kind, with MAPPED-ADDRESS, SOURCE-ADDRESS,
@@ -43,11 +44,13 @@
 # message: direction, transport, message type, attribute types in order,
 # matching transaction IDs, error codes, and every FINGERPRINT.
 #
-# What coturn built: every response. What turnutils_stunclient and the
-# `stun` client built: their requests (binding, rfc5780, classic, and
-# the secure scenario's first request). What this script built: the
-# other requests (unknown, tcp, and the authenticated one), in the
-# Python client below. What the kernel built: the UDP and TCP headers
+# What coturn built: every response, the 7 in the corpus among them.
+# What turnutils_stunclient built: the binding and rfc5780 requests, 2
+# of the corpus's 9, neither with a FINGERPRINT. What the `stun` client
+# built: the classic requests. What this script built: the other 5 of
+# the corpus's requests (unknown's, tcp's two and secure's two), in the
+# Python client below, each but tcp's second ending in a FINGERPRINT.
+# What the kernel built: the UDP and TCP headers
 # and their checksums (offload is off on both veth ends, so they are
 # computed), the IPv4 header and the Ethernet header. Both directions
 # are captured on the client's side of the pair. The kernel has no

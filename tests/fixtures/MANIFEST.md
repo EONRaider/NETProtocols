@@ -570,13 +570,17 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   or DTLS, `--fingerprint`) on 10.9.194.2 in one netns, clients on
   10.9.194.1 in another, a veth pair between them with offload disabled
   on both ends, tcpdump on the client's side, one capture per scenario.
-  **coturn built every response. `turnutils_stunclient` built the
-  binding and RFC 5780 requests and the secure scenario's first one;
-  the script built the others** (the unknown-attribute request, the two
-  TCP requests and the authenticated request), in a stdlib Python
-  client, adding a FINGERPRINT to each; **the kernel built the UDP and
-  TCP headers** (their checksums computed in software and verified by
-  `check_fixtures`), **the IPv4 header and the Ethernet header.** The
+  **coturn built every response (frames 1, 3, 5, 7 with two, 9 and
+  11). `turnutils_stunclient` built the binding and RFC 5780 requests
+  (frames 0 and 2), neither with a FINGERPRINT; the script built the
+  other five** (the unknown-attribute request, frame 4; the two TCP
+  requests, both in frame 6; and the secure scenario's two, the
+  unauthenticated request in frame 8 and the authenticated one in
+  frame 10), in a stdlib Python client, adding a FINGERPRINT to each
+  but the second TCP request, which is a bare header; **the kernel
+  built the UDP and TCP headers** (their checksums computed in software
+  and verified by `check_fixtures`), **the IPv4 header and the Ethernet
+  header.** The
   script keeps every UDP frame, every TCP segment with data (a bare
   ACK on port 3478 hands `STUN` an empty payload, as one on 179 hands
   `BGP`), and of the `-f` run only the RFC 5780 request and its answer,
