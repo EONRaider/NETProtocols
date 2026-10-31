@@ -47,4 +47,50 @@ jobs:
           languages: python
           build-mode: none
 
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      # analyze writes the SARIF without uploading it, the filter step
+      # drops one query's results on two paths, and upload-sarif uploads
+      # what is left. py/weak-sensitive-data-hashing flags the MD5 that
+      # RADIUS, OSPF and RIP require (authenticators, User-Password
+      # hiding, CHAP, keyed digests), which tests/ and
+      # scripts/check_fixtures.py compute over published test secrets
+      # with usedforsecurity=False to verify captured traffic (#265).
+      # The CodeQL config can't scope a query to paths: query-filters
+      # drops it everywhere, src/ included, and paths-ignore drops the
+      # paths from every query. So the filter removes only that query's
+      # results whose primary location is under tests/ or scripts/; the
+      # query still runs on src/, every other query on all three.
+      #
+      # upload: failure-only is the action's documented mode for a
+      # workflow that post-processes the SARIF: nothing is uploaded on
+      # success, and if the job fails (the filter included), the init
+      # step's post action still uploads a failed-run SARIF, so the
+      # failure shows on the code scanning tool status page rather than
+      # leaving the last analysis silently standing. (`never` would skip
+      # that too; any unrecognized value means `always`.)
+      #
+      # Neither analyze nor upload-sarif sets `category`, and that is
+      # what keeps the analysis the same one: with no category the CLI
+      # writes no runs[].automationDetails, and both actions then fill
+      # it in from the workflow path, job id and matrix,
+      # ".github/workflows/codeql.yml:analyze/", the same in both
+      # steps of this job. Existing alerts keep tracking (fixed ones
+      # close, the rest stay) rather than reappearing under a new
+      # category. Setting one on either step alone would start a second
+      # analysis next to the first.
+      - id: analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          upload: failure-only
+
+      # Rewrites each *.sarif in analyze's output directory in place and
+      # logs one line per file naming every result it dropped; malformed
+      # SARIF fails the job instead of uploading unfiltered results.
+      # Stdlib only, so the runner's own python3 runs it.
+      - name: Drop weak-hashing results on tests/ and scripts/
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
+        run: python3 scripts/filter_codeql_sarif.py "$SARIF_DIR"
+
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ steps.analyze.outputs.sarif-output }}

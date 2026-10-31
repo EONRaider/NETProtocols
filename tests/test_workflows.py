@@ -274,10 +274,17 @@ class TestCodeQLActionVersionLockstep:
         )
         steps = {step for group in pins.values() for step in group}
         # Guard against passing vacuously: codeql.yml's init/analyze
-        # pair is the reason this check exists, so it must be seen.
-        assert {"codeql.yml: init", "codeql.yml: analyze"} <= steps, (
-            f"expected codeql.yml's init and analyze steps, found "
-            f"{sorted(steps)}"
+        # pair is the reason this check exists, so it must be seen, and
+        # so must the upload-sarif step that uploads analyze's SARIF
+        # once scripts/filter_codeql_sarif.py has filtered it.
+        expected = {
+            "codeql.yml: init",
+            "codeql.yml: analyze",
+            "codeql.yml: upload-sarif",
+        }
+        assert expected <= steps, (
+            f"expected codeql.yml's init, analyze and upload-sarif steps, "
+            f"found {sorted(steps)}"
         )
         assert len(pins) == 1, (
             f"github/codeql-action steps are pinned to {len(pins)} "
@@ -298,6 +305,154 @@ class TestCodeQLActionVersionLockstep:
             old: ["codeql.yml: init"],
             new: ["codeql.yml: analyze"],
         }
+
+
+CODEQL = WORKFLOWS / "codeql.yml"
+SARIF_OUTPUT = "${{ steps.analyze.outputs.sarif-output }}"
+
+
+def job_steps(block: str) -> list[str]:
+    """Split a :func:`job_blocks` block's ``steps:`` list into the text
+    of each step, in order (comments are already gone)."""
+    _, sep, after = block.partition("    steps:\n")
+    assert sep, "the job has no steps: list"
+    steps: list[str] = []
+    for line in after.splitlines():
+        if line.startswith("      - "):
+            steps.append(line + "\n")
+        elif line.startswith("        ") and steps:
+            steps[-1] += line + "\n"
+        else:
+            break  # left the steps: list
+    assert steps, "the job's steps: list is empty"
+    return steps
+
+
+def step_key(step: str, key: str) -> str | None:
+    """The value of ``key`` anywhere in one step's text (its own keys,
+    or a ``with:``/``env:`` entry), or ``None``."""
+    match = re.search(
+        rf"(?m)^\s+(?:-\s+)?{re.escape(key)}:[ \t]*(.*?)\s*$", step
+    )
+    return match.group(1) if match else None
+
+
+class TestCodeQLWorkflow:
+    """codeql.yml's analyze job writes the SARIF, filters it with
+    scripts/filter_codeql_sarif.py, and only then uploads it.
+
+    Every way to get this wrong still runs green: an analyze step that
+    uploads too puts the unfiltered results in first; a filter after
+    the upload, or reading another directory, filters nothing; and a
+    category on either step starts a second analysis beside the first,
+    so every existing alert reappears instead of closing or staying.
+    """
+
+    @pytest.fixture
+    def steps(self) -> list[str]:
+        return job_steps(job_blocks(CODEQL)["analyze"])
+
+    @staticmethod
+    def uses(step: str) -> str | None:
+        """The step's ``uses:`` reference, on whichever line it is."""
+        refs = [uses_ref(line) for line in step.splitlines()]
+        return next((ref for ref in refs if ref is not None), None)
+
+    @staticmethod
+    def find(steps: list[str], needle: str) -> int:
+        matches = [i for i, step in enumerate(steps) if needle in step]
+        assert len(matches) == 1, (
+            f"expected one codeql.yml step with {needle!r}, found "
+            f"{len(matches)}"
+        )
+        return matches[0]
+
+    def test_analyze_writes_the_sarif_without_uploading_it(
+        self, steps: list[str]
+    ) -> None:
+        """``failure-only`` (the action's documented mode for a
+        workflow that post-processes the SARIF) uploads nothing from a
+        successful analysis; ``always`` and any value the action does
+        not recognize upload before the filter runs."""
+        analyze = steps[self.find(steps, "github/codeql-action/analyze@")]
+        assert step_key(analyze, "upload") == "failure-only"
+        assert step_key(analyze, "id") == "analyze"
+
+    def test_the_filter_runs_between_analyze_and_upload(
+        self, steps: list[str]
+    ) -> None:
+        analyze = self.find(steps, "github/codeql-action/analyze@")
+        script = self.find(steps, "scripts/filter_codeql_sarif.py")
+        upload = self.find(steps, "github/codeql-action/upload-sarif@")
+        assert analyze < script < upload
+        assert (ROOT / "scripts" / "filter_codeql_sarif.py").is_file()
+
+    def test_filter_and_upload_use_the_sarif_analyze_wrote(
+        self, steps: list[str]
+    ) -> None:
+        script = steps[self.find(steps, "scripts/filter_codeql_sarif.py")]
+        assert step_key(script, "SARIF_DIR") == SARIF_OUTPUT
+        assert step_key(script, "run") == (
+            'python3 scripts/filter_codeql_sarif.py "$SARIF_DIR"'
+        )
+        upload = steps[self.find(steps, "github/codeql-action/upload-sarif@")]
+        assert step_key(upload, "sarif_file") == SARIF_OUTPUT
+
+    def test_upload_sarif_runs_the_same_release_as_analyze(
+        self, steps: list[str]
+    ) -> None:
+        pins = {
+            ref.rpartition("@")[0]: ref.rpartition("@")[2]
+            for ref in (self.uses(step) for step in steps)
+            if ref is not None and ref.startswith(CODEQL_ACTION)
+        }
+        assert set(pins) == {
+            f"{CODEQL_ACTION}init",
+            f"{CODEQL_ACTION}analyze",
+            f"{CODEQL_ACTION}upload-sarif",
+        }
+        assert len(set(pins.values())) == 1, pins
+
+    def test_the_category_is_the_one_analyze_always_used(
+        self, steps: list[str]
+    ) -> None:
+        """With no ``category`` the CLI writes no
+        ``runs[].automationDetails`` (tests/fixtures/codeql/python.sarif,
+        TestTheFixture in test_filter_codeql_sarif.py), and the action
+        fills it in from the workflow path, the job id and the matrix:
+        ".github/workflows/codeql.yml:analyze/", which upload-sarif
+        derives exactly as analyze did, in the same job. That is the
+        category this repository's alerts are tracked under, so neither
+        step may set one, the job keeps its id and gains no matrix."""
+        for step in steps:
+            ref = self.uses(step)
+            if ref is not None and ref.startswith(CODEQL_ACTION):
+                assert step_key(step, "category") is None, step
+        assert "analyze" in job_blocks(CODEQL)
+        assert "matrix" not in job_blocks(CODEQL)["analyze"]
+
+    def test_every_trigger_filters_and_uploads(self, steps: list[str]) -> None:
+        """push, pull_request and schedule all run the same steps: no
+        step is conditional, so none of them can skip the filter."""
+        on = CODEQL.read_text().partition("\non:\n")[2].partition("\n\n")[0]
+        for trigger in ("push", "pull_request", "schedule"):
+            assert re.search(rf"(?m)^  {trigger}:", on), trigger
+        for step in steps:
+            assert step_key(step, "if") is None, step
+
+    def test_the_job_keeps_its_minimal_permissions(self) -> None:
+        block = job_blocks(CODEQL)["analyze"]
+        permissions = block.partition("    permissions:\n")[2]
+        granted = []
+        for line in permissions.splitlines():
+            if not line.startswith("      "):
+                break
+            granted.append(line.strip())
+        assert granted == [
+            "actions: read",
+            "contents: read",
+            "security-events: write",
+        ]
 
 
 class TestCIWorkflow:
@@ -838,7 +993,12 @@ NEW_WORKFLOW_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mutation.yml": ("mutation", ("mutmut run",)),
     "codeql.yml": (
         "analyze",
-        ("codeql-action/init", "codeql-action/analyze"),
+        (
+            "codeql-action/init",
+            "codeql-action/analyze",
+            "scripts/filter_codeql_sarif.py",
+            "codeql-action/upload-sarif",
+        ),
     ),
     "scorecard.yml": ("analysis", ("ossf/scorecard-action",)),
     "docs-lint.yml": ("lychee", ("lycheeverse/lychee-action",)),
