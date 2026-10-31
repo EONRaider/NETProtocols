@@ -47,9 +47,14 @@ field: the IEEE CRC-32 (the standard library's, the one Ethernet's FCS
 uses) of the message up to the attribute, XORed with ``0x5354554E``
 (RFC 8489 §14.7, RFC 5389 §15.5). :func:`compute` returns it for a
 message that ends in one, and :func:`verify` accepts a message without
-one, as it does a GRE header without the C bit. MESSAGE-INTEGRITY, the
-keyed HMAC beside it, is not a checksum this module can compute: it
-needs the credential's key.
+one, as it does a GRE header without the C bit. No one field says
+whether a message has one, so a message has none only when its
+attributes walk whole, none of them a FINGERPRINT, and its last 8 bytes
+do not begin like one: a corrupted Length earlier in the list, which
+would end the walk short of the FINGERPRINT or fold it into a longer
+value, fails rather than reading as a message without one.
+MESSAGE-INTEGRITY, the keyed HMAC beside it, is not a checksum this
+module can compute: it needs the credential's key.
 
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
@@ -469,6 +474,32 @@ def _stun_fingerprint(layer: STUN) -> int:
     return binascii.crc32(bytes(layer)[:-8]) ^ STUN.FINGERPRINT_XOR
 
 
+#: A FINGERPRINT attribute's header: its type and a Length of 4.
+_STUN_FINGERPRINT_HEADER = STUN.FINGERPRINT.to_bytes(2, "big") + b"\x00\x04"
+
+
+def _stun_carries_no_fingerprint(layer: STUN) -> bool:
+    """Return whether a STUN message carries no FINGERPRINT to verify.
+
+    Only a message whose attributes walk whole with no attribute of
+    type ``0x8028`` among them, and whose last 8 bytes do not begin
+    like one, carries none. Presence is not read from the walk alone:
+    a corrupted Length earlier in the list could end the walk before
+    the FINGERPRINT, or swallow it into a longer value, and a message
+    that does carry one would read as one without. A FINGERPRINT must
+    be last (RFC 8489 §14.7), so its header in the last 8 bytes is
+    enough to claim one; the walk not reaching the end, or finding one
+    anywhere, is too.
+    """
+    if layer.attributes[-8:-4] == _STUN_FINGERPRINT_HEADER:
+        return False
+    try:
+        attributes = layer.parsed_attributes
+    except InvalidFieldError:
+        return False
+    return all(attribute.type != STUN.FINGERPRINT for attribute in attributes)
+
+
 def _standalone_checksum(layer: Protocol) -> int | None:
     """Checksum a layer whose checksum covers its own bytes alone.
 
@@ -615,8 +646,9 @@ def _carries_no_checksum(layer: Protocol, ip: IPv4 | IPv6 | None) -> bool:
     That is a UDP-over-IPv4 checksum of ``0`` (RFC 768), a GRE header
     without the C bit (RFC 2784 §2.5), an OSPF packet under
     cryptographic authentication (RFC 2328 §D.4.3, RFC 7474 §5), and a
-    STUN message with no FINGERPRINT attribute anywhere (RFC 8489
-    §14.7).
+    STUN message whose attributes walk whole with no FINGERPRINT
+    attribute among them or begun in their last 8 bytes (RFC 8489
+    §14.7; see :func:`_stun_carries_no_fingerprint`).
     """
     if isinstance(layer, UDP):
         return layer.checksum == 0 and not isinstance(ip, IPv6)
@@ -625,7 +657,7 @@ def _carries_no_checksum(layer: Protocol, ip: IPv4 | IPv6 | None) -> bool:
     if isinstance(layer, OSPF):
         return layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES
     if isinstance(layer, STUN):
-        return layer.attribute(STUN.FINGERPRINT) is None
+        return _stun_carries_no_fingerprint(layer)
     return False
 
 
@@ -651,11 +683,16 @@ def verify(
     packet under cryptographic authentication (AuType 2 or 3, RFC 2328
     §D.4.3, RFC 7474 §5), whose digest this library cannot check
     without the key, and a STUN message with no FINGERPRINT attribute
-    (RFC 8489 §14.7); a STUN message with one anywhere but last, where
-    RFC 8489 §14.7 requires it, fails. A PIM Register verifies with its
-    checksum over its first 8 bytes, as RFC 7761 §4.9.3 computes it, or
-    over the whole message, as it asks a receiver to accept too ("for
-    interoperability reasons"). So a whole-message Register verifies, but
+    (RFC 8489 §14.7). A STUN message with one anywhere but last, where
+    RFC 8489 §14.7 requires it, fails, and so does one whose attributes
+    do not walk to their end, or whose last 8 bytes begin like a
+    FINGERPRINT the walk does not reach: either may be a FINGERPRINTed
+    message with an earlier Length corrupted.
+
+    A PIM Register verifies with its checksum over its first 8 bytes,
+    as RFC 7761 §4.9.3 computes it, or over the whole message, as it
+    asks a receiver to accept too ("for interoperability reasons"). So
+    a whole-message Register verifies, but
     :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
     the 8-byte form :func:`compute` returns.
 

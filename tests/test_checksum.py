@@ -2243,6 +2243,9 @@ STUN_MESSAGES = [
     if isinstance(layer, STUN)
 ]
 
+#: The eleven of them that carry a FINGERPRINT.
+STUN_FINGERPRINTED = [m for m in STUN_MESSAGES if m.fingerprint is not None]
+
 
 def stun_with_fingerprint(attributes: bytes, value: bytes = bytes(4)) -> STUN:
     """A Binding Request of ``attributes`` and then a FINGERPRINT."""
@@ -2362,16 +2365,18 @@ class TestSTUNFingerprint:
         assert not verify(message)
 
     def test_a_fingerprint_behind_a_malformed_attribute(self):
-        """A FINGERPRINT the walk cannot reach is not one, and the
-        message carries none it can verify; one the walk reaches before
-        the malformed attribute is not last."""
+        """A FINGERPRINT the walk cannot reach is not one it can
+        verify, and the message may still carry it, so it fails; one
+        the walk reaches before the malformed attribute is not last."""
         hidden = STUN(
             0x0001,
             attributes=b"\x80\x22\x00\x20"
             + bytes(STUNAttribute(STUN.FINGERPRINT, bytes(4))),
         )
         assert hidden.fingerprint is None
-        assert verify(hidden)
+        assert not verify(hidden)
+        with pytest.raises(InvalidFieldError):
+            compute(hidden)
         early = STUN(
             0x0001,
             attributes=bytes(STUNAttribute(STUN.FINGERPRINT, bytes(4)))
@@ -2379,6 +2384,88 @@ class TestSTUNFingerprint:
         )
         assert early.fingerprint is None
         assert not verify(early)
+
+    def test_a_malformed_list_without_a_fingerprint_fails(self):
+        """A list that does not walk whole may hide a FINGERPRINT
+        anywhere past the break, so it cannot be one without."""
+        broken = STUN(0x0001, attributes=b"\x80\x22\x00\x20")
+        assert not verify(broken)
+        with pytest.raises(InvalidFieldError):
+            compute(broken)
+
+    @staticmethod
+    def corrupt(offset: int, mask: int) -> STUN:
+        """Fixture frame 1's Binding Success Response, one bit flipped
+        at ``offset`` into the message."""
+        raw = bytearray(bytes(STUN_FINGERPRINTED[0]))
+        raw[offset] ^= mask
+        return STUN.decode(bytes(raw))
+
+    def test_a_length_that_breaks_the_walk_fails(self):
+        """XOR-MAPPED-ADDRESS's Length 8 -> 12: the walk ends at the
+        next attribute, short of the FINGERPRINT, which used to read as
+        a message without one."""
+        message = self.corrupt(20 + 3, 0x04)
+        with pytest.raises(InvalidFieldError):
+            _ = message.parsed_attributes
+        with pytest.raises(InvalidFieldError):
+            compute(message)
+        assert message.fingerprint is None
+        assert not verify(message)
+
+    def test_a_length_that_swallows_the_fingerprint_fails(self):
+        """RESPONSE-ORIGIN's Length 8 -> 40: the walk stays whole, the
+        SOFTWARE and the FINGERPRINT folded into RESPONSE-ORIGIN's
+        value, but the last 8 bytes still begin like a FINGERPRINT."""
+        message = self.corrupt(20 + 24 + 3, 0x20)
+        attributes = message.parsed_attributes
+        assert [a.type for a in attributes] == [0x0020, 0x0001, 0x802B]
+        assert len(attributes[-1].value) == 40
+        assert message.attribute(STUN.FINGERPRINT) is None
+        assert message.fingerprint is None
+        with pytest.raises(InvalidFieldError):
+            compute(message)
+        assert not verify(message)
+
+    @pytest.mark.parametrize("index", range(11))
+    def test_every_single_bit_flip_fails(self, index):
+        """CRC-32 catches every single-bit error in what it covers, so
+        every flip of a captured FINGERPRINTed message that still
+        decodes fails, but two kinds that leave a well-formed message
+        with no FINGERPRINT at all, which nothing in the message itself
+        can tell from one sent without: a flip of the FINGERPRINT's own
+        type, which makes it another attribute, and a Length shrunk to
+        end the message on an attribute boundary before it. Each is
+        GRE's C bit cleared. The UDP or TCP checksum around the message
+        still catches both.
+
+        Over the eleven, 181 of the 7,392 flips verify: the 176 type
+        flips and 5 cut-offs. Before presence was read from more than
+        the walk, 858 did: 493 in the attributes before the
+        FINGERPRINT, 165 in its Length, 24 in the header and the 176.
+        """
+        message = STUN_FINGERPRINTED[index]
+        raw = bytes(message)
+        type_flips = cut_offs = 0
+        for bit in range(len(raw) * 8):
+            flipped = bytearray(raw)
+            flipped[bit // 8] ^= 0x80 >> bit % 8
+            try:
+                corrupted = STUN.decode(bytes(flipped))
+            except ProtocolError:
+                continue
+            if not verify(corrupted):
+                continue
+            if bit // 8 in (len(raw) - 8, len(raw) - 7):
+                type_flips += 1
+                continue
+            assert bit // 8 in (2, 3)
+            kept = corrupted.parsed_attributes
+            assert kept == message.parsed_attributes[: len(kept)]
+            assert all(a.type != STUN.FINGERPRINT for a in kept)
+            cut_offs += 1
+        assert type_flips == 16
+        assert cut_offs == (index in (1, 4, 7, 8, 10))
 
     def test_with_checksums_fills_a_built_message(self):
         built = stun_with_fingerprint(bytes(STUNAttribute(0x8022, b"np")))

@@ -871,7 +871,10 @@ STUN's FINGERPRINT is a checksum that lives in an attribute rather
 than a header field: the IEEE CRC-32 of the message up to it, XORed
 with `0x5354554E` (RFC 8489 §14.7). `compute()` returns it for a
 message whose last attribute is one, `verify()` accepts a message with
-none, and `with_checksums()` rewrites it; MESSAGE-INTEGRITY, the keyed
+none, and `with_checksums()` rewrites it. A message has none only when
+its attributes walk whole, none of them a FINGERPRINT, and its last 8
+bytes do not begin like one, so a corrupted earlier Length cannot hide
+it from `verify()`. MESSAGE-INTEGRITY, the keyed
 HMAC beside it, needs the credential's key, which this library never
 has, so it is carried raw, like an AH ICV.
 VRRP's checksum is the internet checksum of the message alone in
