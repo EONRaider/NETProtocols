@@ -86,7 +86,7 @@ Out of scope
 
 Everything that needs the shared secret between client and server: the
 Request Authenticator of an Accounting-Request (RFC 2866 §3), and of a
-Disconnect-Request or CoA-Request, keyed the same way (RFC 5176), and
+Disconnect-Request or CoA-Request, keyed the same way (RFC 5176 §2.3), and
 the Response Authenticator of every reply (RFC 2865 §3; RFC 2866 §3
 for an Accounting-Response), which are MD5 hashes keyed with it; the
 Message-Authenticator attribute (RFC 3579 §3.2), an HMAC-MD5 under it;
@@ -362,7 +362,7 @@ class RADIUS(Protocol):
         an Access-Request or a Status-Server; an MD5 hash keyed with
         the shared secret in an Accounting-Request (RFC 2866 §3), in a
         Disconnect-Request or CoA-Request, keyed like an
-        Accounting-Request (RFC 5176), and in every reply (RFC 2865 §3;
+        Accounting-Request (RFC 5176 §2.3), and in every reply (RFC 2865 §3;
         RFC 2866 §3 for an Accounting-Response), which this library
         does not verify.
     :param attributes: The attribute list, kept raw; read via

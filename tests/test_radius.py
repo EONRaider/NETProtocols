@@ -314,7 +314,11 @@ class TestCapturedPackets:
             assert radius.parsed_attributes == ()
 
     def test_status_server_carries_a_message_authenticator(self):
-        """RFC 5997 §3: a Status-Server must carry one, and nothing else."""
+        """RFC 5997 §2: a Status-Server must carry one.
+
+        radclient sends nothing else (§5 recommends a NAS-IP-Address or
+        NAS-Identifier too).
+        """
         (only,) = radius_of(STATUS).parsed_attributes
         assert (only.type, only.type_name, len(only.data)) == (
             80,
@@ -460,6 +464,27 @@ class TestExtent:
         assert packet.stopped_by is None
         assert packet.consumed == len(FRAMES[index])
         assert packet[RADIUS] == radius_of(index)
+
+    def test_a_length_into_trailing_bytes_reads_them_pending_235(self):
+        """Documents current behaviour, pending #235; update it with #235.
+
+        The walk does not end the buffer at UDP's length, so a Length
+        that overstates the datagram takes trailing bytes, here an FCS
+        reading ``12 04 be ef``, as attributes instead of raising: the
+        example in the module docstring, ARCHITECTURE.md and the
+        CHANGELOG. When #235 bounds RADIUS by the UDP length, this
+        decode raises instead and this test fails.
+        """
+        index = ACCT_START + 1
+        assert index == 7
+        frame = bytearray(FRAMES[index])
+        start = RADIUS_START
+        frame[start + 2 : start + 4] = (24).to_bytes(2, "big")
+        packet = decode_frame(bytes(frame) + b"\x12\x04\xbe\xef")
+        radius = packet[RADIUS]
+        assert radius.length == 24
+        assert radius.parsed_attributes == (RADIUSAttribute(18, b"\xbe\xef"),)
+        assert radius.parsed_attributes[0].type_name == "Reply-Message"
 
     def test_padding_inside_the_datagram_is_ignored(self):
         """RFC 2865 §3: octets past the Length are padding, ignored."""
@@ -676,6 +701,23 @@ class TestConstruction:
             "<=65535",
         )
         assert "at most 65535" in str(caught.value)
+
+    def test_the_length_boundary_is_65535(self):
+        """65,515 bytes of attributes fill a Length of 65535; one more cannot.
+
+        256 attributes of 255 bytes, then one of the remainder.
+        """
+        full = bytes(RADIUSAttribute(26, bytes(253))) * 256
+        widest = build(full + bytes(RADIUSAttribute(26, bytes(233))))
+        assert (len(widest.attributes), widest.length) == (65515, 65535)
+        assert RADIUS.decode(bytes(widest)) == widest
+        assert len(widest.parsed_attributes) == 257
+        with pytest.raises(InvalidFieldError) as caught:
+            build(full + bytes(RADIUSAttribute(26, bytes(234))))
+        assert (caught.value.field, caught.value.expected) == (
+            "length",
+            "<=65535",
+        )
 
     @pytest.mark.parametrize("size", [0, 15, 17])
     def test_the_authenticator_is_16_bytes(self, size):
