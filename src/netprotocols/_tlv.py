@@ -16,6 +16,10 @@ PIM Hello options (RFC 7761 §4.9.2) are the same shape with wider
 fields: a 2-byte type and a 2-byte length counting only the value, with
 no lone-byte kinds, no terminator and no length floor. ``width`` covers
 that, and every byte-wide caller keeps the default of ``1``.
+
+RADIUS attributes (RFC 2865 §5) are byte-wide with a length that counts
+the type and length bytes, like TCP's, but have no lone-byte kinds and
+no terminator; their only floor is the structural one of 2.
 """
 
 from __future__ import annotations
@@ -62,8 +66,9 @@ def walk_kind_length_value(
     :param protocol: The class to attach to a raised
         :class:`~netprotocols.utils.exceptions.InvalidFieldError`
         (also named in its message text via ``protocol.__name__``).
-    :param field: The field name to attach to a raised error; every
-        current caller parses an attribute named ``options``.
+    :param field: The field name to attach to a raised error: the
+        attribute the blob came from, ``options`` for TCP, IPv4 and
+        IPv6, ``body`` for PIM Hello and ``attributes`` for RADIUS.
     :param width: How many bytes the kind and the length each take, read
         big-endian: ``1`` for TCP, IPv4 and IPv6, ``2`` for PIM Hello
         options. Every offset above that says ``2`` is ``2 * width``:

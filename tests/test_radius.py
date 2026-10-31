@@ -58,6 +58,95 @@ PASSWORD = b"np193-pass"
 WRONG_PASSWORD = b"np193-wrong"
 
 
+#: Every attribute type named, written from FreeRADIUS 3.2.5's
+#: dictionary.rfc2865 (RFC 2865 §5), dictionary.rfc2866 (RFC 2866 §5)
+#: and dictionary.rfc2869 (RFC 2869 §5: 55, 77, 85 and 87; 79 and 80,
+#: first defined there, are RFC 3579 §3's now).
+NAMED_TYPES = {
+    1: "User-Name",
+    2: "User-Password",
+    3: "CHAP-Password",
+    4: "NAS-IP-Address",
+    5: "NAS-Port",
+    6: "Service-Type",
+    7: "Framed-Protocol",
+    8: "Framed-IP-Address",
+    9: "Framed-IP-Netmask",
+    10: "Framed-Routing",
+    11: "Filter-Id",
+    12: "Framed-MTU",
+    13: "Framed-Compression",
+    14: "Login-IP-Host",
+    15: "Login-Service",
+    16: "Login-TCP-Port",
+    18: "Reply-Message",
+    19: "Callback-Number",
+    20: "Callback-Id",
+    22: "Framed-Route",
+    23: "Framed-IPX-Network",
+    24: "State",
+    25: "Class",
+    26: "Vendor-Specific",
+    27: "Session-Timeout",
+    28: "Idle-Timeout",
+    29: "Termination-Action",
+    30: "Called-Station-Id",
+    31: "Calling-Station-Id",
+    32: "NAS-Identifier",
+    33: "Proxy-State",
+    34: "Login-LAT-Service",
+    35: "Login-LAT-Node",
+    36: "Login-LAT-Group",
+    37: "Framed-AppleTalk-Link",
+    38: "Framed-AppleTalk-Network",
+    39: "Framed-AppleTalk-Zone",
+    40: "Acct-Status-Type",
+    41: "Acct-Delay-Time",
+    42: "Acct-Input-Octets",
+    43: "Acct-Output-Octets",
+    44: "Acct-Session-Id",
+    45: "Acct-Authentic",
+    46: "Acct-Session-Time",
+    47: "Acct-Input-Packets",
+    48: "Acct-Output-Packets",
+    49: "Acct-Terminate-Cause",
+    50: "Acct-Multi-Session-Id",
+    51: "Acct-Link-Count",
+    55: "Event-Timestamp",
+    60: "CHAP-Challenge",
+    61: "NAS-Port-Type",
+    62: "Port-Limit",
+    63: "Login-LAT-Port",
+    77: "Connect-Info",
+    79: "EAP-Message",
+    80: "Message-Authenticator",
+    85: "Acct-Interim-Interval",
+    87: "NAS-Port-Id",
+}
+
+#: Every packet code named: RFC 2865 §3 (1-5, 11-13 and 255; 4 and 5
+#: are RFC 2866's), RFC 5997 (Status-Server, 12) and RFC 5176 (40-45),
+#: in FreeRADIUS 3.2.5's spelling (dictionary.freeradius.internal,
+#: Packet-Type; 255 is RFC 2865 §3's "Reserved").
+NAMED_CODES = {
+    1: "Access-Request",
+    2: "Access-Accept",
+    3: "Access-Reject",
+    4: "Accounting-Request",
+    5: "Accounting-Response",
+    11: "Access-Challenge",
+    12: "Status-Server",
+    13: "Status-Client",
+    40: "Disconnect-Request",
+    41: "Disconnect-ACK",
+    42: "Disconnect-NAK",
+    43: "CoA-Request",
+    44: "CoA-ACK",
+    45: "CoA-NAK",
+    255: "Reserved",
+}
+
+
 def packet_bytes(index: int) -> bytes:
     """Return the RADIUS packet of capture frame ``index``, exactly."""
     return FRAMES[index][RADIUS_START:]
@@ -202,7 +291,7 @@ class TestCapturedPackets:
         assert radius.user_name == "np193-user"
 
     def test_an_accounting_stop_carries_the_session_counters(self):
-        """RFC 2866 §5.7-5.10: session time, octets and packets."""
+        """RFC 2866 §5.3-5.4, §5.7-5.10: octets, time, packets, cause."""
         names = {
             a.type_name: int.from_bytes(a.data)
             for a in radius_of(ACCT_STOP).parsed_attributes
@@ -506,10 +595,16 @@ class TestAttributes:
         assert radius.framed_ip_address is None
 
     def test_a_user_name_that_is_not_utf8_is_replaced(self):
-        """RFC 2865 §5.1 allows any octets; text reads as UTF-8."""
+        """RFC 2865 §5.1 allows any octets; the library reads UTF-8."""
         radius = build(bytes(RADIUSAttribute(1, b"np\xff193")))
         assert radius.user_name == "np�193"
         assert radius.parsed_attributes[0].data == b"np\xff193"
+
+    def test_nas_port_is_unsigned(self):
+        """RFC 2865 §5: an integer is 32-bit unsigned; all ones is 2^32-1."""
+        radius = build(bytes(RADIUSAttribute(5, b"\xff\xff\xff\xff")))
+        assert radius.parsed_attributes[0].value == 4294967295
+        assert radius.nas_port == 4294967295
 
     def test_vendor_specific_is_kept_raw(self):
         """RFC 2865 §5.26: Vendor-Id, then the vendor's own attributes."""
@@ -518,21 +613,17 @@ class TestAttributes:
         assert (found.type_name, found.value) == ("Vendor-Specific", data)
 
     def test_the_named_types(self):
-        """RFC 2865 §5, RFC 2866 §5 and RFC 3579 §3 types are named."""
-        names = {
-            1: "User-Name",
-            4: "NAS-IP-Address",
-            26: "Vendor-Specific",
-            39: "Framed-AppleTalk-Zone",
-            40: "Acct-Status-Type",
-            51: "Acct-Link-Count",
-            60: "CHAP-Challenge",
-            63: "Login-LAT-Port",
-            79: "EAP-Message",
-            80: "Message-Authenticator",
+        """Every type is named as its RFC names it, or falls back.
+
+        See :data:`NAMED_TYPES`: RFC 2865 §5, RFC 2866 §5, RFC 3579 §3
+        and four types of RFC 2869 §5; every other type is unknown.
+        """
+        assert {
+            kind: RADIUSAttribute(kind).type_name for kind in range(256)
+        } == {
+            kind: NAMED_TYPES.get(kind, f"unknown ({kind})")
+            for kind in range(256)
         }
-        for kind, name in names.items():
-            assert RADIUSAttribute(kind).type_name == name
 
     @pytest.mark.parametrize("kind", [17, 21, 52, 64, 81, 241, 255])
     def test_unnamed_types_fall_back(self, kind):
@@ -580,7 +671,11 @@ class TestConstruction:
         filler = bytes(RADIUSAttribute(26, bytes(253))) * 258
         with pytest.raises(InvalidFieldError) as caught:
             build(filler)
-        assert caught.value.field == "length"
+        assert (caught.value.field, caught.value.expected) == (
+            "length",
+            "<=65535",
+        )
+        assert "at most 65535" in str(caught.value)
 
     @pytest.mark.parametrize("size", [0, 15, 17])
     def test_the_authenticator_is_16_bytes(self, size):
@@ -642,12 +737,26 @@ class TestConstruction:
             (255, "Reserved"),
             (0, "unknown (0)"),
             (6, "unknown (6)"),
+            (21, "unknown (21)"),
+            (50, "unknown (50)"),
         ],
     )
     def test_other_codes_decode_and_are_named(self, code, name):
-        """Every code decodes; those IANA lists are named."""
+        """Every code decodes; RFC 2865/2866/5997/5176's are named.
+
+        IANA assigns others too (6-10, 21-34, 50-52, ...), not named.
+        """
         radius = replace(build(), code=code)
         assert RADIUS.decode(bytes(radius)).code_name == name
+
+    def test_the_named_codes(self):
+        """See :data:`NAMED_CODES`; every other code is unknown."""
+        assert {
+            code: replace(build(), code=code).code_name for code in range(256)
+        } == {
+            code: NAMED_CODES.get(code, f"unknown ({code})")
+            for code in range(256)
+        }
 
     def test_positional_patterns_follow_wire_order(self):
         """Positional patterns bind the header fields in wire order."""

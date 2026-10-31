@@ -41,12 +41,13 @@
 # values, published in tests/fixtures/MANIFEST.md, so that
 # tests/test_radius.py can verify every authenticator independently,
 # and check_fixtures.py those one frame holds (an Accounting-Request's
-# Request Authenticator, a request's Message-Authenticator). The script never touches /etc/freeradius:
-# it copies the configuration tree to a scratch directory, drops the EAP
-# module (it needs certificates the package does not ship) and the
-# inner-tunnel site, writes a minimal site of its own, adds the client
-# and the user there, and runs `freeradius -X -d <copy>` in the
-# foreground.
+# Request Authenticator, a request's Message-Authenticator).
+#
+# The script never touches /etc/freeradius: it copies the configuration
+# tree to a scratch directory, drops the EAP module (it needs
+# certificates the package does not ship) and the inner-tunnel site,
+# writes a minimal site of its own, adds the client and the user there,
+# and runs `freeradius -X -d <copy>` in the foreground.
 #
 # The script asserts the composition exactly, frame by frame: sender,
 # ports, Code, Identifier pairing and which attributes each frame

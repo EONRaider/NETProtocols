@@ -32,9 +32,9 @@ Decoding
 --------
 
 :meth:`RADIUS.decode` reads the header, holds the Length against the
-buffer and keeps the attributes as raw ``bytes``, so ``bytes(RADIUS.
-decode(x)) == x[:header_len]`` holds by construction, as for
-:class:`~netprotocols.BGP`. The Length decides the packet's extent:
+buffer and keeps the attributes as raw ``bytes``, so
+``bytes(RADIUS.decode(x)) == x[:header_len]`` holds by construction, as
+for :class:`~netprotocols.BGP`. The Length decides the packet's extent:
 below 20 it cannot hold the header and raises
 :class:`~netprotocols.InvalidFieldError`; past the end of the buffer it
 raises :class:`~netprotocols.TruncatedHeaderError`, for RFC 2865 §3 says
@@ -44,6 +44,18 @@ too; both are left undecoded, past ``packet.consumed``. RFC 2865's
 upper bound of 4096 is not enforced: RFC 7930 §2 lets RADIUS over TCP
 and TLS carry packets up to 65535 bytes, and a decoder reading one
 through ``decode_as`` has no reason to refuse it.
+
+The buffer is not the datagram, though. :func:`~netprotocols.decode_frame`
+does not yet bound a layer by the UDP or IP length (#235), so behind
+UDP the buffer runs to the end of the frame, trailing bytes such as an
+Ethernet FCS included. A Length that overstates the datagram but stays
+within the frame therefore does not raise: the packet takes the
+trailing bytes as attributes, and :attr:`RADIUS.parsed_attributes` walks
+them as it would any other (an Accounting-Response whose Length is 24
+instead of 20, followed by an FCS reading ``12 04 be ef``, decodes with
+a Reply-Message of ``be ef``). Only a Length past the end of the frame
+raises. Decoding the UDP payload alone, sliced by the UDP length,
+avoids that.
 
 The attributes are not validated on decode. An attribute whose Length
 is below 2 or runs past the packet raises
@@ -58,25 +70,30 @@ Attributes
 
 Every attribute is a :class:`RADIUSAttribute` of its type and its raw
 ``data``; :attr:`RADIUSAttribute.type_name` names the types of RFC 2865
-§5, RFC 2866 §5 and RFC 3579 §3. :attr:`RADIUSAttribute.value` decodes
-the commonest: User-Name (1) as text, NAS-IP-Address (4) and
-Framed-IP-Address (8) as :class:`~ipaddress.IPv4Address`, NAS-Port (5)
-as an integer. User-Password (2) and Vendor-Specific (26) are named and
-kept raw: the first is obfuscated with the shared secret, the second
-holds a vendor's own attributes, not decoded here. Every other type is
-kept raw, with ``value`` ``None``.
+§5, RFC 2866 §5 and RFC 3579 §3, and RFC 2869 §5's Event-Timestamp
+(55), Connect-Info (77), Acct-Interim-Interval (85) and NAS-Port-Id
+(87); every other type is ``"unknown (n)"``.
+:attr:`RADIUSAttribute.value` decodes the commonest: User-Name (1) as
+UTF-8 text, NAS-IP-Address (4) and Framed-IP-Address (8) as
+:class:`~ipaddress.IPv4Address`, NAS-Port (5) as an integer.
+User-Password (2) and Vendor-Specific (26) are named and kept raw: the
+first is obfuscated with the shared secret, the second holds a vendor's
+own attributes, not decoded here. Every other type is kept raw, with
+``value`` ``None``.
 
 Out of scope
 ------------
 
 Everything that needs the shared secret between client and server: the
-Request Authenticator of an Accounting-Request (RFC 2866 §3) and the
-Response Authenticator of every reply (RFC 2865 §3), which are MD5
-hashes keyed with it; the Message-Authenticator attribute (RFC 3579
-§3.2), an HMAC-MD5 under it; and the hiding of User-Password (RFC 2865
-§5.2) and Tunnel-Password (RFC 2868). The Authenticator and those
-attributes are kept as the raw bytes they are. ``tests/test_radius.py``
-verifies every one in the corpus with its published test secret, and
+Request Authenticator of an Accounting-Request (RFC 2866 §3), and of a
+Disconnect-Request or CoA-Request, keyed the same way (RFC 5176), and
+the Response Authenticator of every reply (RFC 2865 §3; RFC 2866 §3
+for an Accounting-Response), which are MD5 hashes keyed with it; the
+Message-Authenticator attribute (RFC 3579 §3.2), an HMAC-MD5 under it;
+and the hiding of User-Password (RFC 2865 §5.2) and Tunnel-Password
+(RFC 2868). The Authenticator and those attributes are kept as the raw
+bytes they are. ``tests/test_radius.py`` verifies every one in the
+corpus with its published test secret, and
 ``scripts/check_fixtures.py`` those a frame holds alone, each
 independently of this module.
 
@@ -111,9 +128,11 @@ _HEADER_LEN = 20
 #: header, so 255 - 2.
 _MAX_DATA = 253
 
-#: Packet codes (IANA "RADIUS Packet Type Codes"): RFC 2865 §3 for 1-5
-#: and 11-13 (12 and 13 experimental there; RFC 5997 defines
-#: Status-Server), RFC 5176 for Disconnect and CoA, 40-45.
+#: Packet codes (IANA "RADIUS Packet Type Codes"): RFC 2865 §3 for 1-5,
+#: 11-13 and 255 (4 and 5 defined by RFC 2866; 12 and 13 experimental
+#: there, and RFC 5997 defines Status-Server), RFC 5176 for Disconnect
+#: and CoA, 40-45. IANA assigns others (6-10, 21-34, 50-52, ...) that
+#: are not named here.
 _CODE_NAMES: dict[int, str] = {
     1: "Access-Request",
     2: "Access-Accept",
@@ -134,7 +153,7 @@ _CODE_NAMES: dict[int, str] = {
 
 #: Attribute types (IANA "RADIUS Attribute Types"): RFC 2865 §5 for
 #: 1-39 and 60-63, RFC 2866 §5 for the accounting attributes 40-51, RFC
-#: 3579 §3 for 79 and 80.
+#: 2869 §5 for 55, 77, 85 and 87, RFC 3579 §3 for 79 and 80.
 _TYPE_NAMES: dict[int, str] = {
     1: "User-Name",
     2: "User-Password",
@@ -185,12 +204,16 @@ _TYPE_NAMES: dict[int, str] = {
     49: "Acct-Terminate-Cause",
     50: "Acct-Multi-Session-Id",
     51: "Acct-Link-Count",
+    55: "Event-Timestamp",
     60: "CHAP-Challenge",
     61: "NAS-Port-Type",
     62: "Port-Limit",
     63: "Login-LAT-Port",
+    77: "Connect-Info",
     79: "EAP-Message",
     80: "Message-Authenticator",
+    85: "Acct-Interim-Interval",
+    87: "NAS-Port-Id",
 }
 
 #: The attribute types :attr:`RADIUSAttribute.value` decodes.
@@ -203,7 +226,14 @@ _VENDOR_SPECIFIC = 26
 
 
 def _text(data: bytes) -> str:
-    """Read a ``text`` value: UTF-8 (RFC 2865 §5), never raising."""
+    """Read a value as UTF-8 text, never raising.
+
+    Only User-Name (1) is read this way. RFC 2865 §5.1 types it as
+    ``string``, any octets, not ``text``; reading it as UTF-8, with
+    undecodable bytes replaced, is this library's choice, made because
+    user names are mostly text. :attr:`RADIUSAttribute.data` keeps the
+    octets.
+    """
     return data.decode("utf-8", "replace")
 
 
@@ -329,9 +359,12 @@ class RADIUS(Protocol):
     :param length: The whole packet's length in bytes, header included:
         ``20 + len(attributes)``.
     :param authenticator: The 16-byte Authenticator, kept raw: random in
-        an Access-Request or a Status-Server, an MD5 hash keyed with
-        the shared secret in an Accounting-Request (RFC 2866 §3) and in
-        every reply (RFC 2865 §3), which this library does not verify.
+        an Access-Request or a Status-Server; an MD5 hash keyed with
+        the shared secret in an Accounting-Request (RFC 2866 §3), in a
+        Disconnect-Request or CoA-Request, keyed like an
+        Accounting-Request (RFC 5176), and in every reply (RFC 2865 §3;
+        RFC 2866 §3 for an Accounting-Response), which this library
+        does not verify.
     :param attributes: The attribute list, kept raw; read via
         :attr:`parsed_attributes`.
     """
@@ -369,7 +402,17 @@ class RADIUS(Protocol):
                 actual=len(self.authenticator),
             )
         expected = _HEADER_LEN + len(self.attributes)
-        if self.length != expected or self.length > 0xFFFF:
+        if expected > 0xFFFF:
+            raise InvalidFieldError(
+                f"RADIUS length must be at most 65535, but "
+                f"{len(self.attributes)} bytes of attributes make it "
+                f"{expected}",
+                protocol=type(self),
+                field="length",
+                expected="<=65535",
+                actual=self.length,
+            )
+        if self.length != expected:
             raise InvalidFieldError(
                 f"RADIUS length {self.length} disagrees with "
                 f"{len(self.attributes)} bytes of attributes",
@@ -505,8 +548,9 @@ class RADIUS(Protocol):
 
     @property
     def framed_ip_address(self) -> IPv4Address | None:
-        """The first Framed-IP-Address (8); ``None`` if absent or not 4
-        bytes.
+        """The first Framed-IP-Address (8), or ``None``.
+
+        ``None`` if there is none, or if its value is not 4 bytes.
 
         :raises InvalidFieldError: the attributes are malformed (see
             :attr:`parsed_attributes`).

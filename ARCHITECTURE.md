@@ -740,19 +740,26 @@ any 20 bytes are an entry.
 RADIUS on UDP 1812 and 1813 (RFC 2865, RFC 2866) rejects a little
 more again, through its Length alone: `RADIUS.decode()` requires at least
 the 20 bytes of its header (`InvalidFieldError` below that) and no more
-than the buffer holds (`TruncatedHeaderError` past it), so a random
-300-byte payload passes only when its third and fourth bytes read
-20-300, 281 of 65,536 values. Measured the same way, the walk stopped
-for 99.5% of the 300-byte payloads and 99.6% of the 0-600 byte ones,
-padded or not (`random.Random` seeds 0-2), on either port. The Code is
-not checked: every value decodes, those IANA lists named. Nor are the
-attributes: a packet whose attribute list does not walk still decodes,
-and `parsed_attributes` raises when asked, so an accepted guess can
-still read as garbage. Bytes past the Length are padding (RFC 2865 §3)
-and stay undecoded, past `packet.consumed`. Only 1812 and 1813 are
-registered: the legacy 1645 and 1646, and Dynamic Authorization's 3799
-(RFC 5176, whose Disconnect and CoA packets share the format), need
-`decode_as`.
+than the buffer holds (`TruncatedHeaderError` past it). A random
+300-byte payload therefore passes only when its third and fourth bytes
+read 20-300, 281 of 65,536 values, and one of n bytes with n - 19 of
+them, which over lengths drawn uniformly from 0-600 averages 281 too.
+Measured the same way (`random.Random` seeds 0-2), the walk stopped
+for about 99.6% in each case (99.57% expected): the 300-byte payloads
+and the 0-600 byte ones, padded or not, on either port. The Code is
+not checked: every value decodes, and the codes of RFC 2865, RFC 2866,
+RFC 5997 and RFC 5176 are named (IANA assigns others, such as 6-10,
+21-34 and 50-52, which are not). Nor are the attributes: a packet
+whose attribute list does not walk still decodes, and
+`parsed_attributes` raises when asked, so an accepted guess can still
+read as garbage. Bytes past the Length are padding (RFC 2865 §3) and
+stay undecoded, past `packet.consumed`. The walk does not yet end the
+buffer at UDP's length (#235), though, so a Length that overstates the
+datagram reaches into whatever follows it in the frame, such as an
+Ethernet FCS, and reads it as attributes instead of raising. Only 1812
+and 1813 are registered: the legacy 1645 and 1646, and Dynamic
+Authorization's 3799 (RFC 5176, whose Disconnect and CoA packets share
+the format), need `decode_as`.
 
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
