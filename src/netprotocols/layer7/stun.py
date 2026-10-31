@@ -200,8 +200,11 @@ _FINGERPRINT = 0x8028
 
 #: Attribute names: IANA's "STUN Attributes" registry, for RFC 8489
 #: (and RFC 5389), RFC 3489's reserved ones, RFC 5780 (NAT behaviour
-#: discovery), RFC 8656 (TURN), RFC 6062 (TURN over TCP) and RFC 8445
-#: (ICE).
+#: discovery), RFC 8656 (TURN), RFC 6062 (TURN over TCP), RFC 8445
+#: (ICE), RFC 7635 (OAuth for STUN), RFC 7982 (transmit counter), RFC
+#: 6679 (ECN) and RFC 8016 (TURN mobility). The last four's are spelled
+#: as their IANA Considerations sections spell them, RFC 7982's with
+#: underscores and RFC 6679's with "STUN" in it.
 _ATTRIBUTE_NAMES: dict[int, str] = {
     _MAPPED_ADDRESS: "MAPPED-ADDRESS",
     0x0002: "RESPONSE-ADDRESS",
@@ -225,6 +228,7 @@ _ATTRIBUTE_NAMES: dict[int, str] = {
     0x0018: "EVEN-PORT",
     0x0019: "REQUESTED-TRANSPORT",
     0x001A: "DONT-FRAGMENT",
+    0x001B: "ACCESS-TOKEN",
     0x001C: "MESSAGE-INTEGRITY-SHA256",
     0x001D: "PASSWORD-ALGORITHM",
     0x001E: "USERHASH",
@@ -242,12 +246,16 @@ _ATTRIBUTE_NAMES: dict[int, str] = {
     0x8004: "ICMP",
     _SOFTWARE: "SOFTWARE",
     0x8023: "ALTERNATE-SERVER",
+    0x8025: "TRANSACTION_TRANSMIT_COUNTER",
     0x8027: "CACHE-TIMEOUT",
     _FINGERPRINT: "FINGERPRINT",
     0x8029: "ICE-CONTROLLED",
     0x802A: "ICE-CONTROLLING",
     0x802B: "RESPONSE-ORIGIN",
     0x802C: "OTHER-ADDRESS",
+    0x802D: "ECN-CHECK STUN",
+    0x802E: "THIRD-PARTY-AUTHORIZATION",
+    0x8030: "MOBILITY-TICKET",
 }
 
 #: Methods: IANA's "STUN Methods" registry (RFC 8489 Binding; RFC 8656
