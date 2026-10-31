@@ -46,7 +46,7 @@
 #
 # What coturn built: every response, the 7 in the corpus among them.
 # What turnutils_stunclient built: the binding and rfc5780 requests, 2
-# of the corpus's 9, neither with a FINGERPRINT. What the `stun` client
+# of the corpus's 7, neither with a FINGERPRINT. What the `stun` client
 # built: the classic requests. What this script built: the other 5 of
 # the corpus's requests (unknown's, tcp's two and secure's two), in the
 # Python client below, each but tcp's second ending in a FINGERPRINT.
