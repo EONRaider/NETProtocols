@@ -1318,8 +1318,16 @@ class TestNTPAccessorSafety:
         event(f"NTP remainder: {bool(ntp.remainder)}")
 
 
-#: The captured HSRP messages, every one past its UDP header.
-_HSRP_MESSAGES = [frame[42:] for frame in pcap_frames(FIXTURES / "hsrp.pcap")]
+#: Constructed HSRP messages, packed by hand rather than cut from
+#: tests/fixtures/hsrp.pcap: every Op Code in every one of RFC 2281's
+#: States, under the default Authentication Data, a configured password
+#: and an empty one, with the recommended timers.
+_HSRP_MESSAGES = [
+    bytes([0, opcode, state, 3, 10, 100, 1, 0]) + auth + bytes([192, 0, 2, 1])
+    for opcode in (0, 1, 2)
+    for state in (0, 1, 2, 4, 8, 16)
+    for auth in (b"cisco\x00\x00\x00", b"spark\x00\x00\x00", bytes(8))
+]
 
 #: The values HSRP.decode() weighs in its first three bytes, the ones
 #: either side of what it accepts among them, and a few others.
@@ -1328,7 +1336,7 @@ _hsrp_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 8, 15, 16, 17, 255])
 
 @st.composite
 def _hsrp_seeded(draw: st.DrawFn) -> bytes:
-    """A captured HSRP message, now and then a Version, Op Code or
+    """A constructed HSRP message, now and then a Version, Op Code or
     State redrawn near the values decode() accepts and a later byte
     changed, cut anywhere and followed by nothing, an FCS-like 4 bytes
     or free bytes: the guard's boundaries, which free bytes rarely
