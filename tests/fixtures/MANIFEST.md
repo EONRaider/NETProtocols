@@ -794,13 +794,16 @@ values are also hard-coded, independently, in
   Hellotime, which RFC 2281 requires, and, as this corpus's
   conventions rather than the RFC's, a zero Reserved byte and
   clear-text Authentication Data. No router's state machine sent these
-  frames: the script chose the sequence, which follows RFC 2281 §5.2's
-  election, and every sender uses its own MAC address, Active or not,
-  where §6.1 has an Active router send from the group's virtual MAC
-  address (`00:00:0c:07:ac:01` for group 1), and keeps the 3 s / 10 s
-  timers throughout. `tests/test_hsrp.py` therefore builds, as
-  constructed frames, an exchange with what a Cisco router does
-  differently (TTL 2, the virtual MAC as the Active router's source,
+  frames: they are a scripted sequence of Hello, Coup and Resign
+  messages, not a faithful run of RFC 2281's state machine (frame 7
+  has R2 go from Standby to Speak after R1's Resign, where §5.7's
+  table takes a Standby router straight to Active), and every sender
+  uses its own MAC address, Active or not, where §6.1 has an Active
+  router send from the group's virtual MAC address
+  (`00:00:0c:07:ac:01` for group 1), and keeps the 3 s / 10 s timers
+  throughout. `tests/test_hsrp.py` therefore builds, as
+  constructed frames, an exchange modelling behaviour reported for
+  Cisco routers (TTL 2, the virtual MAC as the Active router's source,
   timers moving to 5 s / 15 s on becoming Active, a Coup from Listen
   preempting the Active router and its Resign), and what neither
   holds: the Initial and Learn states, HSRPv2, an Op Code 3 Advertise,

@@ -14,8 +14,11 @@
 # the other end of the pair in a second netns, so only the veth traffic
 # is seen and nothing of the host.
 #
-# The table stages an election and a failover on one LAN, as RFC 2281's
-# state machine (§5.2) would drive it, across two standby groups:
+# The table is a scripted sequence of Hello, Coup and Resign messages on
+# one LAN, across two standby groups, and not a faithful run of RFC
+# 2281's state machine (§5.3-5.7): frame 7, for instance, has R2 go from
+# Standby to Speak after R1's Resign, where §5.7's table (event i,
+# "CFI/6") takes a Standby router straight to Active.
 #
 #   Group 1, virtual IP 10.9.195.254, the default authentication data
 #   `cisco` (§5.1), three routers:
@@ -50,10 +53,9 @@
 # bytes, including the IPv4 and UDP checksums (it writes raw frames, so
 # offload never touches them; offload is turned off on both veth ends
 # all the same, as the other capture scripts do). Yersinia sets the TTL
-# to 1 (RFC 2281 §5.1; the Wireshark public capture this replaces used
-# 2), the IP ID to 0 and the DSCP to 4 (IP ToS 0x10) rather than the
-# CS6/precedence 6 a Cisco router uses — none of which any corpus check
-# rejects. Source MAC addresses are pinned on the command line
+# to 1 (RFC 2281 §5.1), the IP ID to 0 and the DSCP to 4 (IP ToS 0x10)
+# rather than the CS6/precedence 6 a Cisco router uses — none of which
+# any corpus check rejects. Source MAC addresses are pinned on the command line
 # (`-source`), since Yersinia randomizes them otherwise, so the capture
 # is byte-for-byte reproducible but for the pcap record timestamps.
 #
@@ -79,7 +81,7 @@ echo "[*] $(yersinia -V 2>&1 | head -n 1)"
 
 OUT="tests/fixtures/staging"
 mkdir -p "$OUT"
-WORK=$(mktemp -d)
+WORK=
 NSTX=np195-tx
 NSRX=np195-rx
 TX=v195a
@@ -100,14 +102,14 @@ cleanup() {
     ip netns del "$NSTX" 2>/dev/null || true
     ip netns del "$NSRX" 2>/dev/null || true
     ip link del "$TX" 2>/dev/null || true
-    rm -rf "$WORK"
+    if [[ -n $WORK ]]; then rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
 fail() { echo "[!] $*" >&2; exit 1; }
+cleanup
+WORK=$(mktemp -d)
 
 echo "[*] veth + two netns (sender $TX_IP, capture $RX_IP)"
-ip netns del "$NSTX" 2>/dev/null || true
-ip netns del "$NSRX" 2>/dev/null || true
 ip netns add "$NSTX"; ip netns add "$NSRX"
 ip link add "$TX" address 02:00:0a:09:c3:a1 type veth \
     peer name "$RX" address 02:00:0a:09:c3:b2
@@ -240,6 +242,7 @@ for head, record in records(src):
 if len(selected) != len(expected):
     sys.exit(f"[!] captured {len(selected)} frames, expected {len(expected)}")
 
+ops = {HELLO: 0, COUP: 0, RESIGN: 0}
 for i, (record, want) in enumerate(zip(selected, expected), start=1):
     frame = record[16:]
     eth_dst, eth_src = frame[0:6], frame[6:12]
@@ -265,6 +268,7 @@ for i, (record, want) in enumerate(zip(selected, expected), start=1):
         sys.exit(f"[!] frame {i}: HSRP payload {len(hsrp)} bytes, expected 20")
     version, opcode, state, hello, hold, priority, group, reserved = hsrp[:8]
     auth, vip = hsrp[8:16], dotted(hsrp[16:20])
+    ops[opcode] = ops.get(opcode, 0) + 1
     if version != 0:
         sys.exit(f"[!] frame {i}: HSRP version {version} != 0")
     if reserved != 0:
@@ -276,9 +280,6 @@ for i, (record, want) in enumerate(zip(selected, expected), start=1):
     if opcode == HELLO and not hold > hello:
         sys.exit(f"[!] frame {i}: Holdtime {hold} !> Hellotime {hello}")
 
-ops = {HELLO: 0, COUP: 0, RESIGN: 0}
-for row in expected:
-    ops[row[0]] += 1
 if (ops[HELLO], ops[COUP], ops[RESIGN]) != (10, 1, 1):
     sys.exit(f"[!] op-code mix {ops} != 10 Hello / 1 Coup / 1 Resign")
 

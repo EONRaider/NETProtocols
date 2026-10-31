@@ -6,9 +6,9 @@ whichever router is Active, with a Standby router ready to take over
 when the Active one stops sending Hellos. RFC 2281 is Informational: it
 documents Cisco's protocol, which Cisco calls version 0 on the wire and
 HSRPv1 everywhere else. Every message is a 20-byte UDP payload, sent
-from and to port 1985, to 224.0.0.2 with TTL 1 (§5.1; some Cisco
-releases send TTL 2, which decodes the same, since the TTL is IPv4's
-and not HSRP's), laid out as::
+from and to port 1985, to 224.0.0.2 with TTL 1 (§5.1; TTL 2, which
+field captures of Cisco routers are reported to show, decodes the same,
+since the TTL is IPv4's and not HSRP's), laid out as::
 
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -72,8 +72,9 @@ random datagram on port 1985 is rejected all but 18 times in that many
 (about 1 in 932,000), and always when it is shorter than 20 bytes.
 That is rare, not never: of the 90,000 random walks to port 1985
 ARCHITECTURE.md describes, about 0.1 are expected to decode an HSRP
-layer (90,000 x 18 / 2^24), and 2 did, one 46-byte payload walked both
-unpadded and padded. The other fields are not judged: any Hellotime,
+layer (90,000 x 18 / 2^24 = 0.097, a little less since a few payloads
+are too short to reach 20 bytes), and 2 did, one 46-byte payload walked
+both unpadded and padded. The other fields are not judged: any Hellotime,
 Holdtime, Priority, Group, Reserved byte, Authentication Data and
 Virtual IP Address decodes.
 

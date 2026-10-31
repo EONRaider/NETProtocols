@@ -11,10 +11,11 @@ The unit tests build their messages and frames here, byte by byte, so
 none of them depends on a capture. The Yersinia capture in
 tests/fixtures/hsrp.pcap (see its MANIFEST note) anchors only the tests
 about it: its twelve frames, an election and failover in group 1 and a
-second group with a configured password. A Cisco IOS exchange, which
-sends TTL 2 where RFC 2281 says 1, moves from the 3 s / 10 s timers to
-5 s / 15 s on becoming Active and is preempted by a Coup, is built here
-as constructed frames, as is what neither holds (the Initial and Learn
+second group with a configured password. An exchange constructed to
+model behaviour reported for Cisco routers (TTL 2 where RFC 2281 says
+1, timers moving from 3 s / 10 s to 5 s / 15 s on becoming Active, a
+preempting Coup) is built here as constructed frames, as is what
+neither holds (the Initial and Learn
 states, HSRPv2, an Advertise, trailers, values the guard rejects).
 scripts/check_fixtures.py, which shares no code with the library, is
 run over the capture, the constructed frames and tampered copies of
@@ -402,9 +403,9 @@ class TestCapture:
         ) == (10, 1, 1)
 
 
-# --- A Cisco IOS exchange, constructed --------------------------------
+# --- A Cisco-style exchange, constructed ------------------------------
 
-#: Two Cisco routers' own addresses and MAC addresses, A preempting B.
+#: The two routers' own addresses and MAC addresses, A preempting B.
 CISCO_A = ("192.0.2.1", "02:00:00:00:0a:01")
 CISCO_B = ("192.0.2.2", "02:00:00:00:0b:02")
 CISCO_VIP = "192.0.2.250"
@@ -420,7 +421,8 @@ _B_ACTIVE = _cisco(CISCO_B, 0, 16, 5, 15, 100)
 _B_SPEAK = _cisco(CISCO_B, 0, 4, 5, 15, 100)
 _A_ACTIVE = _cisco(CISCO_A, 0, 16, 5, 15, 110)
 
-#: How a Cisco IOS pair was seen to run an election in group 1, as
+#: A constructed election in group 1, modelling behaviour reported for
+#: Cisco routers (timers configured to 5 s / 15 s, TTL 2), as
 #: (sender, Op Code, State, Hellotime, Holdtime, priority): B alone in
 #: Speak and Standby with the 3 s / 10 s defaults, then Active with its
 #: configured 5 s / 15 s; A, at the higher priority, preempting with a
@@ -448,7 +450,7 @@ _NAMED_STATES = {name: value for value, name in STATES.items()}
 
 
 def cisco_frame(entry, *, ttl: int = 2) -> bytes:
-    """One exchange entry as Cisco sent it: TTL 2, and from the group's
+    """One exchange entry as a frame: TTL 2, and from the group's
     virtual MAC address when, and only when, the sender is Active
     (RFC 2281 §6.1)."""
     (ip, mac), opcode, state, hello, hold, priority = entry
@@ -468,8 +470,9 @@ CISCO_FRAMES = [cisco_frame(entry) for entry in CISCO_EXCHANGE]
 
 
 class TestCiscoExchange:
-    """What a Cisco IOS pair sends that RFC 2281 does not require, and
-    the Yersinia capture does not hold, pinned as constructed frames."""
+    """Behaviour reported for Cisco routers that RFC 2281 does not
+    require, and the Yersinia capture does not hold, pinned as
+    constructed frames."""
 
     def decoded(self) -> list:
         packets = [decode_frame(frame) for frame in CISCO_FRAMES]
@@ -498,9 +501,9 @@ class TestCiscoExchange:
             assert packet.consumed == len(frame) == 62
 
     def test_ttl_2_decodes_as_ttl_1_does(self):
-        """IOS sends TTL 2 where §5.1 says 1; the TTL is IPv4's, so the
-        HSRP layer is the same either way, and the checker does not
-        judge it."""
+        """The exchange uses TTL 2 where §5.1 says 1; the TTL is IPv4's,
+        so the HSRP layer is the same either way, and the checker does
+        not judge it."""
         for entry, frame in zip(CISCO_EXCHANGE, CISCO_FRAMES, strict=True):
             packet = decode_frame(frame)
             assert packet[IPv4].ttl == 2
@@ -1184,6 +1187,38 @@ class TestChecker:
         """All 8 bytes are judged when no NUL padding precedes them."""
         raw = self.message_of(0)[:8] + auth_data + self.message_of(0)[16:]
         assert self.check(retouched(self.FRAMES[0], raw)) == ["hsrp-auth-data"]
+
+    @pytest.mark.parametrize(
+        "auth_data",
+        [
+            pytest.param(b"pw \x00 \x00\x00\x00", id="nul-between-spaces"),
+            pytest.param(b"pw\x00 \x00\x00\x00\x00", id="nul-before-a-space"),
+            pytest.param(b"\x7fcisco\x00\x00", id="leading-del"),
+        ],
+    )
+    def test_a_nul_before_a_space_or_a_leading_del_fails(self, auth_data):
+        """Only NUL bytes are padding, so a NUL followed by a space is
+        inside the password, and fails; DEL fails in the first byte as
+        in any other."""
+        raw = self.message_of(0)[:8] + auth_data + self.message_of(0)[16:]
+        assert self.check(retouched(self.FRAMES[0], raw)) == ["hsrp-auth-data"]
+
+    def test_the_first_failing_check_is_reported(self):
+        """Two checks failing in one frame report one key, in the
+        checker's order: the length before the port, the Version before
+        the Op Code, the Reserved byte before the Holdtime."""
+        frame, message = self.FRAMES[0], self.message_of(0)  # a Hello
+        assert self.check(retouched(frame, src_port=1)) == ["hsrp-port"]
+        both = retouched(frame, message[:19], src_port=1)
+        assert self.check(both) == ["hsrp-length"]
+        for first, second, failure in (
+            ((0, 1), (1, 3), "hsrp-version"),  # and Op Code 3
+            ((7, 1), (4, 3), "hsrp-reserved"),  # and Holdtime 3
+        ):
+            alone = retouched(frame, changed(message, *second))
+            assert self.check(alone) != [failure]
+            raw = changed(changed(message, *first), *second)
+            assert self.check(retouched(frame, raw)) == [failure]
 
     def test_a_nonzero_reserved_byte_fails_in_any_group(self):
         """Group 0, 1 or 255: the Reserved byte alone is judged."""

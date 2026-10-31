@@ -863,9 +863,11 @@ three Op Codes (Hello, Coup, Resign) and one of the six States, which
 the payload must then hold the whole 20-byte message. Measured the
 same way (`random.Random` seeds 0-2, each 10,000 random 300-byte
 payloads and 10,000 of uniformly random length 0-600, the latter
-walked both unpadded and padded: 90,000 walks to port 1985 in all), at
-18 in 2^24 a walk about 0.1 walks are expected to decode an HSRP layer
-(0.097), and 2 did: the same 46-byte payload of seed 2, whose first
+walked both unpadded and padded: 90,000 walks to port 1985 in all),
+about 0.1 of those walks are expected to decode an HSRP layer
+(90,000 x 18 / 2^24 = 0.097, a little less in fact, since a few of the
+random-length payloads are too short to reach 20 bytes), and 2 did:
+the same 46-byte payload of seed 2, whose first
 bytes, `00 00 04`, are a Hello in Speak, once unpadded and once padded.
 The other 89,998 ended with `stopped_by` set. Padding cannot make a message,
 since a minimum-size frame leaves 18 bytes after the UDP header. With
