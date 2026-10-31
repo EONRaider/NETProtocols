@@ -42,15 +42,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urljoin, urlsplit
 
-#: The query whose results this filters, and only on PATH_PREFIXES. The
-#: OSPF and RIP checks in tests/ and scripts/check_fixtures.py compute
-#: the MD5 their RFCs require, over published test secrets and with
-#: ``usedforsecurity=False``, to verify captured traffic, as do those of
-#: RADIUS (#265: RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP) and
-#: STUN (#267: the long-term-credential key). The query reads a variable
-#: named like a secret or password as sensitive data and flags every one
-#: of them (#265), so its findings there are noise; in src/ they would
-#: not be.
+#: The query whose results this filters, and only on PATH_PREFIXES. It
+#: reads a variable named like a secret or password as sensitive data,
+#: as RADIUS's (#265: RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP)
+#: and STUN's (#267: the long-term-credential key) are, and flags the
+#: MD5 their RFCs require, computed in tests/ and scripts/ over
+#: published test secrets with ``usedforsecurity=False`` to verify
+#: captured traffic, so its findings there are noise; in src/ they
+#: would not be. The OSPF and RIP checks compute the same kind of MD5
+#: and escape it only because their variables are named ``key``.
 RULE_ID = "py/weak-sensitive-data-hashing"
 #: Repository-relative directories, each with its trailing slash so
 #: that ``tests_more/`` or ``scriptsfoo.py`` cannot match.

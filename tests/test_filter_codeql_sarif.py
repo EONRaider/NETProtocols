@@ -579,6 +579,64 @@ class TestMain:
         lines = capsys.readouterr().out.splitlines()
         assert [line.partition(": ")[0] for line in lines] == ["python.sarif"]
 
+    def test_a_sarif_file_in_a_symlinked_directory_is_left_alone(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif does not descend into a symlinked directory
+        (``Dirent.isDirectory()`` is false for one), so it never uploads
+        the regular files in it, and the filter must not rewrite them."""
+        target = tmp_path / "elsewhere"
+        target.mkdir()
+        (target / "target.sarif").write_bytes(FIXTURE.read_bytes())
+        output = tmp_path / "output"
+        output.mkdir()
+        (output / "python.sarif").write_bytes(FIXTURE.read_bytes())
+        try:
+            (output / "linked").symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are not supported here")
+        assert sarif_filter.main([str(output)]) == 0
+        assert (target / "target.sarif").read_bytes() == FIXTURE.read_bytes()
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == ["python.sarif"]
+
+    def test_hidden_files_and_directories_are_filtered_too(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif skips no dot-named entry but ``.sarif`` itself,
+        so a hidden file or one in a hidden directory goes up and must
+        be filtered."""
+        hidden = tmp_path / ".hidden"
+        hidden.mkdir()
+        (hidden / "h.sarif").write_bytes(FIXTURE.read_bytes())
+        (tmp_path / ".x.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        expected = fixture()
+        sarif_filter.filter_log(expected, CHECKOUT)
+        for sarif in (hidden / "h.sarif", tmp_path / ".x.sarif"):
+            assert json.loads(sarif.read_text()) == expected, sarif
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == [
+            ".hidden/h.sarif",
+            ".x.sarif",
+        ]
+
+    def test_a_deeply_nested_sarif_file_is_filtered(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """upload-sarif recurses without a depth limit."""
+        deep = tmp_path / "a" / "b" / "c" / "d"
+        deep.mkdir(parents=True)
+        (deep / "deep.sarif").write_bytes(FIXTURE.read_bytes())
+        assert sarif_filter.main([str(tmp_path)]) == 0
+        expected = fixture()
+        sarif_filter.filter_log(expected, CHECKOUT)
+        assert json.loads((deep / "deep.sarif").read_text()) == expected
+        lines = capsys.readouterr().out.splitlines()
+        assert [line.partition(": ")[0] for line in lines] == [
+            "a/b/c/d/deep.sarif"
+        ]
+
     def test_a_file_named_just_dot_sarif_is_ignored(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
