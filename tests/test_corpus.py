@@ -28,6 +28,7 @@ from netprotocols import (
     SNAP,
     STP,
     TCP,
+    TFTP,
     UDP,
     VLAN,
     VRRP,
@@ -127,6 +128,7 @@ class TestCorpusCoverage:
             MPLS,
             STP,
             CDP,
+            TFTP,
         } <= seen
 
     def test_arp_covers_both_operations(self):

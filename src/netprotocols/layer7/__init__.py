@@ -22,6 +22,7 @@ from netprotocols.layer7.http import (
     HTTPHeaderField,
 )
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
+from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "DNS",
     "HTTP",
     "RIP",
+    "TFTP",
     "VXLAN",
     "BGPOptionalParameter",
     "BGPPathAttribute",

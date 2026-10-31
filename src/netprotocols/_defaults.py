@@ -123,6 +123,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
     from netprotocols.layer7.rip import RIP
+    from netprotocols.layer7.tftp import TFTP
     from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
@@ -212,6 +213,12 @@ def install(registry: Registry) -> None:
     # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
     # answer a Request from another port back to it, from 520.
     add(TABLE_UDP_PORT, 520, RIP)
+    # TFTP (RFC 1350 §4): only a request goes to port 69. The server
+    # answers from an ephemeral port, its transfer identifier, and the
+    # rest of the transfer runs between two ephemeral ports, which no
+    # port table can name: a stateless walk reaches TFTP for the request
+    # alone (see layer7/tftp.py; decode_as names the server's port).
+    add(TABLE_UDP_PORT, 69, TFTP)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

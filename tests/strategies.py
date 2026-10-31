@@ -38,6 +38,7 @@ from netprotocols import (
     SCTP,
     SNAP,
     STP,
+    TFTP,
     VLAN,
     VRRP,
     VXLAN,
@@ -795,6 +796,49 @@ def rip_messages(draw: st.DrawFn) -> RIP:
     )
 
 
+#: A TFTP string: any bytes but the zero byte that terminates it.
+_tftp_strings = st.binary(max_size=_MAX_BLOB).map(
+    lambda raw: raw.replace(b"\x00", b"")
+)
+
+
+@st.composite
+def _tftp_options(draw: st.DrawFn) -> bytes:
+    """RFC 2347 option pairs: a name of at least one byte, a value."""
+    pairs = draw(
+        st.lists(
+            st.tuples(_tftp_strings.filter(bool), _tftp_strings), max_size=4
+        )
+    )
+    return b"".join(name + b"\x00" + value + b"\x00" for name, value in pairs)
+
+
+@st.composite
+def tftp_messages(draw: st.DrawFn) -> TFTP:
+    # A canonical message of each opcode decode accepts (1-6): its body
+    # ends where decode ends it, so the round trip is exact. Messages
+    # decode trims or rejects are built in test_tftp.py.
+    opcode = draw(st.integers(1, 6))
+    number = draw(st.integers(0, 0xFFFF)).to_bytes(2, "big")
+    if opcode in (1, 2):
+        body = (
+            draw(_tftp_strings)
+            + b"\x00"
+            + draw(_tftp_strings)
+            + b"\x00"
+            + draw(_tftp_options())
+        )
+    elif opcode == 3:
+        body = number + draw(st.binary(max_size=_MAX_BLOB * 2))
+    elif opcode == 4:
+        body = number
+    elif opcode == 5:
+        body = number + draw(_tftp_strings) + b"\x00"
+    else:
+        body = draw(_tftp_options())
+    return TFTP(opcode=opcode, body=body)
+
+
 @st.composite
 def pim_family_addresses(draw: st.DrawFn) -> tuple[int, str]:
     """A PIM address family and an address of it (RFC 7761 §4.9.1)."""
@@ -937,5 +981,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "VXLAN": vxlan_headers(),
     "OSPF": ospf_packets(),
     "RIP": rip_messages(),
+    "TFTP": tftp_messages(),
     "BGP": bgp_messages(),
 }
