@@ -765,15 +765,13 @@ judged, so a Kiss-o'-Death and a reserved stratum decode.
 The first byte is judged before the length, so every control message
 raises `InvalidFieldError` with `field` `"mode"`, however long, and a
 bad version raises with `field` `"version"`; only a time message's
-first byte can end in `TruncatedHeaderError`. That makes real traffic
-fail a strict walk: `ntpq` (mode 6, a 12-byte request and longer
-responses) and `ntpdc` (mode 7) talk to port 123, and
-`decode_frame()` raises on every one of their messages. Walk them with
-`lax=True`, which keeps Ethernet, IP and UDP and reports the rejection
-as `stopped_by`, or take the port out of dispatch for the walk with
-`decode_as={"udp.port": {123: None}}`, which ends it at UDP; the
-registry accepts that `None` at run time, though `decode_as` is
-annotated with classes only. Decoding mode 6 is a planned follow-up.
+first byte, or an empty buffer, can end in `TruncatedHeaderError`.
+That makes real traffic fail a strict walk: `ntpq` (mode 6, a 12-byte
+request and longer responses) and `ntpdc` (mode 7) talk to port 123,
+and `decode_frame()` raises on every one of their messages. Walk them
+with `lax=True`, which keeps Ethernet, IP and UDP and reports the
+rejection as `stopped_by`. A typed way to take a port out of dispatch for one
+walk, and decoding mode 6, are planned follow-ups.
 
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random

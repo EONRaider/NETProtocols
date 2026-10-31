@@ -585,22 +585,6 @@ class TestDecodeGuard:
         assert packet.stopped_by.field == "mode"
         assert packet.stopped_by.frame_offset == NTP_START
 
-    @pytest.mark.parametrize(
-        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
-    )
-    def test_decode_as_none_takes_port_123_out(self, message):
-        """decode_as={"udp.port": {123: None}} ends a strict walk at UDP.
-
-        The registry accepts None at run time, though decode_as is
-        annotated with classes only; the module docstring says so.
-        """
-        packet = decode_frame(
-            udp_frame(message),
-            decode_as={"udp.port": {123: None}},  # type: ignore[dict-item]
-        )
-        assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
-        assert packet.stopped_by is None
-
     def test_the_first_byte_is_judged_before_the_length(self):
         """Version, then mode, then length, whatever the length."""
         with pytest.raises(InvalidFieldError) as caught:
@@ -757,8 +741,10 @@ class TestDisplay:
             -32768.0
         )
 
-    def test_root_dispersion_is_unsigned_in_every_version(self):
-        """No version lets the dispersion go negative."""
+    def test_root_dispersion_is_read_unsigned_in_every_version(self):
+        """NTPv2-4 never let the dispersion go negative; for NTPv1,
+        whose third word is a drift rate, the number means nothing, but
+        it is read the same way."""
         for version in (1, 2, 3, 4):
             ntp = NTP(0, version, 4, root_dispersion=0xFFFF0000)
             assert ntp.root_dispersion_seconds == 65535.0

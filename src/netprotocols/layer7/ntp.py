@@ -48,9 +48,10 @@ positive and negative values" (RFC 2030 §4). RFC 5905 obsoletes RFC
 1305 and governs NTPv4 alone, so :attr:`NTP.root_delay_seconds` reads
 Root Delay signed below version 4 and unsigned from it: ``0xffff0000``
 is -1.0 s in an NTPv3 message and 65535.0 s in an NTPv4 one. Root
-Dispersion is never negative in any of them, and
-:attr:`NTP.root_dispersion_seconds` reads it unsigned in every
-version.
+Dispersion is never negative in NTPv2-4, and
+:attr:`NTP.root_dispersion_seconds` reads it unsigned. Both
+``*_seconds`` conversions assume NTPv2-4's meanings of these two words
+and do not apply to NTPv1, whose words are other fields (see below).
 
 Timestamps
 ----------
@@ -131,8 +132,8 @@ NTPv1 (RFC 1059) shares the header only by position: it has no Mode
 field, so those three bits are zero and every NTPv1 message decodes
 with mode 0, ``"reserved"``, and its second and third words are a
 Synchronizing Distance and an Estimated Drift Rate, which
-:attr:`NTP.root_delay` and :attr:`NTP.root_dispersion` hold under
-NTPv2-4's names.
+:attr:`NTP.root_delay` and :attr:`NTP.root_dispersion` hold, raw,
+under NTPv2-4's names.
 
 Control messages are not decoded
 --------------------------------
@@ -144,18 +145,11 @@ read-variables request may be nothing more), and reading one as a time
 message would give fields that mean nothing, so :meth:`NTP.decode`
 raises ``InvalidFieldError`` with ``field`` ``"mode"`` for every one,
 whatever its length. A strict ``decode_frame`` therefore raises on
-``ntpq`` and ``ntpdc`` traffic to or from port 123. Two ways around it:
-
-- ``decode_frame(frame, lax=True)`` keeps Ethernet, IP and UDP and
-  reports the rejection as ``stopped_by``, the UDP payload left
-  undecoded;
-- ``decode_frame(frame, decode_as={"udp.port": {123: None}})`` takes
-  port 123 out of dispatch for that walk, so it ends at UDP with
-  nothing stopped. The registry accepts ``None`` here at run time, but
-  ``decode_as`` is annotated with classes only, so a strict type
-  checker needs it silenced.
-
-Decoding mode 6 is a planned follow-up.
+``ntpq`` and ``ntpdc`` traffic to or from port 123. Walk it with
+``decode_frame(frame, lax=True)``, which keeps Ethernet, IP and UDP and
+reports the rejection as ``stopped_by``, the UDP payload left
+undecoded. A typed way to take port 123 out of dispatch for one walk,
+and decoding mode 6, are planned follow-ups.
 
 Construction checks only that each field fits its width, so a header
 with a version or mode decode rejects builds, and
@@ -231,8 +225,9 @@ _CONTROL_MODES = frozenset({6, 7})
 
 #: Extension Field Types: IANA's "NTP Extension Field Types" as RFC
 #: 9748 left it, the entries RFC 8915 (NTS) and RFC 7821 (UDP Checksum
-#: Complement) added. The Autokey types (RFC 5906) and the values RFC
-#: 9748 marks "Reserved for historic reasons" decode unnamed.
+#: Complement) added. 0x0204, which Autokey shares, is named for NTS;
+#: the other Autokey types (RFC 5906), 0x0000 (Crypto-NAK) and the
+#: historic reservations decode unnamed.
 _FIELD_TYPE_NAMES: dict[int, str] = {
     0x0104: "Unique Identifier",
     0x0204: "NTS Cookie",
@@ -242,7 +237,9 @@ _FIELD_TYPE_NAMES: dict[int, str] = {
 }
 
 #: The Field Types RFC 9748 reserves for experimentation and
-#: development, which IANA cannot assign: 0xF000-0xFFFF.
+#: development, which IANA cannot assign: 0xF000-0xFFFF. Wireshark's
+#: packet-ntp.c, which tracks the IANA registry, names the range
+#: "Reserved for Private or Experimental Use".
 _EXPERIMENTAL_FIELD_TYPES = range(0xF000, 0x10000)
 
 
@@ -645,8 +642,9 @@ class NTP(Protocol):
 
         Signed below version 4, as RFC 1305 and RFC 2030 define it, so
         ``0xffff0000`` is -1.0; unsigned from version 4, RFC 5905's NTP
-        short format (§6), so the same bits are 65535.0. See the module
-        docstring. :attr:`root_delay` stays the raw 32 bits.
+        short format (§6), so the same bits are 65535.0. Meaningless
+        for NTPv1, whose second word is a Synchronizing Distance. See
+        the module docstring. :attr:`root_delay` stays the raw 32 bits.
         """
         delay = self.root_delay
         if self.version < 4 and delay >> 31:
@@ -657,8 +655,9 @@ class NTP(Protocol):
     def root_dispersion_seconds(self) -> float:
         """Return the Root Dispersion in seconds, unsigned 16.16.
 
-        Unsigned in every version: no NTP or SNTP specification lets it
-        go negative.
+        Unsigned: no NTPv2-4 or SNTP specification lets it go negative.
+        Meaningless for NTPv1, whose third word is an Estimated Drift
+        Rate (see the module docstring).
         """
         return self.root_dispersion / 0x10000
 
