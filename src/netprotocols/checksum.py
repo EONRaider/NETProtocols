@@ -42,6 +42,20 @@ which it does not pad into the high byte of a last word as RFC 1071
 does: see :func:`compute`. :meth:`~netprotocols.Packet.with_checksums`
 fills it like IPv4's, from the layer alone.
 
+STUN's FINGERPRINT attribute is a checksum too, though not in a header
+field: the IEEE CRC-32 (the standard library's, the one Ethernet's FCS
+uses) of the message up to the attribute, XORed with ``0x5354554E``
+(RFC 8489 §14.7, RFC 5389 §15.5). :func:`compute` returns it for a
+message that ends in one, and :func:`verify` accepts a message without
+one, as it does a GRE header without the C bit. No one field says
+whether a message has one, so a message has none only when its
+attributes walk whole, none of them a FINGERPRINT, and its last 8 bytes
+do not begin like one: a corrupted Length earlier in the list, which
+would end the walk short of the FINGERPRINT or fold it into a longer
+value, fails rather than reading as a message without one.
+MESSAGE-INTEGRITY, the keyed HMAC beside it, is not a checksum this
+module can compute: it needs the credential's key.
+
 Length fields are trusted, not reconciled: UDP uses ``layer.length``
 for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
 and nothing checks ``IPv4.total_length`` against the payload you pass.
@@ -50,6 +64,7 @@ Feed these helpers the payload exactly as it appears on the wire.
 
 from __future__ import annotations
 
+import binascii
 import struct
 from dataclasses import replace
 from functools import reduce
@@ -72,6 +87,7 @@ from netprotocols.layer3.vrrp import VRRP
 from netprotocols.layer4.sctp import SCTP
 from netprotocols.layer4.tcp import TCP
 from netprotocols.layer4.udp import UDP
+from netprotocols.layer7.stun import STUN
 from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = [
@@ -442,6 +458,68 @@ def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
     )
 
 
+def _stun_fingerprint(layer: STUN) -> int:
+    """Return STUN's FINGERPRINT: the CRC-32 of the message up to the
+    attribute, its header's Length already counting it, XORed with
+    ``0x5354554E`` (RFC 8489 §14.7). The attribute must be the last,
+    with a 4-byte value, so the message up to it is all but its last 8
+    bytes."""
+    if layer.fingerprint is None:
+        raise InvalidFieldError(
+            "Computing a STUN fingerprint requires a FINGERPRINT "
+            "attribute, last in the message (RFC 8489 §14.7)",
+            protocol=type(layer),
+            field="attributes",
+        )
+    return binascii.crc32(bytes(layer)[:-8]) ^ STUN.FINGERPRINT_XOR
+
+
+#: A FINGERPRINT attribute's header: its type and a Length of 4.
+_STUN_FINGERPRINT_HEADER = STUN.FINGERPRINT.to_bytes(2, "big") + b"\x00\x04"
+
+
+def _stun_carries_no_fingerprint(layer: STUN) -> bool:
+    """Return whether a STUN message carries no FINGERPRINT to verify.
+
+    Only a message whose attributes walk whole with no attribute of
+    type ``0x8028`` among them, and whose last 8 bytes do not begin
+    like one, carries none. Presence is not read from the walk alone:
+    a corrupted Length earlier in the list could end the walk before
+    the FINGERPRINT, or swallow it into a longer value, and a message
+    that does carry one would read as one without. A FINGERPRINT must
+    be last (RFC 8489 §14.7), so its header in the last 8 bytes is
+    enough to claim one; the walk not reaching the end, or finding one
+    anywhere, is too.
+    """
+    if layer.attributes[-8:-4] == _STUN_FINGERPRINT_HEADER:
+        return False
+    try:
+        attributes = layer.parsed_attributes
+    except InvalidFieldError:
+        return False
+    return all(attribute.type != STUN.FINGERPRINT for attribute in attributes)
+
+
+def _standalone_checksum(layer: Protocol) -> int | None:
+    """Checksum a layer whose checksum covers its own bytes alone.
+
+    Those are IPv4's header, IGMP's and CDP's whole message, OSPF's
+    packet and STUN's FINGERPRINT, none of which takes an IP header or
+    a payload; ``None`` for any other layer.
+    """
+    if isinstance(layer, IPv4):
+        return internet_checksum(_zeroed(bytes(layer), 10))
+    if isinstance(layer, (IGMP, CDP)):
+        # Whole message, checksum field (bytes 2-3) zeroed, no
+        # pseudo-header; the body is already part of bytes(layer).
+        return _whole_message_checksum(layer)
+    if isinstance(layer, OSPF):
+        return _ospf_checksum(layer)
+    if isinstance(layer, STUN):
+        return _stun_fingerprint(layer)
+    return None
+
+
 def _pseudo_header_checksum(
     layer: Protocol, ip: IPv4 | IPv6 | None, payload: bytes
 ) -> int | None:
@@ -502,7 +580,11 @@ def compute(
         and ``payload`` ignored), summed as the internet checksum but
         for an odd final byte ``v``, added as the low byte of a last
         word below 0x80 and as ``0xFF00 + v - 1`` from 0x80, as lldpd
-        and Wireshark sum it (see :func:`_cdp_sum`).
+        and Wireshark sum it (see :func:`_cdp_sum`); ``STUN`` is its
+        FINGERPRINT attribute's value, the CRC-32 of the message up to
+        it XORed with ``0x5354554E`` (RFC 8489 §14.7; ``ip`` and
+        ``payload`` ignored), and raises for a message whose last
+        attribute is not a FINGERPRINT.
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6,
         VRRPv3, and PIM, whose coverage depends on the family.
     :param routing: The :class:`~netprotocols.IPv6Routing` header
@@ -528,26 +610,22 @@ def compute(
         ``ICMPv4``/``ICMPv6``/``IGMP``/``PIM`` message, and a decoded
         ``SCTP`` packet, already carries its whole body in
         ``bytes(layer)``, so pass a ``payload`` only for bytes the layer
-        object does not itself hold. ``IGMP``, ``VRRP``, ``PIM`` and
-        ``CDP`` ignore it: nothing after the message is part of it.
+        object does not itself hold. ``IGMP``, ``VRRP``, ``PIM``,
+        ``CDP`` and ``STUN`` ignore it: nothing after the message is
+        part of it.
     :raises InvalidFieldError: For layers without a checksum field, or
         a missing ``ip`` where the pseudo-header needs one.
     """
     ip = _pseudo_ip(ip, routing)
-    if isinstance(layer, IPv4):
-        return internet_checksum(_zeroed(bytes(layer), 10))
+    standalone = _standalone_checksum(layer)
+    if standalone is not None:
+        return standalone
     if isinstance(layer, ICMPv4):
         return internet_checksum(_zeroed(bytes(layer), 2) + payload)
-    if isinstance(layer, (IGMP, CDP)):
-        # Whole message, checksum field (bytes 2-3) zeroed, no
-        # pseudo-header; the body is already part of bytes(layer).
-        return _whole_message_checksum(layer)
     if isinstance(layer, GRE):
         return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):
         return _sctp_checksum(layer, payload)
-    if isinstance(layer, OSPF):
-        return _ospf_checksum(layer)
     if isinstance(layer, VRRP):
         return _vrrp_checksum(layer, ip)
     if isinstance(layer, PIM):
@@ -560,6 +638,27 @@ def compute(
         protocol=type(layer),
         field="checksum",
     )
+
+
+def _carries_no_checksum(layer: Protocol, ip: IPv4 | IPv6 | None) -> bool:
+    """Return whether ``layer`` carries no checksum to verify.
+
+    That is a UDP-over-IPv4 checksum of ``0`` (RFC 768), a GRE header
+    without the C bit (RFC 2784 §2.5), an OSPF packet under
+    cryptographic authentication (RFC 2328 §D.4.3, RFC 7474 §5), and a
+    STUN message whose attributes walk whole with no FINGERPRINT
+    attribute among them or begun in their last 8 bytes (RFC 8489
+    §14.7; see :func:`_stun_carries_no_fingerprint`).
+    """
+    if isinstance(layer, UDP):
+        return layer.checksum == 0 and not isinstance(ip, IPv6)
+    if isinstance(layer, GRE):
+        return not layer.checksum_present
+    if isinstance(layer, OSPF):
+        return layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES
+    if isinstance(layer, STUN):
+        return _stun_carries_no_fingerprint(layer)
+    return False
 
 
 def verify(
@@ -583,10 +682,17 @@ def verify(
     a frame cannot fail a checksum it does not have — as does an OSPF
     packet under cryptographic authentication (AuType 2 or 3, RFC 2328
     §D.4.3, RFC 7474 §5), whose digest this library cannot check
-    without the key. A PIM Register verifies with its checksum over its
-    first 8 bytes, as RFC 7761 §4.9.3 computes it, or over the whole
-    message, as it asks a receiver to accept too ("for interoperability
-    reasons"). So a whole-message Register verifies, but
+    without the key, and a STUN message with no FINGERPRINT attribute
+    (RFC 8489 §14.7). A STUN message with one anywhere but last, where
+    RFC 8489 §14.7 requires it, fails, and so does one whose attributes
+    do not walk to their end, or whose last 8 bytes begin like a
+    FINGERPRINT the walk does not reach: either may be a FINGERPRINTed
+    message with an earlier Length corrupted.
+
+    A PIM Register verifies with its checksum over its first 8 bytes,
+    as RFC 7761 §4.9.3 computes it, or over the whole message, as it
+    asks a receiver to accept too ("for interoperability reasons"). So
+    a whole-message Register verifies, but
     :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
     the 8-byte form :func:`compute` returns.
 
@@ -595,17 +701,13 @@ def verify(
     (RFC 8200 §8.1).
     """
     ip = _pseudo_ip(ip, routing)
-    if (
-        isinstance(layer, UDP)
-        and layer.checksum == 0
-        and not isinstance(ip, IPv6)
-    ):
-        return True
-    if isinstance(layer, GRE) and not layer.checksum_present:
-        return True
-    if isinstance(layer, OSPF) and layer.au_type in OSPF.CRYPTOGRAPHIC_AU_TYPES:
+    if _carries_no_checksum(layer, ip):
         return True
     if isinstance(layer, PIM):
         return _verify_pim(layer, ip)
+    if isinstance(layer, STUN):
+        return layer.fingerprint is not None and (
+            _stun_fingerprint(layer) == layer.fingerprint
+        )
     wire: int = layer.checksum  # type: ignore[attr-defined]
     return compute(layer, ip=ip, payload=payload) == wire

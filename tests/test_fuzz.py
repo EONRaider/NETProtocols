@@ -53,10 +53,12 @@ from netprotocols import (
     NTP,
     OSPF,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
     STP,
+    STUN,
     TCP,
     TFTP,
     UDP,
@@ -147,11 +149,13 @@ ALL_PROTOCOLS = (
     VXLAN,
     OSPF,
     RIP,
+    RADIUS,
     NTP,
     VRRP,
     VRRPv6,
     BGP,
     TFTP,
+    STUN,
 )
 
 
@@ -1060,6 +1064,145 @@ class TestTFTPAccessorSafety:
         event(f"TFTP opcode: {tftp.opcode_name}")
         event(f"TFTP options: {len(tftp.options)}")
         event(f"TFTP left undecoded: {len(data) > tftp.header_len}")
+
+
+#: The captured RADIUS packets, every one past its UDP header.
+_RADIUS_PACKETS = [
+    frame[42:] for frame in pcap_frames(FIXTURES / "radius.pcap")
+]
+
+
+@st.composite
+def _radius_seeded(draw: st.DrawFn) -> bytes:
+    """A captured RADIUS packet, a few bytes changed (the Length and
+    the attribute headers among them), cut anywhere and followed by
+    nothing, an FCS-like 4 bytes or up to 23 more: well-formed and
+    broken attribute lists, and Lengths near the buffer's, which free
+    bytes rarely reach."""
+    raw = bytearray(draw(st.sampled_from(_RADIUS_PACKETS)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(0, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+def _read_every_radius_attribute(radius: RADIUS) -> None:
+    """Walk the attributes and read every value and display accessor:
+    the walk either tiles the attributes exactly or raises
+    InvalidFieldError, and nothing else raises."""
+    try:
+        attributes = radius.parsed_attributes
+    except InvalidFieldError:
+        event("RADIUS attributes: malformed")
+        return
+    assert b"".join(map(bytes, attributes)) == radius.attributes
+    for found in attributes:
+        assert found.type_name
+        _ = found.value
+    _ = (radius.user_name, radius.nas_ip_address)
+    _ = (radius.nas_port, radius.framed_ip_address)
+    event(f"RADIUS attributes: {len(attributes)}")
+
+
+class TestRADIUSAccessorSafety:
+    @given(data=st.one_of(_radius_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for a Length below 20 or past the
+        buffer, and keeps exactly the bytes the Length covers; the
+        attribute walk and the accessors are total (see
+        _read_every_radius_attribute)."""
+        try:
+            radius = RADIUS.decode(data)
+        except ProtocolError:
+            length = int.from_bytes(data[2:4]) if len(data) >= 4 else 0
+            assert len(data) < 20 or not 20 <= length <= len(data)
+            return
+        assert bytes(radius) == data[: radius.length]
+        assert RADIUS.decode(bytes(radius)) == radius
+        assert radius.code_name
+        _read_every_radius_attribute(radius)
+
+
+#: The captured STUN messages, each TCP segment's as one stream.
+_STUN_MESSAGES = [
+    frame[66:] if frame[23] == 6 else frame[42:]
+    for frame in pcap_frames(FIXTURES / "stun.pcap")
+]
+
+#: Bytes from a small alphabet behind a header decode accepts, so
+#: attribute headers, lengths that fit or overrun, the address families
+#: and FINGERPRINT's and XOR-MAPPED-ADDRESS's types turn up far more
+#: often than in free bytes.
+_stun_like = st.tuples(
+    st.sampled_from([b"\x00\x01", b"\x01\x01", b"\x01\x11"]),
+    st.lists(
+        st.sampled_from([0, 0, 1, 2, 4, 8, 9, 0x0A, 0x20, 0x28, 0x80, 0xFF]),
+        max_size=120,
+    ).map(bytes),
+).map(
+    lambda parts: (
+        parts[0]
+        + (len(parts[1]) - len(parts[1]) % 4).to_bytes(2, "big")
+        + b"\x21\x12\xa4\x42"
+        + bytes(range(12))
+        + parts[1]
+    )
+)
+
+
+@st.composite
+def _stun_seeded(draw: st.DrawFn) -> bytes:
+    """A captured message, a few bytes past the header changed, whole
+    or cut anywhere, and followed by nothing or a few more bytes."""
+    raw = bytearray(draw(st.sampled_from(_STUN_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3)) if len(raw) > 20 else 0):
+        position = draw(st.integers(20, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.one_of(st.just(len(raw)), st.integers(0, len(raw))))
+    return bytes(raw[:cut]) + draw(st.binary(max_size=12))
+
+
+class TestSTUNAccessorSafety:
+    @given(data=st.one_of(_stun_seeded(), _stun_like, fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only a ProtocolError and keeps the message's
+        bytes exactly; parsed_attributes raises only InvalidFieldError,
+        and when it does not, the attributes tile the raw bytes but for
+        their padding; every other accessor never raises."""
+        try:
+            stun = STUN.decode(data)
+        except ProtocolError:
+            return
+        assert bytes(stun) == data[: stun.header_len]
+        assert STUN.decode(bytes(stun)) == stun
+        assert stun.message_type_name and stun.class_name
+        _ = (stun.mapped_address, stun.xor_mapped_address, stun.software)
+        _ = (stun.error_code, stun.error_reason, stun.unknown_attributes)
+        _ = (stun.message_integrity, stun.fingerprint, stun.next_protocol())
+        try:
+            attributes = stun.parsed_attributes
+        except InvalidFieldError:
+            event("STUN attributes malformed")
+            assert stun.fingerprint is None
+            return
+        cursor = 0
+        for attribute in attributes:
+            wire = bytes(attribute)
+            assert stun.attributes[cursor : cursor + 4] == wire[:4]
+            end = cursor + 4 + len(attribute.value)
+            assert stun.attributes[cursor + 4 : end] == attribute.value
+            assert attribute.type_name
+            _ = (attribute.address, stun.xor_address(attribute))
+            cursor += len(wire)
+        assert cursor == stun.length
+        event(f"STUN fingerprint: {stun.fingerprint is not None}")
+        event(f"STUN attributes: {min(len(attributes), 3)}")
 
 
 #: The captured NTP messages, every one past its UDP header.

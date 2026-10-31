@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate the internal checksum consistency of captured fixture pcaps.
 
-Deliberately standalone (stdlib only, its own RFC 1071, CRC32c and
-Fletcher implementations, its own minimal parsers): it must be able to
+Deliberately standalone (stdlib only, its own RFC 1071, CRC32c, CRC-32
+and Fletcher implementations, its own minimal parsers): it must be able to
 disqualify a capture even if netprotocols itself has a bug, and later
 it cross-validates the library's checksum module (plan item L-2) with
 an independent implementation.
@@ -41,6 +41,22 @@ def crc32c(data: bytes) -> int:
         crc ^= byte
         for _ in range(8):
             crc = (crc >> 1) ^ (_CRC32C_POLY if crc & 1 else 0)
+    return crc ^ 0xFFFFFFFF
+
+
+#: The IEEE 802.3 CRC-32 polynomial, bit-reflected: STUN's FINGERPRINT
+#: CRC (RFC 8489 §14.7 cites ITU V.42, which uses the same one).
+_CRC32_POLY = 0xEDB88320
+
+
+def crc32(data: bytes) -> int:
+    """The IEEE CRC-32, bit by bit: slow, and deliberately not the
+    standard library's ``binascii.crc32``, which the library uses."""
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (_CRC32_POLY if crc & 1 else 0)
     return crc ^ 0xFFFFFFFF
 
 
@@ -228,7 +244,7 @@ def _check_tcp(
         != struct.unpack_from("!H", upper, 16)[0]
     ):
         return ["tcp-checksum"]
-    return []
+    return _check_tcp_payload(upper, stats)
 
 
 def _check_udp(
@@ -492,7 +508,7 @@ def _check_tcp6(
         != struct.unpack_from("!H", upper, 16)[0]
     ):
         return ["tcp6-checksum"]
-    return []
+    return _check_tcp_payload(upper, stats)
 
 
 def _check_udp6(
@@ -639,6 +655,13 @@ _VXLAN_PORT = 4789
 #: RIP's port (RFC 2453 §3.9.1 for RIPv2, RFC 1058 §3.1 for RIPv1).
 _RIP_PORT = 520
 
+#: RADIUS's authentication and accounting ports (RFC 2865 §3, RFC 2866
+#: §3).
+_RADIUS_PORTS = (1812, 1813)
+
+#: STUN's port, over UDP and TCP alike (RFC 8489 §6).
+_STUN_PORT = 3478
+
 #: NTP's port (RFC 5905).
 _NTP_PORT = 123
 
@@ -649,16 +672,171 @@ def _check_udp_payload(
     """Validate what a UDP datagram carries, where it is something this
     checker can verify past the UDP checksum: a VXLAN tunnel (see
     :func:`_check_vxlan`), a RIPv2 message's keyed digest (see
-    :func:`_check_rip`) or an NTP message's MAC (see
-    :func:`_check_ntp`)."""
+    :func:`_check_rip`), a RADIUS packet's keyed authenticators (see
+    :func:`_check_radius`), a STUN message's FINGERPRINT and
+    MESSAGE-INTEGRITY (see :func:`_check_stun`) or an NTP message's
+    MAC (see :func:`_check_ntp`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
+    if src_port in _RADIUS_PORTS or dst_port in _RADIUS_PORTS:
+        return _check_radius(datagram, stats)
+    if _STUN_PORT in (src_port, dst_port):
+        end = struct.unpack_from("!H", datagram, 4)[0]
+        return _check_stun(datagram[8:end], stats, stream=False)
     if _NTP_PORT in (src_port, dst_port):
         return _check_ntp(datagram, stats)
     return []
+
+
+def _check_tcp_payload(segment: bytes, stats: Counter) -> list[str]:
+    """Validate what a TCP segment carries past the TCP checksum: STUN
+    messages on port 3478 (see :func:`_check_stun`), the only TCP
+    payload this checker reads."""
+    if _STUN_PORT not in struct.unpack_from("!HH", segment):
+        return []
+    return _check_stun(segment[(segment[12] >> 4) * 4 :], stats, stream=True)
+
+
+#: The Magic Cookie that starts bytes 4-7 of every STUN message since
+#: RFC 5389 (RFC 8489 §5); an RFC 3489 message has none.
+_STUN_COOKIE = bytes.fromhex("2112a442")
+
+#: The corpus's STUN long-term credential (RFC 8489 §9.2), published in
+#: tests/fixtures/MANIFEST.md: coturn was configured with it.
+_STUN_USERNAME = b"npstun"
+_STUN_REALM = b"np194.test"
+_STUN_PASSWORD = b"np194-pass"
+
+_STUN_MESSAGE_INTEGRITY = 0x0008
+_STUN_USERNAME_ATTRIBUTE = 0x0006
+_STUN_INTEGRITY_SHA256 = 0x001C
+_STUN_FINGERPRINT = 0x8028
+
+
+def _check_stun(data: bytes, stats: Counter, *, stream: bool) -> list[str]:
+    """Verify every STUN message in ``data``, back to back.
+
+    Over UDP ``data`` is one datagram's payload, which must be exactly
+    one message; over TCP (``stream``) a segment's, which can hold
+    several (RFC 8489 §6.2.2). A Message Length that is not a multiple
+    of 4, a type whose top two bits are set, or a datagram the message
+    does not fill exactly fails; what cannot be checked at all is left
+    (see :func:`_stun_message_end`)."""
+    failures: list[str] = []
+    while data:
+        end = _stun_message_end(data, stats, stream=stream)
+        if end is None:
+            return failures
+        if end % 4 or data[0] >> 6 or (not stream and end != len(data)):
+            return [*failures, "stun-header"]
+        failures += _check_stun_message(data[:end], stats)
+        data = data[end:]
+    return failures
+
+
+def _stun_message_end(
+    data: bytes, stats: Counter, *, stream: bool
+) -> int | None:
+    """Where the STUN message at the start of ``data`` ends, by its
+    Message Length; ``None``, counted, for one this checker cannot read.
+
+    That is a message without the Magic Cookie, RFC 3489's, with nothing
+    to verify, or over TCP also the middle of a message an earlier
+    segment began; and over TCP a message longer than the segment."""
+    if len(data) < 20 or data[4:8] != _STUN_COOKIE:
+        stats["stun-unchecked" if stream else "stun-rfc3489"] += 1
+        return None
+    end = 20 + struct.unpack_from("!H", data, 2)[0]
+    if end > len(data) and stream:
+        stats["stun-unchecked"] += 1
+        return None
+    return end
+
+
+def _stun_attributes(message: bytes) -> list[tuple[int, int, bytes]] | None:
+    """Walk a STUN message's attributes into (type, offset, value),
+    each value padded to 4 bytes (RFC 8489 §14); ``None`` if one runs
+    past the message."""
+    attributes, cursor = [], 20
+    while cursor < len(message):
+        if cursor + 4 > len(message):
+            return None
+        kind, length = struct.unpack_from("!HH", message, cursor)
+        if cursor + 4 + length > len(message):
+            return None
+        attributes.append(
+            (kind, cursor, message[cursor + 4 : cursor + 4 + length])
+        )
+        cursor += 4 + length + (-length % 4)
+    return attributes
+
+
+def _check_stun_message(message: bytes, stats: Counter) -> list[str]:
+    """Verify one STUN message's attributes (see
+    :func:`_check_stun_attribute`)."""
+    stats["stun"] += 1
+    attributes = _stun_attributes(message)
+    if attributes is None:
+        return ["stun-attributes"]
+    failures: list[str] = []
+    for index, attribute in enumerate(attributes):
+        last = index == len(attributes) - 1
+        failures += _check_stun_attribute(message, attribute, last, stats)
+    return failures
+
+
+def _check_stun_attribute(
+    message: bytes,
+    attribute: tuple[int, int, bytes],
+    last: bool,
+    stats: Counter,
+) -> list[str]:
+    """Verify a FINGERPRINT or a MESSAGE-INTEGRITY in ``message``.
+
+    FINGERPRINT must be the ``last`` attribute and equal the CRC-32 of
+    the message before it, XOR 0x5354554E (RFC 8489 §14.7).
+    MESSAGE-INTEGRITY is verified with the published long-term
+    credential (see :func:`_stun_integrity_verifies`); a USERNAME other
+    than the published one, or a MESSAGE-INTEGRITY-SHA256, which this
+    checker does not compute, fails, as an unpublished IPsec SPI does.
+    """
+    kind, offset, value = attribute
+    if kind == _STUN_USERNAME_ATTRIBUTE and value != _STUN_USERNAME:
+        return ["stun-unknown-user"]
+    if kind == _STUN_INTEGRITY_SHA256:
+        return ["stun-integrity-sha256"]
+    if kind == _STUN_MESSAGE_INTEGRITY:
+        stats["stun-message-integrity"] += 1
+        if not _stun_integrity_verifies(message, offset, value):
+            return ["stun-message-integrity"]
+    if kind == _STUN_FINGERPRINT:
+        stats["stun-fingerprint"] += 1
+        want = crc32(message[:offset]) ^ 0x5354554E
+        if not last or value != want.to_bytes(4, "big"):
+            return ["stun-fingerprint"]
+    return []
+
+
+def _stun_integrity_verifies(message: bytes, offset: int, mac: bytes) -> bool:
+    """Check a MESSAGE-INTEGRITY at ``offset``: HMAC-SHA1 over the
+    message before it, with the header's Length counting up to the end
+    of the attribute (RFC 8489 §14.5, RFC 5389 §15.4), keyed by the
+    long-term key MD5(username ":" realm ":" password) (RFC 8489
+    §9.2.2, RFC 5389 §15.4)."""
+    # MD5 is what RFC 8489 §9.2.2 mandates for the long-term key; this
+    # only rebuilds coturn's key from the published test credential.
+    key = hashlib.md5(
+        b":".join([_STUN_USERNAME, _STUN_REALM, _STUN_PASSWORD]),
+        usedforsecurity=False,
+    ).digest()
+    covered = (
+        message[:2] + struct.pack("!H", offset + 24 - 20) + message[4:offset]
+    )
+    want = hmac.new(key, covered, hashlib.sha1).digest()
+    return hmac.compare_digest(want, mac)
 
 
 def _check_vxlan(
@@ -743,6 +921,93 @@ def _check_rip(datagram: bytes, stats: Counter) -> list[str]:
     digest = _rip_digest(algorithm, key, rip[: trailer + 4])
     if not hmac.compare_digest(digest, rip[trailer + 4 :]):
         return [f"rip-{algorithm}"]
+    return []
+
+
+#: The shared secret between the corpus's RADIUS client and server: the
+#: test secret published in tests/fixtures/MANIFEST.md, as FreeRADIUS
+#: and radclient were configured with it.
+_RADIUS_SECRET = b"np193-radius-secret"
+
+#: RADIUS codes whose Authenticator is random, so that a
+#: Message-Authenticator in them is computed over it as sent:
+#: Access-Request (RFC 3579 §3.2) and Status-Server (RFC 5997 §3).
+_RADIUS_RANDOM_AUTHENTICATOR = (1, 12)
+_RADIUS_ACCOUNTING_REQUEST = 4
+_RADIUS_MESSAGE_AUTHENTICATOR = 80
+
+
+def _radius_attributes(radius: bytes) -> list[tuple[int, int]] | None:
+    """The (type, offset) of each attribute of a RADIUS packet, or
+    ``None`` when they do not tile the packet exactly: a Length below 2
+    or one that runs past the packet's end (RFC 2865 §5)."""
+    found, offset = [], 20
+    while offset + 2 <= len(radius):
+        length = radius[offset + 1]
+        if length < 2:
+            return None
+        found.append((radius[offset], offset))
+        offset += length
+    return found if offset == len(radius) else None
+
+
+def _check_radius(datagram: bytes, stats: Counter) -> list[str]:
+    """Verify what a RADIUS packet's own bytes let this checker verify.
+
+    The UDP checksum already covers every RADIUS byte. On top of it,
+    the Length must fit the datagram and the attributes tile the packet,
+    and, with the published secret: an Accounting-Request's Request
+    Authenticator, MD5 over the packet with a zero Authenticator and
+    then the secret (RFC 2866 §3); and the Message-Authenticator of an
+    Access-Request or a Status-Server, HMAC-MD5 under the secret over
+    the packet with that attribute's value zeroed (RFC 3579 §3.2). A
+    reply's Response Authenticator and Message-Authenticator are
+    computed over its request's Authenticator, which is in another
+    frame, so they are not checked here: tests/test_radius.py pairs and
+    verifies them. Bytes after the Length are padding (RFC 2865 §3) and
+    are not checked."""
+    radius = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["radius"] += 1
+    if len(radius) < 20:
+        return ["radius-truncated"]
+    length = struct.unpack_from("!H", radius, 2)[0]
+    if not 20 <= length <= len(radius):
+        return ["radius-length"]
+    radius = radius[:length]
+    attributes = _radius_attributes(radius)
+    if attributes is None:
+        return ["radius-attributes"]
+    code = radius[0]
+    if code == _RADIUS_ACCOUNTING_REQUEST:
+        stats["radius-accounting-authenticator"] += 1
+        # MD5 is what RFC 2866 §3 mandates; this only checks the hash
+        # the client sent, so it is not a security use.
+        digest = hashlib.md5(
+            radius[:4] + bytes(16) + radius[20:] + _RADIUS_SECRET,
+            usedforsecurity=False,
+        ).digest()
+        if not hmac.compare_digest(digest, radius[4:20]):
+            return ["radius-accounting-authenticator"]
+    if code not in _RADIUS_RANDOM_AUTHENTICATOR:
+        return []
+    for kind, offset in attributes:
+        if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
+            return _check_radius_message_authenticator(radius, offset, stats)
+    return []
+
+
+def _check_radius_message_authenticator(
+    radius: bytes, offset: int, stats: Counter
+) -> list[str]:
+    """Verify the Message-Authenticator at ``offset`` in a request whose
+    Authenticator is random (see :func:`_check_radius`)."""
+    stats["radius-message-authenticator"] += 1
+    if radius[offset + 1] != 18:
+        return ["radius-message-authenticator"]
+    zeroed = radius[: offset + 2] + bytes(16) + radius[offset + 18 :]
+    digest = hmac.new(_RADIUS_SECRET, zeroed, hashlib.md5).digest()
+    if not hmac.compare_digest(digest, radius[offset + 2 : offset + 18]):
+        return ["radius-message-authenticator"]
     return []
 
 

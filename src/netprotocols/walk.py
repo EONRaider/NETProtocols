@@ -68,6 +68,9 @@ walk of such a segment raises :class:`~netprotocols.MaxDepthExceededError`
 and a lax one stops short with ``stopped_by`` set; a larger
 ``max_depth``, or a second walk from ``packet.consumed`` with
 ``start=BGP``, decodes the rest. See :mod:`netprotocols.layer7.bgp`.
+STUN over TCP chains its messages the same way, and a 1448-byte
+segment of bare 20-byte headers holds 72 of them: see
+:mod:`netprotocols.layer7.stun`.
 
 802.3 Length
 ------------

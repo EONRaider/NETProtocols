@@ -8,17 +8,19 @@ pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
-digest and every NTP MAC, with the test keys published below. Frames
+digest, every RADIUS authenticator a frame holds alone, every STUN
+MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
+below, and every STUN FINGERPRINT. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 343 frames across 32
+frames routinely leave checksums to NIC offload. 367 frames across 34
 scenarios. Addresses are as-captured from the capture host's network.
 
-Nineteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-one scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
-`ntp.pcap`) are
-captured separately by their own `scripts/capture_fixtures_*.sh` over
+`radius.pcap`, `stun.pcap`, `ntp.pcap`) are captured separately by
+their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
@@ -28,8 +30,10 @@ two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
 three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
-server with tftp-hpa and curl clients, and a chronyd NTP server queried
-by ntpdig and chronyd clients — see their rows and the notes below.
+server with tftp-hpa and curl clients, a FreeRADIUS server answering
+radclient, coturn answering STUN clients, and a chronyd NTP server
+queried by ntpdig and chronyd clients — see their rows and the notes
+below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -56,7 +60,6 @@ by ntpdig and chronyd clients — see their rows and the notes below.
 | `ah.pcap` | 6 | IPsec AH (RFC 4302), HMAC-SHA-256-128, three SAs: transport mode protecting a TCP SYN (MSS option), an ICMPv4 echo and a UDP datagram (SPI `0x20000001`, sequence 1-3); tunnel mode protecting inner IPv4 with an ICMPv4 echo and a TCP SYN (SPI `0x20000002`, sequence 1-2); and an AH-over-ESP bundle, AH (SPI `0x20000003`) protecting NULL-encrypted ESP (SPI `0x10000003`) carrying an ICMPv4 echo — `Ethernet→IPv4→AH→` then TCP, ICMPv4, UDP, IPv4 (→ ICMPv4 or TCP) or ESP; **direct capture** of script-built datagrams (see IPsec note) |
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
 | `tftp.pcap` | 33 | Six TFTP (RFC 1350) transfers between tftpd-hpa 5.2 and two clients, each a request to UDP 69 followed by the transfer between two ephemeral ports: an RRQ in octet mode for a 1300-byte file (DATA blocks of 512, 512 and 276 bytes, each ACKed); an RRQ for a 1024-byte file, ending in an empty DATA block 3; a WRQ of 600 bytes (ACK of block 0, then DATA of 512 and 88); an RRQ for a missing file (ERROR code 1, `File not found`) and one for a file the server cannot open (ERROR code 0, `Permission denied`), each followed by the tftp-hpa client's ACK of block 1; and curl's RRQ with RFC 2347 options `tsize` 0, `blksize` 1024 and `timeout` 6, answered by an OACK (`tsize` 1300) and ACKed with block 0, then DATA of 1024 and 276 bytes — `Ethernet→IPv4→UDP→TFTP` for the 6 requests, `Ethernet→IPv4→UDP` for the other 27, which no port names; **direct capture**, both directions (see TFTP note) |
-| `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `mpls.pcap` | 8 | MPLS label stacks (RFC 3032) over Ethernet: one label (`0x12345`) carrying an ICMPv4 echo; two labels (16001, 16002) carrying UDP; three labels (16001-16003, traffic classes 5/3/0) carrying an echo; an Entropy Label Indicator (7) and an entropy label (RFC 6790) carrying an echo; an IPv4 Explicit NULL bottom label (0) carrying a UDP datagram of 2 bytes of payload, zero padded to 60 bytes; an IPv6 Explicit NULL bottom label (2) carrying an IPv6 UDP datagram; EtherType `0x8848` to a multicast MAC carrying an echo; and an Ethernet pseudowire, a control word (RFC 4448 §4.6) and a whole Ethernet frame — `Ethernet→MPLS→IPv4→ICMPv4` / `→IPv4→UDP` / `→IPv6→UDP`, and `Ethernet→MPLS`, where the walk stops at the control word; **script-built label stacks around kernel-built IPv4 datagrams**, the IPv6 datagram script-built (see MPLS note) |
@@ -65,6 +68,9 @@ by ntpdig and chronyd clients — see their rows and the notes below.
 | `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 | `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST BPDU, which `tests/test_stp.py` builds by hand); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
+| `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and its Access-Accept; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
+| `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
+| `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -532,6 +538,37 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   frame over IPv4 with no options, would get 14 bytes of it on a wire)
   or an FCS; `tests/test_tftp.py` appends both.
 
+- `radius.pcap` was produced by `scripts/capture_fixtures_radius.sh`:
+  FreeRADIUS 3.2.5 (`freeradius -X`, in the foreground, on a copy of
+  the packaged configuration with the EAP module and the inner-tunnel
+  site left out and a minimal site of the script's own: `chap`,
+  `files` and `pap` to authorize, `detail` for accounting) in one netns
+  and radclient 3.2.5 in another, over a veth pair with offload
+  disabled on both ends and tcpdump on the server's side. **radclient
+  and FreeRADIUS built every RADIUS byte**, the authenticators, the
+  hidden User-Password, the CHAP-Password and the
+  Message-Authenticators included; **the kernel built the UDP header**
+  (its checksum computed in software, and verified by
+  `check_fixtures`), **the IPv4 header and the Ethernet header**. Each
+  request is sent once (`radclient -r 1`) and answered before the next
+  is sent, so the capture is exactly the twelve frames in request,
+  reply order, which the script asserts, frame by frame, with the
+  attribute types each one carries and the Identifier pairing.
+  radclient 3.2.5 adds a Message-Authenticator to every Access-Request
+  and Status-Server, and FreeRADIUS 3.2.5 to every Access-Accept and
+  Access-Reject (both BlastRADIUS hardening), so every authentication
+  frame here carries one; `tests/test_radius.py` builds an
+  Access-Request without one. FreeRADIUS answers the wrong password
+  after its 1-second reject delay, and its Access-Reject carries the
+  user entry's Reply-Message, which `attr_filter.access_reject` lets
+  through. The Identifiers, the Request Authenticators of the
+  Access-Requests and the Status-Server (random), every authenticator
+  and Message-Authenticator computed from them, the IPv4
+  identifications and the timestamps differ in a re-capture. veth
+  does not pad and no packet is short enough to need Ethernet padding,
+  so no frame carries padding or an FCS; `tests/test_radius.py`
+  appends a 4-byte trailer to every frame. Everything here is IPv4.
+
 - `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
   netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s
   hello time, 2 s forward delay; A at priority 0x1000, so the root),
@@ -592,6 +629,49 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   address, Port ID, Capabilities, Software version, Platform), and the
   forms they do not, such as an IPv6 address, are built in the tests
   (the kernel boots with IPv6 disabled).
+
+- `stun.pcap` was produced by `scripts/capture_fixtures_stun.sh`:
+  coturn 4.6.1's `turnserver` in STUN-only mode (`--stun-only`, no TLS
+  or DTLS, `--fingerprint`) on 10.9.194.2 in one netns, clients on
+  10.9.194.1 in another, a veth pair between them with offload disabled
+  on both ends, tcpdump on the client's side, one capture per scenario.
+  **coturn built every response (frames 1, 3, 5, 7 with two, 9 and
+  11). `turnutils_stunclient` built the binding and RFC 5780 requests
+  (frames 0 and 2), neither with a FINGERPRINT; the script built the
+  other five** (the unknown-attribute request, frame 4; the two TCP
+  requests, both in frame 6; and the secure scenario's two, the
+  unauthenticated request in frame 8 and the authenticated one in
+  frame 10), in a stdlib Python client, adding a FINGERPRINT to each
+  but the second TCP request, which is a bare header; **the kernel
+  built the UDP and TCP headers** (their checksums computed in software
+  and verified by `check_fixtures`), **the IPv4 header and the Ethernet
+  header.** The
+  script keeps every UDP frame, every TCP segment with data (a bare
+  ACK on port 3478 hands `STUN` an empty payload, as one on 179 hands
+  `BGP`), and of the `-f` run only the RFC 5780 request and its answer,
+  and asserts the selection exactly: direction, transport, message
+  types, attribute types in order, matching transaction IDs, error
+  codes and every FINGERPRINT. coturn pads its error reason phrases
+  with NUL bytes it counts in the attribute's length. The transaction
+  IDs, the NONCE, the ports and so every XOR-MAPPED-ADDRESS, the
+  FINGERPRINTs and MESSAGE-INTEGRITYs differ in a re-capture. The
+  kernel had no IPv6, so XOR-MAPPED-ADDRESS over IPv6, whose XOR also
+  takes in the transaction ID, is covered by RFC 5769's test vectors
+  in `tests/test_stun.py`. The same script captures the RFC 3489
+  exchange in `stun/stun_rfc3489.pcap` (see below).
+
+### STUN test credential
+
+Published so anyone can verify the captures: it protects nothing. The
+secure scenario's server ran with `--secure-stun --lt-cred-mech`, realm
+`np194.test` and one user, `npstun`, password `np194-pass`. The
+long-term key is MD5(`npstun:np194.test:np194-pass`) (RFC 8489
+§9.2.2, RFC 5389 §15.4), and `check_fixtures` verifies every
+MESSAGE-INTEGRITY with it: HMAC-SHA1 over the message before the
+attribute, the header's Length counting up to the attribute's end. A
+message carrying another USERNAME, or a MESSAGE-INTEGRITY-SHA256,
+which it does not compute, fails. The credential is also hard-coded,
+independently, in `scripts/check_fixtures.py` and `tests/test_stun.py`.
 
 - `ntp.pcap` was produced by `scripts/capture_fixtures_ntp.sh`: a
   chronyd 4.5 server (`local stratum 8`, `allow all`, a keyfile and a
@@ -661,6 +741,29 @@ hard-coded, independently, in `scripts/check_fixtures.py` and
 | md5 | keyed MD5 (type 3) | 1 | `nprip-md5-key` |
 | sha256 | HMAC-SHA-256 (type 3) | 2 | `nprip-sha256-key` |
 
+### RADIUS test secrets
+
+Published so anyone can verify the captures: these values protect
+nothing. `check_fixtures` verifies, with the shared secret, every
+Accounting-Request's Request Authenticator (MD5 over the packet with a
+zero Authenticator, then the secret, RFC 2866 §3) and the
+Message-Authenticator of every Access-Request and Status-Server
+(HMAC-MD5 under the secret over the packet with the attribute's value
+zeroed, RFC 3579 §3.2): what one frame holds. A reply's Response
+Authenticator (RFC 2865 §3) and Message-Authenticator are computed over
+its request's Authenticator, in another frame, so `tests/test_radius.py`
+pairs each reply with its request and verifies those, and unhides each
+User-Password (RFC 2865 §5.2) and checks the CHAP-Password (§5.3). The
+values are also hard-coded, independently, in
+`scripts/check_fixtures.py` and `tests/test_radius.py`.
+
+| What | Value |
+|---|---|
+| shared secret (client `10.9.193.2`) | `np193-radius-secret` |
+| user | `np193-user` |
+| its password (PAP and CHAP) | `np193-pass` |
+| the wrong password (PAP, rejected) | `np193-wrong` |
+
 ## HTTP captures (`tests/fixtures/http/`)
 
 Outside the corpus on purpose: the corpus globs are non-recursive, and
@@ -706,6 +809,22 @@ finishes; frames 34-35 and 86-87 each split one UPDATE (2090 and 2430
 bytes) between them. `tests/test_bgp.py` walks those strictly and in
 lax mode, and reassembles each direction's stream to check it is
 nothing but whole messages.
+
+## STUN RFC 3489 capture (`tests/fixtures/stun/`)
+
+Outside the corpus on purpose: `netprotocols.STUN` rejects every frame
+in it, at the magic cookie, so a strict walk of it raises, which the
+corpus's invariants do not allow. `stun_rfc3489.pcap` (4 frames, every
+UDP checksum verified by `check_fixtures`, which counts them as
+`stun-rfc3489`) is the `stun` client's (stun-client 0.97) exchange with
+the same coturn server, captured by `scripts/capture_fixtures_stun.sh`:
+RFC 3489 messages, with a 16-byte transaction ID where RFC 5389 put the
+cookie. The script keeps two of its exchanges: a Binding Request with
+CHANGE-REQUEST 0 and the Success Response, which carries
+MAPPED-ADDRESS, SOURCE-ADDRESS, CHANGED-ADDRESS and SERVER (the name
+RFC 3489 gave 0x8022), and a request asking for another address and
+port and the error 420 coturn answers with. `tests/test_stun.py` walks
+them to the rejection, strict and lax.
 
 ## Provenance note
 

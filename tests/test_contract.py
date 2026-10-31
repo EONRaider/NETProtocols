@@ -16,10 +16,12 @@ from netprotocols import (
     NTP,
     OSPF,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
     STP,
+    STUN,
     TCP,
     TFTP,
     UDP,
@@ -57,6 +59,8 @@ class TestTruncation:
             (OSPF, "raw_ospf_hello"),
             (RIP, "raw_rip_message"),
             (TFTP, "raw_tftp_rrq"),
+            (RADIUS, "raw_radius_status_server"),
+            (STUN, "raw_stun_message"),
             (NTP, "raw_ntp_message"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
@@ -108,6 +112,14 @@ class TestTruncation:
         lying = raw_bgp_keepalive[:16] + b"\x10\x00\x02" + bytes(4)
         with pytest.raises(TruncatedHeaderError):
             BGP.decode(lying)
+
+    def test_lying_radius_length_raises(self, raw_radius_status_server):
+        """A Length of 4096 claims a 4096-byte packet on a 38-byte
+        buffer: RFC 2865 §3 discards a packet shorter than its Length."""
+        raw = raw_radius_status_server
+        lying = raw[:2] + b"\x10\x00" + raw[4:]
+        with pytest.raises(TruncatedHeaderError):
+            RADIUS.decode(lying)
 
     def test_lying_lldp_tlv_length_raises(self, raw_lldp_shutdown):
         """A Port ID TLV whose Length claims 511 bytes on a 27-byte

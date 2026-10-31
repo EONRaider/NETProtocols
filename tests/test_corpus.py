@@ -24,10 +24,12 @@ from netprotocols import (
     NTP,
     OSPF,
     PIM,
+    RADIUS,
     RIP,
     SCTP,
     SNAP,
     STP,
+    STUN,
     TCP,
     TFTP,
     UDP,
@@ -121,6 +123,7 @@ class TestCorpusCoverage:
             VXLAN,
             OSPF,
             RIP,
+            RADIUS,
             NTP,
             VRRP,
             BGP,
@@ -131,6 +134,7 @@ class TestCorpusCoverage:
             STP,
             CDP,
             TFTP,
+            STUN,
         } <= seen
 
     def test_arp_covers_both_operations(self):

@@ -95,7 +95,9 @@ from netprotocols.layer7.http import (
     HTTPHeaderField,
 )
 from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
+from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
+from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
 from netprotocols.layer7.tftp import TFTP
 from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
@@ -159,10 +161,12 @@ __all__ = [
     "OSPF",
     "OSPFLSA",
     "PIM",
+    "RADIUS",
     "RIP",
     "SCTP",
     "SNAP",
     "STP",
+    "STUN",
     "TCP",
     "TFTP",
     "UDP",
@@ -232,12 +236,15 @@ __all__ = [
     "Packet",
     "Protocol",
     "ProtocolError",
+    "RADIUSAttribute",
     "RIPAuthentication",
     "RIPEntry",
     "Registry",
     "RegistryConflictError",
     "SCTPChunk",
     "SOARecord",
+    "STUNAddress",
+    "STUNAttribute",
     "TCPOption",
     "TruncatedHeaderError",
     "UnknownTableError",

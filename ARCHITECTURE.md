@@ -399,12 +399,15 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP`, `MPLS` and `LLC` are the three exceptions: they answer from
-decode context rather than from a wire field alone. A BGP message
+`BGP`, `STUN`, `MPLS` and `LLC` are the four exceptions: they answer
+from decode context rather than from a wire field alone. A BGP message
 carries no payload: a TCP segment can hold several messages back to
 back, each decoded as its own layer, so `BGP.next_protocol()` names the
 next message *beside* it — `BGP` when the bytes after this message
-begin another one, `None` when they do not. An MPLS label stack carries
+begin another one, `None` when they do not. STUN over TCP is the same
+case, and `STUN.next_protocol()` answers `STUN` the same way, when the
+8 bytes after the message begin like a message's header, its magic
+cookie in place. An MPLS label stack carries
 a packet but no field naming its protocol (see *MPLS: dispatch by
 convention* below), so `MPLS.next_protocol()` infers one, partly from
 the first byte after the stack. SAP 0x42 carries GARP's PDUs (Protocol
@@ -418,11 +421,12 @@ records what it saw on the instance in a field kept out of the
 dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
 uses for its `_message` parse cache). Two equal headers compare equal
 however they were found, and can still chain differently. The rules of
-the decode contract hold for all three unchanged; see *Port-based
+the decode contract hold for all four unchanged; see *Port-based
 dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
 next_protocol*, the module docstrings of
-[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py) and
+[`layer7/bgp.py`](src/netprotocols/layer7/bgp.py),
+[`layer7/stun.py`](src/netprotocols/layer7/stun.py) and
 [`layer2/mpls.py`](src/netprotocols/layer2/mpls.py), and
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s *DSAP 0x42*.
 
@@ -490,9 +494,13 @@ flowchart LR
   VX -->|always| E
   U -->|520| R[RIP]
   U -->|69, the request only| TF[TFTP]
+  U -->|1812, 1813| RAD[RADIUS]
   U -->|123| NT[NTP]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
+  U -->|3478| STUN[STUN message]
+  T -->|3478| STUN
+  STUN -->|another message in the segment| STUN
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -760,7 +768,7 @@ header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
 
-RIP on UDP 520 rejects the most, because two of its four header bytes
+RIP on UDP 520 rejects far more, because two of its four header bytes
 have values no RIP message carries: `RIP.decode()` requires version 1
 or 2 and a nonzero command, which 510 of the 65,536 two-byte prefixes
 satisfy, so about 99.2% of random datagrams are rejected. Measured the
@@ -773,6 +781,30 @@ version 0. It goes no further. The obsolete and extension commands
 does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
 tells a receiver to ignore but a decoder should show. Past the header,
 any 20 bytes are an entry.
+
+RADIUS on UDP 1812 and 1813 (RFC 2865, RFC 2866) rejects a little
+more again, through its Length alone: `RADIUS.decode()` requires at least
+the 20 bytes of its header (`InvalidFieldError` below that) and no more
+than the buffer holds (`TruncatedHeaderError` past it). A random
+300-byte payload therefore passes only when its third and fourth bytes
+read 20-300, 281 of 65,536 values, and one of n bytes with n - 19 of
+them, which over lengths drawn uniformly from 0-600 averages 281 too.
+Measured the same way (`random.Random` seeds 0-2), the walk stopped
+for about 99.6% in each case (99.57% expected): the 300-byte payloads
+and the 0-600 byte ones, padded or not, on either port. The Code is
+not checked: every value decodes, and the codes of RFC 2865, RFC 2866,
+RFC 5997 and RFC 5176 are named (IANA assigns others, such as 6-10,
+21-34 and 50-52, which are not). Nor are the attributes: a packet
+whose attribute list does not walk still decodes, and
+`parsed_attributes` raises when asked, so an accepted guess can still
+read as garbage. Bytes past the Length are padding (RFC 2865 §3) and
+stay undecoded, past `packet.consumed`. The walk does not yet end the
+buffer at UDP's length (#235), though, so a Length that overstates the
+datagram reaches into whatever follows it in the frame, such as an
+Ethernet FCS, and reads it as attributes instead of raising. Only 1812
+and 1813 are registered: the legacy 1645 and 1646, and Dynamic
+Authorization's 3799 (RFC 5176, whose Disconnect and CoA packets share
+the format), need `decode_as`.
 
 TFTP on UDP 69 (RFC 1350) rejects more: `TFTP.decode()` requires an
 opcode of 1-6, which 6 of the 65,536 two-byte prefixes are, and then the
@@ -857,6 +889,32 @@ offload off, carries 7. Reassembling
 the stream is the caller's, as it is for `HTTP` below: see
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 
+STUN on UDP and TCP 3478 (RFC 8489, RFC 5389) is guarded nearly as
+well, by its fixed header: the two bits above the Message Type must be
+zero, the 32-bit Magic Cookie `0x2112A442` must follow the Message
+Length, and the Length must be a multiple of 4, so random bytes pass
+once in 2^36, before the Length is held against the buffer. Measured
+the same way, every walk to port 3478 ended with `stopped_by` set and
+none decoded a STUN layer, over UDP for 10,000 random 300-byte payloads
+and 10,000 of uniformly random length 0-600, padded or not, and over
+TCP for 10,000 random 300-byte segments (`random.Random` seeds 0-2).
+With the cookie forced in place, `STUN.decode()` accepted 28 of
+100,000 random 300-byte payloads (`random.Random(0)`), near the 27
+expected: a quarter have the two top bits clear, and 71 of the 65,536
+Lengths are multiples of 4 that fit in the 280 bytes after the header.
+The cookie is also what separates STUN from RFC 3489, its first
+version, whose 16-byte transaction ID took the cookie's place:
+`STUN.decode()` rejects a classic message at `magic_cookie`, which is
+what RFC 5389 put the cookie there for. Over TCP, messages follow one
+another with no framing but their own Length, as BGP's do, and chain
+the same way, so `max_depth` bounds correctness here too: a message
+can be a bare 20-byte header, the default leaves room for 29 after
+Ethernet, IPv4 and TCP, and a 1448-byte segment holds 72, so a strict
+walk of a valid segment can raise `MaxDepthExceededError` and a lax
+one stop short. BGP's two ways past it work the same, with
+`start=STUN`; the corpus's TCP segments carry 2. See
+[`layer7/stun.py`](src/netprotocols/layer7/stun.py)'s module docstring.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -929,6 +987,16 @@ one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
+STUN's FINGERPRINT is a checksum that lives in an attribute rather
+than a header field: the IEEE CRC-32 of the message up to it, XORed
+with `0x5354554E` (RFC 8489 §14.7). `compute()` returns it for a
+message whose last attribute is one, `verify()` accepts a message with
+none, and `with_checksums()` rewrites it. A message has none only when
+its attributes walk whole, none of them a FINGERPRINT, and its last 8
+bytes do not begin like one, so a corrupted earlier Length cannot hide
+it from `verify()`. MESSAGE-INTEGRITY, the keyed
+HMAC beside it, needs the credential's key, which this library never
+has, so it is carried raw, like an AH ICV.
 VRRP's checksum is the internet checksum of the message alone in
 VRRPv2 and behind the IP pseudo-header in VRRPv3. RFC 5798 §5.2.8
 cites only IPv6's pseudo-header; adding IPv4's too is keepalived's
@@ -980,15 +1048,17 @@ src/netprotocols/
 ├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
-│                   options and PIM Hello options TLV walker
+│                   options, PIM Hello options and STUN attributes
+│                   TLV walker
 ├── _enums.py       EtherType, IPProtocol, ARPOperation (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
 ├── walk.py         decode_frame(): the shipped chain walker
 ├── _defaults.py    the built-in decoder map, installed at import
 ├── packet.py       Packet composition, with_checksums(), flow_key()
 ├── checksum.py     RFC 1071 internet_checksum, SCTP's crc32c,
-│                   compute, verify (CDP's odd-byte sum among them),
-│                   OSPF's LSA Fletcher checksum
+│                   compute, verify (CDP's odd-byte sum and STUN's
+│                   FINGERPRINT among them), OSPF's LSA Fletcher
+│                   checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames
@@ -1011,7 +1081,9 @@ src/netprotocols/
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
 │                   and the HTTP codec class), vxlan.py, rip.py
 │                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages),
-│                   tftp.py (TFTP, with RFC 2347 options)
+│                   tftp.py (TFTP, with RFC 2347 options),
+│                   radius.py (RADIUS + RADIUSAttribute),
+│                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
