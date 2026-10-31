@@ -124,13 +124,17 @@ pytest_add_cli_args_test_selection = [
     "tests/test_dns.py",
     "tests/test_http.py",
 ]
-# mutmut runs the tests from its `mutants/` copy, which holds only the
-# source paths, `tests/` and the lockfiles; tests/test_checksum.py
-# loads scripts/check_fixtures.py (the independent fixture checker) by
-# a path relative to itself, so it has to be copied too. The whole
-# directory, not the one file: mutmut (3.8.1) copies a file entry
-# without creating its parent directory, and `mutants/scripts/` does
-# not otherwise exist.
+# mutmut runs the tests from its `mutants/` copy, which holds the
+# source paths and, by default, only `tests/`, `test/`, root-level
+# `test*.py`, `pyproject.toml`, `setup.cfg` and the lockfiles;
+# tests/test_checksum.py loads scripts/check_fixtures.py (the
+# independent fixture checker) by a path relative to itself, so it has
+# to be copied too. The whole directory, not the one file: mutmut
+# (3.8.1) copies a file entry without creating its parent directory,
+# and `mutants/scripts/` does not otherwise exist. On a dev machine
+# where `npm ci` ran in scripts/pyodide, the gitignored node_modules
+# there is copied too, which slows each local run; CI never has it.
+# tests/test_workflows.py (TestMutmutAlsoCopy) pins this.
 also_copy = ["scripts"]
 # dns.py's in-scope surface is narrower still: only the low-level
 # name-compression byte walk (_read_name/_labels and any private
