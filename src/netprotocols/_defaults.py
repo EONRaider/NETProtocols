@@ -122,6 +122,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.bgp import BGP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.radius import RADIUS
     from netprotocols.layer7.rip import RIP
     from netprotocols.layer7.stun import STUN
     from netprotocols.layer7.tftp import TFTP
@@ -220,6 +221,13 @@ def install(registry: Registry) -> None:
     # port table can name: a stateless walk reaches TFTP for the request
     # alone (see layer7/tftp.py; decode_as names the server's port).
     add(TABLE_UDP_PORT, 69, TFTP)
+    # RADIUS (RFC 2865, RFC 2866): IANA's authentication and accounting
+    # ports. A client sends from an ephemeral port and the server
+    # answers from the one it was sent to, so the destination-first
+    # lookup finds both directions. The legacy 1645 and 1646 and
+    # Dynamic Authorization's 3799 (RFC 5176) are not registered:
+    # decode_as adds them per walk.
+    register_all(TABLE_UDP_PORT, (1812, 1813), RADIUS, registry=registry)
     # STUN (RFC 8489 §6, RFC 5389 §7): a server listens on 3478 and a
     # client sends from an ephemeral port, so the destination-first
     # lookup finds it in both directions.
