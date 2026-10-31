@@ -328,3 +328,13 @@ def raw_lldp_shutdown() -> bytes:
     return bytes.fromhex(
         "020704024e5086000a040a056e706c6c64702d7661060200000000"
     )
+
+
+@pytest.fixture
+def raw_tftp_rrq() -> bytes:
+    """RRQ from ``tftp.pcap``: curl asking for ``boot.bin`` in octet
+    mode with options tsize 0, blksize 1024 and timeout 6."""
+    return (
+        b"\x00\x01boot.bin\x00octet\x00"
+        b"tsize\x000\x00blksize\x001024\x00timeout\x006\x00"
+    )

@@ -104,6 +104,7 @@ class TestCorpusFiguresInDocs:
             "vrrp.py",
             "bgp.py",
             "mpls.py",
+            "tftp.py",
             "radius.py",
         ],
     )

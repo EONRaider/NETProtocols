@@ -124,6 +124,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.dns import DNS, DNSOverTCP
     from netprotocols.layer7.radius import RADIUS
     from netprotocols.layer7.rip import RIP
+    from netprotocols.layer7.tftp import TFTP
     from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
@@ -213,6 +214,12 @@ def install(registry: Registry) -> None:
     # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
     # answer a Request from another port back to it, from 520.
     add(TABLE_UDP_PORT, 520, RIP)
+    # TFTP (RFC 1350 §4): only a request goes to port 69. The server
+    # answers from an ephemeral port, its transfer identifier, and the
+    # rest of the transfer runs between two ephemeral ports, which no
+    # port table can name: a stateless walk reaches TFTP for the request
+    # alone (see layer7/tftp.py; decode_as names the server's port).
+    add(TABLE_UDP_PORT, 69, TFTP)
     # RADIUS (RFC 2865, RFC 2866): IANA's authentication and accounting
     # ports. A client sends from an ephemeral port and the server
     # answers from the one it was sent to, so the destination-first

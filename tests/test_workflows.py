@@ -22,11 +22,13 @@ the same failure mode as ALL_PROTOCOLS silently skipping DNSOverTCP
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
 
-WORKFLOWS = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOWS = ROOT / ".github" / "workflows"
 CI = WORKFLOWS / "ci.yml"
 RELEASE = WORKFLOWS / "release.yml"
 FUZZ = WORKFLOWS / "fuzz.yml"
@@ -272,10 +274,17 @@ class TestCodeQLActionVersionLockstep:
         )
         steps = {step for group in pins.values() for step in group}
         # Guard against passing vacuously: codeql.yml's init/analyze
-        # pair is the reason this check exists, so it must be seen.
-        assert {"codeql.yml: init", "codeql.yml: analyze"} <= steps, (
-            f"expected codeql.yml's init and analyze steps, found "
-            f"{sorted(steps)}"
+        # pair is the reason this check exists, so it must be seen, and
+        # so must the upload-sarif step that uploads analyze's SARIF
+        # once scripts/filter_codeql_sarif.py has filtered it.
+        expected = {
+            "codeql.yml: init",
+            "codeql.yml: analyze",
+            "codeql.yml: upload-sarif",
+        }
+        assert expected <= steps, (
+            f"expected codeql.yml's init, analyze and upload-sarif steps, "
+            f"found {sorted(steps)}"
         )
         assert len(pins) == 1, (
             f"github/codeql-action steps are pinned to {len(pins)} "
@@ -296,6 +305,169 @@ class TestCodeQLActionVersionLockstep:
             old: ["codeql.yml: init"],
             new: ["codeql.yml: analyze"],
         }
+
+
+CODEQL = WORKFLOWS / "codeql.yml"
+SARIF_OUTPUT = "${{ steps.analyze.outputs.sarif-output }}"
+
+
+def job_steps(block: str) -> list[str]:
+    """Split a :func:`job_blocks` block's ``steps:`` list into the text
+    of each step, in order (comments are already gone)."""
+    _, sep, after = block.partition("    steps:\n")
+    assert sep, "the job has no steps: list"
+    steps: list[str] = []
+    for line in after.splitlines():
+        if line.startswith("      - "):
+            steps.append(line + "\n")
+        elif line.startswith("        ") and steps:
+            steps[-1] += line + "\n"
+        else:
+            break  # left the steps: list
+    assert steps, "the job's steps: list is empty"
+    return steps
+
+
+def step_key(step: str, key: str) -> str | None:
+    """The value of ``key`` anywhere in one step's text (its own keys,
+    or a ``with:``/``env:`` entry), or ``None``."""
+    match = re.search(
+        rf"(?m)^\s+(?:-\s+)?{re.escape(key)}:[ \t]*(.*?)\s*$", step
+    )
+    return match.group(1) if match else None
+
+
+class TestCodeQLWorkflow:
+    """codeql.yml's analyze job writes the SARIF, filters it with
+    scripts/filter_codeql_sarif.py, and only then uploads it.
+
+    Almost every way to get this wrong still runs green: a filter after
+    the upload, or reading another directory, filters nothing; a failed
+    filter allowed to pass (``continue-on-error``, or an upload under
+    ``if: always()``) can upload its input unfiltered; and a category on
+    either step starts a second analysis beside the first, so every
+    existing alert reappears instead of closing or staying. The one
+    that does not, ``upload: always`` on analyze, uploads the
+    unfiltered results first and only then fails, when upload-sarif
+    refuses a second upload under the same category; by then the
+    unfiltered alerts are already in.
+    """
+
+    @pytest.fixture
+    def steps(self) -> list[str]:
+        return job_steps(job_blocks(CODEQL)["analyze"])
+
+    @staticmethod
+    def uses(step: str) -> str | None:
+        """The step's ``uses:`` reference, on whichever line it is."""
+        refs = [uses_ref(line) for line in step.splitlines()]
+        return next((ref for ref in refs if ref is not None), None)
+
+    @staticmethod
+    def find(steps: list[str], needle: str) -> int:
+        matches = [i for i, step in enumerate(steps) if needle in step]
+        assert len(matches) == 1, (
+            f"expected one codeql.yml step with {needle!r}, found "
+            f"{len(matches)}"
+        )
+        return matches[0]
+
+    def test_analyze_writes_the_sarif_without_uploading_it(
+        self, steps: list[str]
+    ) -> None:
+        """``failure-only`` (the action's documented mode for a
+        workflow that post-processes the SARIF) uploads nothing from a
+        successful analysis; ``always`` and any value the action does
+        not recognize upload before the filter runs."""
+        analyze = steps[self.find(steps, "github/codeql-action/analyze@")]
+        assert step_key(analyze, "upload") == "failure-only"
+        assert step_key(analyze, "id") == "analyze"
+
+    def test_the_filter_runs_between_analyze_and_upload(
+        self, steps: list[str]
+    ) -> None:
+        analyze = self.find(steps, "github/codeql-action/analyze@")
+        script = self.find(steps, "scripts/filter_codeql_sarif.py")
+        upload = self.find(steps, "github/codeql-action/upload-sarif@")
+        assert analyze < script < upload
+        assert (ROOT / "scripts" / "filter_codeql_sarif.py").is_file()
+
+    def test_filter_and_upload_use_the_sarif_analyze_wrote(
+        self, steps: list[str]
+    ) -> None:
+        script = steps[self.find(steps, "scripts/filter_codeql_sarif.py")]
+        assert step_key(script, "SARIF_DIR") == SARIF_OUTPUT
+        assert step_key(script, "run") == (
+            'python3 scripts/filter_codeql_sarif.py "$SARIF_DIR"'
+        )
+        upload = steps[self.find(steps, "github/codeql-action/upload-sarif@")]
+        assert step_key(upload, "sarif_file") == SARIF_OUTPUT
+
+    def test_upload_sarif_runs_the_same_release_as_analyze(
+        self, steps: list[str]
+    ) -> None:
+        pins = {
+            ref.rpartition("@")[0]: ref.rpartition("@")[2]
+            for ref in (self.uses(step) for step in steps)
+            if ref is not None and ref.startswith(CODEQL_ACTION)
+        }
+        assert set(pins) == {
+            f"{CODEQL_ACTION}init",
+            f"{CODEQL_ACTION}analyze",
+            f"{CODEQL_ACTION}upload-sarif",
+        }
+        assert len(set(pins.values())) == 1, pins
+
+    def test_the_category_is_the_one_analyze_always_used(
+        self, steps: list[str]
+    ) -> None:
+        """With no ``category`` the CLI writes no
+        ``runs[].automationDetails`` (tests/fixtures/codeql/python.sarif,
+        TestTheFixture in test_filter_codeql_sarif.py), and the action
+        fills it in from the workflow path, the job id and the matrix:
+        ".github/workflows/codeql.yml:analyze/", which upload-sarif
+        derives exactly as analyze did, in the same job. That is the
+        category this repository's alerts are tracked under, so neither
+        step may set one, the job keeps its id and gains no matrix."""
+        for step in steps:
+            ref = self.uses(step)
+            if ref is not None and ref.startswith(CODEQL_ACTION):
+                assert step_key(step, "category") is None, step
+        assert "analyze" in job_blocks(CODEQL)
+        assert "matrix" not in job_blocks(CODEQL)["analyze"]
+
+    def test_every_trigger_filters_and_uploads(self, steps: list[str]) -> None:
+        """push, pull_request and schedule all run the same steps: no
+        step is conditional, so none of them can skip the filter."""
+        on = CODEQL.read_text().partition("\non:\n")[2].partition("\n\n")[0]
+        for trigger in ("push", "pull_request", "schedule"):
+            assert re.search(rf"(?m)^  {trigger}:", on), trigger
+        for step in steps:
+            assert step_key(step, "if") is None, step
+
+    def test_a_failed_filter_or_upload_fails_the_job(self) -> None:
+        """The filter's exit 1 must stop the job before upload-sarif
+        runs, and a failed upload must show: ``continue-on-error`` on
+        the filter, on upload-sarif or on the job would let unfiltered
+        SARIF go up, or a lost upload pass green. No step may set it,
+        and the job may not; no step has an ``if:`` either (see
+        test_every_trigger_filters_and_uploads)."""
+        block = job_blocks(CODEQL)["analyze"]
+        assert step_key(block, "continue-on-error") is None, block
+
+    def test_the_job_keeps_its_minimal_permissions(self) -> None:
+        block = job_blocks(CODEQL)["analyze"]
+        permissions = block.partition("    permissions:\n")[2]
+        granted = []
+        for line in permissions.splitlines():
+            if not line.startswith("      "):
+                break
+            granted.append(line.strip())
+        assert granted == [
+            "actions: read",
+            "contents: read",
+            "security-events: write",
+        ]
 
 
 class TestCIWorkflow:
@@ -734,6 +906,100 @@ class TestMutationWorkflow:
             self._parse_mutmut_run_filters(malformed)
 
 
+# mutmut runs the selected tests from its mutants/ copy of the repo,
+# which holds the source paths, plus what mutmut copies by default
+# (mutmut/configuration.py) and whatever [tool.mutmut]'s also_copy
+# names. A selected test that loads any other repo file by a path
+# relative to itself dies there with FileNotFoundError -- which is how
+# #263's scripts/check_fixtures.py fixture broke the nightly run.
+MUTMUT_DEFAULT_COPIES = (
+    "tests",
+    "test",
+    "setup.cfg",
+    "pyproject.toml",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "pdm.lock",
+)
+
+# The repo root as the tests spell it: Path(__file__), optionally
+# .resolve(), then .parent.parent (this file's own ROOT is the same).
+_REPO_ROOT_EXPR = r"Path\(__file__\)(?:\.resolve\(\))?\.parent\.parent"
+# One or more `/ "segment"` joins after a root, e.g.
+# `/ "scripts/check_fixtures.py"` or `/ "scripts" / "check_fixtures.py"`.
+_JOINS = r"((?:\s*/\s*\"[^\"]+\")+)"
+
+
+def repo_paths_loaded_by(test_file: Path) -> set[str]:
+    """Repo-relative paths ``test_file`` builds from the repo root.
+
+    Matches joins on the root expression itself and on any name bound
+    to it alone (``ROOT = Path(__file__).resolve().parent.parent``,
+    then ``ROOT / "scripts" / "x.py"``). A path built some other way
+    is not found, so test_mutmut_copies_what_selected_tests_load
+    checks that the one known load is found.
+    """
+    source = test_file.read_text()
+    roots = [_REPO_ROOT_EXPR]
+    roots += [
+        re.escape(name)
+        for name in re.findall(
+            rf"(?m)^(\w+)\s*=\s*{_REPO_ROOT_EXPR}\s*$", source
+        )
+    ]
+    found = set()
+    for root in roots:
+        for joins in re.findall(rf"\b{root}{_JOINS}", source):
+            segments = re.findall(r"\"([^\"]+)\"", joins)
+            found.add("/".join(segments))
+    return found
+
+
+class TestMutmutAlsoCopy:
+    @staticmethod
+    def _mutmut_config() -> dict:
+        with (ROOT / "pyproject.toml").open("rb") as handle:
+            return tomllib.load(handle)["tool"]["mutmut"]
+
+    def test_the_scan_finds_the_known_checker_load(self) -> None:
+        """Guards the scan below against passing vacuously: if the
+        regex stops matching how the tests spell a root-relative path,
+        this fails instead of the real check finding nothing to check."""
+        assert "scripts/check_fixtures.py" in repo_paths_loaded_by(
+            ROOT / "tests" / "test_checksum.py"
+        )
+
+    def test_mutmut_copies_what_selected_tests_load(self) -> None:
+        """Every repo file a mutation-selected test loads from outside
+        what mutants/ always holds lies under a *directory* entry of
+        also_copy. A file entry is not enough: mutmut (3.8.1) copies
+        one with shutil.copy2 and never creates its parent directory,
+        so ``also_copy = ["scripts/check_fixtures.py"]`` fails just as
+        a missing entry does."""
+        config = self._mutmut_config()
+        always_there = [*config.get("source_paths", []), *MUTMUT_DEFAULT_COPIES]
+        copied_dirs = [
+            Path(entry)
+            for entry in config.get("also_copy", [])
+            if (ROOT / entry).is_dir()
+        ]
+        missing = []
+        for test in config["pytest_add_cli_args_test_selection"]:
+            for loaded in sorted(repo_paths_loaded_by(ROOT / test)):
+                path = Path(loaded)
+                if any(path.is_relative_to(p) for p in always_there):
+                    continue
+                if not any(path.is_relative_to(d) for d in copied_dirs):
+                    missing.append(f"{test} loads {loaded}")
+        assert not missing, (
+            "these files are absent from mutmut's mutants/ copy, so the "
+            "nightly mutation run's stats phase dies with "
+            "FileNotFoundError; add their directory (not the file) to "
+            f"[tool.mutmut] also_copy in pyproject.toml: {missing}"
+        )
+
+
 # Each new workflow file's defining job, and one distinctive thing that
 # job must still do. A missing file or job fails outright; a present job
 # missing its needle means the workflow was gutted without anyone
@@ -742,7 +1008,12 @@ NEW_WORKFLOW_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "mutation.yml": ("mutation", ("mutmut run",)),
     "codeql.yml": (
         "analyze",
-        ("codeql-action/init", "codeql-action/analyze"),
+        (
+            "codeql-action/init",
+            "codeql-action/analyze",
+            "scripts/filter_codeql_sarif.py",
+            "codeql-action/upload-sarif",
+        ),
     ),
     "scorecard.yml": ("analysis", ("ossf/scorecard-action",)),
     "docs-lint.yml": ("lychee", ("lycheeverse/lychee-action",)),

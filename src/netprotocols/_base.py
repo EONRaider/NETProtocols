@@ -82,6 +82,14 @@ buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
 report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
 instead of raising. See :mod:`netprotocols.layer7.rip`.
 
+``TFTP`` is port-dispatched too, but bounds most of its messages by
+their structure: an ACK's 4 bytes, an ERROR's terminated message, a
+request's or an OACK's last whole option pair; step 3 holds after them.
+Its strings are zero-terminated, so a missing terminator is its
+truncation case, as a lying length is in step 2. A DATA message's data
+has no terminator and runs to the end of the buffer. See
+:mod:`netprotocols.layer7.tftp`.
+
 ``VRRP`` has no length field either, but its version and address count
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.

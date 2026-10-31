@@ -34,7 +34,7 @@ bench = [
 ]
 dev = [
     "hypothesis>=6.100",
-    "mutmut>=3.7.0",
+    "mutmut>=3.8.1",
     "mypy>=1.14",
     "pytest>=8.3",
     "pytest-cov>=6.0",
@@ -124,6 +124,18 @@ pytest_add_cli_args_test_selection = [
     "tests/test_dns.py",
     "tests/test_http.py",
 ]
+# mutmut runs the tests from its `mutants/` copy, which holds the
+# source paths and, by default, only `tests/`, `test/`, root-level
+# `test*.py`, `pyproject.toml`, `setup.cfg` and the lockfiles;
+# tests/test_checksum.py loads scripts/check_fixtures.py (the
+# independent fixture checker) by a path relative to itself, so it has
+# to be copied too. The whole directory, not the one file: mutmut
+# (3.8.1) copies a file entry without creating its parent directory,
+# and `mutants/scripts/` does not otherwise exist. On a dev machine
+# where `npm ci` ran in scripts/pyodide, the gitignored node_modules
+# there is copied too, which slows each local run; CI never has it.
+# tests/test_workflows.py (TestMutmutAlsoCopy) pins this.
+also_copy = ["scripts"]
 # dns.py's in-scope surface is narrower still: only the low-level
 # name-compression byte walk (_read_name/_labels and any private
 # helpers they call), not the record/question parsing built on top of
@@ -138,7 +150,7 @@ pytest_add_cli_args_test_selection = [
 # private module-level function, matched by 'x__*'.
 # Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
 # the DNS/DNSOverTCP dataclass methods, ...) are out of scope for this
-# audit and were not triaged. mutmut (3.8.0) generates none at all for
+# audit and were not triaged. mutmut (3.8.1) generates none at all for
 # a decorated function other than a lone @staticmethod/@classmethod, so
 # the @lru_cache section parsers are never mutated, whatever the
 # filters say; logic meant to be audited belongs in undecorated
