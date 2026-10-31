@@ -214,6 +214,22 @@ raises. Ethernet's zero padding reaches only a message with no entries,
 since one entry already fills the minimum frame. See
 [`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
 
+`TFTP` has no length field either, but most of its messages bound
+themselves: an ACK is 4 bytes, an ERROR ends at the zero byte after its
+message, and a request or an OACK after its last whole option pair, a
+zero byte where the next name would start ending the options. So it
+obeys rule 3 like a header with a length field and leaves Ethernet's
+padding (which every ACK, at 4 bytes, gets) and an FCS undecoded,
+`bytes(TFTP.decode(x)) == x[:header_len]`. A DATA message cannot: its
+data has no terminator, so it runs to the end of the buffer, and a
+trailer joins it, as it joins an ICMP `body`. Its strings are
+terminated rather than length-prefixed, so a missing terminator is
+TFTP's truncation case: a filename, mode or error message with no zero
+byte after it raises `TruncatedHeaderError`, as a lying length does in
+rule 2, while an option pair cut short is left undecoded, since only
+UDP's length could tell it from a trailer. See
+[`layer7/tftp.py`](src/netprotocols/layer7/tftp.py)'s module docstring.
+
 `VRRP` has no length field either, but needs no walk: its version and
 address count give its exact length (8 bytes, the addresses, and
 VRRPv2's 8 bytes of authentication data), so it obeys rule 3 like a
@@ -453,6 +469,7 @@ flowchart LR
   U -->|4789| VX[VXLAN]
   VX -->|always| E
   U -->|520| R[RIP]
+  U -->|69, the request only| TF[TFTP]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
 ```
@@ -736,6 +753,28 @@ does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
 tells a receiver to ignore but a decoder should show. Past the header,
 any 20 bytes are an entry.
 
+TFTP on UDP 69 (RFC 1350) rejects more: `TFTP.decode()` requires an
+opcode of 1-6, which 6 of the 65,536 two-byte prefixes are, and then
+the mandatory fields that opcode carries, whole. Measured the same way,
+over three seeds, the walk stopped for 99.98-100% of the 300-byte
+payloads sent to 69 and of the 0-600 byte ones unpadded and padded: 5
+of the 90,000 decoded a `TFTP` layer, about the 6 in 65,536 the opcode
+lets through. What the port cannot do is find the transfer. Only the
+request goes to port 69: the server answers from an ephemeral port of
+its own, its transfer identifier, and every DATA, ACK, OACK and ERROR
+after that runs between two ephemeral ports (RFC 1350 §4), which no
+port table can name. So a stateless walk decodes a `TFTP` layer for the
+RRQ or WRQ alone, and stops at UDP for the rest of the transfer, as for
+any datagram between unregistered ports; of the 33 frames in
+`tests/fixtures/tftp.pcap`, the 6 requests decode one. A caller who
+follows the transfer has the server's port from the source port of its
+first reply, and names it for the walk, `decode_as={"udp.port":
+{tid: TFTP}}`, which covers both directions since every later datagram
+has it as one of its two ports; tracking the transfer is the caller's,
+as reassembly is for `HTTP` and `BGP`. A server that answers from port
+69 itself, which RFC 1350 does not allow, has its replies dispatched by
+the source-port fallback.
+
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
 bytes match once in 2^128, and then a Length and Type whose bounds
@@ -923,7 +962,8 @@ src/netprotocols/
 │                   dispatch)
 ├── layer7/         dns.py, dhcp.py, http.py (the HTTP/1.1 grammar
 │                   and the HTTP codec class), vxlan.py, rip.py
-│                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages)
+│                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages),
+│                   tftp.py (TFTP, with RFC 2347 options)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

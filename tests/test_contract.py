@@ -20,6 +20,7 @@ from netprotocols import (
     SNAP,
     STP,
     TCP,
+    TFTP,
     UDP,
     VRRP,
     VXLAN,
@@ -54,6 +55,7 @@ class TestTruncation:
             (VXLAN, "raw_vxlan_header"),
             (OSPF, "raw_ospf_hello"),
             (RIP, "raw_rip_message"),
+            (TFTP, "raw_tftp_rrq"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
             (BGP, "raw_bgp_keepalive"),
@@ -119,6 +121,13 @@ class TestTruncation:
             MPLS.decode(raw_mpls_stack[:-1])
         assert (excinfo.value.field, excinfo.value.offset) == ("labels", 4)
 
+    def test_a_tftp_string_without_its_zero_byte_raises(self, raw_tftp_rrq):
+        """TFTP has no length to lie with: a zero byte ends each string,
+        so a request cut inside its mode is the truncation case."""
+        with pytest.raises(TruncatedHeaderError) as excinfo:
+            TFTP.decode(raw_tftp_rrq[:14])
+        assert (excinfo.value.field, excinfo.value.offset) == ("mode", 11)
+
     def test_all_errors_share_the_library_base(self, raw_ipv4_header):
         with pytest.raises(ProtocolError):
             IPv4.decode(raw_ipv4_header[:10])
@@ -147,6 +156,25 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         assert bytes(packet)[:12] == raw_sctp_packet[:12]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "trailer",
+        [b"\xde\xad\xbe\xef", bytes(14), b"blk"],
+        ids=["fcs", "padding", "cut-option"],
+    )
+    def test_tftp_leaves_a_trailer_after_its_last_option(
+        self, raw_tftp_rrq, trailer, lax
+    ):
+        """TFTP has no length field either: a request ends after its
+        last whole option pair, so padding, an FCS or an option cut
+        short is left undecoded."""
+        raw = raw_tftp_rrq + trailer
+        packet = decode_frame(raw, start=TFTP, lax=lax)
+        assert [type(layer) for layer in packet] == [TFTP]
+        assert packet.stopped_by is None
+        assert bytes(packet) == raw_tftp_rrq
+        assert packet.consumed == len(raw_tftp_rrq)
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     def test_pim_leaves_a_trailer_after_a_bounded_message(

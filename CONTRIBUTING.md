@@ -49,7 +49,7 @@ src/netprotocols/
   layer3/         IPv4, IPv6, IPv6 extension headers, ICMPv4/v6, IGMP,
                   GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)
-  layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP
+  layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP, TFTP
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
 scripts/          fixture capture + validation
