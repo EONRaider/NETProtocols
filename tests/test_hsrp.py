@@ -24,6 +24,7 @@ both.
 import importlib.util
 import socket
 import struct
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 
@@ -1015,3 +1016,207 @@ class TestDispatch:
             udp_frame(HELLO), decode_as={"udp.port": {1985: DNS}}
         )
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP, DNS]
+
+
+# --- scripts/check_fixtures.py ----------------------------------------
+
+
+def retouched(
+    frame: bytes,
+    payload: bytes | None = None,
+    *,
+    src_port: int | None = None,
+    dst_port: int | None = None,
+) -> bytes:
+    """A captured frame with its HSRP message, or its ports, changed,
+    and its IPv4 Total Length and header checksum and its UDP header
+    and checksum rewritten to match, so only the HSRP checks can fail."""
+    ip = bytearray(frame[14:34])
+    old_src, old_dst = struct.unpack_from("!HH", frame, 34)
+    payload = frame[HSRP_START:] if payload is None else payload
+    datagram = udp_datagram(
+        payload,
+        socket.inet_ntoa(bytes(ip[12:16])),
+        socket.inet_ntoa(bytes(ip[16:20])),
+        old_src if src_port is None else src_port,
+        old_dst if dst_port is None else dst_port,
+    )
+    struct.pack_into("!H", ip, 2, 20 + len(datagram))
+    struct.pack_into("!H", ip, 10, 0)
+    struct.pack_into("!H", ip, 10, ones_complement(bytes(ip)))
+    return frame[:14] + bytes(ip) + datagram
+
+
+def changed(raw: bytes, position: int, value: int) -> bytes:
+    """``raw`` with the byte at ``position`` set to ``value``."""
+    return raw[:position] + bytes([value]) + raw[position + 1 :]
+
+
+#: Captured frames to tamper with: R1's Speak Hello, R3's Coup and R1's
+#: Resign in group 1, and R4's Active Hello in group 2.
+_TAMPERED = [0, R3_COUP, R1_RESIGN, 10]
+
+
+class TestChecker:
+    """scripts/check_fixtures.py's _check_hsrp: each failure on a
+    tampered copy of a captured frame, and the counters."""
+
+    FRAMES = pcap_frames(FIXTURES / "hsrp.pcap")
+
+    @pytest.fixture(autouse=True)
+    def _checker(self, check_fixtures):
+        self.checker = check_fixtures
+
+    def check(self, frame: bytes, stats: Counter | None = None) -> list[str]:
+        stats = self.checker.Counter() if stats is None else stats
+        return self.checker.check_frame(frame, stats)
+
+    def message_of(self, index: int) -> bytes:
+        return self.FRAMES[index][HSRP_START:]
+
+    @pytest.mark.parametrize("index", _TAMPERED)
+    def test_a_retouched_but_unchanged_frame_passes(self, index):
+        """The helper alone changes nothing the checker sees."""
+        assert retouched(self.FRAMES[index]) == self.FRAMES[index]
+        assert self.check(retouched(self.FRAMES[index])) == []
+
+    def test_an_unretouched_change_fails_only_udp(self):
+        """Without the checksum rewritten, a change in a field the HSRP
+        checks accept fails the UDP checksum alone."""
+        frame = bytearray(self.FRAMES[0])
+        frame[HSRP_START + 5] ^= 0x01  # the Priority
+        assert self.check(bytes(frame)) == ["udp-checksum"]
+
+    @pytest.mark.parametrize("index", _TAMPERED)
+    @pytest.mark.parametrize(
+        "cut",
+        [
+            pytest.param(lambda raw: raw[:19], id="19-bytes"),
+            pytest.param(lambda raw: raw[:0], id="empty"),
+            pytest.param(lambda raw: raw + b"\x00", id="21-bytes"),
+            pytest.param(lambda raw: raw + MD5_TLV, id="md5-tlv"),
+            pytest.param(lambda raw: HSRPV2_HELLO, id="hsrpv2"),
+        ],
+    )
+    def test_a_message_not_20_bytes_fails_its_length(self, index, cut):
+        frame = retouched(self.FRAMES[index], cut(self.message_of(index)))
+        stats = self.checker.Counter()
+        assert self.check(frame, stats) == ["hsrp-length"]
+        assert (stats["udp"], stats["hsrp"]) == (1, 1)
+
+    @pytest.mark.parametrize(
+        "ports",
+        [
+            {"src_port": 40000},
+            {"dst_port": 40000},
+            {"src_port": 1986},
+        ],
+    )
+    def test_a_port_other_than_1985_fails(self, ports):
+        """Sent from and to 1985 (§5.1); either port alone dispatches
+        to the check, which then fails it."""
+        frame = retouched(self.FRAMES[0], **ports)
+        assert self.check(frame) == ["hsrp-port"]
+
+    @pytest.mark.parametrize("index", _TAMPERED)
+    @pytest.mark.parametrize(
+        "position,value,failure",
+        [
+            pytest.param(0, 1, "hsrp-version", id="version-1"),
+            pytest.param(0, 2, "hsrp-version", id="version-2"),
+            pytest.param(1, 3, "hsrp-op-code", id="advertise-op-code"),
+            pytest.param(1, 0xFF, "hsrp-op-code", id="op-code-255"),
+            pytest.param(2, 3, "hsrp-state", id="state-3"),
+            pytest.param(2, 32, "hsrp-state", id="state-32"),
+            pytest.param(7, 1, "hsrp-reserved", id="reserved-1"),
+            pytest.param(7, 0x80, "hsrp-reserved", id="reserved-128"),
+            pytest.param(8, 0x00, "hsrp-auth-data", id="leading-nul"),
+            pytest.param(10, 0x00, "hsrp-auth-data", id="inner-nul"),
+            pytest.param(9, 0x7F, "hsrp-auth-data", id="del"),
+            pytest.param(9, 0x1F, "hsrp-auth-data", id="control"),
+            pytest.param(12, 0xFF, "hsrp-auth-data", id="high-bit"),
+            pytest.param(15, 0x09, "hsrp-auth-data", id="tab-at-the-end"),
+        ],
+    )
+    def test_a_changed_byte_fails(self, index, position, value, failure):
+        raw = changed(self.message_of(index), position, value)
+        assert self.check(retouched(self.FRAMES[index], raw)) == [failure]
+
+    @pytest.mark.parametrize("holdtime", [0, 2, 3])
+    def test_a_hello_holding_no_longer_than_its_hellotime_fails(self, holdtime):
+        """§5.1: the Holdtime MUST be greater than the Hellotime, in a
+        Hello; one second more passes."""
+        for index in (0, 10):
+            raw = changed(self.message_of(index), 4, holdtime)
+            frame = retouched(self.FRAMES[index], raw)
+            assert self.check(frame) == ["hsrp-holdtime"]
+        raw = changed(self.message_of(0), 4, 4)
+        assert self.check(retouched(self.FRAMES[0], raw)) == []
+
+    @pytest.mark.parametrize("index", [R3_COUP, R1_RESIGN])
+    def test_the_holdtime_rule_is_for_hellos_alone(self, index):
+        """A Coup or Resign whose Holdtime does not exceed its Hellotime
+        passes: the timers are "only meaningful in Hello messages"."""
+        raw = changed(self.message_of(index), 4, 3)
+        assert self.check(retouched(self.FRAMES[index], raw)) == []
+
+    @pytest.mark.parametrize(
+        "auth_data",
+        [
+            bytes(8),
+            b" " * 8,
+            b"~" + bytes(7),
+            b"ab  \x00\x00\x00\x00",
+            b"np-hsrp1",
+        ],
+    )
+    def test_printable_passwords_pass(self, auth_data):
+        """Empty, all spaces, the printable range's ends, trailing
+        spaces before the padding and all 8 bytes used: all clear text."""
+        raw = self.message_of(0)[:8] + auth_data + self.message_of(0)[16:]
+        assert self.check(retouched(self.FRAMES[0], raw)) == []
+
+    @pytest.mark.parametrize(
+        "auth_data",
+        [b"np-hsrp\x01", b"np-hsrp\x7f", b"\x01np-hsrp"],
+    )
+    def test_a_bad_byte_at_either_end_of_a_full_password_fails(self, auth_data):
+        """All 8 bytes are judged when no NUL padding precedes them."""
+        raw = self.message_of(0)[:8] + auth_data + self.message_of(0)[16:]
+        assert self.check(retouched(self.FRAMES[0], raw)) == ["hsrp-auth-data"]
+
+    def test_a_nonzero_reserved_byte_fails_in_any_group(self):
+        """Group 0, 1 or 255: the Reserved byte alone is judged."""
+        for group in (0, 1, 255):
+            raw = hsrp_bytes(group=group, reserved=1)
+            assert self.check(udp_frame(raw)) == ["hsrp-reserved"]
+            assert self.check(udp_frame(hsrp_bytes(group=group))) == []
+
+    def test_what_each_failure_still_counts(self):
+        """Every message counts as ``hsrp``; its Op Code's counter
+        follows once the Op Code is known, so a later failure keeps it."""
+        stats = self.checker.Counter()
+        for position, value in ((1, 3), (0, 1)):
+            raw = changed(self.message_of(0), position, value)
+            self.check(retouched(self.FRAMES[0], raw), stats)
+        assert stats["hsrp"] == 2
+        assert stats["hsrp-hello"] == 0
+        for index, position, value in ((0, 2, 3), (R3_COUP, 7, 1)):
+            raw = changed(self.message_of(index), position, value)
+            self.check(retouched(self.FRAMES[index], raw), stats)
+        assert stats["hsrp"] == 4
+        assert (stats["hsrp-hello"], stats["hsrp-coup"]) == (1, 1)
+
+    def test_constructed_messages_pass_in_every_state(self):
+        """Every Op Code in every State, built here, passes and counts."""
+        stats = self.checker.Counter()
+        for opcode in OPCODES:
+            for state in STATES:
+                frame = udp_frame(hsrp_bytes(opcode=opcode, state=state))
+                assert self.check(frame, stats) == []
+        assert stats["hsrp"] == 18
+        assert (
+            stats["hsrp-hello"],
+            stats["hsrp-coup"],
+            stats["hsrp-resign"],
+        ) == (6, 6, 6)

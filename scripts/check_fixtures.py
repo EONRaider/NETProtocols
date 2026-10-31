@@ -1100,14 +1100,17 @@ def _check_hsrp(datagram: bytes, stats: Counter) -> list[str]:
     instead. It must be the whole UDP payload, exactly 20 bytes, sent
     from and to port 1985 (no MD5 Authentication TLV, which some Cisco
     releases append, follows any message here), with Version 0, an Op
-    Code of Hello, Coup or Resign, a State the RFC defines and a zero
-    Reserved byte; a Hello's Holdtime must exceed its Hellotime, which
-    the RFC says only for Hellos, and the Authentication Data must be a
-    clear-text password, printable ASCII padded with NUL bytes. The
-    Reserved and Holdtime checks are on what the sender transmitted,
-    not on what a receiver requires: nothing in RFC 2281 tells a
-    receiver to drop a message that breaks them. HSRPv2, a sequence of
-    TLVs whose Group State TLV alone is 42 bytes, fails too."""
+    Code of Hello, Coup or Resign and a State the RFC defines; a
+    Hello's Holdtime must exceed its Hellotime, which the RFC says only
+    for Hellos. Two further rules are this corpus's conventions, not
+    RFC 2281 requirements: the Reserved byte must be zero, which every
+    sender captured here transmits, and the Authentication Data must be
+    a clear-text password, printable ASCII padded with NUL bytes. The
+    Holdtime rule too is on what the sender transmitted, not on what a
+    receiver requires: nothing in RFC 2281 tells a receiver to drop a
+    message that breaks it, or any of the conventions. HSRPv2, a
+    sequence of TLVs whose Group State TLV alone is 42 bytes, fails
+    too."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrp"] += 1
     if len(hsrp) != 20:
@@ -1122,12 +1125,13 @@ def _check_hsrp(datagram: bytes, stats: Counter) -> list[str]:
     stats[f"hsrp-{_HSRP_OP_CODES[op_code]}"] += 1
     if state not in _HSRP_STATES:
         return ["hsrp-state"]
-    if hsrp[7] != 0:
+    if hsrp[7] != 0:  # a corpus convention, not an RFC 2281 rule
         return ["hsrp-reserved"]
     if op_code == 0 and holdtime <= hellotime:
         return ["hsrp-holdtime"]
+    # NUL is not printable, so this also fails a NUL before the padding.
     password = hsrp[8:16].rstrip(b"\x00")
-    if b"\x00" in password or not all(0x20 <= b < 0x7F for b in password):
+    if not all(0x20 <= b < 0x7F for b in password):
         return ["hsrp-auth-data"]
     return []
 
