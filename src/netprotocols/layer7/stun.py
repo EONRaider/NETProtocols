@@ -203,8 +203,9 @@ _FINGERPRINT = 0x8028
 #: discovery), RFC 8656 (TURN), RFC 6062 (TURN over TCP), RFC 8445
 #: (ICE), RFC 7635 (OAuth for STUN), RFC 7982 (transmit counter), RFC
 #: 6679 (ECN) and RFC 8016 (TURN mobility). The last four's are spelled
-#: as their IANA Considerations sections spell them, RFC 7982's with
-#: underscores and RFC 6679's with "STUN" in it.
+#: as their IANA Considerations sections spell them (RFC 7635 §12, RFC
+#: 7982 §4, RFC 6679 §10.6, RFC 8016 §4), RFC 7982's with underscores
+#: and RFC 6679's with "STUN" in it.
 _ATTRIBUTE_NAMES: dict[int, str] = {
     _MAPPED_ADDRESS: "MAPPED-ADDRESS",
     0x0002: "RESPONSE-ADDRESS",
