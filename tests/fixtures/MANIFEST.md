@@ -17,8 +17,7 @@ Eighteen scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`) are
-captured
-separately by their own `scripts/capture_fixtures_*.sh` over
+captured separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, a GRE tunnel, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
@@ -527,8 +526,9 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   block 1, as BSD tftp's `recvfile` does. The file contents are fixed
   text the script writes; the ports, the IPv4 identification and the
   timestamps differ in a re-capture. veth does not pad, so no frame
-  carries Ethernet padding (every ACK, 4 bytes, would get 14 bytes of
-  it on a wire) or an FCS; `tests/test_tftp.py` appends both.
+  carries Ethernet padding (every ACK here, 4 bytes in an untagged
+  frame over IPv4 with no options, would get 14 bytes of it on a wire)
+  or an FCS; `tests/test_tftp.py` appends both.
 
 - `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
   netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s

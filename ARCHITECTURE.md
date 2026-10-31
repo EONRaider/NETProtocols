@@ -218,16 +218,22 @@ since one entry already fills the minimum frame. See
 themselves: an ACK is 4 bytes, an ERROR ends at the zero byte after its
 message, and a request or an OACK after its last whole option pair, a
 zero byte where the next name would start ending the options. So it
-obeys rule 3 like a header with a length field and leaves Ethernet's
-padding (which every ACK, at 4 bytes, gets) and an FCS undecoded,
-`bytes(TFTP.decode(x)) == x[:header_len]`. A DATA message cannot: its
-data has no terminator, so it runs to the end of the buffer, and a
-trailer joins it, as it joins an ICMP `body`. Its strings are
-terminated rather than length-prefixed, so a missing terminator is
-TFTP's truncation case: a filename, mode or error message with no zero
-byte after it raises `TruncatedHeaderError`, as a lying length does in
-rule 2, while an option pair cut short is left undecoded, since only
-UDP's length could tell it from a trailer. See
+obeys rule 3 like a header with a length field,
+`bytes(TFTP.decode(x)) == x[:header_len]`, and leaves Ethernet's
+padding (which every ACK, at 4 bytes, gets in an untagged frame over
+IPv4 with no options) and an FCS
+undecoded, with two exceptions only the UDP length could rule out
+(#235): padding after a name with no value ends that value, so
+`("tsize", "")` decodes and takes one padding byte, and an FCS after
+option pairs that holds a name, a zero byte, a value and a zero byte,
+such as `12 00 34 00`, reads as one more pair. A DATA message cannot
+bound itself at all: its data has no terminator, so it runs to the end
+of the buffer, and a trailer joins it, as it joins an ICMP `body`. Its
+strings are terminated rather than length-prefixed, so a missing
+terminator is TFTP's truncation case: a filename, mode or error message
+with no zero byte after it raises `TruncatedHeaderError`, as a lying
+length does in rule 2, while an option pair cut short is left undecoded,
+since only UDP's length could tell it from a trailer. See
 [`layer7/tftp.py`](src/netprotocols/layer7/tftp.py)'s module docstring.
 
 `VRRP` has no length field either, but needs no walk: its version and
@@ -754,26 +760,30 @@ tells a receiver to ignore but a decoder should show. Past the header,
 any 20 bytes are an entry.
 
 TFTP on UDP 69 (RFC 1350) rejects more: `TFTP.decode()` requires an
-opcode of 1-6, which 6 of the 65,536 two-byte prefixes are, and then
-the mandatory fields that opcode carries, whole. Measured the same way,
-over three seeds, the walk stopped for 99.98-100% of the 300-byte
-payloads sent to 69 and of the 0-600 byte ones unpadded and padded: 5
-of the 90,000 decoded a `TFTP` layer, about the 6 in 65,536 the opcode
-lets through. What the port cannot do is find the transfer. Only the
-request goes to port 69: the server answers from an ephemeral port of
-its own, its transfer identifier, and every DATA, ACK, OACK and ERROR
-after that runs between two ephemeral ports (RFC 1350 §4), which no
-port table can name. So a stateless walk decodes a `TFTP` layer for the
-RRQ or WRQ alone, and stops at UDP for the rest of the transfer, as for
-any datagram between unregistered ports; of the 33 frames in
-`tests/fixtures/tftp.pcap`, the 6 requests decode one. A caller who
-follows the transfer has the server's port from the source port of its
-first reply, and names it for the walk, `decode_as={"udp.port":
-{tid: TFTP}}`, which covers both directions since every later datagram
-has it as one of its two ports; tracking the transfer is the caller's,
-as reassembly is for `HTTP` and `BGP`. A server that answers from port
-69 itself, which RFC 1350 does not allow, has its replies dispatched by
-the source-port fallback.
+opcode of 1-6, which 6 of the 65,536 two-byte prefixes are, and then the
+mandatory fields that opcode carries, whole. Measured the same way, over
+three seeds, the walk stopped for 99.98-100% of the 300-byte payloads
+sent to 69 and of the 0-600 byte ones unpadded and padded: about 5 of
+the 90,000 decoded a `TFTP` layer, a count small enough to vary by a few
+between runs. The opcode alone lets through 6 in 65,536, about 8 of
+90,000; of those, a DATA, ACK or OACK almost always decodes, but an RRQ
+or WRQ needs two zero bytes after its opcode and an ERROR one after its
+code, which random bytes lack about two thirds and one third of the
+time, so about 6 are expected. What the port cannot do is find the
+transfer. Only the request goes to port 69: the server answers from an
+ephemeral port of its own, its transfer identifier, and every DATA, ACK,
+OACK and ERROR after that runs between two ephemeral ports (RFC 1350
+§4), which no port table can name. So a stateless walk decodes a `TFTP`
+layer for the RRQ or WRQ alone, and stops at UDP for the rest of the
+transfer, as for any datagram between unregistered ports; of the 33
+frames in `tests/fixtures/tftp.pcap`, the 6 requests decode one. A
+caller who follows the transfer has the server's port from the source
+port of its first reply, and names it for the walk,
+`decode_as={"udp.port": {tid: TFTP}}`, which covers both directions
+since every later datagram has it as one of its two ports; tracking the
+transfer is the caller's, as reassembly is for `HTTP` and `BGP`. A
+server that answers from port 69 itself, which RFC 1350 does not allow,
+has its replies dispatched by the source-port fallback.
 
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random

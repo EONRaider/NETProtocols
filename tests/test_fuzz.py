@@ -991,6 +991,26 @@ def _tftp_seeded(draw: st.DrawFn) -> bytes:
     return bytes(raw[:cut]) + tail
 
 
+@st.composite
+def _tftp_long_numbers(draw: st.DrawFn) -> bytes:
+    """A request or an OACK whose number option holds a run of digits,
+    as often past int()'s 4,300-digit limit as short, leading zeros or
+    not."""
+    opcode = draw(st.sampled_from([1, 2, 6]))
+    name = draw(st.sampled_from(["blksize", "TIMEOUT", "tsize", "windowSize"]))
+    zeros = draw(st.sampled_from([0, 1, 4300, 5000]))
+    width = draw(
+        st.one_of(
+            st.integers(0, 25), st.integers(4290, 4310), st.integers(4311, 6000)
+        )
+    )
+    digit = draw(st.sampled_from("0123456789"))
+    value = "0" * zeros + digit * width
+    request = b"" if opcode == 6 else b"f\x00octet\x00"
+    option = f"{name}\x00{value}\x00".encode()
+    return bytes([0, opcode]) + request + option
+
+
 def _tftp_rebuilt(tftp: TFTP) -> bytes:
     """Rebuild a decoded message's body from its accessors alone.
 
@@ -1012,7 +1032,11 @@ def _tftp_rebuilt(tftp: TFTP) -> bytes:
 
 
 class TestTFTPAccessorSafety:
-    @given(data=st.one_of(_tftp_seeded(), _tftp_like, fuzz_input))
+    @given(
+        data=st.one_of(
+            _tftp_seeded(), _tftp_like, _tftp_long_numbers(), fuzz_input
+        )
+    )
     def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
         """decode() raises only for an opcode other than 1-6 or a
         mandatory field cut short, keeps a prefix of the buffer that

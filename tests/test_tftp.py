@@ -342,6 +342,43 @@ class TestExtent:
         assert tftp.options == (("blksize", "512"),)
         assert tftp.header_len == raw.index(b"\x00\x00tsize") + 1
 
+    def test_padding_completes_a_name_left_without_a_value(self):
+        """With an odd number of option strings, the last a name with no
+        value, the first padding byte ends an empty value: the pair
+        decodes and takes that byte. Without the padding the name is
+        left undecoded; only the UDP length tells the two apart
+        (#235)."""
+        raw = b"\x00\x01f\x00octet\x00blksize\x00512\x00tsize\x00"
+        alone = TFTP.decode(raw)
+        assert alone.options == (("blksize", "512"),)
+        assert alone.header_len == len(raw) - len(b"tsize\x00")
+        padded = TFTP.decode(raw + bytes(8))
+        assert padded.options == (("blksize", "512"), ("tsize", ""))
+        assert padded.header_len == len(raw) + 1
+        assert padded.tsize is None
+
+    @pytest.mark.parametrize("index", [26, 27], ids=["rrq", "oack"])
+    def test_an_fcs_holding_an_option_reads_as_one(self, index):
+        """An FCS that holds a name, a zero byte, a value and a zero
+        byte is one more option pair to the decoder; only the UDP
+        length could tell it from one (#235)."""
+        raw = message_bytes(index)
+        tftp = TFTP.decode(raw + b"\x12\x00\x34\x00")
+        assert tftp.options == (*tftp_of(index).options, ("\x12", "4"))
+        assert tftp.header_len == len(raw) + 4
+
+    @pytest.mark.parametrize("index", [26, 27], ids=["rrq", "oack"])
+    @pytest.mark.parametrize(
+        "fcs",
+        [b"\x00\x12\x00\x34", b"\x12\x00\x34\x56", b"\x12\x34\x56\x00"],
+        ids=["leading-zero", "one-zero-mid", "one-zero-last"],
+    )
+    def test_an_fcs_short_of_an_option_is_left_undecoded(self, index, fcs):
+        """An FCS that starts with a zero byte, or holds fewer than two,
+        is left undecoded."""
+        tftp = TFTP.decode(message_bytes(index) + fcs)
+        assert tftp == tftp_of(index)
+
 
 class TestTruncation:
     def test_shorter_than_the_opcode(self):
@@ -481,6 +518,30 @@ class TestDecodeGuard:
         tftp = TFTP.decode(raw)
         assert bytes(tftp) == raw
 
+    @pytest.mark.parametrize(
+        "code,name",
+        [
+            # RFC 1350's appendix, "Error Codes", without the trailing
+            # period; code 0 reads "Not defined, see error message (if
+            # any)."
+            (0, "Not defined"),
+            (1, "File not found"),
+            (2, "Access violation"),
+            (3, "Disk full or allocation exceeded"),
+            (4, "Illegal TFTP operation"),
+            (5, "Unknown transfer ID"),
+            (6, "File already exists"),
+            (7, "No such user"),
+            # RFC 2347 defines code 8 "to indicate that a transfer
+            # should be terminated due to option negotiation".
+            (8, "Terminate transfer due to option negotiation"),
+        ],
+    )
+    def test_every_error_code_the_rfcs_define_is_named(self, code, name):
+        """Each code of RFC 1350's table, and RFC 2347's 8, by name."""
+        raw = b"\x00\x05" + code.to_bytes(2, "big") + b"text\x00"
+        assert TFTP.decode(raw).error_name == name
+
     def test_unknown_and_option_negotiation_error_codes(self):
         """Code 8 is RFC 2347's; others fall back to unknown."""
         assert TFTP(5, b"\x00\x08\x00").error_name == (
@@ -510,6 +571,43 @@ class TestOptions:
         assert tftp.option("blksize") == value.encode().decode(
             "ascii", "backslashreplace"
         )
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"\x00\x01f\x00octet\x00blksize\x00" + b"9" * 5000 + b"\x00",
+            b"\x00\x06tsize\x00" + b"1" * 4301 + b"\x00",
+        ],
+        ids=["rrq-5000", "oack-4301"],
+    )
+    def test_a_value_past_ints_digit_limit_reads_as_none(self, raw):
+        """int() raises ValueError for a string over 4,300 digits; the
+        number accessors answer None instead, and the raw value stays."""
+        tftp = TFTP.decode(raw)
+        numbers = (tftp.blksize, tftp.timeout, tftp.tsize, tftp.windowsize)
+        assert numbers == (None,) * 4
+        value = raw.split(b"\x00")[-2]
+        assert tftp.options[-1][1] == value.decode()
+
+    @pytest.mark.parametrize(
+        "value,number",
+        [
+            ("18446744073709551615", 2**64 - 1),
+            ("99999999999999999999", 10**20 - 1),
+            ("0" * 5000 + "512", 512),
+            ("0" * 5000, 0),
+            ("100000000000000000000", None),
+            ("0" + "9" * 21, None),
+        ],
+        ids=["2**64-1", "20-digits", "leading-zeros", "zeros", "21", "0+21"],
+    )
+    def test_a_number_reads_up_to_20_significant_digits(self, value, number):
+        """Any 64-bit size reads as a number; a value over 20 digits,
+        leading zeros aside, reads as None."""
+        for name in ("blksize", "timeout", "tsize", "windowsize"):
+            tftp = TFTP(6, f"{name}\x00{value}\x00".encode())
+            assert getattr(tftp, name) == number
+            assert tftp.option(name) == value
 
     def test_the_first_of_a_repeated_option_wins(self):
         """option() returns the first match, in wire order."""

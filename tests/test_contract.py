@@ -167,8 +167,9 @@ class TestDamagedPayload:
         self, raw_tftp_rrq, trailer, lax
     ):
         """TFTP has no length field either: a request ends after its
-        last whole option pair, so padding, an FCS or an option cut
-        short is left undecoded."""
+        last whole option pair, so padding, an FCS with no zero byte or
+        an option cut short is left undecoded (test_tftp.py pins the
+        trailers that read as options)."""
         raw = raw_tftp_rrq + trailer
         packet = decode_frame(raw, start=TFTP, lax=lax)
         assert [type(layer) for layer in packet] == [TFTP]

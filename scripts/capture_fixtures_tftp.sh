@@ -133,7 +133,8 @@ def text(size: int) -> bytes:
 PY
 chmod 0777 "$ROOT"
 chmod 0644 "$ROOT/boot.bin" "$ROOT/even.bin"
-# Not world-readable: tftpd-hpa refuses to serve it (ERROR code 2).
+# Not world-readable: tftpd-hpa refuses to serve it (ERROR code 0,
+# "Permission denied"; see the header).
 chmod 0600 "$ROOT/secret.bin"
 
 ip netns exec "$NSS" tcpdump -i "$S" -w "$RAW" --immediate-mode -U -q \

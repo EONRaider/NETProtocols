@@ -32,7 +32,7 @@ each acknowledged before the next is sent. Every message starts with a
 Strings are terminated by a zero byte, not prefixed by a length, so
 they are found with ``bytes.find`` rather than the TLV walker other
 modules share. The mode is ``netascii``, ``octet`` or ``mail`` (§5, in
-any case; ``mail`` is obsolete). Option negotiation (RFC 2347) appends
+any case; §1 calls ``mail`` obsolete). Option negotiation (RFC 2347) appends
 name/value string pairs to a request, and the server answers with an
 OACK (opcode 6) naming the options it accepted, or ignores them; the
 values are decimal strings for the options defined so far:
@@ -51,7 +51,9 @@ demand: :attr:`~TFTP.filename`, :attr:`~TFTP.mode` and
 :attr:`~TFTP.options` for OACK. Each answers ``None`` (``()`` for the
 options) for an opcode that does not carry it. The strings are read as
 ASCII, the netascii RFC 1350 asks for, and a byte outside it reads as a
-backslash escape, so no accessor raises and no byte is lost.
+backslash escape, and a number option's value over 20 digits (leading
+zeros aside) reads as ``None``, so no accessor raises and no byte is
+lost.
 
 Dispatch: only the request reaches TFTP by port
 -----------------------------------------------
@@ -84,21 +86,37 @@ decoder. Each opcode bounds itself as far as its structure allows, and
 leaves what follows undecoded, past :attr:`TFTP.header_len`, so
 ``bytes(TFTP.decode(x)) == x[:header_len]``:
 
-- An ACK is exactly 4 bytes (Ethernet pads it with 14 zero bytes).
+- An ACK is exactly 4 bytes (in an untagged Ethernet frame over IPv4
+  with no IP options, the frame is padded with 14 zero bytes; over
+  IPv6 it already fills the minimum).
 - An ERROR ends at the zero byte after its message.
 - A request ends after its mode, or after the last whole option pair,
   a name of at least one byte and a value, each with its zero byte. A
-  zero byte where a name would start ends the options, so padding
-  never reads as an option. An option cut short by a snap length cannot
-  be told from a trailer, so it is left undecoded too.
+  zero byte where a name would start ends the options, so padding after
+  whole pairs is left undecoded. An option cut short by a snap length
+  cannot be told from a trailer, so it is left undecoded too.
 - An OACK ends after its last whole option pair, the same way.
 - DATA runs to the end of the buffer: its data has no terminator, so
-  bytes after the datagram join :attr:`TFTP.data`. Over Ethernet a
-  final block shorter than 14 bytes is padded on the wire, and only the
-  UDP length (``udp.length - 12``) says how much of the data is real.
+  bytes after the datagram join :attr:`TFTP.data`. In an untagged
+  Ethernet frame over IPv4 with no IP options, a final block shorter
+  than 14 bytes is padded on the wire, and only the UDP length
+  (``udp.length - 12``) says how much of the data is real.
   For the same reason, and because the block size an OACK negotiated
   is not in the DATA itself, no accessor says whether a block is the
   last one (RFC 1350 §6: a block shorter than the block size is).
+
+Structure bounds a request or an OACK only so far; two trailers still
+read as options, and only the UDP length could tell them apart (#235):
+
+- A message whose options end with a name and no value (an odd number
+  of option strings) takes the first byte of zero padding after it as
+  that value's terminator: ``...tsize\x00`` plus padding decodes the
+  option ``("tsize", "")`` and keeps one padding byte, where without
+  the padding the name is left undecoded as an option cut short.
+- A trailer that holds a name, a zero byte, a value and a zero byte
+  reads as one more option: an FCS ``12 00 34 00`` decodes as
+  ``("\x12", "4")``. An FCS that starts with a zero byte, or holds
+  fewer than two, is left undecoded.
 
 Decoding a guess
 ----------------
@@ -168,6 +186,15 @@ _ERROR_NAMES: dict[int, str] = {
 }
 
 _NUL = b"\x00"
+
+#: The most significant digits a number option's value may have before
+#: its accessor answers ``None`` rather than call ``int()``, which
+#: raises ``ValueError`` for a string over 4,300 digits
+#: (``sys.get_int_max_str_digits``). tsize, a file's size in octets, is
+#: the largest value the options carry, and RFC 2349 does not bound it;
+#: 20 digits hold any 64-bit size (2**64 - 1 has 20). Leading zeros do
+#: not count, as for HTTP's Content-Length.
+_MAX_OPTION_DIGITS = 20
 
 
 def _text(raw: bytes) -> str:
@@ -404,18 +431,25 @@ class TFTP(Protocol):
         )
 
     def _int_option(self, name: str) -> int | None:
-        """Return option ``name`` read as a decimal number, or ``None``."""
+        """Return option ``name`` read as a decimal number, or ``None``.
+
+        ``None`` too past :data:`_MAX_OPTION_DIGITS` significant digits.
+        """
         value = self.option(name)
         if value is None or not (value.isascii() and value.isdigit()):
             return None
-        return int(value)
+        significant = value.lstrip("0")
+        if len(significant) > _MAX_OPTION_DIGITS:
+            return None
+        return int(significant or "0")
 
     @property
     def blksize(self) -> int | None:
         """Return the ``blksize`` option, in octets (RFC 2348).
 
         A client asks for 8-65464; an OACK gives the size the server
-        chose. ``None`` when absent or not a decimal number.
+        chose. ``None`` when absent, not a decimal number, or over 20
+        digits (leading zeros aside).
         """
         return self._int_option("blksize")
 
@@ -423,7 +457,8 @@ class TFTP(Protocol):
     def timeout(self) -> int | None:
         """Return the ``timeout`` option, in seconds (RFC 2349).
 
-        ``None`` when absent or not a decimal number.
+        ``None`` when absent, not a decimal number, or over 20 digits
+        (leading zeros aside).
         """
         return self._int_option("timeout")
 
@@ -432,7 +467,8 @@ class TFTP(Protocol):
         """Return the ``tsize`` option, the file's size in octets (RFC 2349).
 
         An RRQ sends 0 and the server's OACK the size; a WRQ sends the
-        size. ``None`` when absent or not a decimal number.
+        size. ``None`` when absent, not a decimal number, or over 20
+        digits (leading zeros aside).
         """
         return self._int_option("tsize")
 
@@ -440,7 +476,8 @@ class TFTP(Protocol):
     def windowsize(self) -> int | None:
         """Return the ``windowsize`` option, in blocks (RFC 7440).
 
-        ``None`` when absent or not a decimal number.
+        ``None`` when absent, not a decimal number, or over 20 digits
+        (leading zeros aside).
         """
         return self._int_option("windowsize")
 
@@ -455,8 +492,13 @@ class TFTP(Protocol):
     def block(self) -> int | None:
         """Return a DATA's or ACK's block number.
 
-        Blocks count from 1; an ACK of block 0 answers a WRQ (RFC 1350
-        §4) or an OACK (RFC 2347). ``None`` for another opcode.
+        Blocks count from 1 (RFC 1350 §5). The number is 16 bits and
+        RFC 1350 does not say what follows block 65,535: implementations
+        that go on wrap it, some to 0 and some to 1, so block 0 can
+        appear mid-transfer. An ACK of block 0 answers a WRQ
+        (RFC 1350 §4), or an OACK that answered an RRQ (RFC 2347; after
+        a WRQ the client answers an OACK with DATA block 1). ``None``
+        for another opcode.
         """
         return self._number if self.opcode in (_DATA, _ACK) else None
 
