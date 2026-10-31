@@ -130,6 +130,17 @@ snap length cuts the datagram. Reassembling a stream is the caller's,
 as it is for BGP and HTTP. TURN's ChannelData messages, which share a
 TCP connection with STUN, end the walk at their first byte.
 
+Each message being a layer, a segment of many is a deep chain, as it is
+for BGP: Ethernet, IPv4 and TCP are three layers, and the walk's
+default ``max_depth`` of :data:`~netprotocols.MAX_DEPTH` (32) leaves
+room for 29 messages. A message can be a bare 20-byte header, so a
+1448-byte segment can hold 72, and a strict walk of it raises
+:class:`~netprotocols.MaxDepthExceededError` on valid traffic while a
+lax one stops with ``packet.stopped_by`` set. A larger ``max_depth``,
+or a second walk with ``decode_frame(frame[packet.consumed:],
+start=STUN)``, decodes the rest, as :mod:`netprotocols.layer7.bgp`
+describes. The corpus's TCP segments carry 2 messages each.
+
 Decoding a guess
 ----------------
 STUN is reached through ``udp.port`` and ``tcp.port`` 3478, best-effort

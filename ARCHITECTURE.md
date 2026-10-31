@@ -785,14 +785,22 @@ once in 2^36, before the Length is held against the buffer. Measured
 the same way, every walk to port 3478 ended with `stopped_by` set and
 none decoded a STUN layer, over UDP for 10,000 random 300-byte payloads
 and 10,000 of uniformly random length 0-600, padded or not, and over
-TCP for 10,000 random 300-byte segments (`random.Random` seeds 0-2);
-with the cookie forced in place, 33 of 100,000 random 300-byte payloads
-decoded. The cookie is also what separates STUN from RFC 3489, its
-first version, whose 16-byte transaction ID took the cookie's place:
+TCP for 10,000 random 300-byte segments (`random.Random` seeds 0-2).
+With the cookie forced in place, `STUN.decode()` accepted 28 of
+100,000 random 300-byte payloads (`random.Random(0)`), near the 27
+expected: a quarter have the two top bits clear, and 71 of the 65,536
+Lengths are multiples of 4 that fit in the 280 bytes after the header.
+The cookie is also what separates STUN from RFC 3489, its first
+version, whose 16-byte transaction ID took the cookie's place:
 `STUN.decode()` rejects a classic message at `magic_cookie`, which is
 what RFC 5389 put the cookie there for. Over TCP, messages follow one
 another with no framing but their own Length, as BGP's do, and chain
-the same way: see
+the same way, so `max_depth` bounds correctness here too: a message
+can be a bare 20-byte header, the default leaves room for 29 after
+Ethernet, IPv4 and TCP, and a 1448-byte segment holds 72, so a strict
+walk of a valid segment can raise `MaxDepthExceededError` and a lax
+one stop short. BGP's two ways past it work the same, with
+`start=STUN`; the corpus's TCP segments carry 2. See
 [`layer7/stun.py`](src/netprotocols/layer7/stun.py)'s module docstring.
 
 A rejected guess takes the ordinary decode-error path: the chain keeps

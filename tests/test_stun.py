@@ -36,6 +36,7 @@ from netprotocols import (
     Ethernet,
     InvalidFieldError,
     IPv4,
+    MaxDepthExceededError,
     STUNAddress,
     STUNAttribute,
     TruncatedHeaderError,
@@ -841,6 +842,33 @@ class TestOverTCP:
             STUN,
         ]
         assert isinstance(packet.stopped_by, TruncatedHeaderError)
+
+    def test_a_full_segment_of_bare_headers_exceeds_max_depth(self):
+        """The module docstring's max_depth note: a 1448-byte segment
+        holds 72 bare 20-byte messages, and the default MAX_DEPTH
+        leaves room for 29 after Ethernet, IPv4 and TCP. Strict raises
+        at the 30th, lax stops there, and a second walk with
+        start=STUN decodes the other 43."""
+        eth, ip, tcp = decode_frame(FRAMES[6]).layers[:3]
+        bare = bytes(STUN(0x0001, transaction_id=bytes(range(12))))
+        data = bare * 72
+        assert len(bare) == 20
+        assert len(data) <= 1448
+        grown = replace(ip, total_length=20 + tcp.header_len + len(data))
+        raw = bytes(eth) + bytes(grown) + bytes(tcp) + data
+        stop_at = TCP_START + 29 * 20
+        with pytest.raises(MaxDepthExceededError) as excinfo:
+            decode_frame(raw)
+        assert excinfo.value.protocol is STUN
+        assert excinfo.value.frame_offset == stop_at
+        packet = decode_frame(raw, lax=True)
+        assert sum(isinstance(layer, STUN) for layer in packet) == 29
+        assert isinstance(packet.stopped_by, MaxDepthExceededError)
+        assert packet.consumed == stop_at
+        rest = decode_frame(raw[stop_at:], start=STUN, max_depth=43)
+        assert [type(layer) for layer in rest] == [STUN] * 43
+        assert rest.stopped_by is None
+        assert stop_at + rest.consumed == len(raw)
 
     def test_followed_is_neither_compared_nor_hashed(self):
         chained = stun_of(6)
