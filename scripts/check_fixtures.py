@@ -947,14 +947,15 @@ def _check_ipv6(
         # The upper-layer checksum spans the reassembled datagram, not
         # this fragment's slice: nothing verifiable here.
         return failures + (["unchecked-fragment"] if strict else [])
+    # RFC 8200 §8.1: behind a route with segments left, every
+    # pseudo-header below, transport mode under ESP's included, takes
+    # the route's end for the Destination Address, so the header is
+    # passed on as the pseudo-header sees it. Nothing below reads the
+    # wire address from it: ESP's ICV covers only ESP, AH over IPv6 is
+    # not verified, and a tunnelled packet brings its own header.
+    seen = payload[:24] + (final_dst or payload[24:40])
     return failures + _check_upper_v6(
-        next_header,
-        payload[:40],
-        upper,
-        stats,
-        depth,
-        strict=strict,
-        final_dst=final_dst,
+        next_header, seen, upper, stats, depth, strict=strict
     )
 
 
@@ -1060,17 +1061,18 @@ def _check_upper_v6(
     depth: int,
     *,
     strict: bool = False,
-    final_dst: bytes | None = None,
 ) -> list[str]:
     """The IPv6 counterpart of :func:`_check_upper_v4`, bounding
     nesting and honouring ``strict`` the same way.
 
-    ``final_dst``, when given, replaces the header's Destination Address
-    in every pseudo-header: the end of a route (see :func:`_route_end`).
+    ``ip_header`` is the IPv6 header as its pseudo-headers see it: its
+    Destination Address is the end of a route (see :func:`_route_end`)
+    when the packet has one, and ESP in transport mode passes it back
+    here unchanged, so the payload it protects is summed the same way.
     """
     if depth > _MAX_DEPTH:
         return ["nesting-too-deep"]
-    src, dst = ip_header[8:24], final_dst or ip_header[24:40]
+    src, dst = ip_header[8:24], ip_header[24:40]
     transport = _check_transport_v6(
         next_header, src, dst, upper, stats, depth, strict=strict
     )

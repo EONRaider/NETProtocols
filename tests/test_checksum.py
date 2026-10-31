@@ -4,6 +4,8 @@ its captured value. SCTP's CRC32c is tested here too, not in
 test_sctp.py, because this file is in the mutation audit's test
 selection (pyproject.toml's [tool.mutmut]); so is CDP's checksum."""
 
+import hashlib
+import hmac
 import importlib.util
 import socket
 import struct
@@ -18,6 +20,7 @@ from netprotocols import (
     ARP,
     CDP,
     CDPTLV,
+    ESP,
     GRE,
     IGMP,
     LLC,
@@ -56,6 +59,7 @@ from netprotocols.checksum import (
     verify_lsa,
 )
 from test_corpus import walk
+from test_esp import ESP_KEYS, ICV_LEN, null_esp_payload
 from test_vrrp import (
     V6_GROUP,
     V6_SRC,
@@ -2045,6 +2049,55 @@ def transport_frame(route: str, kind: str, final: str | None = None) -> bytes:
     )
 
 
+#: Routing headers with segments left whose final destination cannot be
+#: resolved, so the wire Destination Address stands.
+UNRESOLVABLE = [
+    # Unknown type 253.
+    bytes([17, 1, 253, 1]) + bytes(12),
+    # SRH: Last Entry 5 but one segment of data.
+    bytes([17, 2, 4, 1, 5, 0, 0, 0]) + pton(RT_FINAL),
+    # Mobile IPv6 with two addresses, not one.
+    bytes([17, 4, 2, 1]) + bytes(4) + pton(RT_FINAL) * 2,
+    # RH0 whose data is not 4 + 16n octets.
+    bytes([17, 1, 0, 1]) + bytes(12),
+    # RPL, CmprI 0: 8 octets before a 16-octet last entry do not tile
+    # 16-octet entries.
+    routing_rpl(0, 0, 0, bytes(8) + pton(RT_FINAL), 2),
+]
+UNRESOLVABLE_IDS = [
+    "unknown",
+    "srh-short",
+    "type2-two",
+    "rh0-ragged",
+    "rpl-untiled",
+]
+
+
+def esp_null_frame(routing: bytes, final: str) -> bytes:
+    """IPv6 to :data:`RT_NEXT_HOP` + ``routing`` + ESP in transport mode
+    on the published SA 0x10000001 (NULL encryption, HMAC-SHA-256-128,
+    RFC 4303 §2.4 default padding to 8 octets), protecting a UDP
+    datagram summed for ``final``."""
+    message = udp_message()
+    value = ref_checksum(RT_SRC, final, 17, message)
+    message = message[:6] + struct.pack("!H", value) + message[8:]
+    pad = -(len(message) + 2) % 8
+    protected = (
+        struct.pack("!II", 0x10000001, 1)
+        + message
+        + bytes(range(1, pad + 1))
+        + bytes([pad, 17])
+    )
+    icv = hmac.new(ESP_KEYS[0x10000001], protected, hashlib.sha256)
+    chain = bytes([50]) + routing[1:] + protected + icv.digest()[:ICV_LEN]
+    return (
+        struct.pack("!IHBB", 0x60000000, len(chain), 43, 64)
+        + pton(RT_SRC)
+        + pton(RT_NEXT_HOP)
+        + chain
+    )
+
+
 class TestRoutingIndependentChecker:
     def check(self, check_fixtures, packet: bytes) -> list[str]:
         stats = check_fixtures.Counter()
@@ -2108,23 +2161,7 @@ class TestRoutingIndependentChecker:
             wrong = build_frame(routings, RT_NEXT_HOP, other)
             assert self.check(check_fixtures, wrong) == ["udp6-checksum"]
 
-    @pytest.mark.parametrize(
-        "routing",
-        [
-            # Unknown type 253.
-            bytes([17, 1, 253, 1]) + bytes(12),
-            # SRH: Last Entry 5 but one segment of data.
-            bytes([17, 2, 4, 1, 5, 0, 0, 0]) + pton(RT_FINAL),
-            # Mobile IPv6 with two addresses, not one.
-            bytes([17, 4, 2, 1]) + bytes(4) + pton(RT_FINAL) * 2,
-            # RH0 whose data is not 4 + 16n octets.
-            bytes([17, 1, 0, 1]) + bytes(12),
-            # RPL, CmprI 0: 8 octets before a 16-octet last entry do
-            # not tile 16-octet entries.
-            routing_rpl(0, 0, 0, bytes(8) + pton(RT_FINAL), 2),
-        ],
-        ids=["unknown", "srh-short", "type2-two", "rh0-ragged", "rpl-untiled"],
-    )
+    @pytest.mark.parametrize("routing", UNRESOLVABLE, ids=UNRESOLVABLE_IDS)
     def test_an_unresolvable_route_falls_back_to_ip_dst(
         self, check_fixtures, routing
     ):
@@ -2134,6 +2171,38 @@ class TestRoutingIndependentChecker:
         assert self.check(check_fixtures, frame) == []
         resolved = build_frame(routing, RT_NEXT_HOP, RT_FINAL)
         assert self.check(check_fixtures, resolved) == ["udp6-checksum"]
+
+    @pytest.mark.parametrize("routing", UNRESOLVABLE, ids=UNRESOLVABLE_IDS)
+    def test_an_unresolvable_last_route_falls_back_past_an_earlier_one(
+        self, check_fixtures, routing
+    ):
+        # The last Routing header with segments left decides, and when
+        # it resolves nothing the wire address stands, not the end of
+        # the earlier route the packet has already been routed by.
+        routings = [routing_srh(["2001:db8::77", RT_NEXT_HOP], 1), routing]
+        frame = build_frame(routings, RT_NEXT_HOP, RT_NEXT_HOP)
+        assert self.check(check_fixtures, frame) == []
+        p = decode_frame(frame, start=IPv6)
+        assert p.with_checksums(b"hi")[UDP].checksum == wire_checksum(frame)
+        earlier = build_frame(routings, RT_NEXT_HOP, "2001:db8::77")
+        assert self.check(check_fixtures, earlier) == ["udp6-checksum"]
+
+    def test_esp_transport_mode_behind_a_route(self, check_fixtures):
+        # ESP in transport mode protects the upper-layer packet, whose
+        # pseudo-header is still this packet's (RFC 4303 §3.1.1), so it
+        # takes the route's end too.
+        routing = routing_srh([RT_FINAL, RT_NEXT_HOP], 1)
+        frame = esp_null_frame(routing, RT_FINAL)
+        assert self.check(check_fixtures, frame) == []
+        old_rule = esp_null_frame(routing, RT_NEXT_HOP)
+        assert self.check(check_fixtures, old_rule) == ["udp6-checksum"]
+        # The library agrees once the protected datagram is put back
+        # behind the headers ESP left in front of it.
+        p = decode_frame(frame, start=IPv6)
+        _, payload = null_esp_payload(p[ESP])
+        udp = UDP.decode(payload)
+        rebuilt = Packet(p[IPv6], p[IPv6Routing], udp)
+        assert rebuilt.with_checksums(payload[8:])[UDP] == udp
 
     def test_no_segments_left_uses_ip_dst(self, check_fixtures):
         routing = routing_srh(["2001:db8::77", RT_FINAL], 0)
