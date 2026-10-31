@@ -122,6 +122,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.bgp import BGP
     from netprotocols.layer7.dhcp import DHCP
     from netprotocols.layer7.dns import DNS, DNSOverTCP
+    from netprotocols.layer7.radius import RADIUS
     from netprotocols.layer7.rip import RIP
     from netprotocols.layer7.vxlan import VXLAN
 
@@ -212,6 +213,13 @@ def install(registry: Registry) -> None:
     # RIP (RFC 1058, RFC 2453): routers send from and to port 520, and
     # answer a Request from another port back to it, from 520.
     add(TABLE_UDP_PORT, 520, RIP)
+    # RADIUS (RFC 2865, RFC 2866): IANA's authentication and accounting
+    # ports. A client sends from an ephemeral port and the server
+    # answers from the one it was sent to, so the destination-first
+    # lookup finds both directions. The legacy 1645 and 1646 and
+    # Dynamic Authorization's 3799 (RFC 5176) are not registered:
+    # decode_as adds them per walk.
+    register_all(TABLE_UDP_PORT, (1812, 1813), RADIUS, registry=registry)
 
     # DNS over TCP carries a 2-byte length prefix (RFC 1035 §4.2.2), so
     # port 53 names the shim that consumes it and then chains to the DNS

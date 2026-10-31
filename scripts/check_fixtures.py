@@ -639,19 +639,26 @@ _VXLAN_PORT = 4789
 #: RIP's port (RFC 2453 §3.9.1 for RIPv2, RFC 1058 §3.1 for RIPv1).
 _RIP_PORT = 520
 
+#: RADIUS's authentication and accounting ports (RFC 2865 §3, RFC 2866
+#: §3).
+_RADIUS_PORTS = (1812, 1813)
+
 
 def _check_udp_payload(
     datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate what a UDP datagram carries, where it is something this
     checker can verify past the UDP checksum: a VXLAN tunnel (see
-    :func:`_check_vxlan`) or a RIPv2 message's keyed digest (see
-    :func:`_check_rip`)."""
+    :func:`_check_vxlan`), a RIPv2 message's keyed digest (see
+    :func:`_check_rip`) or a RADIUS packet's keyed authenticators (see
+    :func:`_check_radius`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
+    if src_port in _RADIUS_PORTS or dst_port in _RADIUS_PORTS:
+        return _check_radius(datagram, stats)
     return []
 
 
@@ -737,6 +744,93 @@ def _check_rip(datagram: bytes, stats: Counter) -> list[str]:
     digest = _rip_digest(algorithm, key, rip[: trailer + 4])
     if not hmac.compare_digest(digest, rip[trailer + 4 :]):
         return [f"rip-{algorithm}"]
+    return []
+
+
+#: The shared secret between the corpus's RADIUS client and server: the
+#: test secret published in tests/fixtures/MANIFEST.md, as FreeRADIUS
+#: and radclient were configured with it.
+_RADIUS_SECRET = b"np193-radius-secret"
+
+#: RADIUS codes whose Authenticator is random, so that a
+#: Message-Authenticator in them is computed over it as sent:
+#: Access-Request (RFC 3579 §3.2) and Status-Server (RFC 5997 §3).
+_RADIUS_RANDOM_AUTHENTICATOR = (1, 12)
+_RADIUS_ACCOUNTING_REQUEST = 4
+_RADIUS_MESSAGE_AUTHENTICATOR = 80
+
+
+def _radius_attributes(radius: bytes) -> list[tuple[int, int]] | None:
+    """The (type, offset) of each attribute of a RADIUS packet, or
+    ``None`` when they do not tile the packet exactly: a Length below 2
+    or one that runs past the packet's end (RFC 2865 §5)."""
+    found, offset = [], 20
+    while offset + 2 <= len(radius):
+        length = radius[offset + 1]
+        if length < 2:
+            return None
+        found.append((radius[offset], offset))
+        offset += length
+    return found if offset == len(radius) else None
+
+
+def _check_radius(datagram: bytes, stats: Counter) -> list[str]:
+    """Verify what a RADIUS packet's own bytes let this checker verify.
+
+    The UDP checksum already covers every RADIUS byte. On top of it,
+    the Length must fit the datagram and the attributes tile the packet,
+    and, with the published secret: an Accounting-Request's Request
+    Authenticator, MD5 over the packet with a zero Authenticator and
+    then the secret (RFC 2866 §3); and the Message-Authenticator of an
+    Access-Request or a Status-Server, HMAC-MD5 under the secret over
+    the packet with that attribute's value zeroed (RFC 3579 §3.2). A
+    reply's Response Authenticator and Message-Authenticator are
+    computed over its request's Authenticator, which is in another
+    frame, so they are not checked here: tests/test_radius.py pairs and
+    verifies them. Bytes after the Length are padding (RFC 2865 §3) and
+    are not checked."""
+    radius = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["radius"] += 1
+    if len(radius) < 20:
+        return ["radius-truncated"]
+    length = struct.unpack_from("!H", radius, 2)[0]
+    if not 20 <= length <= len(radius):
+        return ["radius-length"]
+    radius = radius[:length]
+    attributes = _radius_attributes(radius)
+    if attributes is None:
+        return ["radius-attributes"]
+    code = radius[0]
+    if code == _RADIUS_ACCOUNTING_REQUEST:
+        stats["radius-accounting-authenticator"] += 1
+        # MD5 is what RFC 2866 §3 mandates; this only checks the hash
+        # the client sent, so it is not a security use.
+        digest = hashlib.md5(
+            radius[:4] + bytes(16) + radius[20:] + _RADIUS_SECRET,
+            usedforsecurity=False,
+        ).digest()
+        if not hmac.compare_digest(digest, radius[4:20]):
+            return ["radius-accounting-authenticator"]
+    if code not in _RADIUS_RANDOM_AUTHENTICATOR:
+        return []
+    for kind, offset in attributes:
+        if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
+            return _check_radius_message_authenticator(radius, offset, stats)
+    return []
+
+
+def _check_radius_message_authenticator(
+    radius: bytes, offset: int, stats: Counter
+) -> list[str]:
+    """Verify the Message-Authenticator at ``offset`` in a request whose
+    Authenticator is random (see :func:`_check_radius`)."""
+    stats["radius-message-authenticator"] += 1
+    if radius[offset + 1] != 18:
+        return ["radius-message-authenticator"]
+    zeroed = radius[: offset + 2] + bytes(16) + radius[offset + 18 :]
+    digest = hmac.new(_RADIUS_SECRET, zeroed, hashlib.md5).digest()
+    if not hmac.compare_digest(digest, radius[offset + 2 : offset + 18]):
+        return ["radius-message-authenticator"]
     return []
 
 
