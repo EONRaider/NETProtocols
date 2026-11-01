@@ -974,8 +974,10 @@ README's own example over the corpus.
 `DHCP` run to 11-15 fields, wide enough that the plain auto-generated
 `__match_args__` is unusable positionally, so those three now
 hand-declare a short, documented, tested tuple instead (`IPv4.src,
-dst, protocol`; every other header still relies on the plain
-auto-generated one). Keyword patterns are unaffected either way.
+dst, protocol`). `HTTP` has since declared one too (`method, target,
+status_code`): a request matches on its method and target, a response
+on its status code. Every other header still relies on the plain
+auto-generated one. Keyword patterns are unaffected either way.
 
 ```python
 match ip:
@@ -1059,7 +1061,7 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 
 15 stdlib modules imported (`__future__` and the type-checking-only
 `_typeshed` aside); `socket` used for exactly two
-`inet_pton`/`inet_ntop` calls (`_base.py:200-205`) and no socket ever
+`inet_pton`/`inet_ntop` calls (`_base.py:202-207`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
 
@@ -1130,9 +1132,11 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:86-91` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 379
-frames**, across 35 scenarios captured with tcpdump over real kernel
+`tests/test_corpus.py:137-142` asserts `bytes(layer) ==
+frame[cursor:cursor+layer.header_len]` for **every layer of all 394
+frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
+strict walk raises at the empty payload TLS is handed, walked lax),
+across 36 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
@@ -1141,34 +1145,40 @@ LLDP agents, Linux STP bridges with lldpd speaking CDP over IEEE
 802.3 LLC/SNAP framing, a tftpd-hpa server with tftp-hpa and curl
 clients, a FreeRADIUS server answering radclient, coturn answering
 STUN clients, a chronyd NTP server queried by ntpdig and chronyd
-clients, and HSRP messages crafted by Yersinia and sent across a netns
-veth pair. Every frame's checksums (SCTP's CRC32c, VRRP's, PIM's, CDP's,
-and OSPF's packet and LSA checksums included), every ESP and AH ICV,
-every RIPv2 and OSPF keyed-MD5 digest, every RADIUS authenticator a
-frame holds alone, every STUN MESSAGE-INTEGRITY and FINGERPRINT, and
-every NTP MAC verify internally (`scripts/check_fixtures.py`); HSRP,
+clients, HSRP messages crafted by Yersinia and sent across a netns
+veth pair, and an nginx HTTPS server answering five clients (headless
+Chromium, curl, gnutls-cli, `openssl s_client` and curl capped at TLS
+1.2) across another. Every frame's checksums (SCTP's CRC32c, VRRP's,
+PIM's, CDP's, and OSPF's packet and LSA checksums included), every ESP
+and AH ICV, every RIPv2 and OSPF keyed-MD5 digest, every RADIUS
+authenticator a frame holds alone, every STUN MESSAGE-INTEGRITY and
+FINGERPRINT, and every NTP MAC verify internally (`scripts/check_fixtures.py`); HSRP,
 which carries no checksum of its own, has every message's fields
-checked instead.
+checked instead, and TLS, which has none beyond TCP's, every record:
+each segment on port 443 that carries data must hold whole records,
+every ClientHello's fields must tile it, and every server_name must be
+a host name.
 
 ### 5.2 "Property-based fuzzing of every decoder"
 **Status: VERIFIED**
 
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
-that eight TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
+that nine TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
 `RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s, `STP`'s,
 `CDP`'s, `TFTP`'s, `NTP`'s and `HSRP`'s accessors never raise at all,
-and that `bytes(decode(x)) == x` is Hypothesis-generated for **all 41**
+and that `bytes(decode(x)) == x` is Hypothesis-generated for **all 42**
 protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the
-property over the 37 without a hand-written one (#97 added the first
+property over the 38 without a hand-written one (#97 added the first
 14; `HTTP` is the 15th, `VXLAN` the 16th, `ESP` the 17th, `AH` and
 `AHv6` the 18th and 19th, `SCTP` the 20th, `VRRP` and `VRRPv6` the
 21st and 22nd, `RIP` the 23rd, `OSPF` the 24th, `PIM`
 the 25th, `BGP` the 26th, `MPLS` the 27th, `LLDP` the 28th, `LLC` and `SNAP` the 29th and
 30th, `STP` the 31st, `CDP` the 32nd, `TFTP` the 33rd, `RADIUS` the
-34th, `STUN` the 35th, `NTP` the 36th, `HSRP` the 37th). Reproduce:
+34th, `STUN` the 35th, `NTP` the 36th, `HSRP` the 37th, `TLS` the
+38th). Reproduce:
 `uv run pytest tests/test_fuzz.py::TestGeneralizedRoundTrips -v`.
 
 CI runs two Hypothesis profiles (#98): every push/PR runs a fixed 200
@@ -1191,8 +1201,8 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-5,919 statements, 1 missed (99.98%; re-measured 2026-10-31, after
-HSRP, and the miss is still `Packet.__eq__`'s `NotImplemented`
+6,143 statements, 1 missed (99.98%; re-measured 2026-11-01, after
+TLS, and the miss is still `Packet.__eq__`'s `NotImplemented`
 branch). Enforced, not merely reported:
 `[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
 runs with `--cov-report=term` on every push and pull request, so a
@@ -1322,17 +1332,22 @@ eight lines:
   `MaxDepthExceededError`. Chains already terminated — every header
   validates its own declared length — so for nested headers this
   bounds *cost*, not correctness: a crafted frame cannot turn one walk
-  into thousands of decodes. BGP is the exception (#185): each message
-  in a TCP segment is a layer, so a valid segment of more than 29
-  messages — 30 one-prefix UPDATEs fit in a 1448-byte segment, and
-  GRO, TSO, loopback and jumbo frames make segments far larger —
-  exceeds the default, and the strict walk raises on valid traffic
-  (lax stops short). There the caller raises `max_depth` or walks on
-  with `decode_frame(frame[packet.consumed:], start=BGP)`
-  (`layer7/bgp.py`'s module docstring; tested in `tests/test_bgp.py`'s
-  `TestMaxDepth`). Corpus maximum is 10 layers (a TCP segment carrying
-  7 BGP messages, one layer each); 7 for nested headers (an ICMP echo
-  tunnelled through VXLAN).
+  into thousands of decodes. BGP is the exception (#185), and STUN over
+  TCP and TLS share it: each message, or TLS record, in a TCP segment
+  is a layer, so a valid segment of more than 29 — 30 one-prefix
+  UPDATEs, or 30 of TLS 1.3's 22-byte empty protected records, fit
+  in a 1448-byte segment, and GRO, TSO, loopback and jumbo frames
+  make segments far larger — exceeds the default, and the strict walk
+  raises on valid traffic (lax stops short). There the caller raises
+  `max_depth` or walks on with
+  `decode_frame(frame[packet.consumed:], start=BGP)` (or `start=STUN`,
+  `start=TLS`) (`layer7/bgp.py`'s, `layer7/stun.py`'s and
+  `layer7/tls.py`'s module docstrings; tested in `tests/test_bgp.py`'s
+  and `tests/test_tls.py`'s `TestMaxDepth` and `tests/test_stun.py`'s
+  `TestOverTCP`). Corpus maximum is 10 layers (a TCP segment carrying
+  7 BGP messages, one layer each; TLS's busiest segment carries 6
+  records, 9 layers); 7 for nested headers (an ICMP echo tunnelled
+  through VXLAN).
 - **An explicit start layer.** `decode_frame(buf, start=IPv4)`, for
   buffers that begin mid-stack. gopacket has this; scapy and dpkt make
   you name the class and hand-roll the rest.
@@ -1400,7 +1415,7 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 206 raise sites in the library
+`protocol` is set at every one of the 228 raise sites in the library
 but `random_mac`'s (`utils/mac.py`), which belongs to no protocol
 (verified by an AST sweep, not just by eye); `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
@@ -1450,7 +1465,7 @@ section to begin with.
   (1.2), and on 2.6.0's 293-frame corpus too.
 - ❌ **"Superior to scapy"** with no axis named. Scapy crafts, sends,
   sniffs, fuzzes and covers thousands of protocols; we decode and
-  re-encode a couple of dozen headers. On *codec* axes — typing,
+  re-encode a few dozen headers. On *codec* axes — typing,
   purity, round-trip fidelity, throughput, licence, import cost — the
   evidence in this file is strong and getting stronger. On coverage and
   capability it is not a contest we are in, and one screenshot of
