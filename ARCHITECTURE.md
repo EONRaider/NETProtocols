@@ -1010,10 +1010,19 @@ separate, opt-in function and not a decode mode, walks a ClientHello
 from the start of its record as far as the bytes go, the first record
 at most, and returns a `TLSServerNamePeek` with one of three outcomes:
 *found* (`complete`, the name), *absent* (`complete`, `None`: the
-record is not a ClientHello, or enough of it is present to show it
-names no host) or *not reached* (not `complete`: the bytes ended
-first, which is not "no SNI"). A prefix ending anywhere is *not
-reached* and never raises; bytes present that are malformed raise what
+first record carries no host name, because it is not a ClientHello,
+or enough of it is present to show it names no host) or *not reached*
+(not `complete`: the bytes ended first, which is not "no SNI").
+*Absent* speaks for the first record only: a ChangeCipherSpec and
+then a ClientHello with a name in one segment, as TLS 1.3's middlebox
+compatibility mode sends after a HelloRetryRequest (RFC 9846 Appendix
+E.4), is *absent*, as `TLS.server_name` is `None` for that first
+record; a caller who wants to look past whole records calls
+`TLS.decode()` on the first and peeks `data[tls.header_len:]`. Under
+ECH a *found* name is the outer ClientHello's, the client-facing
+server's `public_name`, as for `TLS.server_name`. A prefix that ends
+before the answer is known is *not reached*; where a prefix ends never
+by itself causes a raise. Bytes present that are malformed raise what
 the strict path raises for them, the guard's errors and the
 ClientHello's `InvalidFieldError`s with the same `field` and `offset`;
 nothing is re-encoded and no `TLS` is built. A ClientHello fragmented

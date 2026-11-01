@@ -2119,6 +2119,26 @@ class TestPeekRecords:
         """One byte of a length past the bound is not judged yet."""
         assert peek_server_name(b"\x16\x03\x01\xff") == NOT_REACHED
 
+    @pytest.mark.parametrize(
+        "lead",
+        [record(CCS, b"\x01"), record(HANDSHAKE, b"", version=0x0301)],
+        ids=["ccs", "empty-handshake"],
+    )
+    def test_absent_speaks_for_the_first_record_only(self, lead):
+        """A ChangeCipherSpec, then a second ClientHello, as TLS 1.3's
+        middlebox compatibility mode sends after a HelloRetryRequest:
+        absent, as the strict first record's name is None, though the
+        next record names a host; decoding the first record and peeking
+        after it finds the name."""
+        hello = hello_record(hello_body(extensions=sni((0, b"hrr.example"))))
+        data = lead + hello
+        tls = TLS.decode(data)
+        assert tls.server_name is None
+        assert peek_server_name(data) == ABSENT
+        assert peek_server_name(data[tls.header_len :]) == TLSServerNamePeek(
+            complete=True, server_name="hrr.example"
+        )
+
 
 def _overrun(at: int, width: int) -> bytes:
     """TestOverrunByOne's ClientHello, the length at ``at`` one byte too
@@ -2394,10 +2414,26 @@ class TestPeekValue:
         with pytest.raises(InvalidFieldError) as caught:
             TLSServerNamePeek(complete=False, server_name="a.example")
         assert caught.value.protocol is TLSServerNamePeek
-        assert (caught.value.field, caught.value.actual) == (
-            "server_name",
-            "a.example",
-        )
+        assert (
+            caught.value.field,
+            caught.value.expected,
+            caught.value.actual,
+        ) == ("server_name", "None when not complete", "a.example")
+
+    def test_a_name_is_never_empty(self):
+        """As the strict path raises for an empty host_name, a found
+        name is never empty."""
+        with pytest.raises(InvalidFieldError) as caught:
+            TLSServerNamePeek(complete=True, server_name="")
+        assert caught.value.protocol is TLSServerNamePeek
+        assert (
+            caught.value.field,
+            caught.value.expected,
+            caught.value.actual,
+        ) == ("server_name", "a non-empty host name or None", "")
+        raw = hello_record(hello_body(extensions=sni((0, b""))))
+        with pytest.raises(InvalidFieldError):
+            peek_server_name(raw)
 
     def test_frozen_and_slotted(self):
         peek = TLSServerNamePeek(complete=True, server_name="a.example")

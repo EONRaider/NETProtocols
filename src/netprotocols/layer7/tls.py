@@ -592,16 +592,30 @@ class TLSServerNamePeek:
     - *found*: :attr:`complete` and :attr:`server_name` set, read as
       :attr:`TLS.server_name` reads it from the whole record;
     - *absent*: :attr:`complete` and :attr:`server_name` ``None``: the
-      bytes held enough to know there is no host name, because the
-      record is not a ClientHello, the ClientHello has no extensions
-      block, its extensions block, walked to its end, holds no
-      ``server_name``, or the first one holds no ``host_name``;
+      bytes held enough to know the *first record* carries no host
+      name, because it is not a ClientHello (another content type, an
+      empty Handshake record, another handshake message), or it is a
+      ClientHello without one: no extensions block, an extensions block
+      that, walked to its end, holds no ``server_name``, or a first
+      ``server_name`` that holds no ``host_name``;
     - *not reached*: neither: the bytes, or the first record, ended
       before the answer was known.
 
-    *Not reached* is not "no SNI": the name may be in the bytes the
-    next segment carries. Reassemble the stream and call
-    :meth:`TLS.decode` on it to know.
+    *Absent* says nothing of the records after the first: a segment
+    holding a ChangeCipherSpec and then a ClientHello with a name, as
+    TLS 1.3's middlebox compatibility mode sends after a
+    HelloRetryRequest (RFC 9846 Appendix E.4), is *absent*, as
+    :attr:`TLS.server_name` is ``None`` for its first record. To look
+    past whole records, :meth:`TLS.decode` the first and peek
+    ``data[tls.header_len:]``. *Not reached* is not "no SNI": the name
+    may be in the bytes the next segment carries. Reassemble the stream
+    and call :meth:`TLS.decode` on it to know. Under Encrypted Client
+    Hello (ECH) a *found* name is the outer ClientHello's, the
+    client-facing server's ``public_name``, as for
+    :attr:`TLS.server_name`.
+
+    A name is never empty: :func:`peek_server_name` raises, as
+    :attr:`TLS.server_name` does, for an empty ``host_name``.
 
     :param complete: Whether the bytes decided the answer.
     :param server_name: The host name, when found; ``None`` otherwise.
@@ -611,15 +625,28 @@ class TLSServerNamePeek:
     server_name: str | None = None
 
     def __post_init__(self) -> None:
-        """Check a name comes only with a complete answer.
+        """Check a name comes only with a complete answer, and is not
+        empty.
 
-        :raises InvalidFieldError: a name without one.
+        :raises InvalidFieldError: a name without a complete answer, or
+            an empty one.
         """
-        if self.server_name is not None and not self.complete:
+        if self.server_name is None:
+            return
+        if not self.complete:
             raise InvalidFieldError(
                 "TLS server name peek holds a name but is not complete",
                 protocol=type(self),
                 field="server_name",
+                expected="None when not complete",
+                actual=self.server_name,
+            )
+        if not self.server_name:
+            raise InvalidFieldError(
+                "TLS server name peek holds an empty name",
+                protocol=type(self),
+                field="server_name",
+                expected="a non-empty host name or None",
                 actual=self.server_name,
             )
 
@@ -1223,24 +1250,40 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     payload does, and may end anywhere: the ClientHello is walked as far
     as the bytes go, and the answer, a :class:`TLSServerNamePeek`, is
     *found* when the whole ``server_name`` extension is in them,
-    *absent* when they show there is no host name, and *not reached*
-    when they end first, which is not "no SNI" (see
+    *absent* when they show the first record carries no host name, and
+    *not reached* when they end first, which is not "no SNI" (see
     :class:`TLSServerNamePeek`). :meth:`TLS.decode`'s contract is
     unchanged: this is a separate function, not a decode mode, and it
     builds no :class:`TLS` instance, re-encodes nothing, keeps no state,
     and does work bounded by ``len(data)``.
 
     Only the first record is read, as far as its length says or the
-    bytes go, whichever is shorter. A record that is not Handshake, or
-    whose first message is not a ClientHello, is *absent*, as
+    bytes go, whichever is shorter, and *absent* means "this first
+    record carries no ``host_name``": it is not a ClientHello, or it is
+    a ClientHello without one. A record that is not Handshake, or whose
+    first message is not a ClientHello, is *absent*, as
     :attr:`TLS.server_name` answers ``None`` for it; so is an empty
-    Handshake record. A ClientHello longer than its record, a handshake
-    message fragmented across records, is walked to the record's end
-    like a ClientHello the bytes cut: it may be *found* there, though
-    :attr:`TLS.server_name` raises
-    :class:`~netprotocols.TruncatedHeaderError` for that record, and is
-    *not reached* past it, even when ``data`` holds the next record,
-    which is not joined to it.
+    Handshake record. That holds even when ``data`` goes on into a
+    ClientHello with a name: ``data`` holding a ChangeCipherSpec
+    record, ``14 03 03 00 01 01``, and then the second ClientHello, as
+    TLS 1.3's middlebox compatibility mode sends after a
+    HelloRetryRequest (RFC 9846 Appendix E.4), is *absent*. A caller
+    who wants to look past whole records decodes the first, which must
+    then be whole, and peeks after it::
+
+        tls = TLS.decode(data)
+        peek = peek_server_name(data[tls.header_len:])
+
+    Under Encrypted Client Hello (ECH) a *found* name is the outer
+    ClientHello's, the client-facing server's ``public_name``, not the
+    inner one's, as for :attr:`TLS.server_name`.
+
+    A ClientHello longer than its record, a handshake message fragmented
+    across records, is walked to the record's end like a ClientHello the
+    bytes cut: it may be *found* there, though :attr:`TLS.server_name`
+    raises :class:`~netprotocols.TruncatedHeaderError` for that record,
+    and is *not reached* past it, even when ``data`` holds the next
+    record, which is not joined to it.
 
     The answer depends only on the bytes it read, so once a prefix is
     *found* or *absent*, every longer prefix of the same bytes answers
