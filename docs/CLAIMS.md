@@ -1482,3 +1482,131 @@ section to begin with.
   winner, run on a Core 2 Duo, or comparing CPython 3.6 against
   CPython 2.7. Being the exception is itself a differentiator, and #86
   exists to make it possible.
+
+---
+
+## 7. Protocol coverage
+
+### 7.1 "Every protocol on #170's gap list decodes"
+**Status: VERIFIED for `master`** (surveyed 2026-11-01, #197) — for a
+release, `GATED ON` [#174](https://github.com/EONRaider/NETProtocols/issues/174)
+and [#175](https://github.com/EONRaider/NETProtocols/issues/175): 2.6.0,
+the latest release, ships 15 of the 21, and the other six are merged
+but unreleased.
+
+[#170](https://github.com/EONRaider/NETProtocols/issues/170) built its
+five tiers by cross-referencing dpkt's, scapy's (`layers/` and
+`contrib/`) and pypacker's module lists against this library's. The
+same survey, re-run against each competitor's **current PyPI release**
+rather than a source tree, so the versions are exact (Rule 3):
+
+- `dpkt 1.9.8` — `dpkt-1.9.8-py3-none-any.whl`, uploaded 2022-08-18,
+  sha256
+  `4da4d111d7bf67575b571f5c678c71bddd2d8a01a3d57d489faf0a92c748fbfd`;
+- `scapy 2.8.0` — `scapy-2.8.0-py3-none-any.whl`, uploaded 2026-10-02,
+  sha256
+  `abf855145ee829a42b2eb28983cd6a0a52b12a31d3f861cb7be36791195ed9aa`;
+- `pypacker 5.4` — `pypacker-5.4.tar.gz` (it publishes no wheel),
+  uploaded 2023-02-26, sha256
+  `80fb794acbe9eb972e43b4b28e85d8899ea3637fa5461df2866736e6d99ea5a3`;
+- netprotocols at `master` `8fe5076` (`__version__` 2.6.0, with Tiers 4
+  and 5 merged); CPython 3.13.18, x86-64 Linux, which matters to nothing
+  here: the survey reads source files as text and runs none of them.
+
+Reproduce. Each download goes to a fresh directory, nothing in it is
+imported or executed, and the script is run with `-I` from outside
+them (pip is not used for pypacker, whose only artifact is an sdist
+that `pip download` would build):
+
+```
+for p in dpkt scapy pypacker; do mkdir /tmp/survey-$p-dl /tmp/survey-$p-src; done
+F=https://files.pythonhosted.org/packages
+(cd /tmp/survey-dpkt-dl && curl -sSLO $F/py3/d/dpkt/dpkt-1.9.8-py3-none-any.whl)
+(cd /tmp/survey-scapy-dl && curl -sSLO $F/py3/s/scapy/scapy-2.8.0-py3-none-any.whl)
+(cd /tmp/survey-pypacker-dl && curl -sSLO $F/source/p/pypacker/pypacker-5.4.tar.gz)
+sha256sum /tmp/survey-*-dl/*    # against the digests above and on PyPI
+unzip -q /tmp/survey-dpkt-dl/*.whl -d /tmp/survey-dpkt-src
+unzip -q /tmp/survey-scapy-dl/*.whl -d /tmp/survey-scapy-src
+tar -xzf /tmp/survey-pypacker-dl/*.tar.gz -C /tmp/survey-pypacker-src --no-same-owner
+python3 -I scripts/survey_protocols.py --dpkt /tmp/survey-dpkt-src/dpkt \
+    --scapy /tmp/survey-scapy-src/scapy \
+    --pypacker /tmp/survey-pypacker-src/pypacker-5.4/pypacker
+```
+
+`scripts/survey_protocols.py` is stdlib-only and static: each cell is a
+regular expression over one source file (a class definition, or for
+IP-in-IP the line that dispatches protocol 4), printed with the file
+it matched, so any cell can be checked by opening that file. Its
+output, condensed:
+
+| Protocol | Issue | netprotocols | dpkt 1.9.8 | scapy 2.8.0 | pypacker 5.4 |
+|---|---|---|---|---|---|
+| SCTP | #176 | 2.4.0 | yes | yes | yes |
+| IP-in-IP | #177 | 2.4.0 | yes | yes | IPv6 in IP only; no handler for protocol 4 |
+| IPsec ESP | #178 | 2.4.0 | yes | yes | yes |
+| IPsec AH | #179 | 2.4.0 | yes | yes | as an IPv6 extension header only; IPv4 has no handler for it |
+| VXLAN | #180 | 2.4.0 | no | yes | no |
+| VRRP | #181 | 2.5.0 | yes | yes | yes |
+| RIP | #182 | 2.5.0 | yes | yes | yes |
+| OSPF | #183 | 2.5.0 | yes | `contrib` | yes |
+| PIM | #184 | 2.5.0 | yes | `contrib` | yes |
+| BGP | #185 | 2.5.0 | yes | `contrib` | yes |
+| LLDP | #186 | 2.6.0 | no (an `ETH_TYPE_LLDP` constant, no decoder) | `contrib` | yes |
+| MPLS | #187 | 2.6.0 | labels folded into `Ethernet.mpls_labels` | `contrib` | no (EtherType constants only) |
+| 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into `LLC`) | yes | `LLC` class, but its Ethernet reads no 802.3 Length ("not supported") |
+| STP | #189 | 2.6.0 | yes | yes | yes |
+| CDP | #190 | 2.6.0 | yes | `contrib` | no |
+| NTP | #191 | `master`, unreleased | yes | yes | yes |
+| TFTP | #192 | `master`, unreleased | yes | yes | yes |
+| RADIUS | #193 | `master`, unreleased | yes | yes | yes |
+| STUN | #194 | `master`, unreleased | yes | `contrib` | yes |
+| HSRP | #195 | `master`, unreleased | yes | yes | yes |
+| TLS records + SNI | #196 | `master`, unreleased | yes (`ssl.py`) | `layers/tls`, loaded by `load_layer("tls")` | yes (`layer4/ssl.py`) |
+| **of 21** | | **21** (15 released) | **19** | **21** | **18**, three of them partial |
+
+What it shows:
+
+- **Every item on #170's list decodes on `master`.** 2.4.0, 2.5.0 and
+  2.6.0 released fifteen; Tier 4's five and Tier 5's TLS are merged and
+  will first ship in the next release. Until then the claim is about
+  `master`, not about anything on PyPI.
+- **None of the 21 is unique to this library.** scapy 2.8.0 has a
+  decoder for every one, though eight of them do not load with `import
+  scapy.all`: seven sit in `contrib/` and need `load_contrib()`, and
+  `tls` is not in `conf.load_layers` (`scapy/config.py`'s
+  `load_layers` list). dpkt 1.9.8 lacks VXLAN and LLDP; pypacker 5.4
+  lacks VXLAN, MPLS and CDP and covers IP-in-IP, AH and LLC in part.
+  The list is the one this library drew from its own gaps, so
+  covering more of it than dpkt or pypacker is not a coverage claim
+  against either, and §6's "more protocols than X" stays off limits.
+- **A cell says a decoder exists, not that the library's own walk
+  reaches it.** dpkt's TCP and UDP leave the payload raw
+  (`dpkt/tcp.py`'s `unpack`; `dpkt/udp.py` dispatches nothing), so its
+  BGP, RIP, NTP, TFTP, RADIUS, STUN, HSRP and TLS decoders are called by
+  hand (as 1.6 counts); pypacker's VRRP, RIP, HSRP, LLC and STP classes
+  are in none of its handler tables (`layer3/ip.py`, `layer4/udp.py`,
+  `layer12/ethernet.py`). #170 counted modules, and so does this.
+- **What the competitors gained since #170 opened (2026-09-09).** dpkt
+  and pypacker have released nothing since: 1.9.8 (2022-08-18) and 5.4
+  (2023-02-26) are still current. scapy released 2.8.0 on 2026-10-02.
+  Against `scapy-2.7.0-py3-none-any.whl` (sha256
+  `eb22786da92be6fd8e5c694ae5595e4f5b9ac1f4364c9c45986844f3e3063561`),
+  its `layers/` and `contrib/` gained `layers/igmp.py` (IGMP moved out
+  of `contrib/`, which now re-exports it with a `DeprecationWarning`),
+  `layers/windows/` (Windows error codes, registry and security
+  structures) and `layers/msrpce/raw/ms_rrp.py` (the MS-RRP remote
+  registry RPC interface), and `contrib/` modules for DICOM, SAE J1939,
+  the MySQL client/server protocol, PTPv2, a CoAP socket and six
+  Bluetooth chip vendors' HCI commands; none is on #170's list. Reproduce with the 2.7.0 wheel unpacked the same way to
+  `/tmp/survey-scapy270-src`, then `diff <(cd
+  /tmp/survey-scapy270-src/scapy && find layers contrib -name '*.py' |
+  sort) <(cd /tmp/survey-scapy-src/scapy && find layers contrib -name
+  '*.py' | sort)`. #170 read source trees and recorded no commits, so
+  this compares releases, not what #170 saw.
+
+The script's second table is a survey, not a roadmap: nine protocols
+all three releases decode and this library does not export — PPP,
+PPPoE, IEEE 802.11, Radiotap, Cisco DTP, ATA over Ethernet, RTP,
+Diameter and SMB. It is recorded so the next roadmap starts from a
+measured list rather than a recollection, not as a promise to chase
+any of them.
