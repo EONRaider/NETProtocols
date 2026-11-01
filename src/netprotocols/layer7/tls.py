@@ -726,9 +726,9 @@ def _reject(
 
     ``expected`` is what the field may hold and ``actual`` the value
     judged, in the terms ``message`` uses, as HSRP's and NTP's guard
-    errors set them: the byte at ``offset``, or for the version's
-    second byte the whole version (``0x0305`` and up), as
-    :meth:`TLS.decode` says.
+    errors set them: the byte at ``offset``, the whole version
+    (``0x0305`` and up) for the version's second byte, or the whole
+    length for the length at offset 3, as :meth:`TLS.decode` says.
     """
     raise InvalidFieldError(
         message,
