@@ -1757,6 +1757,58 @@ class TestChecker:
         assert failures == []
         assert stats["tls-client-hello"] == 1
 
+    @staticmethod
+    def finished_starting_with_1(index: int) -> tuple[bytes, int]:
+        """The payload of CORPUS[index], a TLS 1.2 segment holding a
+        ChangeCipherSpec and then the encrypted Finished, with the
+        Finished's first ciphertext byte forced to 1, as about one
+        Finished in 256 has it; and where that record starts."""
+        payload, at = bytearray(CORPUS[index][PAYLOAD_AT:]), 0
+        while payload[at] != CCS:
+            at += 5 + struct.unpack_from("!H", payload, at + 3)[0]
+        at += 6
+        assert payload[at] == HANDSHAKE and payload[at + 5] != 1
+        payload[at + 5] = 1
+        return bytes(payload), at
+
+    @pytest.mark.parametrize("index", [10, 11], ids=["client", "server"])
+    def test_a_finished_after_its_ccs_is_not_a_hello(self, index):
+        """Records after ChangeCipherSpec are encrypted (RFC 5246
+        §7.1): a Finished whose ciphertext starts with 1 is not checked
+        as a ClientHello, and is still counted as a Handshake record."""
+        payload, _ = self.finished_starting_with_1(index)
+        failures, stats = self.check(retouched(CORPUS[index], payload))
+        assert failures == []
+        assert stats["tls-client-hello"] == 0
+        assert stats["tls-handshake"] == CAPTURE[index][1].count(HANDSHAKE)
+
+    @pytest.mark.parametrize("index", [10, 11], ids=["client", "server"])
+    def test_the_same_record_before_a_ccs_is_a_hello(self, index):
+        """The same record ahead of the segment's ChangeCipherSpec is
+        checked as a ClientHello, and fails as one."""
+        payload, at = self.finished_starting_with_1(index)
+        moved = payload[at:] + payload[:at]
+        failures, stats = self.check(retouched(CORPUS[index], moved))
+        assert failures == ["tls-hello"]
+        assert stats["tls-client-hello"] == 1
+
+    def test_a_handshake_before_the_ccs_is_still_checked(self):
+        """The client's ClientKeyExchange, ahead of its ChangeCipherSpec
+        in CORPUS[10], is in the clear: given the type of a ClientHello,
+        it is checked as one, and fails."""
+        payload = bytearray(CORPUS[10][PAYLOAD_AT:])
+        assert payload[0] == HANDSHAKE and payload[5] == 16
+        payload[5] = 1
+        failures, stats = self.check(retouched(CORPUS[10], bytes(payload)))
+        assert failures == ["tls-hello"]
+        assert stats["tls-client-hello"] == 1
+
+    def test_an_empty_handshake_after_a_ccs_fails(self):
+        """Every other check still holds after ChangeCipherSpec."""
+        payload = record(CCS, b"\x01") + record(HANDSHAKE)
+        failures, _ = self.check(retouched(CORPUS[11], payload))
+        assert failures == ["tls-empty"]
+
     def test_a_segment_starting_inside_a_record_is_unchecked(self):
         failures, stats = self.check(retouched(CORPUS[2], b"\x99" * 30))
         assert failures == []

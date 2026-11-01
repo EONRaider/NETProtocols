@@ -760,7 +760,24 @@ def _check_tls(data: bytes, stats: Counter) -> list[str]:
     and :func:`check_capture_frame` fails it (``tls-split``) unless it
     comes from a session capture. The corpus has none;
     tests/fixtures/tls/tls_session.pcap has Chromium's two-segment
-    ClientHellos."""
+    ClientHellos.
+
+    A Handshake record after a ChangeCipherSpec in the same segment is
+    not read as a ClientHello: under TLS 1.2 every record after it is
+    protected under the new cipher spec (RFC 5246 §7.1), so the
+    Finished that follows, still Handshake on the wire, is ciphertext,
+    and one in 256 starts with the byte 1 (TLS 1.3 sends its encrypted
+    handshake as application_data, RFC 9846 §5.2). The check is per
+    segment and keeps no state, so a Finished carried alone in a later
+    segment than its ChangeCipherSpec is read as a ClientHello and, if
+    its ciphertext starts with 1, almost always fails ``tls-hello``: a
+    false failure, never a false pass. No capture here has one: in
+    tls.pcap (frames 10 and 11) and tls_session.pcap (99 and 100) the
+    TLS 1.2 client's and server's Finished each share a segment with
+    their ChangeCipherSpec, and scripts/capture_fixtures_tls.sh, which
+    runs this checker on each capture, exits before it unless they
+    do."""
+    after_ccs = False
     while data:
         if not _tls_record_header_ok(data):
             stats["tls-unchecked"] += 1
@@ -778,11 +795,12 @@ def _check_tls(data: bytes, stats: Counter) -> list[str]:
             return ["tls-empty"]
         if kind == 20 and fragment != b"\x01":
             return ["tls-ccs"]
-        if kind == 22 and fragment[0] == 1:
+        if kind == 22 and fragment[0] == 1 and not after_ccs:
             stats["tls-client-hello"] += 1
             failure = _check_tls_client_hello(fragment, stats)
             if failure:
                 return [failure]
+        after_ccs = after_ccs or kind == 20
     return []
 
 
