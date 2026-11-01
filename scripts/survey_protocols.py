@@ -198,15 +198,21 @@ GAP = (
             # module names IP_PROTO_AH three times, all as data: in its
             # import list ("IP_PROTO_AH, IP_PROTO_ESP, ..."), as an
             # EXT_HDRS item ("IP_PROTO_AH," closing the line) and as the
-            # ext_hdrs_cls entry ("IP_PROTO_AH: IP6AHHeader,"). Any other
-            # use of the name, such as a comparison or "in (IP_PROTO_AH,)",
-            # and any comparison or membership test against 51, AH's
-            # protocol number, fails the check.
+            # ext_hdrs_cls entry ("IP_PROTO_AH: IP6AHHeader,"). The check
+            # fails on any other use of the name, except one followed by a
+            # comma and then a space and a word or the line's end, as the
+            # first two are (so "is IP_PROTO_AH" and "in (IP_PROTO_AH,)"
+            # fail it); on "==" or "!=" with the name or 51, AH's protocol
+            # number, on either side; and on "in" and an opening (, [ or {
+            # followed by the name or 51 before any closing bracket, as in
+            # "in [51]" or "in (IP_PROTO_AH, IP_PROTO_ESP)". Other
+            # comparisons with 51, such as "is 51" or "< 51", and 51 after
+            # a nested bracket, as in "in (f(x), 51)", pass it.
             Check(
                 "layer3/ip6.py",
                 r"\bIP_PROTO_AH\b(?!,(?: \w|$)|: IP6AHHeader,$)"
                 r"|[=!]= *(?:IP_PROTO_AH|51)\b|\b51 *[=!]="
-                r"|\bin [({][^)}]*\b(?:IP_PROTO_AH|51)\b",
+                r"|\bin [\[({][^\])}]*\b(?:IP_PROTO_AH|51)\b",
                 absent=True,
             ),
             # Dispatch is scored only in the IP-in-IP and LLC / SNAP rows,
