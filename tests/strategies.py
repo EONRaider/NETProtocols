@@ -43,6 +43,7 @@ from netprotocols import (
     STP,
     STUN,
     TFTP,
+    TLS,
     VLAN,
     VRRP,
     VXLAN,
@@ -77,6 +78,8 @@ from netprotocols import (
     Protocol,
     SCTPChunk,
     STUNAttribute,
+    TLSClientHello,
+    TLSExtension,
     VRRPv6,
 )
 from netprotocols._base import bytes_to_ipv4, bytes_to_ipv6, bytes_to_mac
@@ -1039,6 +1042,60 @@ def hsrp_messages(draw: st.DrawFn) -> HSRP:
     )
 
 
+@st.composite
+def tls_extensions(draw: st.DrawFn) -> TLSExtension:
+    # Any type, any data: only server_name's data is ever parsed, and
+    # its parse is on demand, so a malformed one still round-trips.
+    return TLSExtension(
+        type=draw(st.integers(0, 0xFFFF)),
+        data=draw(st.binary(max_size=_MAX_BLOB)),
+    )
+
+
+@st.composite
+def tls_client_hellos(draw: st.DrawFn) -> TLSClientHello:
+    # Every field within the length its prefix can carry, and the
+    # extensions block present, empty or absent (None, RFC 5246's hello
+    # without extensions): canonical for the parse in TLS.client_hello.
+    extensions = draw(
+        st.one_of(
+            st.none(),
+            st.lists(tls_extensions(), max_size=4).map(tuple),
+        )
+    )
+    return TLSClientHello(
+        legacy_version=draw(st.sampled_from([0x0300, 0x0301, 0x0303])),
+        random=draw(st.binary(min_size=32, max_size=32)),
+        legacy_session_id=draw(st.binary(max_size=32)),
+        cipher_suites=draw(st.binary(max_size=_MAX_BLOB)),
+        legacy_compression_methods=draw(st.binary(min_size=1, max_size=4)),
+        extensions=extensions,
+    )
+
+
+@st.composite
+def tls_records(draw: st.DrawFn) -> TLS:
+    # Canonical records only: a ContentType of 20-24 and a version of
+    # 0x0300-0x0304, which decode() requires (the constructor does not;
+    # test_tls.py covers those). The fragment is opaque bytes, or now
+    # and then a ClientHello, so the round trip covers records whose
+    # accessors parse and records whose accessors raise.
+    hello = draw(st.one_of(st.none(), tls_client_hellos()))
+    if hello is None:
+        content_type = draw(st.integers(20, 24))
+        fragment = draw(st.binary(max_size=_MAX_BLOB))
+    else:
+        body = bytes(hello)
+        content_type = 22
+        fragment = b"\x01" + len(body).to_bytes(3, "big") + body
+    return TLS(
+        content_type=content_type,
+        legacy_version=draw(st.integers(0x0300, 0x0304)),
+        length=len(fragment),
+        fragment=fragment,
+    )
+
+
 #: One entry per protocol without an existing Hypothesis-generated
 #: round-trip test (see test_fuzz.py::TestConstrainedRoundTrips for
 #: the other four: Ethernet, UDP, TCP, IPv6Fragment). Keyed by class
@@ -1080,5 +1137,6 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "STUN": stun_messages(),
     "NTP": ntp_messages(),
     "HSRP": hsrp_messages(),
+    "TLS": tls_records(),
     "BGP": bgp_messages(),
 }

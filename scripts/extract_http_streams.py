@@ -7,7 +7,10 @@ For each TCP connection to ``--port`` (80 by default), in the order the
 connections opened, this writes ``NN.request`` (every byte the client
 sent) and ``NN.response`` (every byte the server sent) to ``OUT_DIR``.
 Those files are what the HTTP tests and the Atheris harness read, so
-neither has to reassemble TCP itself.
+neither has to reassemble TCP itself. :func:`extract` takes any port:
+``tests/test_tls.py`` and ``scripts/capture_fixtures_tls.sh`` call it
+with 443 to reassemble the TLS session capture, whose ClientHellos can
+span segments.
 
 Deliberately standalone, like ``check_fixtures.py``: stdlib only, its own
 minimal Ethernet/IPv4/TCP parsing, and no netprotocols import, so a

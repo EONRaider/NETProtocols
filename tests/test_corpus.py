@@ -33,6 +33,7 @@ from netprotocols import (
     STUN,
     TCP,
     TFTP,
+    TLS,
     UDP,
     VLAN,
     VRRP,
@@ -43,12 +44,33 @@ from netprotocols import (
     ICMPv6,
     IPv4,
     IPv6,
+    Packet,
     Protocol,
     ProtocolError,
+    TruncatedHeaderError,
     decode_frame,
 )
 
 CORPUS = corpus_frames()
+
+
+def is_bare_segment(packet: Packet) -> bool:
+    """Whether a lax walk stopped at a TCP segment with no payload.
+
+    That is a bare ACK to a port whose decoder needs a payload: TCP
+    hands it the empty buffer before anyone looks, and it raises
+    ``TruncatedHeaderError``, as on BGP's port 179 and TLS's 443. An
+    IPv4 bare ACK without TCP options that carries Ethernet's padding
+    to the 60-byte minimum is not one: the walk hands TLS the 6 zero
+    bytes (#235), which it rejects with ``InvalidFieldError`` at
+    ``content_type``. The corpus holds none.
+    """
+    return (
+        isinstance(packet.stopped_by, TruncatedHeaderError)
+        and packet.stopped_by.actual == 0
+        and bool(packet.layers)
+        and isinstance(packet.layers[-1], TCP)
+    )
 
 
 def walk(frame: bytes) -> tuple[list[Protocol], int]:
@@ -58,8 +80,19 @@ def walk(frame: bytes) -> tuple[list[Protocol], int]:
     assertions below keep their shape. The suite no longer carries its
     own copy of the loop (#88) — if the walker regresses, these tests
     are what notices.
+
+    One kind of frame raises by design: a bare TCP segment to port 443,
+    where ``TLS`` is handed an empty payload (``tcp_https.pcap``'s five
+    IPv6 ACKs; see :data:`BARE_SEGMENTS`). For those the lax walk's
+    layers are returned, Ethernet through TCP, and any other error
+    still raises.
     """
-    packet = decode_frame(frame)
+    try:
+        packet = decode_frame(frame)
+    except TruncatedHeaderError:
+        packet = decode_frame(frame, lax=True)
+        if not is_bare_segment(packet):
+            raise
     return list(packet.layers), packet.consumed
 
 
@@ -67,10 +100,28 @@ def corpus_ids() -> list[str]:
     return [f"{name}#{index}" for name, index, _ in CORPUS]
 
 
+#: The corpus frames a strict walk raises on: bare TCP segments to a
+#: port-dispatched decoder (see :func:`walk`). ``tcp_https.pcap``'s
+#: IPv6 frames are ACKs with no payload, sent to the client from 443,
+#: so since TLS was registered there a strict walk raises
+#: ``TruncatedHeaderError`` at each, as at a bare ACK on BGP's port 179.
+BARE_SEGMENTS = {("tcp_https.pcap", index) for index in range(5, 10)}
+
+
 class TestCorpusInvariants:
     def test_corpus_is_present_and_generous(self):
         assert len(CORPUS) >= 40
         assert len(list(FIXTURES.glob("*.pcap"))) >= 10
+
+    def test_only_the_known_bare_segments_fail_a_strict_walk(self):
+        failing = set()
+        for name, index, frame in CORPUS:
+            try:
+                decode_frame(frame)
+            except ProtocolError:
+                failing.add((name, index))
+                assert is_bare_segment(decode_frame(frame, lax=True))
+        assert failing == BARE_SEGMENTS
 
     @pytest.mark.parametrize(
         "frame", [f for _, _, f in CORPUS], ids=corpus_ids()
@@ -137,6 +188,7 @@ class TestCorpusCoverage:
             CDP,
             TFTP,
             STUN,
+            TLS,
         } <= seen
 
     def test_arp_covers_both_operations(self):

@@ -399,15 +399,17 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP`, `STUN`, `MPLS` and `LLC` are the four exceptions: they answer
-from decode context rather than from a wire field alone. A BGP message
-carries no payload: a TCP segment can hold several messages back to
-back, each decoded as its own layer, so `BGP.next_protocol()` names the
-next message *beside* it — `BGP` when the bytes after this message
-begin another one, `None` when they do not. STUN over TCP is the same
-case, and `STUN.next_protocol()` answers `STUN` the same way, when the
-8 bytes after the message begin like a message's header, its magic
-cookie in place. An MPLS label stack carries
+`BGP`, `STUN`, `TLS`, `MPLS` and `LLC` are the five exceptions: they
+answer from decode context rather than from a wire field alone. A BGP
+message carries no payload: a TCP segment can hold several messages
+back to back, each decoded as its own layer, so `BGP.next_protocol()`
+names the next message *beside* it — `BGP` when the bytes after this
+message begin another one, `None` when they do not. STUN over TCP is
+the same case, and `STUN.next_protocol()` answers `STUN` the same way,
+when the 8 bytes after the message begin like a message's header, its
+magic cookie in place; so are TLS records, and `TLS.next_protocol()`
+answers `TLS` when as much of the next 3 bytes as the segment holds
+passes `TLS.decode()`'s guard. An MPLS label stack carries
 a packet but no field naming its protocol (see *MPLS: dispatch by
 convention* below), so `MPLS.next_protocol()` infers one, partly from
 the first byte after the stack. SAP 0x42 carries GARP's PDUs (Protocol
@@ -421,12 +423,13 @@ records what it saw on the instance in a field kept out of the
 dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
 uses for its `_message` parse cache). Two equal headers compare equal
 however they were found, and can still chain differently. The rules of
-the decode contract hold for all four unchanged; see *Port-based
+the decode contract hold for all five unchanged; see *Port-based
 dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
 next_protocol*, the module docstrings of
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py),
-[`layer7/stun.py`](src/netprotocols/layer7/stun.py) and
+[`layer7/stun.py`](src/netprotocols/layer7/stun.py),
+[`layer7/tls.py`](src/netprotocols/layer7/tls.py) and
 [`layer2/mpls.py`](src/netprotocols/layer2/mpls.py), and
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s *DSAP 0x42*.
 
@@ -502,6 +505,8 @@ flowchart LR
   U -->|3478| STUN[STUN message]
   T -->|3478| STUN
   STUN -->|another message in the segment| STUN
+  T -->|443| TLS[TLS record]
+  TLS -->|another record in the segment| TLS
 ```
 
 IPv6 extension headers (Hop-by-Hop Options, Routing, Fragment,
@@ -949,6 +954,68 @@ one stop short. BGP's two ways past it work the same, with
 `start=STUN`; the corpus's TCP segments carry 2. See
 [`layer7/stun.py`](src/netprotocols/layer7/stun.py)'s module docstring.
 
+TLS on TCP 443 (RFC 9846 §5.1, which obsoletes RFC 8446 as TLS 1.3's
+specification, and RFC 5246 §6.2, TLS 1.2's, which RFC 9846 also
+obsoletes) has a weaker guard than BGP's or STUN's, but one byte at a
+time, as HSRP's is: a ContentType of 20-24 (change_cipher_spec, alert,
+handshake, application_data and RFC 6520's heartbeat), a version whose
+first byte is 3 and second 0-4 (SSL 3.0 to TLS 1.3 in form), each judged
+as soon as it is in the buffer, then a length of at most 2^14 + 2048
+(RFC 5246 §6.2.3's ciphertext bound, the loosest any version sets),
+judged once both its bytes are, and only then the length against the
+buffer. Random bytes pass the first three 25 times in 2^24, about once
+in 671,000. Measured the same way (`random.Random` seeds 0-2, each
+10,000 random 300-byte TCP payloads to port 443 and 10,000 of uniformly
+random length 0-600, the latter walked unpadded and padded: 90,000
+walks), every walk ended with `stopped_by` set and none decoded a TLS
+layer: about 0.13 of them are expected to pass the first three checks
+(90,000 x 25 / 2^24) and about 0.0006 to hold a whole record as well.
+With the first three bytes forced to a valid header, `TLS.decode()`
+accepted 449 of 100,000 random 300-byte payloads (`random.Random(0)`),
+near the 452 expected: a length of 0-295 is 296 of the 65,536 values.
+The fragment is not judged, and an SSL 2.0-compatible ClientHello, its
+first byte's top bit set, is turned away at the ContentType. Records
+follow one another in the stream as BGP's messages do, and chain the
+same way, so the rest of BGP's paragraph holds here: a segment that ends
+inside a record raises `TruncatedHeaderError` at it, one that begins
+inside one almost always fails the guard, a bare ACK raises
+`TruncatedHeaderError` at the empty payload
+(`tests/fixtures/tcp_https.pcap`'s five IPv6 ACKs do, and
+`tests/test_corpus.py` walks them lax), and `max_depth` bounds
+correctness. One difference from BGP's port: an IPv4 bare ACK with no
+TCP options is a 54-byte frame, and where the capture holds the padding
+that brings it to Ethernet's 60 bytes, the walk, which does not yet end
+a buffer at IPv4's Total Length (#235), hands TLS those 6 zero bytes,
+which it rejects as a ContentType of 0 (`InvalidFieldError`,
+`field="content_type"`), where BGP, judging nothing before its 19-byte
+header is whole, still raises `TruncatedHeaderError`. As for
+`max_depth`, the decoder's worst case is a bare 5-byte header, 289 to a
+1448-byte segment; the smallest protected TLS 1.3 record is 5 + 1 + 16
+= 22 bytes (an empty Application Data fragment is protected with its
+inner content type and, under AES-GCM, ChaCha20-Poly1305 or AES-CCM, a
+16-byte tag; RFC 9846 §5.2), or 5 + 1 + 8 = 14 with
+TLS_AES_128_CCM_8_SHA256's 8-byte tag, so a
+1448-byte segment holds 65 or 103 records and 30 of 22 bytes, 660 bytes,
+already exceed the 29 the default leaves; the corpus's busiest segment
+carries 6. The case that matters is a ClientHello larger than a segment:
+Chromium's, with its X25519MLKEM768 key share, is a 1738-byte record
+that TCP carried in two segments in
+`tests/fixtures/tls/tls_session.pcap`, so a strict walk raises at both
+and a lax one stops at TCP. There is no lenient mode that reads a
+partial hello: the SNI of such a client comes from reassembling its
+stream and calling `TLS.decode()` on that, as for `HTTP` below.
+`TLS.client_hello` and `TLS.server_name` parse the fragment on demand
+and never in `decode()`; there is no cryptography, and nothing past the
+ClientHello's fields and its server_name extension is decoded (the
+ServerHello, certificates, key exchange and every other extension stay
+raw, handshake messages fragmented across records or coalesced into one
+are not reassembled or split, and DTLS and QUIC, on UDP 443, are not
+decoded). Under Encrypted Client Hello the name read is the outer
+ClientHello's, the client-facing server's. Only 443 is registered: DNS
+over TLS's 853, the mail ports 465, 993 and 995, and 8443 need
+`decode_as`. See [`layer7/tls.py`](src/netprotocols/layer7/tls.py)'s
+module docstring.
+
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one
 yields a layer that decoded cleanly and is wrong, and nothing in the
@@ -968,7 +1035,8 @@ that happen to fit in one segment. Of the 98 frames in
 raise `TruncatedHeaderError`, and the 12 that begin mid-message raise
 `InvalidFieldError`. So it needs `lax=True`, and it is still not
 reassembly. Reassemble the connection and call `HTTP.decode()` on its
-bytes instead.
+bytes instead. HTTPS is not HTTP on the wire: port 443 dispatches to
+`TLS`, and the HTTP inside it is encrypted.
 
 ## The encode side, and the round-trip guarantee
 
@@ -1119,7 +1187,9 @@ src/netprotocols/
 │                   radius.py (RADIUS + RADIUSAttribute),
 │                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages),
-│                   hsrp.py (HSRPv1 Hello, Coup and Resign)
+│                   hsrp.py (HSRPv1 Hello, Coup and Resign),
+│                   tls.py (TLS records, the ClientHello and its
+│                   SNI: TLS + TLSClientHello + TLSExtension)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
