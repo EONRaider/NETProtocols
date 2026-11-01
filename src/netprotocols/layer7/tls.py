@@ -123,10 +123,18 @@ is a 1,738-byte record that TCP carries in a 1,448-byte segment and a
 290-byte one. A strict walk of the first raises
 :class:`~netprotocols.TruncatedHeaderError` (the lax one keeps TCP and
 stops), and of the second :class:`~netprotocols.InvalidFieldError`.
-There is no lenient mode that reads a partial hello: to get the SNI of
-such a client, reassemble the client's byte stream and call
-:meth:`TLS.decode` on it, as ``tests/test_tls.py`` does with
-``scripts/extract_http_streams.py``.
+There is no lenient mode of :meth:`TLS.decode` that reads a partial
+hello: to get the SNI of such a client for certain, reassemble the
+client's byte stream and call :meth:`TLS.decode` on it, as
+``tests/test_tls.py`` does with ``scripts/extract_http_streams.py``.
+Without reassembly, :func:`peek_server_name`, a separate function and
+opt-in, walks the ClientHello in the first segment as far as its bytes
+go and answers whether the name was *found*, is *absent*, or was *not
+reached*, which is not "no SNI" (see :class:`TLSServerNamePeek`).
+Chromium shuffles its extensions, so its name lies in the first
+segment about 54% of the time, and it did for one of its two captured
+hellos; the other clients' hellos fit one segment, so their answer is
+always complete. Its function docstring gives the measurements.
 
 Each record being a layer, a segment of many is a deep chain: Ethernet,
 IPv4 and TCP are three layers, and the walk's default ``max_depth`` of
@@ -226,7 +234,9 @@ nothing is decrypted, verified or derived. The ServerHello,
 Certificate and key exchange messages, and every extension but
 ``server_name``, are kept raw. Only the first handshake message of a
 record is looked at: a handshake message fragmented across records, or
-several coalesced into one, is not reassembled or split. SSL 2.0-
+several coalesced into one, is not reassembled or split, and
+:func:`peek_server_name` reads the first record and nothing after it,
+the same fields and the same extension, no further. SSL 2.0-
 compatible hellos are rejected by the guard. DTLS, which has its own
 record header, and QUIC, which carries TLS's handshake in its own
 frames on UDP port 443, are not decoded, and no ``udp.port`` 443 entry
@@ -248,7 +258,13 @@ from netprotocols.utils.exceptions import (
     TruncatedHeaderError,
 )
 
-__all__ = ["TLS", "TLSClientHello", "TLSExtension"]
+__all__ = [
+    "TLS",
+    "TLSClientHello",
+    "TLSExtension",
+    "TLSServerNamePeek",
+    "peek_server_name",
+]
 
 #: The record header's length (RFC 9846 §5.1).
 _HEADER_LEN = 5
@@ -565,6 +581,52 @@ class TLSClientHello:
         return _version_name(self.legacy_version)
 
 
+@dataclass(frozen=True, slots=True)
+class TLSServerNamePeek:
+    """What :func:`peek_server_name` read from a ClientHello's prefix.
+
+    A value, not a layer, with one of three outcomes:
+
+    - *found*: :attr:`complete` and :attr:`server_name` set, read as
+      :attr:`TLS.server_name` reads it from the whole record;
+    - *absent*: :attr:`complete` and :attr:`server_name` ``None``: the
+      bytes held enough to know there is no host name, because the
+      record is not a ClientHello, the ClientHello has no extensions
+      block, its extensions block, walked to its end, holds no
+      ``server_name``, or the first one holds no ``host_name``;
+    - *not reached*: neither: the bytes, or the first record, ended
+      before the answer was known.
+
+    *Not reached* is not "no SNI": the name may be in the bytes the
+    next segment carries. Reassemble the stream and call
+    :meth:`TLS.decode` on it to know.
+
+    :param complete: Whether the bytes decided the answer.
+    :param server_name: The host name, when found; ``None`` otherwise.
+    """
+
+    complete: bool
+    server_name: str | None = None
+
+    def __post_init__(self) -> None:
+        """Check a name comes only with a complete answer.
+
+        :raises InvalidFieldError: a name without one.
+        """
+        if self.server_name is not None and not self.complete:
+            raise InvalidFieldError(
+                "TLS server name peek holds a name but is not complete",
+                protocol=type(self),
+                field="server_name",
+                actual=self.server_name,
+            )
+
+
+#: :func:`peek_server_name`'s two nameless answers.
+_NOT_REACHED = TLSServerNamePeek(complete=False)
+_NO_NAME = TLSServerNamePeek(complete=True)
+
+
 def _malformed(message: str, offset: int) -> InvalidFieldError:
     """Build an error in a :class:`TLS` fragment, positioned within it."""
     return InvalidFieldError(
@@ -572,18 +634,37 @@ def _malformed(message: str, offset: int) -> InvalidFieldError:
     )
 
 
+class _Unreached(Exception):
+    """The prefix :func:`peek_server_name` reads ends before the answer.
+
+    Raised by the parsing helpers when a length they need lies past the
+    end of the bytes they were given, which happens only to a prefix:
+    the strict accessors hand them a whole message, so it never escapes
+    those, and :func:`peek_server_name` turns it into its *not reached*
+    answer, so it never escapes that either.
+    """
+
+
 def _prefixed(
     data: bytes, at: int, width: int, end: int, what: str
 ) -> tuple[int, int]:
     """Locate a ``width``-byte length-prefixed element at ``at``.
 
-    :returns: ``(start, stop)`` of its contents.
+    ``end`` is where what contains it ends, which may lie past the end
+    of ``data`` when ``data`` is a prefix (see :func:`peek_server_name`);
+    the strict parsers pass an ``end`` within ``data``.
+
+    :returns: ``(start, stop)`` of its contents, which need not be in
+        ``data``.
     :raises InvalidFieldError: its length, or its contents, runs past
         ``end`` (offsets as in ``data``).
+    :raises _Unreached: its length runs past ``data`` but not ``end``.
     """
     if at + width > end:
         raise _malformed(f"TLS {what} length runs past its message", at)
     start = at + width
+    if start > len(data):
+        raise _Unreached
     stop = start + int.from_bytes(data[at:start], "big")
     if stop > end:
         raise _malformed(f"TLS {what} runs past its message", at)
@@ -597,8 +678,12 @@ def _extension_spans(
     ``data[at:end]``: where its header and its data start, its type,
     and where its data stops.
 
+    Nothing is read past an extension's header, so an extension whose
+    data lies past the end of a prefix is still stepped over.
+
     :raises InvalidFieldError: an extension's header or data runs past
         ``end``.
+    :raises _Unreached: an extension's header runs past ``data``.
     """
     while at < end:
         if at + 4 > end:
@@ -632,7 +717,9 @@ def _hello_spans(
     at ``end`` in ``fragment``.
 
     Every length is judged against what contains it, as soon as it is
-    read and in wire order.
+    read and in wire order, whether or not the bytes it covers are in
+    ``fragment``, which is only a prefix of the message when
+    :func:`peek_server_name` calls this.
 
     :returns: ``(start, stop)`` of the session ID, the cipher suites and
         the compression methods, and of the extensions block's contents
@@ -640,6 +727,8 @@ def _hello_spans(
     :raises InvalidFieldError: the message ends inside its Random, a
         length runs past what contains it, the session ID exceeds 32
         bytes, or bytes follow the extensions block.
+    :raises _Unreached: ``fragment`` ends before a length that decides
+        any of that.
     """
     if end < 4 + 2 + 32:
         raise _malformed("TLS ClientHello ends inside its random", 4)
@@ -1094,3 +1183,127 @@ def _begins_record(rest: bytes) -> bool:
     if not rest or rest[0] not in _CONTENT_TYPE_NAMES:
         return False
     return (len(rest) < 2 or rest[1] == 3) and (len(rest) < 3 or rest[2] <= 4)
+
+
+def _peek_host_name(fragment: bytes) -> str | None:
+    """Read a ClientHello's host name from a prefix of its record's
+    fragment, as :attr:`TLS.server_name` reads it from the whole.
+
+    Every length is judged against the length that encloses it, the
+    handshake message's own included, never against ``fragment``'s end,
+    which only says how far the bytes go.
+
+    :raises InvalidFieldError: as :attr:`TLS.server_name`, for bytes
+        that are present.
+    :raises _Unreached: ``fragment`` ends before the answer is known.
+    """
+    if len(fragment) < 4:
+        raise _Unreached
+    end = 4 + int.from_bytes(fragment[1:4], "big")
+    block = _hello_spans(fragment, end)[3]
+    if block is None:
+        return None
+    for _, kind, start, stop in _extension_spans(fragment, *block):
+        if kind == _SERVER_NAME:
+            if stop > len(fragment):
+                raise _Unreached
+            return _host_name(fragment, start, stop)
+    return None
+
+
+def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
+    """Read the SNI host name from the start of a ClientHello's record.
+
+    Opt-in, for a ClientHello larger than one segment, such as the
+    1,738-byte one Chromium sends with its X25519MLKEM768 key share,
+    whose first segment :meth:`TLS.decode` rejects as a record cut
+    short. ``data`` starts at a record header, as a TCP segment's
+    payload does, and may end anywhere: the ClientHello is walked as far
+    as the bytes go, and the answer, a :class:`TLSServerNamePeek`, is
+    *found* when the whole ``server_name`` extension is in them,
+    *absent* when they show there is no host name, and *not reached*
+    when they end first, which is not "no SNI" (see
+    :class:`TLSServerNamePeek`). :meth:`TLS.decode`'s contract is
+    unchanged: this is a separate function, not a decode mode, and it
+    builds no :class:`TLS` instance, re-encodes nothing, keeps no state,
+    and does work bounded by ``len(data)``.
+
+    Only the first record is read, as far as its length says or the
+    bytes go, whichever is shorter. A record that is not Handshake, or
+    whose first message is not a ClientHello, is *absent*, as
+    :attr:`TLS.server_name` answers ``None`` for it; so is an empty
+    Handshake record. A ClientHello longer than its record, a handshake
+    message fragmented across records, is walked to the record's end
+    like a ClientHello the bytes cut: it may be *found* there, though
+    :attr:`TLS.server_name` raises
+    :class:`~netprotocols.TruncatedHeaderError` for that record, and is
+    *not reached* past it, even when ``data`` holds the next record,
+    which is not joined to it.
+
+    The answer depends only on the bytes it read, so once a prefix is
+    *found* or *absent*, every longer prefix of the same bytes answers
+    the same, and once one raises, every longer one raises the same.
+    It does not vouch for the bytes it did not read: a ClientHello
+    malformed after its ``server_name`` extension is *found*, and
+    :attr:`TLS.server_name` raises for its whole record.
+
+    Measured over the captures in ``tests/fixtures``: curl (OpenSSL
+    3.0), gnutls-cli, ``openssl s_client`` and curl capped at TLS 1.2
+    send ClientHellos of 517, 392, 293 and 225 bytes, inside one
+    1,448-byte segment, so their answer is always complete, *found* at
+    byte 167, 206 and 129 of the record and *absent* at byte 255 for
+    ``s_client -noservername``. Chromium's two are 1,738 bytes, cut
+    after 1,448: the first connection's ``server_name`` ends at byte
+    184, *found*, and the second's at byte 1,729, *not reached*.
+    Chromium shuffles its extensions per connection, GREASE kept first
+    and last, so its hit rate is a probability: permuting the 17
+    others of each captured hello 100,000 times (``random.Random(0)``,
+    sizes as captured, no ``pre_shared_key`` to keep last), the
+    ``server_name`` extension ended inside the first 1,448 bytes 54.45%
+    and 54.40% of the time, against an exact 54.42%
+    (3,333,817 / 6,126,120). The key share, 1,267 bytes with its
+    header, decides it: when it follows ``server_name``, half the
+    orders, the name always ends inside the segment, and when it comes
+    first, only if the other extensions before the name hold 40 bytes
+    or fewer.
+
+    :param data: Bytes starting at a record header, cut anywhere.
+    :returns: *found*, *absent* or *not reached*.
+    :raises InvalidFieldError: a byte present fails :meth:`TLS.decode`'s
+        guard (``field`` ``"content_type"``, ``"legacy_version"`` or
+        ``"length"``, the length once both its bytes are present), or
+        the ClientHello's bytes present are malformed as
+        :attr:`TLS.server_name` reports them (``field`` ``"fragment"``,
+        ``offset`` counted from the fragment's start, as the message's
+        offsets are, so for a message fragmented across records it may
+        lie past the first record): a message too short
+        for its version and Random, a length that runs past the one
+        enclosing it (the session ID, cipher suites, compression methods
+        or extensions block past the handshake message's, an extension
+        past the block's), a session ID over 32 bytes, bytes between the
+        extensions block and the message's end, or, once it is whole, a
+        malformed ``server_name`` extension. Each has the ``field``,
+        ``offset``, ``expected``, ``actual`` and message the strict path
+        gives for the same fault in the whole record, and the strict
+        path raises whenever this does: for a ClientHello fragmented
+        across records it raises TruncatedHeaderError instead, and for
+        one malformed both in its ``server_name`` extension and after
+        it, it reports the later fault, having walked every extension
+        first.
+    """
+    _judge_lead(TLS, data)
+    if len(data) < _HEADER_LEN:
+        return _NOT_REACHED
+    length = int.from_bytes(data[3:_HEADER_LEN], "big")
+    _judge_length(TLS, length)
+    if data[0] != _HANDSHAKE or length == 0:
+        return _NO_NAME
+    fragment = bytes(data[_HEADER_LEN : _HEADER_LEN + length])
+    if not fragment:
+        return _NOT_REACHED
+    if fragment[0] != _CLIENT_HELLO:
+        return _NO_NAME
+    try:
+        return TLSServerNamePeek(True, _peek_host_name(fragment))
+    except _Unreached:
+        return _NOT_REACHED

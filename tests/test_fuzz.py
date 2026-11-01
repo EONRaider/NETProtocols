@@ -103,9 +103,11 @@ from netprotocols import (
     TCPOption,
     TLSClientHello,
     TLSExtension,
+    TLSServerNamePeek,
     TruncatedHeaderError,
     VRRPv6,
     decode_frame,
+    peek_server_name,
 )
 from strategies import (
     ROUND_TRIP_STRATEGIES,
@@ -1572,6 +1574,35 @@ def _tls_decode(data: bytes) -> TLS | str:
         return str(error.field)
 
 
+@st.composite
+def _tls_mutated_hello(draw: st.DrawFn) -> bytes:
+    """A captured ClientHello record, whole, with up to three of its
+    bytes after the header's first three changed: prefixes of it reach
+    peek_server_name's answers, where _tls_seeded's cut seldom leaves
+    the server_name extension whole."""
+    raw = bytearray(draw(st.sampled_from(_TLS_CAPTURED_HELLOS)))
+    for _ in range(draw(st.integers(0, 3))):
+        raw[draw(st.integers(3, len(raw) - 1))] = draw(st.integers(0, 255))
+    return bytes(raw)
+
+
+def _tls_strict_server_name(data: bytes) -> str | ProtocolError | None:
+    """TLS.decode(data).server_name, or the error either raises."""
+    try:
+        return TLS.decode(data).server_name
+    except ProtocolError as error:
+        return error
+
+
+def _tls_peek(data: bytes) -> TLSServerNamePeek | InvalidFieldError:
+    """peek_server_name(data), or the InvalidFieldError it raises, the
+    only exception it may."""
+    try:
+        return peek_server_name(data)
+    except InvalidFieldError as error:
+        return error
+
+
 #: TLS's display accessors, every one of which must answer on any
 #: decoded or constructed instance.
 _TLS_DISPLAY = (
@@ -1612,6 +1643,67 @@ class TestTLSAccessorSafety:
                 assert error.offset is not None
                 assert 0 <= error.offset <= tls.length
         event(f"TLS {tls.content_type_name}, hello: {tls.handshake_type == 1}")
+
+    @given(
+        data=st.one_of(_tls_mutated_hello(), _tls_seeded(), fuzz_input),
+        cuts=st.data(),
+    )
+    def test_peek_server_name_is_total(
+        self, data: bytes, cuts: st.DataObject
+    ) -> None:
+        """peek_server_name on two prefixes of any bytes, the second the
+        longer: only InvalidFieldError escapes, positioned as the strict
+        path positions it, and only where the strict path raises for the
+        whole; a complete answer holds for every longer prefix, as a
+        raise does, and is the strict path's answer where that has
+        one. A fragment offset lies within the handshake message, past
+        the record only for a message fragmented across records."""
+        short = cuts.draw(st.integers(0, len(data)), label="short")
+        long = cuts.draw(
+            st.one_of(st.just(len(data)), st.integers(short, len(data))),
+            label="long",
+        )
+        strict = _tls_strict_server_name(data)
+        first = _tls_peek(data[:short])
+        second = _tls_peek(data[:long])
+        for answer in (first, second):
+            if isinstance(answer, InvalidFieldError):
+                assert isinstance(strict, ProtocolError)
+                if answer.field == "fragment":
+                    # Within the handshake message, which may run past
+                    # its record (fragmented across records).
+                    message = 4 + int.from_bytes(data[6:9])
+                    assert answer.offset is not None
+                    assert 0 <= answer.offset <= message
+                else:
+                    assert (answer.field, answer.offset, answer.actual) == (
+                        strict.field,
+                        strict.offset,
+                        strict.actual,
+                    )
+            elif answer.complete and not isinstance(strict, ProtocolError):
+                assert answer.server_name == strict
+        if isinstance(first, InvalidFieldError):
+            assert isinstance(second, InvalidFieldError)
+            assert (second.field, second.offset, str(second)) == (
+                first.field,
+                first.offset,
+                str(first),
+            )
+        elif first.complete:
+            assert second == first
+        event(
+            "peek: "
+            + (
+                type(second).__name__
+                if isinstance(second, InvalidFieldError)
+                else "found"
+                if second.server_name is not None
+                else "absent"
+                if second.complete
+                else "not reached"
+            )
+        )
 
     @given(hello=tls_client_hellos(), version=st.integers(0x0300, 0x0304))
     def test_built_client_hellos_parse_back(

@@ -5,8 +5,11 @@ every length, the decode-time guard against a wrong port guess (each
 rejection and its ``field``), records chaining within a segment and
 ``max_depth``, the ClientHello parsed on demand with every lying length
 inside it, the server_name extension (RFC 6066 §3), the display
-helpers, construction, dispatch from TCP port 443, and
-scripts/check_fixtures.py's TLS checks.
+helpers, construction, dispatch from TCP port 443,
+scripts/check_fixtures.py's TLS checks, and ``peek_server_name``, which
+reads the server name from a ClientHello's prefix (#285): every prefix
+of every captured ClientHello, Chromium's first segments, and its
+errors held against the strict path's.
 
 Real bytes come from two captures of the same nginx server
 (tests/fixtures/MANIFEST.md): ``tls.pcap``, the corpus frames, each a
@@ -28,6 +31,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from conftest import FIXTURES, pcap_frames
 from netprotocols import (
@@ -45,10 +50,13 @@ from netprotocols import (
     ProtocolError,
     TLSClientHello,
     TLSExtension,
+    TLSServerNamePeek,
     TruncatedHeaderError,
     decode_frame,
+    peek_server_name,
 )
 from netprotocols.registry import DEFAULT, TABLE_TCP_PORT, TABLE_UDP_PORT
+from strategies import tls_client_hellos, tls_records
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
@@ -96,6 +104,10 @@ HELLOS = {2: HOST, 4: HOST, 6: None, 8: HOST}
 #: tls_session.pcap: Chromium's first connection's ClientHello, split
 #: 1448 + 290 bytes, and a bare ACK (the handshake's third segment).
 SPLIT_HEAD, SPLIT_TAIL, BARE_ACK = 3, 4, 2
+
+#: tls_session.pcap: Chromium's second connection's ClientHello, split
+#: the same way.
+SPLIT_HEAD_2, SPLIT_TAIL_2 = 15, 16
 
 # X25519MLKEM768 (IANA's TLS Supported Groups registry, 4588) and
 # X25519 (29).
@@ -1854,3 +1866,594 @@ class TestChecker:
         out = capsys.readouterr().out
         assert ("!! tls-split x4" in out) == bool(verdict)
         assert "tls-unchecked=4" in out
+
+
+# --- peek_server_name: the server name from a prefix (#285) ----------
+
+#: Each captured ClientHello: its record's length, the smallest prefix
+#: of the record that peek_server_name answers, and the answer, the
+#: strict path's. Chromium's two are reassembled from the session
+#: capture, the others are tls.pcap's ClientHello frames.
+PEEKED = {
+    "chromium-1": (1738, 184, HOST),
+    "chromium-2": (1738, 1729, HOST),
+    "curl": (517, 167, HOST),
+    "gnutls": (392, 206, HOST),
+    "nosni": (293, 255, None),
+    "tls12": (225, 129, HOST),
+}
+
+#: Where each captured ClientHello comes from: a session stream, or a
+#: tls.pcap frame.
+PEEKED_FROM = {
+    "chromium-1": ("stream", 0),
+    "chromium-2": ("stream", 1),
+    "curl": ("frame", 2),
+    "gnutls": ("frame", 4),
+    "nosni": ("frame", 6),
+    "tls12": ("frame", 8),
+}
+
+
+def captured_hello(name: str, streams: list[tuple[bytes, bytes]]) -> bytes:
+    """The ClientHello record ``name``, alone."""
+    source, index = PEEKED_FROM[name]
+    if source == "stream":
+        client = streams[index][0]
+        return client[: 5 + int.from_bytes(client[3:5], "big")]
+    return CORPUS[index][PAYLOAD_AT:]
+
+
+def strict_error(raw: bytes) -> ProtocolError:
+    """What the strict path, TLS.decode and then server_name, raises for
+    the whole of ``raw``."""
+    with pytest.raises(ProtocolError) as caught:
+        _ = TLS.decode(raw).server_name
+    return caught.value
+
+
+def same_error(error: ProtocolError, expected: ProtocolError) -> None:
+    """``error`` is ``expected`` in every detail a caller reads."""
+    assert type(error) is type(expected)
+    assert (
+        error.protocol,
+        error.field,
+        error.offset,
+        error.expected,
+        error.actual,
+        str(error),
+    ) == (
+        expected.protocol,
+        expected.field,
+        expected.offset,
+        expected.expected,
+        expected.actual,
+        str(expected),
+    )
+
+
+NOT_REACHED = TLSServerNamePeek(complete=False, server_name=None)
+ABSENT = TLSServerNamePeek(complete=True, server_name=None)
+
+
+class TestPeekCaptured:
+    """Every prefix of every captured ClientHello, and the segments
+    Chromium's were split into."""
+
+    @pytest.mark.parametrize("name", sorted(PEEKED))
+    def test_every_prefix(self, name, streams):
+        """No prefix raises; each is not reached until the pinned length,
+        and from there to the whole record answers the strict path's
+        name: where the server_name extension ends, or, for s_client
+        without SNI, where the last extension's header does."""
+        raw = captured_hello(name, streams)
+        size, first, expected = PEEKED[name]
+        assert len(raw) == size
+        assert TLS.decode(raw).server_name == expected
+        complete = TLSServerNamePeek(complete=True, server_name=expected)
+        for cut in range(size + 1):
+            answer = peek_server_name(raw[:cut])
+            assert answer == (NOT_REACHED if cut < first else complete), cut
+        assert peek_server_name(memoryview(raw)) == complete
+
+    def test_the_first_found_is_where_the_extension_ends(self, streams):
+        """For each found name, the pinned length is the end of the
+        server_name extension in the record."""
+        for name, (_, first, expected) in PEEKED.items():
+            if expected is None:
+                continue
+            raw = captured_hello(name, streams)
+            tls = TLS.decode(raw)
+            name_data = sni((0, expected.encode()))
+            at = tls.fragment.index(name_data)
+            assert 5 + at + len(name_data) == first
+
+    def test_a_whole_record_ignores_what_follows(self, streams):
+        """The client's next records, after the whole ClientHello, change
+        nothing."""
+        for client, _ in streams:
+            assert peek_server_name(client) == peek_server_name(
+                client[: 5 + int.from_bytes(client[3:5], "big")]
+            )
+
+    @pytest.mark.parametrize(
+        "index,expected",
+        [
+            (SPLIT_HEAD, TLSServerNamePeek(complete=True, server_name=HOST)),
+            (SPLIT_HEAD_2, NOT_REACHED),
+        ],
+        ids=["first-connection", "second-connection"],
+    )
+    def test_chromiums_first_segments(self, index, expected):
+        """Chromium's first 1448 bytes: the first connection's name ends
+        at byte 184 and is found, the second's at 1729 and is not
+        reached, its key share first."""
+        payload = SESSION[index][PAYLOAD_AT:]
+        assert len(payload) == 1448
+        assert peek_server_name(payload) == expected
+
+    @pytest.mark.parametrize("index", [SPLIT_TAIL, SPLIT_TAIL_2])
+    def test_chromiums_second_segments_fail_the_guard(self, index):
+        """The tails begin inside the record: peek_server_name raises
+        what TLS.decode does."""
+        payload = SESSION[index][PAYLOAD_AT:]
+        assert len(payload) == 290
+        with pytest.raises(InvalidFieldError) as caught:
+            peek_server_name(payload)
+        assert caught.value.field == "content_type"
+        same_error(caught.value, strict_error(payload))
+
+    def test_every_other_client_segment(self):
+        """The session's other client payloads hold whole records:
+        ChangeCipherSpec, application data, the other ClientHellos;
+        each answers as the strict path does, the bare ACKs not
+        reached."""
+        answers = Counter()
+        for raw in SESSION:
+            tcp = TCP.decode(raw[34:])
+            if tcp.dst_port != 443:
+                continue
+            payload = raw[PAYLOAD_AT:]
+            if not payload:
+                answers["empty"] += 1
+                assert peek_server_name(payload) == NOT_REACHED
+                continue
+            try:
+                strict = TLS.decode(payload).server_name
+            except ProtocolError:
+                answers["split"] += 1
+                continue
+            assert peek_server_name(payload) == TLSServerNamePeek(
+                complete=True, server_name=strict
+            )
+            answers[strict or "none"] += 1
+        assert answers[HOST] == 3 and answers["none"] > 0
+
+
+class TestPeekRecords:
+    """What is not a ClientHello, and the record header's guard."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            record(APPDATA, b"\x17" * 30),
+            record(CCS, b"\x01"),
+            record(ALERT, b"\x01\x00"),
+            record(24, b"\x01\x00\x10"),
+            record(HANDSHAKE, handshake(2, bytes(40))),
+            record(HANDSHAKE, b""),
+        ],
+        ids=["appdata", "ccs", "alert", "heartbeat", "server-hello", "empty"],
+    )
+    def test_not_a_client_hello_is_absent(self, raw):
+        """As TLS.server_name answers None for such a record, once the
+        header is whole, and the handshake type too where there is one,
+        whatever the record's length."""
+        assert TLS.decode(raw).server_name is None
+        known = 5 if raw[0] != HANDSHAKE or len(raw) == 5 else 6
+        for cut in range(len(raw) + 1):
+            assert peek_server_name(raw[:cut]) == (
+                ABSENT if cut >= known else NOT_REACHED
+            )
+
+    def test_empty(self):
+        """Nothing yet: TLS.decode raises, the peek is not reached."""
+        assert peek_server_name(b"") == NOT_REACHED
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            b"\x19",
+            b"\x80\x03\x01",
+            b"\x16\x02",
+            b"\x16\x03\x05\x00\x10",
+            b"\x16\x03\x01" + (TLS.MAX_LENGTH + 1).to_bytes(2, "big"),
+            b"\x17\x03\x03\xff\xff" + bytes(10),
+        ],
+        ids=[
+            "content-type",
+            "sslv2",
+            "major",
+            "minor",
+            "length-bound",
+            "length-bound-appdata",
+        ],
+    )
+    def test_the_guard_raises_as_decode_does(self, raw):
+        with pytest.raises(InvalidFieldError) as caught:
+            peek_server_name(raw)
+        same_error(caught.value, strict_error(raw))
+        assert caught.value.field != "fragment"
+
+    def test_a_length_is_judged_once_whole(self):
+        """One byte of a length past the bound is not judged yet."""
+        assert peek_server_name(b"\x16\x03\x01\xff") == NOT_REACHED
+
+
+def _overrun(at: int, width: int) -> bytes:
+    """TestOverrunByOne's ClientHello, the length at ``at`` one byte too
+    long."""
+    fragment = bytearray(handshake(1, TestOverrunByOne.BODY))
+    claimed = len(fragment) - (at + width) + 1
+    fragment[at : at + width] = claimed.to_bytes(width, "big")
+    return record(HANDSHAKE, bytes(fragment), version=0x0301)
+
+
+def _sni_fault(data: bytes) -> bytes:
+    """TestServerNameErrors's ClientHello: extended_main_secret, then a
+    server_name extension holding ``data``."""
+    block = extension(23, b"") + extension(0, data)
+    return hello_record(hello_body(extensions=block))
+
+
+#: Malformed ClientHellos, one fault each, whose whole record the strict
+#: path rejects with InvalidFieldError.
+MALFORMED = {
+    "random-20": record(HANDSHAKE, handshake(1, bytes(20))),
+    "random-33": record(HANDSHAKE, handshake(1, bytes(33))),
+    "session-id-length-cut": record(HANDSHAKE, handshake(1, bytes(34))),
+    "session-id-33": hello_record(hello_body(session_id=bytes(33))),
+    "methods-then-one-byte": hello_record(
+        hello_body(extensions=None) + b"\x00"
+    ),
+    "bytes-after-block": hello_record(
+        hello_body(extensions=extension(23, b"")) + b"\x00\x00"
+    ),
+    **{
+        f"header-cut-{left}": hello_record(
+            hello_body(extensions=extension(23, b"") + b"\x00\x17\x00"[:left])
+        )
+        for left in (1, 2, 3)
+    },
+    **{
+        f"overrun-{what}": _overrun(at, width)
+        for what, at, width in TestOverrunByOne.LENGTHS
+    },
+    "sni-empty-extension": _sni_fault(b""),
+    "sni-list-too-short": _sni_fault(
+        vector(_entries((0, b"c.example")), 2) + b"\x00"
+    ),
+    "sni-empty-list": _sni_fault(b"\x00\x00"),
+    "sni-empty-name": _sni_fault(vector(_entries((0, b"")), 2)),
+    "sni-non-ascii": _sni_fault(
+        vector(_entries((0, "bü.example".encode())), 2)
+    ),
+    "sni-second-entry": _sni_fault(
+        vector(_entries((7, b"opaque")) + b"\x00\x00\x20ab", 2)
+    ),
+}
+
+
+#: The shortest prefix of each MALFORMED record that raises: the first
+#: holding every byte of the lengths that show the fault, which may come
+#: before the bytes at fault (a session ID's length past a message whose
+#: length is already known raises once the message's length is read).
+RAISED_AT = {
+    "bytes-after-block": 54,
+    "header-cut-1": 58,
+    "header-cut-2": 58,
+    "header-cut-3": 58,
+    "methods-then-one-byte": 51,
+    "overrun-cipher_suites": 50,
+    "overrun-extended_main_secret": 62,
+    "overrun-extensions block": 58,
+    "overrun-first name": 85,
+    "overrun-host_name": 85,
+    "overrun-legacy_compression_methods": 55,
+    "overrun-legacy_session_id": 44,
+    "overrun-server_name": 66,
+    "overrun-server_name list": 85,
+    "random-20": 9,
+    "random-33": 9,
+    "session-id-33": 44,
+    "session-id-length-cut": 9,
+    "sni-empty-extension": 62,
+    "sni-empty-list": 64,
+    "sni-empty-name": 67,
+    "sni-list-too-short": 77,
+    "sni-non-ascii": 78,
+    "sni-second-entry": 78,
+}
+
+
+class TestPeekMalformed:
+    """Malformed bytes present raise what the strict path raises for the
+    whole record; bytes not yet present are not reached."""
+
+    @pytest.mark.parametrize("name", sorted(MALFORMED))
+    def test_raises_as_the_strict_path_once_present(self, name):
+        """Not reached up to the pinned prefix, then the strict path's
+        error, in every detail, for every longer one."""
+        raw = MALFORMED[name]
+        expected = strict_error(raw)
+        assert isinstance(expected, InvalidFieldError)
+        assert expected.field == "fragment"
+        raised = None
+        for cut in range(len(raw) + 1):
+            try:
+                answer = peek_server_name(raw[:cut])
+            except InvalidFieldError as error:
+                same_error(error, expected)
+                raised = cut if raised is None else raised
+                continue
+            assert raised is None, cut
+            assert answer == NOT_REACHED, cut
+        assert raised == RAISED_AT[name]
+
+    @pytest.mark.parametrize(
+        "cut,expected",
+        [(5 + 59, NOT_REACHED), (5 + 61, NOT_REACHED), (5 + 80, None)],
+        ids=["extension-header", "extension-data", "whole"],
+    )
+    def test_a_name_is_judged_once_its_extension_is_whole(self, cut, expected):
+        """A host_name length running past its list is not reached until
+        the whole server_name extension is present."""
+        raw = _overrun(69, 2)
+        if expected is None:
+            with pytest.raises(InvalidFieldError) as caught:
+                peek_server_name(raw[:cut])
+            assert caught.value.offset == 69
+        else:
+            assert peek_server_name(raw[:cut]) == expected
+
+    def test_a_fault_after_the_name_is_not_read(self):
+        """The bytes after the server_name extension are not judged: a
+        name found stays found, though the strict path raises."""
+        block = sni((0, b"a.example")) + extension(23, b"") + b"\x00"
+        raw = hello_record(hello_body(extensions=block))
+        assert isinstance(strict_error(raw), InvalidFieldError)
+        assert peek_server_name(raw) == TLSServerNamePeek(
+            complete=True, server_name="a.example"
+        )
+
+    def test_a_faulty_name_before_a_later_fault(self):
+        """Both the name and a later extension malformed: the peek
+        reports the name, the strict path, which walks every extension
+        first, the later one."""
+        block = sni((0, b"")) + extension(23, b"") + b"\x00"
+        raw = hello_record(hello_body(extensions=block))
+        with pytest.raises(InvalidFieldError) as caught:
+            peek_server_name(raw)
+        assert "host_name is empty" in str(caught.value)
+        assert "extension header runs past" in str(strict_error(raw))
+
+
+class TestPeekFragmented:
+    """A ClientHello longer than its record, fragmented across records:
+    read to the first record's end, never joined to the next."""
+
+    #: A ClientHello with server_name first, then 400 bytes of padding.
+    BODY = hello_body(
+        extensions=sni((0, b"frag.example")) + extension(21, bytes(400))
+    )
+    MESSAGE = handshake(1, BODY)
+    #: Where the server_name extension ends in the message.
+    NAME_END = (
+        4 + len(hello_body(extensions=b"")) + len(sni((0, b"frag.example")))
+    )
+
+    def split(self, at: int) -> tuple[bytes, bytes]:
+        return (
+            record(HANDSHAKE, self.MESSAGE[:at], version=0x0301),
+            record(HANDSHAKE, self.MESSAGE[at:], version=0x0303),
+        )
+
+    def test_the_whole_message_reads(self):
+        assert TLS.decode(hello_record(self.BODY)).server_name == (
+            "frag.example"
+        )
+
+    def test_found_inside_the_first_record(self):
+        """The strict path raises at a record shorter than its message;
+        the peek finds the name the first record holds."""
+        first, second = self.split(self.NAME_END)
+        error = strict_error(first)
+        assert isinstance(error, TruncatedHeaderError)
+        found = TLSServerNamePeek(complete=True, server_name="frag.example")
+        assert peek_server_name(first) == found
+        assert peek_server_name(first + second) == found
+        assert peek_server_name(first[:-1]) == NOT_REACHED
+
+    @pytest.mark.parametrize("at", [1, 3, 4, 40, 60, 69])
+    def test_not_reached_past_the_first_record(self, at):
+        """Cut before the name's end, inside the handshake header or
+        not: not reached at the record's end, and with the next record
+        in the buffer too, whatever the strict path says of it."""
+        assert at < self.NAME_END
+        first, second = self.split(at)
+        assert isinstance(strict_error(first), TruncatedHeaderError)
+        for cut in range(len(first + second) + 1):
+            assert peek_server_name((first + second)[:cut]) == NOT_REACHED
+
+    def test_a_fault_past_the_first_record(self):
+        """The 39-byte record holds the handshake header, the version,
+        the Random and a session ID length of 1, and the message's
+        length, 36, ends it after that session ID: the cipher suites'
+        length, at 40, past the record, cannot fit. The lengths the
+        record holds show it, so the peek raises there, at an offset
+        in the message; the strict path raises TruncatedHeaderError."""
+        body = b"\x03\x03" + bytes(32) + b"\x01"
+        first = record(HANDSHAKE, b"\x01" + (36).to_bytes(3, "big") + body)
+        assert len(first) == 5 + 39
+        assert isinstance(strict_error(first), TruncatedHeaderError)
+        with pytest.raises(InvalidFieldError) as caught:
+            peek_server_name(first)
+        assert caught.value.offset == 40
+        assert "cipher_suites length runs past" in str(caught.value)
+
+    def test_a_fault_in_the_first_record_still_raises(self):
+        """A session ID over 32 bytes in the first record: the peek
+        raises it; the strict path raises TruncatedHeaderError first."""
+        message = handshake(1, hello_body(session_id=bytes(33)))
+        first = record(HANDSHAKE, message[:60])
+        assert isinstance(strict_error(first), TruncatedHeaderError)
+        with pytest.raises(InvalidFieldError) as caught:
+            peek_server_name(first)
+        assert caught.value.offset == 38
+        assert "exceeds 32" in str(caught.value)
+
+
+class TestPeekAbsent:
+    """Absent: walked far enough to know there is no host name."""
+
+    def peek(self, extensions: bytes | None) -> TLSServerNamePeek:
+        return peek_server_name(hello_record(hello_body(extensions=extensions)))
+
+    def test_no_extensions_block(self):
+        """Known once the compression methods' length is, before their
+        bytes."""
+        raw = hello_record(hello_body(extensions=None))
+        assert peek_server_name(raw) == ABSENT
+        assert peek_server_name(raw[:-1]) == ABSENT
+        assert peek_server_name(raw[:-2]) == NOT_REACHED
+
+    def test_an_empty_block(self):
+        assert self.peek(b"") == ABSENT
+
+    def test_no_server_name(self):
+        """Known once the last extension's header is: its data cannot
+        hold another."""
+        raw = hello_record(hello_body(extensions=extension(21, bytes(50))))
+        assert peek_server_name(raw[:-50]) == ABSENT
+        assert peek_server_name(raw[:-51]) == NOT_REACHED
+
+    def test_only_other_name_types(self):
+        assert self.peek(sni((7, b"opaque"))) == ABSENT
+
+    def test_the_first_server_name_extension_decides(self):
+        """As the strict path, the first server_name extension is read;
+        a later one is not."""
+        block = sni((7, b"opaque")) + sni((0, b"late.example"))
+        raw = hello_record(hello_body(extensions=block))
+        assert TLS.decode(raw).server_name is None
+        assert peek_server_name(raw) == ABSENT
+
+    def test_the_first_host_name_wins(self):
+        block = sni((0, b"one.example"), (0, b"two.example"))
+        assert self.peek(block).server_name == "one.example"
+
+
+class TestPeekValue:
+    def test_three_outcomes(self):
+        assert TLSServerNamePeek(complete=True, server_name="a.example")
+        assert ABSENT != NOT_REACHED
+        assert TLSServerNamePeek(False) == NOT_REACHED
+        assert TLSServerNamePeek(True) == ABSENT
+
+    def test_a_name_needs_a_complete_answer(self):
+        with pytest.raises(InvalidFieldError) as caught:
+            TLSServerNamePeek(complete=False, server_name="a.example")
+        assert caught.value.protocol is TLSServerNamePeek
+        assert (caught.value.field, caught.value.actual) == (
+            "server_name",
+            "a.example",
+        )
+
+    def test_frozen_and_slotted(self):
+        peek = TLSServerNamePeek(complete=True, server_name="a.example")
+        assert not hasattr(peek, "__dict__")
+        with pytest.raises(AttributeError):
+            peek.complete = False  # type: ignore[misc]
+        assert hash(peek) == hash(
+            TLSServerNamePeek(complete=True, server_name="a.example")
+        )
+
+    def test_exported_with_tls(self):
+        import netprotocols.layer7 as layer7
+
+        assert layer7.peek_server_name is peek_server_name
+        assert layer7.TLSServerNamePeek is TLSServerNamePeek
+
+
+@st.composite
+def named_hellos(draw: st.DrawFn) -> bytes:
+    """A generated ClientHello record (tests/strategies.py's), now and
+    then given a well-formed server_name extension anywhere among its
+    extensions, which may already hold a malformed one."""
+    hello = draw(tls_client_hellos())
+    if hello.extensions is not None and draw(st.booleans()):
+        name = draw(
+            st.text(
+                alphabet=st.characters(min_codepoint=0x21, max_codepoint=0x7E),
+                min_size=1,
+                max_size=30,
+            )
+        )
+        entry = b"\x00" + vector(name.encode(), 2)
+        extensions = list(hello.extensions)
+        extensions.insert(
+            draw(st.integers(0, len(extensions))),
+            TLSExtension(0, vector(entry, 2)),
+        )
+        hello = TLSClientHello(
+            hello.legacy_version,
+            hello.random,
+            hello.legacy_session_id,
+            hello.cipher_suites,
+            hello.legacy_compression_methods,
+            tuple(extensions),
+        )
+    return hello_record(bytes(hello))
+
+
+class TestPeekProperties:
+    @given(raw=named_hellos(), data=st.data())
+    def test_a_prefix_of_a_built_hello(self, raw: bytes, data) -> None:
+        """Any prefix of a generated ClientHello: the peek raises only
+        what the strict path raises for the whole, and once complete
+        answers its name; the whole record is always complete."""
+        cut = data.draw(st.integers(0, len(raw)), label="cut")
+        try:
+            strict: str | ProtocolError | None = TLS.decode(raw).server_name
+        except ProtocolError as error:
+            strict = error
+        try:
+            answer = peek_server_name(raw[:cut])
+        except ProtocolError as error:
+            assert isinstance(strict, ProtocolError)
+            same_error(error, strict)
+            return
+        if cut == len(raw):
+            assert answer.complete
+        if answer.complete:
+            assert not isinstance(strict, ProtocolError)
+            assert answer.server_name == strict
+
+    @given(tls=tls_records(), data=st.data())
+    def test_a_prefix_of_any_record(self, tls: TLS, data) -> None:
+        """Any prefix of any canonical record: a peek that raises means
+        the strict path raises for the whole, and a complete one where
+        the strict path answers is its answer."""
+        raw = bytes(tls)
+        cut = data.draw(st.integers(0, len(raw)), label="cut")
+        try:
+            strict: str | ProtocolError | None = tls.server_name
+        except ProtocolError as error:
+            strict = error
+        try:
+            answer = peek_server_name(raw[:cut])
+        except ProtocolError:
+            assert isinstance(strict, ProtocolError)
+            return
+        if answer.complete and not isinstance(strict, ProtocolError):
+            assert answer.server_name == strict
