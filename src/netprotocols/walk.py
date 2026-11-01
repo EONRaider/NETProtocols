@@ -69,16 +69,17 @@ smallest protected records, 22 bytes with a 16-byte AEAD tag, or 103
 of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
 (:mod:`netprotocols.layer7.tls`), where 30 of 22 bytes already exceed
 the 29; one captured with GRO or TSO on, over loopback or on a
-jumbo-frame link is larger still. The corpus's deepest chain is such a
-segment, 10 layers (7 BGP UPDATEs), and TLS's busiest segment carries
-6 records, 9 layers. A strict walk of a segment past the limit raises
+jumbo-frame link is larger still. The corpus's deepest chain, a segment
+of 7 BGP UPDATEs captured with offload off and well inside the limit,
+is 10 layers, and TLS's busiest segment carries 6 records, 9 layers. A
+strict walk of a segment past the limit raises
 :class:`~netprotocols.MaxDepthExceededError` and a lax one stops short
 with ``stopped_by`` set. A larger ``max_depth`` decodes the rest, and
 so does walking on from ``packet.consumed`` with ``start=BGP`` (or
 ``start=STUN``, ``start=TLS``) as many times as it takes: a walk that
-starts there has room for 32 messages or records, so the 76
-KEEPALIVEs, 72 STUN messages or 65 TLS records above take three walks
-and the 103 records four (the loop in :mod:`netprotocols.layer7.bgp`).
+starts there has room for 32 messages or records, so the 76 KEEPALIVEs,
+72 STUN messages or 65 TLS records above take three walks and the 103
+records four (the loop in :mod:`netprotocols.layer7.bgp`).
 
 802.3 Length
 ------------
