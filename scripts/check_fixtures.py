@@ -776,7 +776,15 @@ def _check_tls(data: bytes, stats: Counter) -> list[str]:
     TLS 1.2 client's and server's Finished each share a segment with
     their ChangeCipherSpec, and scripts/capture_fixtures_tls.sh, which
     runs this checker on each capture, exits before it unless they
-    do."""
+    do. Under TLS 1.3's middlebox compatibility mode a client's dummy
+    ChangeCipherSpec may instead come before its second ClientHello,
+    after a HelloRetryRequest (RFC 9846 §E.4), so a segment holding
+    both leaves that plaintext ClientHello unchecked: a skipped check,
+    a possible false pass, never a false failure. Neither capture has
+    a HelloRetryRequest or another Handshake record after a
+    ChangeCipherSpec, and the script pins each scenario's frame count
+    and its corpus frames' content types, so none could enter
+    unnoticed."""
     after_ccs = False
     while data:
         if not _tls_record_header_ok(data):
