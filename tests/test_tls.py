@@ -873,6 +873,36 @@ class TestMaxDepth:
         rest = decode_frame(raw[packet.consumed :], start=TLS)
         assert len(tls_layers(packet)) + len(tls_layers(rest)) == 40
 
+    def test_walking_on_through_a_full_segment_of_ccm_8_records(self):
+        """The bgp module's loop takes four walks over 103 records.
+
+        TLS_AES_128_CCM_8_SHA256's smallest record is 14 bytes (header,
+        inner content type, 8-byte tag), and 1,448 bytes hold 103. The
+        first walk holds 29 after Ethernet, IPv4 and TCP, each walk that
+        starts at TLS holds MAX_DEPTH (32), and the fourth takes 10.
+        """
+        smallest = record(APPDATA, bytes(1 + 8))
+        assert len(smallest) == 14
+        assert 1448 // len(smallest) == 103
+        raw = frame(smallest * 103)
+        packet = decode_frame(raw, lax=True)
+        records = tls_layers(packet)
+        per_walk = [len(records)]
+        rest = raw[packet.consumed :]
+        while (
+            isinstance(packet.stopped_by, MaxDepthExceededError)
+            and packet.stopped_by.protocol is TLS
+        ):
+            packet = decode_frame(rest, start=TLS, lax=True)
+            records.extend(packet)
+            per_walk.append(len(tls_layers(packet)))
+            rest = rest[packet.consumed :]
+        assert per_walk == [29, 32, 32, 10]
+        assert len(records) == 103
+        assert all(bytes(layer) == smallest for layer in records)
+        assert packet.stopped_by is None
+        assert rest == b""
+
 
 # --- The ClientHello ----------------------------------------------------
 
