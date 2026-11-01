@@ -18,8 +18,9 @@
 #   chromium  Headless Chromium (BoringSSL) fetching https://tls.np196.test/.
 #             Its ClientHello carries GREASE values, a randomized
 #             extension order and an X25519MLKEM768 key share beside
-#             X25519's, which makes it a 1733-byte record that TCP
-#             carries in two segments at the 1448-byte MSS. Chromium
+#             X25519's, which makes it a 1738-byte record (a 1733-byte
+#             fragment) that TCP carries in two segments at the
+#             1448-byte MSS. Chromium
 #             opens two connections, abandoning the first after the
 #             server's flight, so the capture holds two ClientHellos
 #             whose extension orders differ.
@@ -58,12 +59,18 @@
 # ClientHello's record version, session ID, server_name and, for
 # Chromium, its GREASE, the X25519MLKEM768 key share, the two segments
 # and the two extension orders; each ServerHello; the TLS 1.2 record
-# sequence; and every corpus frame's content types, in order. It parses
+# sequence; every corpus frame's content types, in order; and the
+# session's layout that tests/test_tls.py hard-codes and
+# tests/fixtures/MANIFEST.md lists (the frames each scenario adds, the
+# bare ACK at frame 2, the split ClientHellos at 3-4 and 15-16). It parses
 # the pcaps with the standard library and reassembles each connection
 # with scripts/extract_http_streams.py, whose extract() takes any port,
 # so neither depends on netprotocols. It then runs
 # scripts/check_fixtures.py over both, which verifies every IPv4 and TCP
-# checksum and that every corpus segment on port 443 is whole records.
+# checksum and that every segment on port 443 that carries data is
+# whole records in tls.pcap, failing it otherwise; in tls_session.pcap,
+# whose name marks it a session capture, it counts the four split
+# segments as tls-unchecked instead.
 #
 # What the clients and nginx built: every TLS byte. What the kernel
 # built: the TCP and IPv4 headers and their checksums (offload is off on
@@ -274,6 +281,19 @@ HOST = b"tls.np196.test"
 CCS, ALERT, HANDSHAKE, APPDATA = 20, 21, 22, 23
 X25519MLKEM768, X25519 = 0x11EC, 0x001D
 
+# The session capture's layout, which tests/test_tls.py hard-codes
+# (BARE_ACK, SPLIT_HEAD and SPLIT_TAIL, PAYLOAD_AT) and
+# tests/fixtures/MANIFEST.md lists: the frames each scenario adds, in
+# turn; in Chromium's, the client's bare ACK ending the first handshake,
+# and each connection's ClientHello, a 1448-byte head and a 290-byte
+# tail; and where the payload starts in those frames, after Ethernet,
+# IPv4 and a TCP header with the timestamps option.
+SESSION_FRAMES = {"chromium": 36, "curl": 18, "gnutls": 18, "nosni": 20, "tls12": 16}
+BARE_ACK = 2
+SPLIT_HELLOS = ((3, 4), (15, 16))
+HELLO_SEGMENTS = (1448, 290)
+PAYLOAD_AT = 14 + 20 + 32
+
 
 def grease(value):
     """RFC 8701's reserved values: 0x0A0A, 0x1A1A, ... 0xFAFA."""
@@ -374,6 +394,43 @@ def server_name(extensions, what):
     return host
 
 
+def check_session_layout(frames, counts):
+    """Exit unless ``frames``, the session in capture order, and
+    ``counts``, the frames each scenario added, have the layout above."""
+    if counts != SESSION_FRAMES:
+        sys.exit(
+            f"session frames per scenario {counts}, expected {SESSION_FRAMES}: "
+            "update tests/fixtures/MANIFEST.md and tests/test_tls.py"
+        )
+
+    def client_payload(index, size):
+        frame = frames[index]
+        port, side, payload = segment(frame)
+        if side != "c" or len(payload) != size or len(frame) != PAYLOAD_AT + size:
+            sys.exit(
+                f"session frame {index}: {len(frame)} bytes, side {side}, a "
+                f"{len(payload)}-byte payload; expected the client's {size} "
+                f"bytes at {PAYLOAD_AT}"
+            )
+        return port, payload
+
+    bare_port, _ = client_payload(BARE_ACK, 0)
+    for head, tail in SPLIT_HELLOS:
+        head_port, first = client_payload(head, HELLO_SEGMENTS[0])
+        tail_port, rest = client_payload(tail, HELLO_SEGMENTS[1])
+        found = split(first + rest, f"session frames {head} and {tail}")
+        kind, _, fragment = found[0]
+        if (
+            head_port != tail_port
+            or len(found) != 1
+            or kind != HANDSHAKE
+            or fragment[0] != 1
+        ):
+            sys.exit(f"session frames {head} and {tail} are not one ClientHello")
+    if bare_port != segment(frames[SPLIT_HELLOS[0][0]])[0]:
+        sys.exit(f"session frame {BARE_ACK} is not the first connection's")
+
+
 def key_share_groups(extensions):
     data = dict(extensions)[51]
     groups, cursor = [], 2
@@ -385,11 +442,12 @@ def key_share_groups(extensions):
 
 
 header, session, selected = None, [], []
-summary = []
+summary, counts = [], {}
 for name in SCENARIOS:
     head, captured = records(work / f"{name}.pcap")
     header = header or head
     session += captured
+    counts[name] = len(captured)
     frames = [record[16:] for record in captured]
     streams = extract(frames, 443)
     want = 2 if name == "chromium" else 1
@@ -482,6 +540,7 @@ order = {id(record): i for i, record in enumerate(session)}
 selected.sort(key=lambda record: order[id(record)])
 if len(selected) != 15:
     sys.exit(f"selected {len(selected)} corpus frames, expected 15")
+check_session_layout([record[16:] for record in session], counts)
 corpus_out.write_bytes(header + b"".join(selected))
 session_out.write_bytes(header + b"".join(session))
 print("\n".join(summary))

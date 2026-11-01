@@ -756,9 +756,11 @@ def _check_tls(data: bytes, stats: Counter) -> list[str]:
     well-formed host_name: printable ASCII, not an IP address, no
     trailing dot (``tls-sni``, RFC 6066 §3). Over TCP a segment can
     begin or end inside a record, which only reassembly could check:
-    such a segment is counted ``tls-unchecked`` and not failed. The
-    corpus has none; tests/fixtures/tls/tls_session.pcap has
-    Chromium's two-segment ClientHellos."""
+    such a segment is counted ``tls-unchecked`` here and not failed,
+    and :func:`check_capture_frame` fails it (``tls-split``) unless it
+    comes from a session capture. The corpus has none;
+    tests/fixtures/tls/tls_session.pcap has Chromium's two-segment
+    ClientHellos."""
     while data:
         if not _tls_record_header_ok(data):
             stats["tls-unchecked"] += 1
@@ -1830,6 +1832,31 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
     return _check_ethernet(frame, stats, 0)
 
 
+#: The name a session capture ends with: every frame of a few
+#: connections, kept in a directory beside the corpus rather than in it
+#: (tests/fixtures/bgp/bgp_session.pcap, tests/fixtures/tls/
+#: tls_session.pcap; see MANIFEST.md), where TCP's segments begin and
+#: end wherever TCP cut the stream.
+SESSION_SUFFIX = "_session.pcap"
+
+
+def check_capture_frame(
+    frame: bytes, stats: Counter, *, session: bool
+) -> list[str]:
+    """Validate one frame of a capture, as :func:`check_frame` does, and
+    in a capture that is not a session one (``session``, see
+    :data:`SESSION_SUFFIX`) fail a TCP segment on port 443 that carries
+    data but not whole TLS records (``tls-split``), which
+    :func:`_check_tls` only counts as ``tls-unchecked``: every corpus
+    segment on 443 must be whole records, while a session capture keeps
+    the segments a record spans."""
+    before = stats["tls-unchecked"]
+    failures = check_frame(frame, stats)
+    if not session and stats["tls-unchecked"] > before:
+        failures.append("tls-split")
+    return failures
+
+
 def _check_ethernet(
     frame: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
@@ -2077,10 +2104,13 @@ def main() -> int:
         stats: Counter = Counter()
         failures: Counter = Counter()
         frames = 0
+        session = pcap.name.endswith(SESSION_SUFFIX)
         try:
             for frame in read_pcap(pcap):
                 frames += 1
-                for failure in check_frame(frame, stats):
+                for failure in check_capture_frame(
+                    frame, stats, session=session
+                ):
                     failures[failure] += 1
         except ValueError as e:
             print(f"[FAIL] {pcap.name}: {e}")

@@ -857,8 +857,10 @@ values are also hard-coded, independently, in
   Handshake, Alert or ChangeCipherSpec record, every ChangeCipherSpec
   the single byte 1, every ClientHello whole and its fields tiling it,
   and every server_name one printable-ASCII host name, neither an IP
-  address nor ending in a dot; a segment that begins or ends inside a
-  record is counted `tls-unchecked`, which the corpus has none of.
+  address nor ending in a dot. A segment that begins or ends inside a
+  record is counted `tls-unchecked`, and fails its file (`tls-split`)
+  unless the file is a session capture, named `*_session.pcap`; the
+  corpus has none.
   Randoms, key shares, session IDs and GREASE values are fresh in
   every run, so a re-capture differs in those bytes and in the
   timestamps, but not in what the script asserts. Nothing is
@@ -941,7 +943,8 @@ curl's (92-107). Its point is what a per-segment walk cannot decode:
 frames 3 and 15 each hold a Chromium ClientHello's record header and
 its first 1443 bytes, which frames 4 and 16 finish, so a strict walk
 raises `TruncatedHeaderError` at the first and `InvalidFieldError` at
-the second, and `check_fixtures` counts all four `tls-unchecked`; the
+the second, and `check_fixtures` counts all four `tls-unchecked`, which
+it allows only in a file named `*_session.pcap`, as this one is; the
 SNI of those ClientHellos is read by reassembling the client's stream
 and decoding that. `tests/test_tls.py` walks the split segments strict
 and lax, reassembles every connection with

@@ -1517,8 +1517,9 @@ def retouched(raw: bytes, payload: bytes) -> bytes:
 
 
 class TestChecker:
-    """scripts/check_fixtures.py's _check_tls: each failure on a
-    tampered copy of a captured frame."""
+    """scripts/check_fixtures.py's _check_tls, each failure on a
+    tampered copy of a captured frame, and check_capture_frame and
+    main(), which fail a split segment outside a session capture."""
 
     @pytest.fixture(autouse=True)
     def _checker(self, check_fixtures):
@@ -1594,3 +1595,44 @@ class TestChecker:
         failures, stats = self.check(retouched(CORPUS[2], b"\x99" * 30))
         assert failures == []
         assert stats["tls-unchecked"] == 1
+
+    @pytest.mark.parametrize("index", [SPLIT_HEAD, SPLIT_TAIL])
+    def test_a_split_segment_fails_outside_a_session(self, index):
+        """check_capture_frame, what main() runs, fails a segment that
+        is not whole records unless its capture is a session one."""
+        for session, failures in ((False, ["tls-split"]), (True, [])):
+            stats = self.checker.Counter()
+            assert (
+                self.checker.check_capture_frame(
+                    SESSION[index], stats, session=session
+                )
+                == failures
+            )
+            assert stats["tls-unchecked"] == 1
+
+    def test_every_corpus_frame_is_whole_records(self):
+        for raw in CORPUS + TestHTTPSCapture.FRAMES:
+            stats = self.checker.Counter()
+            assert (
+                self.checker.check_capture_frame(raw, stats, session=False)
+                == []
+            )
+            assert stats["tls-unchecked"] == 0
+
+    @pytest.mark.parametrize(
+        "name,verdict",
+        [("tls_session.pcap", 0), ("bgp_session.pcap", 0), ("tls.pcap", 1)],
+    )
+    def test_main_judges_by_the_capture_name(
+        self, tmp_path, monkeypatch, capsys, name, verdict
+    ):
+        """The session capture passes under a session name, and fails,
+        on its four split segments, under any other."""
+        (tmp_path / name).write_bytes(
+            (FIXTURES / "tls" / "tls_session.pcap").read_bytes()
+        )
+        monkeypatch.setattr(sys, "argv", ["check_fixtures.py", str(tmp_path)])
+        assert self.checker.main() == verdict
+        out = capsys.readouterr().out
+        assert ("!! tls-split x4" in out) == bool(verdict)
+        assert "tls-unchecked=4" in out
