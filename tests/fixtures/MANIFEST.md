@@ -10,16 +10,18 @@ verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
 digest, every RADIUS authenticator a frame holds alone, every STUN
 MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
-below, and every STUN FINGERPRINT. Frames
+below, and every STUN FINGERPRINT; every TCP segment on port 443
+that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 379 frames across 35
+frames routinely leave checksums to NIC offload. 394 frames across 36
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-two scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-three scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
-`radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`) are captured
+`radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
+captured
 separately by
 their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
@@ -33,9 +35,10 @@ kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
 server with tftp-hpa and curl clients, a FreeRADIUS server answering
 radclient, coturn answering STUN clients, a chronyd NTP server
-queried by ntpdig and chronyd clients, and HSRP messages crafted by
-Yersinia and sent between two netns — see their rows and the notes
-below.
+queried by ntpdig and chronyd clients, HSRP messages crafted by
+Yersinia and sent between two netns, and an nginx HTTPS server
+answering Chromium, curl, gnutls-cli and openssl s_client — see their
+rows and the notes below.
 
 | File | Frames | Contents |
 |---|---|---|
@@ -74,6 +77,7 @@ below.
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
 | `hsrp.pcap` | 12 | HSRPv1 (RFC 2281) messages crafted by Yersinia 0.8.2, every one to 224.0.0.2 (TTL 1) from and to UDP 1985 with Hellotime 3 and Holdtime 10, staging an election and a failover in two standby groups: group 1 (virtual IP 10.9.195.254, the default authentication data `cisco`) — R1 (10.9.195.11, priority 120) and R2 (10.9.195.12, priority 100) Hellos in Speak, R1 in Standby then Active, R2 in Standby, R1's Resign from Active, R2 in Speak then Active, then R3 (10.9.195.13, priority 200) preempting with a Coup and its Active Hello; group 2 (virtual IP 10.9.195.253, the configured password `spark`) — R4 (10.9.195.21, priority 110) Active and R5 (10.9.195.22, priority 90) Standby — 10 Hellos, 1 Coup, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **direct capture of script-built frames**, every byte Yersinia's (see HSRP note) |
+| `tls.pcap` | 15 | TLS (RFC 8446, RFC 5246) on TCP 443 between an nginx 1.24 server (OpenSSL 3.0, a self-signed ECDSA P-256 certificate for `tls.np196.test`) and five clients, each segment a whole number of records: from curl (OpenSSL 3.0, a 512-byte ClientHello with SNI), gnutls-cli (GnuTLS 3.8, record version TLS 1.2, SNI) and `openssl s_client -noservername` (no server_name), the ClientHello and the server's TLS 1.3 flight (ServerHello, ChangeCipherSpec and four encrypted records in one segment); from headless Chromium 153 (BoringSSL), whose ClientHello spans two segments and is not in the corpus, the server's flight and the client's ChangeCipherSpec and Finished; and every data segment of curl capped at TLS 1.2 — ClientHello; ServerHello, Certificate, ServerKeyExchange, ServerHelloDone; ClientKeyExchange, ChangeCipherSpec and the encrypted Finished; ChangeCipherSpec and Finished back; application data each way; the client's close_notify Alert — `Ethernet→IPv4→TCP→TLS` (→ `TLS` …, up to 6 records a segment); **direct capture**, both directions, a selection of the session in `tls/` (see TLS note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -814,6 +818,53 @@ values are also hard-coded, independently, in
   no frame carries Ethernet padding or an FCS: a 20-byte HSRP message
   behind UDP's 8 bytes and IPv4's 20 already fills Ethernet's 46-byte
   minimum payload, and tcpdump on a veth device captures no FCS.
+- `tls.pcap` was produced by `scripts/capture_fixtures_tls.sh`. nginx
+  1.24 (nginx-light, OpenSSL 3.0.13) serves HTTPS on 10.9.196.2:443 in
+  one netns, with session tickets off and a self-signed ECDSA P-256
+  certificate for `tls.np196.test` that the script generates in a
+  scratch directory and deletes on exit; no key is committed. Five
+  clients in a second netns, a veth pair away with offload disabled on
+  both ends, reach it by that name, never by address (RFC 6066 §3
+  forbids an IP literal in server_name), through an `/etc/hosts` that
+  `ip netns exec` bind-mounts from `/etc/netns/np-tls-client/`: headless
+  Chromium 153 (Chrome for Testing, BoringSSL), curl 8.5 (OpenSSL
+  3.0.13), gnutls-cli 3.8.3, `openssl s_client -noservername` and curl
+  with `--tls-max 1.2`. Each runs in its own tcpdump capture on the
+  client's end of the pair. **What the clients and nginx built: every
+  TLS byte; what the kernel built: the TCP and IPv4 headers and their
+  checksums**, which `check_fixtures` verifies, and the Ethernet
+  header, from MAC addresses the script pins. The script reassembles
+  every connection with `scripts/extract_http_streams.py`'s `extract()`
+  and asserts what it keeps: the number of connections per client
+  (Chromium opens two, abandoning the first after the server's flight),
+  that both sides of each are whole records, each ClientHello's record
+  version, session ID and server_name, Chromium's GREASE, its
+  X25519MLKEM768 key share beside X25519's, its two segments and its
+  two extension orders, each ServerHello, the TLS 1.2 record sequence,
+  and the content types of every corpus frame, in order. What it
+  observed: Chromium's ClientHello is a 1738-byte record (19
+  extensions, a 1263-byte key_share, GREASE first and last, and two
+  types IANA lists as unassigned, 4832 and 51764), carried in a
+  1448-byte and a 290-byte segment, its extensions in a different order
+  on each connection; curl's is 517 bytes (12 extensions, padded by
+  OpenSSL to a 512-byte fragment), gnutls-cli's 392 (13), s_client's
+  293 (9, no server_name) and the TLS 1.2 curl's 225 (7, no session ID
+  and no TLS 1.3 suite); every one but gnutls-cli's says TLS 1.0 in its
+  record header. No ECH extension was sent. TLS carries no checksum of
+  its own beyond TCP's, so `check_fixtures` checks the records instead
+  (see `_check_tls`): each segment on port 443 that carries data must
+  be whole records with a length of at most 2^14 + 2048, no empty
+  Handshake, Alert or ChangeCipherSpec record, every ChangeCipherSpec
+  the single byte 1, every ClientHello whole and its fields tiling it,
+  and every server_name one printable-ASCII host name, neither an IP
+  address nor ending in a dot; a segment that begins or ends inside a
+  record is counted `tls-unchecked`, which the corpus has none of.
+  Randoms, key shares, session IDs and GREASE values are fresh in
+  every run, so a re-capture differs in those bytes and in the
+  timestamps, but not in what the script asserts. Nothing is
+  sensitive: the addresses are in 10.9.196.0/24, the MAC addresses
+  locally administered, the key gone, and the only application data is
+  `GET /` and nginx's fixed answer, encrypted.
 
 ## HTTP captures (`tests/fixtures/http/`)
 
@@ -876,6 +927,25 @@ MAPPED-ADDRESS, SOURCE-ADDRESS, CHANGED-ADDRESS and SERVER (the name
 RFC 3489 gave 0x8022), and a request asking for another address and
 port and the error 420 coturn answers with. `tests/test_stun.py` walks
 them to the rejection, strict and lax.
+
+## TLS session capture (`tests/fixtures/tls/`)
+
+Outside the corpus on purpose, like the BGP session above: none of the
+counts above include it. `tls_session.pcap` (108 frames, every TCP
+checksum verified by `check_fixtures`) is every frame of the six
+connections `tls.pcap` was cut from, the handshakes, bare ACKs and
+FINs included, in capture order: Chromium's two (frames 0-35, the
+first connection's last frames interleaved with the second's), curl's
+(36-53), gnutls-cli's (54-71), s_client's (72-91) and the TLS 1.2
+curl's (92-107). Its point is what a per-segment walk cannot decode:
+frames 3 and 15 each hold a Chromium ClientHello's record header and
+its first 1443 bytes, which frames 4 and 16 finish, so a strict walk
+raises `TruncatedHeaderError` at the first and `InvalidFieldError` at
+the second, and `check_fixtures` counts all four `tls-unchecked`; the
+SNI of those ClientHellos is read by reassembling the client's stream
+and decoding that. `tests/test_tls.py` walks the split segments strict
+and lax, reassembles every connection with
+`scripts/extract_http_streams.py` and reads each client's SNI.
 
 ## Provenance note
 
