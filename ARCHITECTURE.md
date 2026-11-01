@@ -990,10 +990,11 @@ which it rejects as a ContentType of 0 (`InvalidFieldError`,
 `field="content_type"`), where BGP, judging nothing before its 19-byte
 header is whole, still raises `TruncatedHeaderError`. As for
 `max_depth`, the decoder's worst case is a bare 5-byte header, 289 to a
-1448-byte segment; a real TLS 1.3 record is at least 5 + 1 + 16 = 22
-bytes (an empty Application Data fragment is protected with its inner
-content type and, under AES-GCM or ChaCha20-Poly1305, a 16-byte tag; RFC
-9846 §5.2), or 14 with TLS_AES_128_CCM_8_SHA256's 8-byte tag, so a
+1448-byte segment; the smallest protected TLS 1.3 record is 5 + 1 + 16
+= 22 bytes (an empty Application Data fragment is protected with its
+inner content type and, under AES-GCM, ChaCha20-Poly1305 or AES-CCM, a
+16-byte tag; RFC 9846 §5.2), or 5 + 1 + 8 = 14 with
+TLS_AES_128_CCM_8_SHA256's 8-byte tag, so a
 1448-byte segment holds 65 or 103 records and 30 of 22 bytes, 660 bytes,
 already exceed the 29 the default leaves; the corpus's busiest segment
 carries 6. The case that matters is a ClientHello larger than a segment:

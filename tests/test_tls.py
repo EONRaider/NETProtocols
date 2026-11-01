@@ -1423,6 +1423,16 @@ class TestValueObjects:
             TLSClientHello(**fields)
         assert caught.value.field == field
 
+    def test_client_hello_extensions_overflow_reports_their_size(self):
+        """Each extension adds a 4-byte header to its data."""
+        extensions = (TLSExtension(0, bytes(0xFFFF)), TLSExtension(1))
+        with pytest.raises(InvalidFieldError) as caught:
+            TLSClientHello(0x0303, bytes(32), extensions=extensions)
+        error = caught.value
+        assert error.field == "extensions"
+        assert (error.expected, error.actual) == ("<=65535 bytes", 0x10007)
+        assert "65543 bytes" in str(error)
+
     def test_client_hello_bytes(self):
         hello = TLSClientHello(
             0x0303, bytes(range(32)), cipher_suites=b"\x13\x01\x13\x02"

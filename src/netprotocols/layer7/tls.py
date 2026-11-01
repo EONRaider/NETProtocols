@@ -526,16 +526,17 @@ class TLSClientHello:
                     expected=f"<={limit} bytes",
                     actual=size,
                 )
-        if (
-            self.extensions is not None
-            and sum(4 + len(ext.data) for ext in self.extensions) > 0xFFFF
-        ):
+        if self.extensions is None:
+            return
+        block = sum(4 + len(ext.data) for ext in self.extensions)
+        if block > 0xFFFF:
             raise InvalidFieldError(
-                "TLS ClientHello extensions exceed the 65535 bytes their "
-                "length can say",
+                f"TLS ClientHello extensions of {block} bytes exceed the "
+                f"65535 their length can say",
                 protocol=type(self),
                 field="extensions",
                 expected="<=65535 bytes",
+                actual=block,
             )
 
     def __bytes__(self) -> bytes:
@@ -723,9 +724,11 @@ def _reject(
 ) -> NoReturn:
     """Raise the decode-time :class:`InvalidFieldError` for ``field``.
 
-    ``expected`` is what ``offset`` may hold and ``actual`` what it
-    does, in the terms ``message`` uses, as HSRP's and NTP's guard
-    errors set them.
+    ``expected`` is what the field may hold and ``actual`` the value
+    judged, in the terms ``message`` uses, as HSRP's and NTP's guard
+    errors set them: the byte at ``offset``, or for the version's
+    second byte the whole version (``0x0305`` and up), as
+    :meth:`TLS.decode` says.
     """
     raise InvalidFieldError(
         message,
