@@ -169,12 +169,32 @@ GAP = (
         (cls("layers/ipsec.py", "AH"),),
         (
             cls("layer3/ip6.py", "IP6AHHeader"),
+            # The extension-header walk (_dissect_opts) frames every
+            # header but IPv6's, AH included, as 8 + len * 8 octets: the
+            # Hdr Ext Len rule of RFC 8200 4.3. AH's Payload Len counts
+            # 32-bit words minus 2 (RFC 4302 2.2), so a header is
+            # (len + 2) * 4 octets and the two agree only at len 0: an
+            # HMAC-SHA1-96 AH (len 4) is 24 octets, which the walk reads
+            # as 40. That mis-frames the ICV and everything after it.
+            Check("layer3/ip6.py", r"^\t+OPT_BASEHEADER_LEN = 8$"),
+            Check(
+                "layer3/ip6.py",
+                r"^\t+optlen = OPT_BASEHEADER_LEN"
+                r" \+ buf\[off \+ OPT_OFF_OLEN_SUB\] \* 8$",
+                "an IPv6 extension header class whose length pypacker sizes"
+                " in 8-octet units, not AH's (Payload Len + 2)"
+                " \N{MULTIPLICATION SIGN} 4 (RFC 4302 §2.2), so the ICV and"
+                " what follows are mis-framed",
+                verdict="partial",
+            ),
+            # ...with no case of its own for AH anywhere in the module.
+            Check("layer3/ip6.py", r"[=!]= *IP_PROTO_AH\b", absent=True),
             # Dispatch is scored only in the IP-in-IP and LLC / SNAP rows,
-            # so IPv4's missing AH handler is a caveat, not a "partial".
+            # so IPv4's missing AH handler is a caveat, not the "partial".
             Check(
                 "layer3/ip.py",
                 r"\bIP_PROTO_AH\s*:",
-                "an IPv6 extension header class; IPv4 has no handler for it",
+                "IPv4 has no handler for it",
                 absent=True,
             ),
         ),

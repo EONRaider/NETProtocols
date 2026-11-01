@@ -1599,7 +1599,7 @@ first shipped each row instead of its file):
 | SCTP | #176 | 2.4.0 | yes | yes | yes |
 | IP-in-IP | #177 | 2.4.0 | yes | yes | no (6in4 only, protocol 41; no handler for protocol 4) |
 | IPsec ESP | #178 | 2.4.0 | yes | yes | yes |
-| IPsec AH | #179 | 2.4.0 | yes | yes | yes (an IPv6 extension header class; IPv4 has no handler for it) |
+| IPsec AH | #179 | 2.4.0 | yes | yes | partial (an IPv6 extension header class whose length pypacker sizes in 8-octet units, not AH's (Payload Len + 2) × 4 (RFC 4302 §2.2), so the ICV and what follows are mis-framed; IPv4 has no handler for it) |
 | VXLAN | #180 | 2.4.0 | no | yes | no |
 | VRRP | #181 | 2.5.0 | yes | yes | yes |
 | RIP | #182 | 2.5.0 | yes | yes | yes |
@@ -1617,10 +1617,10 @@ first shipped each row instead of its file):
 | STUN | #194 | `master`, unreleased | yes | yes (`contrib`) | yes |
 | HSRP | #195 | `master`, unreleased | yes | yes | yes |
 | TLS records + SNI | #196 | `master`, unreleased | partial (records and generic ClientHello extensions; no server_name decoding) | yes (`load_layer("tls")`) | partial (records and generic ClientHello extensions; no server_name decoding) |
-| **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 2 partial |
+| **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 3 partial |
 
 The script's own summary line reads "Of #170's 21 items: netprotocols
-21, dpkt 19 (1 partial), scapy 21, pypacker 17 (2 partial); a partial
+21, dpkt 19 (1 partial), scapy 21, pypacker 17 (3 partial); a partial
 cell counts." The release column is each module's first tag:
 
 ```
@@ -1655,7 +1655,14 @@ What it shows:
   in part (no server_name decoding); pypacker 5.4 lacks IP-in-IP (its
   `layer3/ip.py` dispatches protocol 41, IPv6 in IPv4, but nothing for
   protocol 4, which #177 and RFC 2003 define IP-in-IP as), VXLAN, MPLS
-  and CDP, and covers LLC / SNAP and TLS in part.
+  and CDP, and covers AH, LLC / SNAP and TLS in part: its
+  `layer3/ip6.py` extension-header walk sizes every header but IPv6's,
+  AH included, as `8 + len * 8` octets, RFC 8200's rule for Hdr Ext
+  Len, where AH's Payload Len gives `(len + 2) * 4` (RFC 4302 §2.2), so
+  the two agree only at Payload Len 0 and an HMAC-SHA1-96 AH (Payload
+  Len 4, 24 octets) is read as 40, mis-framing the ICV #179 asks for and
+  everything after it; its Ethernet reads no 802.3 Length to reach LLC;
+  and its TLS has no server_name decoding.
   The list is the one this library drew from its own gaps, so
   covering more of it than dpkt or pypacker is not a coverage claim
   against either, and §6's "more protocols than X" stays off limits.
@@ -1669,7 +1676,9 @@ What it shows:
   `layer12/ethernet.py`), and its AH class is reached from IPv6 only:
   `layer3/ip.py` has no handler for protocol 51, and only
   `layer3/ip6.py`'s extension-header walk (`ext_hdrs_cls`) dispatches
-  to `IP6AHHeader`. #170 counted modules, and so does this.
+  to `IP6AHHeader`. That is a caveat, not what makes the AH cell
+  partial: the cell is partial for the framing above, which no dispatch
+  would fix. #170 counted modules, and so does this.
 - **What the competitors gained since #170 opened (2026-09-09).** dpkt
   and pypacker have released nothing since: 1.9.8 (2022-08-18) and 5.4
   (2023-02-26) are still current. scapy released 2.8.0 on 2026-10-02.
