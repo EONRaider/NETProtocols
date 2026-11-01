@@ -151,7 +151,10 @@ the session ID is longer than 32 bytes, or when bytes follow the
 extensions block inside the message. Both name ``field`` ``"fragment"``
 and give an ``offset`` relative to :attr:`TLS.fragment`, as every
 accessor error on a raw attribute does (ARCHITECTURE.md's *The decode
-contract*). Nothing else ever escapes.
+contract*): where the length, extension header or name at fault starts
+(for a message too short for its version and Random, where those
+start; for bytes after the extensions block, where those start), inside
+the server_name extension as anywhere else. Nothing else ever escapes.
 
 :attr:`TLS.server_name` reads the ``server_name`` extension (0, RFC 6066
 §3): a 2-byte ServerNameList length, then entries of a 1-byte NameType
@@ -616,56 +619,70 @@ def _parse_client_hello(
     return hello, offsets
 
 
-def _host_name(data: bytes, base: int) -> str | None:
-    """Read the first host_name of a server_name extension's data.
+def _host_name(fragment: bytes, begin: int, end: int) -> str | None:
+    """Read the first host_name of the server_name extension whose data
+    is ``fragment[begin:end]``.
+
+    Every position is the fragment's, so every offset raised is one in
+    :attr:`TLS.fragment`, as the accessors promise.
 
     ``None`` when the list holds names of other types only.
 
-    :param base: Where ``data`` starts in the fragment, for offsets.
     :raises InvalidFieldError: the list is empty or malformed, or the
         host_name is empty or not ASCII.
     """
-    list_start, list_stop = _prefixed(data, 0, 2, len(data), "server_name list")
-    if list_stop != len(data) or list_start == list_stop:
+    list_start, list_stop = _prefixed(
+        fragment, begin, 2, end, "server_name list"
+    )
+    if list_stop != end or list_start == list_stop:
         raise _malformed(
             "TLS server_name list does not fill its extension, or is empty",
-            base,
+            begin,
         )
     at = list_start
     while at < list_stop:
-        name_type = data[at]
-        start, stop = _prefixed(data, at + 1, 2, list_stop, "server name")
+        name_type = fragment[at]
+        start, stop = _prefixed(fragment, at + 1, 2, list_stop, "server name")
         if name_type == _HOST_NAME:
             if start == stop:
-                raise _malformed("TLS host_name is empty", base + at)
+                raise _malformed("TLS host_name is empty", at + 1)
             try:
-                return data[start:stop].decode("ascii")
+                return fragment[start:stop].decode("ascii")
             except UnicodeDecodeError:
                 raise _malformed(
-                    "TLS host_name is not ASCII (RFC 6066 §3)", base + start
+                    "TLS host_name is not ASCII (RFC 6066 §3)", start
                 ) from None
         at = stop
     return None
 
 
-def _reject(owner: type, field: str, offset: int, message: str) -> NoReturn:
-    """Raise the decode-time :class:`InvalidFieldError` for ``field``."""
+def _reject(
+    owner: type,
+    field: str,
+    offset: int,
+    expected: str,
+    actual: int,
+    message: str,
+) -> NoReturn:
+    """Raise the decode-time :class:`InvalidFieldError` for ``field``.
+
+    ``expected`` is what ``offset`` may hold and ``actual`` what it
+    does, in the terms ``message`` uses, as HSRP's and NTP's guard
+    errors set them.
+    """
     raise InvalidFieldError(
         message,
         protocol=owner,
         field=field,
         offset=offset,
-        expected={
-            "content_type": "20-24",
-            "legacy_version": "0x0300-0x0304",
-            "length": f"<={_MAX_LENGTH}",
-        }[field],
+        expected=expected,
+        actual=actual,
     )
 
 
 @dataclass(frozen=True, slots=True)
 class TLS(Protocol):
-    """One TLS record (RFC 8446 §5.1, RFC 5246 §6.2.1).
+    """One TLS record (RFC 9846 §5.1, RFC 5246 §6.2.1).
 
     Construction checks that each header field fits and that
     :attr:`length` agrees with :attr:`fragment`; it does not check the
@@ -728,7 +745,15 @@ class TLS(Protocol):
                 expected="0-65535",
                 actual=self.legacy_version,
             )
-        if self.length != len(self.fragment) or self.length > 0xFFFF:
+        if not 0 <= self.length <= 0xFFFF:
+            raise InvalidFieldError(
+                f"TLS length must be within 0-65535, got {self.length}",
+                protocol=type(self),
+                field="length",
+                expected="0-65535",
+                actual=self.length,
+            )
+        if self.length != len(self.fragment):
             raise InvalidFieldError(
                 f"TLS length {self.length} disagrees with a "
                 f"{len(self.fragment)}-byte fragment",
@@ -751,11 +776,14 @@ class TLS(Protocol):
             (``field`` ``"content_type"``, ``offset`` 0), else the
             version's first byte is not 3 (``"legacy_version"``, 1) or
             its second above 4 (``"legacy_version"``, 2), else the
-            length exceeds 2**14 + 2048 (``"length"``, 3); at any
-            buffer length.
+            length exceeds 2**14 + 2048 (``"length"``, 3); the first
+            three at any buffer length, the length once both its bytes
+            are present. ``actual`` is the value judged: the byte, the
+            version (``0x0305`` and up) or the length.
         :raises TruncatedHeaderError: ``data`` is shorter than the
-            5-byte header and every byte it holds passes, or shorter
-            than the record's length says (``field`` ``"length"``).
+            5-byte header and every byte of the first three it holds
+            passes, or shorter than the record's length says (``field``
+            ``"length"``).
         """
         size = len(data)
         if size > 0 and data[0] not in _CONTENT_TYPE_NAMES:
@@ -763,6 +791,8 @@ class TLS(Protocol):
                 cls,
                 "content_type",
                 0,
+                "20-24",
+                data[0],
                 f"TLS content_type must be 20-24, got {data[0]}",
             )
         if size > 1 and data[1] != 3:
@@ -770,6 +800,8 @@ class TLS(Protocol):
                 cls,
                 "legacy_version",
                 1,
+                "0x03",
+                data[1],
                 f"TLS legacy_version must start 0x03, got {data[1]:#04x}",
             )
         if size > 2 and data[2] > 4:
@@ -777,6 +809,8 @@ class TLS(Protocol):
                 cls,
                 "legacy_version",
                 2,
+                "0x0300-0x0304",
+                0x0300 | data[2],
                 f"TLS legacy_version must be 0x0300-0x0304, "
                 f"got 0x03{data[2]:02x}",
             )
@@ -786,6 +820,8 @@ class TLS(Protocol):
                 cls,
                 "length",
                 3,
+                f"<={_MAX_LENGTH}",
+                length,
                 f"TLS record length {length} exceeds {_MAX_LENGTH}",
             )
         end = _HEADER_LEN + length
@@ -926,7 +962,10 @@ class TLS(Protocol):
         extensions = hello.extensions or ()
         for offset, extension in zip(offsets, extensions, strict=True):
             if extension.type == _SERVER_NAME:
-                return _host_name(extension.data, offset + 4)
+                begin = offset + 4
+                return _host_name(
+                    self.fragment, begin, begin + len(extension.data)
+                )
         return None
 
 

@@ -604,10 +604,21 @@ class TestConstruction:
             TLS(23, 0x0303, 3, b"ab")
         assert caught.value.field == "length"
 
-    def test_length_must_fit_two_bytes(self):
+    @pytest.mark.parametrize("value", [-1, 0x10000])
+    def test_length_must_fit_two_bytes(self, value):
+        """Reported as out of range, even where the fragment matches."""
+        fragment = bytes(max(value, 0))
         with pytest.raises(InvalidFieldError) as caught:
-            TLS(23, 0x0303, 0x10000, bytes(0x10000))
-        assert caught.value.field == "length"
+            TLS(23, 0x0303, value, fragment)
+        error = caught.value
+        assert error.field == "length"
+        assert (error.expected, error.actual) == ("0-65535", value)
+        assert str(error) == f"TLS length must be within 0-65535, got {value}"
+
+    def test_a_fragment_too_long_for_its_length(self):
+        with pytest.raises(InvalidFieldError) as caught:
+            TLS(23, 0x0303, 3, bytes(0x10000))
+        assert (caught.value.expected, caught.value.actual) == (0x10000, 3)
 
     @pytest.mark.parametrize("value", [-1, 256])
     def test_content_type_must_fit_a_byte(self, value):
@@ -644,17 +655,16 @@ class TestDecodeGuard:
             error = caught.value
             assert (error.field, error.offset) == ("content_type", 0)
             assert error.protocol is TLS
-            assert error.expected == "20-24"
+            assert (error.expected, error.actual) == ("20-24", first)
 
     @pytest.mark.parametrize("major", [0, 2, 4, 0x80])
     def test_version_major(self, major):
         for raw in (bytes([22, major]), bytes([22, major, 3, 0, 0])):
             with pytest.raises(InvalidFieldError) as caught:
                 TLS.decode(raw)
-            assert (caught.value.field, caught.value.offset) == (
-                "legacy_version",
-                1,
-            )
+            error = caught.value
+            assert (error.field, error.offset) == ("legacy_version", 1)
+            assert (error.expected, error.actual) == ("0x03", major)
 
     @pytest.mark.parametrize("minor", [5, 0xFE, 0xFF])
     def test_version_minor(self, minor):
@@ -662,10 +672,10 @@ class TestDecodeGuard:
         for raw in (bytes([22, 3, minor]), bytes([22, 3, minor, 0, 0])):
             with pytest.raises(InvalidFieldError) as caught:
                 TLS.decode(raw)
-            assert (caught.value.field, caught.value.offset) == (
-                "legacy_version",
-                2,
-            )
+            error = caught.value
+            assert (error.field, error.offset) == ("legacy_version", 2)
+            assert error.expected == "0x0300-0x0304"
+            assert error.actual == 0x0300 + minor
 
     def test_length_bound(self):
         """A length of 2**14 + 2049 is rejected before the buffer is
@@ -675,7 +685,19 @@ class TestDecodeGuard:
             TLS.decode(raw)
         error = caught.value
         assert (error.field, error.offset) == ("length", 3)
-        assert error.expected == "<=18432"
+        assert (error.expected, error.actual) == ("<=18432", 18433)
+
+    @pytest.mark.parametrize("high", [0x49, 0xFF])
+    def test_a_length_judged_only_whole(self, high):
+        """The length is judged once both its bytes are present: with
+        one, a length over the bound whatever the other byte is still
+        reads as a short header."""
+        with pytest.raises(TruncatedHeaderError) as caught:
+            TLS.decode(bytes([23, 3, 3, high]))
+        assert caught.value.actual == 4
+        with pytest.raises(InvalidFieldError) as caught:
+            TLS.decode(bytes([23, 3, 3, high, 0]))
+        assert caught.value.field == "length"
 
     def test_order(self):
         """Every check fails here; the ContentType is reported."""
@@ -905,13 +927,28 @@ class TestClientHelloLyingLengths:
 
     @pytest.mark.parametrize("size", [1, 2, 3])
     def test_handshake_header_cut(self, size):
+        """The message's 3-byte length, at 1, is itself cut."""
         error = _hello_error(record(HANDSHAKE, b"\x01\x00\x00\x40"[:size]))
         assert isinstance(error, TruncatedHeaderError)
+        assert error.offset == 1
+        assert (error.expected, error.actual) == (None, size)
 
-    def test_a_message_too_short_for_its_random(self):
-        error = _hello_error(record(HANDSHAKE, handshake(1, bytes(20))))
+    @pytest.mark.parametrize(
+        "size,offset,words",
+        [
+            (20, 4, "ends inside its random"),
+            (33, 4, "ends inside its random"),
+            (34, 38, "legacy_session_id length runs past"),
+        ],
+    )
+    def test_a_message_too_short_for_its_random(self, size, offset, words):
+        """The version and the Random take 34 bytes from 4: a 33-byte
+        message ends inside them, at 4; a 34-byte one holds them and
+        ends where the session ID's length, at 38, should be."""
+        error = _hello_error(record(HANDSHAKE, handshake(1, bytes(size))))
         assert isinstance(error, InvalidFieldError)
-        assert error.offset == 4
+        assert error.offset == offset
+        assert words in str(error)
 
     def test_session_id_length(self):
         body = bytearray(hello_body())
@@ -924,6 +961,7 @@ class TestClientHelloLyingLengths:
         error = _hello_error(hello_record(hello_body(session_id=bytes(33))))
         assert isinstance(error, InvalidFieldError)
         assert "exceeds 32" in str(error)
+        assert error.offset == 38
 
     def test_cipher_suites_length(self):
         body = bytearray(hello_body())
@@ -958,12 +996,17 @@ class TestClientHelloLyingLengths:
         error = _hello_error(hello_record(body))
         assert isinstance(error, InvalidFieldError)
         assert "after its extensions" in str(error)
+        assert error.offset == 4 + len(body) - 2
 
-    def test_an_extension_header_cut(self):
-        error = _hello_error(
-            hello_record(hello_body(extensions=b"\x00\x17\x00"))
-        )
+    @pytest.mark.parametrize("left", [1, 2, 3])
+    def test_an_extension_header_cut(self, left):
+        """1-3 bytes after a whole extension: the header they start is
+        cut, at its own first byte, whether or not they hold its type."""
+        block = extension(23, b"") + b"\x00\x17\x00"[:left]
+        error = _hello_error(hello_record(hello_body(extensions=block)))
         assert isinstance(error, InvalidFieldError)
+        assert "extension header runs past" in str(error)
+        assert error.offset == 4 + len(hello_body(extensions=b"")) + 4
 
     def test_one_extensions_length(self):
         block = bytearray(extension(23, b"") + extension(43, b"\x02\x03\x04"))
@@ -1007,7 +1050,7 @@ class TestCapturedEdgeCases:
         """The handshake and record lengths shortened with the block, so
         the record decodes and the block's own length overruns: the
         accessor raises, decode does not."""
-        raw, _ = self.curl_hello()
+        raw, hello = self.curl_hello()
         cut = 30
         fragment = raw[5:-cut]
         fragment = (
@@ -1017,7 +1060,19 @@ class TestCapturedEdgeCases:
         assert tls.handshake_type == 1
         error = _hello_error(bytes(tls))
         assert isinstance(error, InvalidFieldError)
-        assert "extension" in str(error)
+        assert "extensions block runs past" in str(error)
+        # At the block's length, after the fields before it.
+        assert error.offset == (
+            4
+            + 2
+            + 32
+            + 1
+            + len(hello.legacy_session_id)
+            + 2
+            + len(hello.cipher_suites)
+            + 1
+            + len(hello.legacy_compression_methods)
+        )
 
 
 class TestServerName:
@@ -1083,38 +1138,180 @@ class TestServerName:
         start = 4 + len(hello_body()) + 4 + 2 + 1 + 2
         assert caught.value.offset == start
 
-    def test_empty_name_raises(self):
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(sni((0, b"")))
 
-    def test_empty_list_raises(self):
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, b"\x00\x00"))
+def _entries(*entries: tuple[int, bytes]) -> bytes:
+    """ServerNameList entries: a NameType, then a 2-byte length-prefixed
+    name, each."""
+    return b"".join(bytes([kind]) + vector(name, 2) for kind, name in entries)
 
-    def test_empty_extension_raises(self):
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, b""))
 
-    def test_list_length_too_long(self):
-        data = bytearray(sni((0, b"c.example"))[4:])
-        struct.pack_into("!H", data, 0, 40)
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, bytes(data)))
+#: Where the server_name extension's data starts in the fragment when
+#: it follows a 4-byte extended_main_secret: 4 handshake header, the
+#: body to the end of the block's length, 4 for the extension before
+#: it and 4 for its own header. Its list's first entry starts 2 later.
+SNI_DATA = 4 + len(hello_body(extensions=b"")) + 4 + 4
+SNI_ENTRY = SNI_DATA + 2
 
-    def test_list_length_too_short(self):
-        """Bytes after the list, inside the extension."""
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, sni((0, b"c.example"))[4:] + b"\x00"))
 
-    def test_host_name_length_too_long(self):
-        data = bytearray(sni((0, b"c.example"))[4:])
-        struct.pack_into("!H", data, 3, 40)
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, bytes(data)))
+class TestServerNameErrors:
+    """Every way the server_name extension's data can be malformed, and
+    the exact offset in the fragment each is reported at: where the
+    length or name at fault starts. The extension is the block's second,
+    so an offset counted from the extension, or from the block, is
+    caught."""
 
-    def test_a_name_cut_inside_its_length(self):
-        with pytest.raises(InvalidFieldError):
-            self.sni_of(extension(0, b"\x00\x02\x00\x00"))
+    @pytest.mark.parametrize(
+        "data,offset,words",
+        [
+            (b"", SNI_DATA, "server_name list length runs past"),
+            (b"\x00", SNI_DATA, "server_name list length runs past"),
+            (
+                b"\x00\x28" + _entries((0, b"c.example")),
+                SNI_DATA,
+                "server_name list runs past",
+            ),
+            (
+                vector(_entries((0, b"c.example")), 2) + b"\x00",
+                SNI_DATA,
+                "does not fill its extension",
+            ),
+            (b"\x00\x00", SNI_DATA, "does not fill its extension"),
+            (
+                b"\x00\x02\x00\x00",
+                SNI_ENTRY + 1,
+                "server name length runs past",
+            ),
+            (
+                vector(b"\x00\x00\x28c.example", 2),
+                SNI_ENTRY + 1,
+                "server name runs past",
+            ),
+            (
+                vector(_entries((0, b"")), 2),
+                SNI_ENTRY + 1,
+                "host_name is empty",
+            ),
+            (
+                vector(_entries((0, "bü.example".encode())), 2),
+                SNI_ENTRY + 3,
+                "not ASCII",
+            ),
+            (
+                vector(_entries((7, b"opaque")) + b"\x00\x00\x20ab", 2),
+                SNI_ENTRY + 9 + 1,
+                "server name runs past",
+            ),
+        ],
+        ids=[
+            "empty-extension",
+            "one-byte",
+            "list-too-long",
+            "list-too-short",
+            "empty-list",
+            "name-length-cut",
+            "name-too-long",
+            "empty-name",
+            "non-ascii",
+            "second-entry-too-long",
+        ],
+    )
+    def test_offset_in_the_fragment(self, data, offset, words):
+        block = extension(23, b"") + extension(0, data)
+        tls = TLS.decode(hello_record(hello_body(extensions=block)))
+        assert tls.client_hello is not None
+        assert tls.fragment[SNI_DATA - 4 : SNI_DATA - 2] == b"\x00\x00"
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = tls.server_name
+        error = caught.value
+        assert words in str(error)
+        assert (error.protocol, error.field) == (TLS, "fragment")
+        assert error.offset == offset
+
+
+class TestOverrunByOne:
+    """Each length-prefixed element, at every level of nesting, claiming
+    exactly one byte more than what contains it holds: the error is at
+    that length, and says it runs past."""
+
+    #: The ClientHello every case starts from: a 4-byte session ID, two
+    #: suites, one method, then extended_main_secret and a server_name
+    #: listing an entry of NameType 7 and a host_name.
+    BODY = hello_body(
+        session_id=b"sess",
+        suites=b"\x13\x01\x13\x02",
+        extensions=extension(23, b"")
+        + extension(0, vector(_entries((7, b"op"), (0, b"a.example")), 2)),
+    )
+
+    #: (what, where its length starts in the fragment, its width): the
+    #: fragment is 80 bytes, and what contains each element, the
+    #: message, the block, the extension's data or the list, ends where
+    #: the fragment does.
+    LENGTHS = (
+        ("legacy_session_id", 38, 1),
+        ("cipher_suites", 43, 2),
+        ("legacy_compression_methods", 49, 1),
+        ("extensions block", 51, 2),
+        ("extended_main_secret", 55, 2),
+        ("server_name", 59, 2),
+        ("server_name list", 61, 2),
+        ("first name", 64, 2),
+        ("host_name", 69, 2),
+    )
+
+    def test_the_layout(self):
+        """The positions above, read back from the parsed ClientHello."""
+        tls = TLS.decode(hello_record(self.BODY))
+        assert tls.length == 4 + len(self.BODY) == 80
+        assert tls.server_name == "a.example"
+        fragment = tls.fragment
+        assert fragment[38] == 4 and fragment[43:45] == b"\x00\x04"
+        assert fragment[49] == 1 and fragment[51:53] == b"\x00\x1b"
+        assert fragment[53:57] == b"\x00\x17\x00\x00"
+        assert fragment[57:61] == b"\x00\x00\x00\x13"
+        assert fragment[61:63] == b"\x00\x11"
+        assert fragment[63:68] == b"\x07\x00\x02op"
+        assert fragment[68:71] == b"\x00\x00\x09"
+
+    @pytest.mark.parametrize(
+        "at,width",
+        [(at, width) for _, at, width in LENGTHS],
+        ids=[what for what, _, _ in LENGTHS],
+    )
+    def test_one_byte_too_many(self, at, width):
+        fragment = bytearray(handshake(1, self.BODY))
+        claimed = len(fragment) - (at + width) + 1
+        fragment[at : at + width] = claimed.to_bytes(width, "big")
+        tls = TLS.decode(record(HANDSHAKE, bytes(fragment), version=0x0301))
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = tls.server_name
+        error = caught.value
+        assert error.offset == at
+        assert "runs past its message" in str(error)
+        assert "length runs past" not in str(error)
+        if at < 61:  # outside the server_name extension's data
+            with pytest.raises(InvalidFieldError) as caught:
+                _ = tls.client_hello
+            assert caught.value.offset == at
+        else:
+            assert tls.client_hello is not None
+
+    @pytest.mark.parametrize(
+        "at,width",
+        [(at, width) for _, at, width in LENGTHS],
+        ids=[what for what, _, _ in LENGTHS],
+    )
+    def test_exactly_enough(self, at, width):
+        """The same length one byte shorter fits: whatever is then
+        wrong, it is not that length running past."""
+        fragment = bytearray(handshake(1, self.BODY))
+        claimed = len(fragment) - (at + width)
+        fragment[at : at + width] = claimed.to_bytes(width, "big")
+        tls = TLS.decode(record(HANDSHAKE, bytes(fragment), version=0x0301))
+        try:
+            _ = tls.server_name
+        except InvalidFieldError as error:
+            assert not (error.offset == at and "runs past" in str(error))
 
 
 class TestValueObjects:
