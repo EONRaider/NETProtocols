@@ -194,20 +194,20 @@ GAP = (
                 " what follows are mis-framed",
                 verdict="partial",
             ),
-            # ...with no case of its own for AH anywhere in the module. The
-            # module names IP_PROTO_AH three times, all as data: in its
-            # import list ("IP_PROTO_AH, IP_PROTO_ESP, ..."), as an
-            # EXT_HDRS item ("IP_PROTO_AH," closing the line) and as the
-            # ext_hdrs_cls entry ("IP_PROTO_AH: IP6AHHeader,"). The check
-            # fails on any other use of the name, except one followed by a
-            # comma and then a space and a word or the line's end, as the
-            # first two are (so "is IP_PROTO_AH" and "in (IP_PROTO_AH,)"
-            # fail it); on "==" or "!=" with the name or 51, AH's protocol
-            # number, on either side; and on "in" and an opening (, [ or {
-            # followed by the name or 51 before any closing bracket, as in
-            # "in [51]" or "in (IP_PROTO_AH, IP_PROTO_ESP)". Other
-            # comparisons with 51, such as "is 51" or "< 51", and 51 after
-            # a nested bracket, as in "in (f(x), 51)", pass it.
+            # ...with no case of its own for AH anywhere in the module. This
+            # is a textual tripwire, meant to fail if pypacker adds
+            # AH-specific handling to ip6.py. It ignores the module's three
+            # current mentions of IP_PROTO_AH, all data, and any other
+            # mention shaped like them: the import list and EXT_HDRS items
+            # (the name followed by a comma and then a space and a word, or
+            # the line's end) and the ext_hdrs_cls entry
+            # "IP_PROTO_AH: IP6AHHeader,". It fails on other uses of the
+            # name and on common comparison and membership forms against
+            # IP_PROTO_AH or 51, AH's protocol number, such as
+            # "is IP_PROTO_AH", "== 51", "in [51]" and
+            # "in (IP_PROTO_AH, IP_PROTO_ESP)". It is a heuristic, not a
+            # parser, so unusual spellings such as "in(51,)", "== (51)" or
+            # "is 51" can pass it.
             Check(
                 "layer3/ip6.py",
                 r"\bIP_PROTO_AH\b(?!,(?: \w|$)|: IP6AHHeader,$)"
