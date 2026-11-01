@@ -69,13 +69,16 @@ smallest protected records, 22 bytes with a 16-byte AEAD tag, or 103
 of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
 (:mod:`netprotocols.layer7.tls`), where 30 of 22 bytes already exceed
 the 29; one captured with GRO or TSO on, over loopback or on a
-jumbo-frame link is larger still. The corpus's deepest chain is one of
-these, 10 layers (a segment of 7 BGP UPDATEs), and TLS's busiest
-segment carries 6 records, 9 layers. A strict walk of such a segment
-raises :class:`~netprotocols.MaxDepthExceededError` and a lax one stops
-short with ``stopped_by`` set; a larger ``max_depth``, or a second walk
-``decode_frame(frame[packet.consumed:], start=BGP)`` (or
-``start=STUN``, ``start=TLS``), decodes the rest.
+jumbo-frame link is larger still. The corpus's deepest chain is such a
+segment, 10 layers (7 BGP UPDATEs), and TLS's busiest segment carries
+6 records, 9 layers. A strict walk of a segment past the limit raises
+:class:`~netprotocols.MaxDepthExceededError` and a lax one stops short
+with ``stopped_by`` set. A larger ``max_depth`` decodes the rest, and
+so does walking on from ``packet.consumed`` with ``start=BGP`` (or
+``start=STUN``, ``start=TLS``) as many times as it takes: a walk that
+starts there has room for 32 messages or records, so the 76
+KEEPALIVEs, 72 STUN messages or 65 TLS records above take three walks
+and the 103 records four (the loop in :mod:`netprotocols.layer7.bgp`).
 
 802.3 Length
 ------------
@@ -129,8 +132,10 @@ __all__ = ["MAX_DEPTH", "decode_frame"]
 #: one-prefix UPDATEs, 72 bare 20-byte STUN headers, or 65 of TLS 1.3's
 #: 22-byte protected records (103 of 14 bytes); the corpus peaks at 7
 #: BGP UPDATEs, a 10-layer chain, and TLS at 6 records, 9 layers. Walk
-#: on with ``decode_frame(frame[packet.consumed:], start=BGP)``, or
-#: ``start=STUN`` or ``start=TLS``; see :mod:`netprotocols.layer7.bgp`,
+#: on from ``packet.consumed`` with ``start=BGP``, ``start=STUN`` or
+#: ``start=TLS`` as many times as it takes (each such walk takes up to
+#: 32 more, so 76 KEEPALIVEs need three walks), or pass a larger
+#: ``max_depth``; see :mod:`netprotocols.layer7.bgp`,
 #: :mod:`netprotocols.layer7.stun` and :mod:`netprotocols.layer7.tls`.
 MAX_DEPTH = 32
 
