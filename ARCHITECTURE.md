@@ -921,9 +921,10 @@ one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
 loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
 strict walk raises `MaxDepthExceededError` on valid traffic and a lax
 one stops with `stopped_by` set and `consumed` short of the frame. A
-larger `max_depth` or a second walk,
-`decode_frame(frame[packet.consumed:], start=BGP)`, decodes the rest;
-the busiest segment of the captured session in the corpus, taken with
+larger `max_depth` decodes the rest, and so does walking on from
+`packet.consumed` with `start=BGP` as many times as it takes (a walk
+that starts there has room for 32 messages, so the 76 KEEPALIVEs take
+three walks); the busiest segment of the captured session in the corpus, taken with
 offload off, carries 7. Reassembling
 the stream is the caller's, as it is for `HTTP` below: see
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.

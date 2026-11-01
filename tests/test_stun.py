@@ -855,8 +855,9 @@ class TestOverTCP:
         """The module docstring's max_depth note: a 1448-byte segment
         holds 72 bare 20-byte messages, and the default MAX_DEPTH
         leaves room for 29 after Ethernet, IPv4 and TCP. Strict raises
-        at the 30th, lax stops there, and a second walk with
-        start=STUN decodes the other 43."""
+        at the 30th, lax stops there, and a walk on with start=STUN
+        and max_depth=43 decodes the other 43 (at the default, 32 of
+        them)."""
         eth, ip, tcp = decode_frame(FRAMES[6]).layers[:3]
         bare = bytes(STUN(0x0001, transaction_id=bytes(range(12))))
         data = bare * 72

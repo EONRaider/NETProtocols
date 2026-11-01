@@ -153,9 +153,11 @@ the former (1,448 / 22 = 65.8) and 103 of the latter (1,448 / 14 =
 29; a capture taken with GRO or TSO on holds segments of up to 64 KB.
 Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic and a lax
-one stops with ``packet.stopped_by`` set; a larger ``max_depth``, or a
-second walk ``decode_frame(frame[packet.consumed:], start=TLS)``, decodes
-the rest, as for BGP. The corpus's busiest segment carries 6.
+one stops with ``packet.stopped_by`` set. A larger ``max_depth``
+decodes the rest, and so does walking on from ``packet.consumed`` with
+``start=TLS`` as many times as it takes, as for BGP: a walk that starts
+there has room for 32 records, so the 65 take three walks and the 103
+four. The corpus's busiest segment carries 6.
 
 The handshake and the ClientHello
 ---------------------------------

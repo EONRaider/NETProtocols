@@ -1339,9 +1339,9 @@ eight lines:
   in a 1448-byte segment, and GRO, TSO, loopback and jumbo frames
   make segments far larger — exceeds the default, and the strict walk
   raises on valid traffic (lax stops short). There the caller raises
-  `max_depth` or walks on with
-  `decode_frame(frame[packet.consumed:], start=BGP)` (or `start=STUN`,
-  `start=TLS`) (`layer7/bgp.py`'s, `layer7/stun.py`'s and
+  `max_depth` or walks on from `packet.consumed` with `start=BGP` (or
+  `start=STUN`, `start=TLS`) as many times as it takes, each such walk
+  taking up to 32 more (`layer7/bgp.py`'s, `layer7/stun.py`'s and
   `layer7/tls.py`'s module docstrings; tested in `tests/test_bgp.py`'s
   and `tests/test_tls.py`'s `TestMaxDepth` and `tests/test_stun.py`'s
   `TestOverTCP`). Corpus maximum is 10 layers (a TCP segment carrying
