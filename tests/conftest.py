@@ -289,15 +289,15 @@ def raw_hsrp_hello() -> bytes:
     return bytes.fromhex("000004030a640100636973636f000000c0000201")
 
 
-@pytest.fixture
-def raw_tls_client_hello() -> bytes:
-    """A constructed TLS record holding a ClientHello (RFC 8446 §4.1.2):
+def tls_client_hello_record() -> bytes:
+    """A constructed TLS record holding a ClientHello (RFC 9846 §4.2.2):
     record version 0x0301, ClientHello version 0x0303, a Random of
     bytes 0-31, no session ID, one cipher suite (TLS_AES_128_GCM_SHA256),
     the null compression method and one extension, server_name for
     ``example.com``. Built by hand rather than cut from
     tests/fixtures/tls.pcap, so the tests that use it do not depend on
-    the capture."""
+    the capture. A function as well as the fixture below, for
+    test_fuzz.py's seeds, which are built at import."""
     sni = b"\x00\x00\x0b" + b"example.com"
     sni = struct.pack("!H", len(sni)) + sni
     extensions = struct.pack("!HH", 0, len(sni)) + sni
@@ -312,6 +312,12 @@ def raw_tls_client_hello() -> bytes:
     )
     handshake = b"\x01" + len(body).to_bytes(3, "big") + body
     return b"\x16\x03\x01" + struct.pack("!H", len(handshake)) + handshake
+
+
+@pytest.fixture
+def raw_tls_client_hello() -> bytes:
+    """See :func:`tls_client_hello_record`."""
+    return tls_client_hello_record()
 
 
 @pytest.fixture

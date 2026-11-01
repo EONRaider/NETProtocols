@@ -1356,94 +1356,176 @@ class TestValueObjects:
         assert bytes(hello) == hello_body(extensions=b"")
 
 
+#: The names expected, written here from the RFCs rather than read from
+#: the module, so a wrong name in either is caught. ContentType: RFC 9846
+#: §5.1's enum, and heartbeat, RFC 6520 §6.
+CONTENT_TYPE_NAMES = {
+    20: "change_cipher_spec",
+    21: "alert",
+    22: "handshake",
+    23: "application_data",
+    24: "heartbeat",
+}
+
+#: SSL 3.0 (RFC 6101) and TLS 1.0 (RFC 2246), 1.1 (RFC 4346), 1.2 (RFC
+#: 5246) and 1.3 (RFC 9846).
+VERSION_NAMES = {
+    0x0300: "SSL 3.0",
+    0x0301: "TLS 1.0",
+    0x0302: "TLS 1.1",
+    0x0303: "TLS 1.2",
+    0x0304: "TLS 1.3",
+}
+
+#: HandshakeType: RFC 9846 Appendix B.3's enum, the ``_RESERVED`` suffix
+#: of the types TLS 1.3 retired dropped, then the types it leaves to
+#: other RFCs.
+HANDSHAKE_TYPE_NAMES = {
+    0: "hello_request",
+    1: "client_hello",
+    2: "server_hello",
+    3: "hello_verify_request",
+    4: "new_session_ticket",
+    5: "end_of_early_data",
+    6: "hello_retry_request",
+    8: "encrypted_extensions",
+    11: "certificate",
+    12: "server_key_exchange",
+    13: "certificate_request",
+    14: "server_hello_done",
+    15: "certificate_verify",
+    16: "client_key_exchange",
+    20: "finished",
+    21: "certificate_url",
+    22: "certificate_status",
+    23: "supplemental_data",
+    24: "key_update",
+    254: "message_hash",
+    9: "request_connection_id",  # RFC 9147
+    10: "new_connection_id",  # RFC 9147
+    17: "client_certificate_request",  # RFC 9261
+    25: "compressed_certificate",  # RFC 8879
+    26: "ekt_key",  # RFC 8870
+}
+
+#: ExtensionType: RFC 9846 §4.3's enum, then seven it leaves out.
+EXTENSION_NAMES = {
+    0: "server_name",
+    5: "status_request",
+    10: "supported_groups",
+    13: "signature_algorithms",
+    14: "use_srtp",
+    15: "heartbeat",
+    16: "application_layer_protocol_negotiation",
+    19: "client_certificate_type",
+    20: "server_certificate_type",
+    21: "padding",
+    27: "compress_certificate",
+    28: "record_size_limit",
+    34: "delegated_credential",
+    39: "supported_ekt_ciphers",
+    41: "pre_shared_key",
+    42: "early_data",
+    43: "supported_versions",
+    44: "cookie",
+    45: "psk_key_exchange_modes",
+    47: "certificate_authorities",
+    48: "oid_filters",
+    49: "post_handshake_auth",
+    50: "signature_algorithms_cert",
+    51: "key_share",
+    52: "transparency_info",
+    55: "external_id_hash",
+    56: "external_session_id",
+    57: "quic_transport_parameters",
+    58: "ticket_request",
+    64768: "ech_outer_extensions",
+    65037: "encrypted_client_hello",
+    1: "max_fragment_length",  # RFC 6066
+    11: "ec_point_formats",  # RFC 8422
+    18: "signed_certificate_timestamp",  # RFC 6962
+    22: "encrypt_then_mac",  # RFC 7366
+    23: "extended_main_secret",  # RFC 7627, renamed by RFC 9846 §11.1
+    35: "session_ticket",  # RFC 5077, renamed by RFC 8447
+    65281: "renegotiation_info",  # RFC 5746
+}
+
+#: RFC 8701 §2's sixteen GREASE values for extensions.
+GREASE = {0x0A0A + 0x1010 * i for i in range(16)}
+
+
 class TestDisplay:
-    @pytest.mark.parametrize(
-        "kind,name",
-        [
-            (20, "change_cipher_spec"),
-            (21, "alert"),
-            (22, "handshake"),
-            (23, "application_data"),
-            (24, "heartbeat"),
-            (25, "unknown (25)"),
-        ],
-    )
+    @pytest.mark.parametrize("kind,name", sorted(CONTENT_TYPE_NAMES.items()))
     def test_content_type_name(self, kind, name):
         assert TLS(kind, 0x0303, 0, b"").content_type_name == name
 
-    @pytest.mark.parametrize(
-        "version,name",
-        [
-            (0x0300, "SSL 3.0"),
-            (0x0301, "TLS 1.0"),
-            (0x0302, "TLS 1.1"),
-            (0x0303, "TLS 1.2"),
-            (0x0304, "TLS 1.3"),
-            (0x0305, "unknown (0x0305)"),
-            (0xFEFD, "unknown (0xfefd)"),
-        ],
-    )
+    def test_every_other_content_type_is_unknown(self):
+        for kind in set(range(256)) - set(CONTENT_TYPE_NAMES):
+            name = TLS(kind, 0x0303, 0, b"").content_type_name
+            assert name == f"unknown ({kind})"
+
+    @pytest.mark.parametrize("version,name", sorted(VERSION_NAMES.items()))
     def test_version_names(self, version, name):
         assert TLS(23, version, 0, b"").legacy_version_name == name
         assert TLSClientHello(version, bytes(32)).legacy_version_name == name
 
-    @pytest.mark.parametrize(
-        "kind,name",
-        [
-            (0, "hello_request"),
-            (1, "client_hello"),
-            (2, "server_hello"),
-            (4, "new_session_ticket"),
-            (8, "encrypted_extensions"),
-            (11, "certificate"),
-            (12, "server_key_exchange"),
-            (14, "server_hello_done"),
-            (16, "client_key_exchange"),
-            (20, "finished"),
-            (24, "key_update"),
-            (254, "message_hash"),
-            (7, "unknown (7)"),
-            (255, "unknown (255)"),
-        ],
-    )
+    def test_every_other_version_is_unknown(self):
+        """Every other value, 0x0305 and DTLS 1.2's 0xfefd among them,
+        is unknown, in four hex digits."""
+        assert TLS(23, 0xFEFD, 0, b"").legacy_version_name == (
+            "unknown (0xfefd)"
+        )
+        for version in set(range(0x10000)) - set(VERSION_NAMES):
+            name = TLS(23, version, 0, b"").legacy_version_name
+            assert name == f"unknown ({version:#06x})"
+
+    @pytest.mark.parametrize("kind,name", sorted(HANDSHAKE_TYPE_NAMES.items()))
     def test_handshake_type_name(self, kind, name):
         tls = TLS.decode(record(HANDSHAKE, bytes([kind])))
         assert tls.handshake_type == kind
         assert tls.handshake_type_name == name
+
+    def test_every_other_handshake_type_is_unknown(self):
+        for kind in set(range(256)) - set(HANDSHAKE_TYPE_NAMES):
+            tls = TLS(HANDSHAKE, 0x0303, 1, bytes([kind]))
+            assert tls.handshake_type_name == f"unknown ({kind})"
 
     def test_no_handshake_type_outside_handshake_records(self):
         tls = TLS.decode(record(APPDATA, b"\x01"))
         assert tls.handshake_type is None
         assert tls.handshake_type_name is None
 
+    @pytest.mark.parametrize("kind,name", sorted(EXTENSION_NAMES.items()))
+    def test_extension_type_name(self, kind, name):
+        assert TLSExtension(kind).type_name == name
+
     @pytest.mark.parametrize(
         "kind,name",
         [
-            (0, "server_name"),
-            (10, "supported_groups"),
-            (16, "application_layer_protocol_negotiation"),
-            (21, "padding"),
-            (23, "extended_main_secret"),
-            (43, "supported_versions"),
-            (51, "key_share"),
-            (65037, "encrypted_client_hello"),
-            (65281, "renegotiation_info"),
             (0x0A0A, "GREASE"),
             (0xFAFA, "GREASE"),
             (0x0A1A, "unknown (2586)"),
             (0x12E0, "unknown (4832)"),
+            (0x44CD, "unknown (17613)"),
+            (0xCA34, "unknown (51764)"),
             (0xFFFF, "unknown (65535)"),
         ],
     )
-    def test_extension_type_name(self, kind, name):
+    def test_grease_and_unknown_extension_types(self, kind, name):
+        """The three types Chromium sends that are named nowhere here
+        (see tests/fixtures/MANIFEST.md) among them."""
         assert TLSExtension(kind).type_name == name
+
+    def test_every_other_extension_type_is_unknown(self):
+        for kind in set(range(0x10000)) - set(EXTENSION_NAMES) - GREASE:
+            assert TLSExtension(kind).type_name == f"unknown ({kind})"
 
     def test_every_grease_value(self):
         """RFC 8701's sixteen, and no other value, are GREASE."""
         grease = {
             v for v in range(0x10000) if TLSExtension(v).type_name == "GREASE"
         }
-        assert grease == {0x0A0A + 0x1010 * i for i in range(16)}
+        assert grease == GREASE
 
 
 class TestDispatch:

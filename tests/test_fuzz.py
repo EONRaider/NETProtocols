@@ -26,15 +26,22 @@ this file (mutmut's, for one).
 """
 
 import contextlib
+import importlib.util
 import struct
 import sys
 from ipaddress import IPv6Address
+from pathlib import Path
 
 import pytest
 from hypothesis import event, example, given
 from hypothesis import strategies as st
 
-from conftest import FIXTURES, corpus_frames, pcap_frames
+from conftest import (
+    FIXTURES,
+    corpus_frames,
+    pcap_frames,
+    tls_client_hello_record,
+)
 from netprotocols import (
     AH,
     ARP,
@@ -1450,20 +1457,56 @@ class TestHSRPAccessorSafety:
             getattr(hsrp, name)
 
 
-#: The ClientHello records of tests/fixtures/tls.pcap (curl, gnutls-cli,
-#: openssl s_client without SNI and curl capped at TLS 1.2), and the
-#: constructed one tests/conftest.py builds.
 def _tcp_payload(frame: bytes) -> bytes:
     """The payload of an Ethernet/IPv4/TCP frame, by its two lengths."""
     tcp = 14 + (frame[14] & 0x0F) * 4
     return frame[tcp + (frame[tcp + 12] >> 4) * 4 :]
 
 
+def _chromium_hellos() -> list[bytes]:
+    """Chromium's two ClientHello records, which tests/fixtures/tls/
+    tls_session.pcap carries split across two segments each, from the
+    client streams scripts/extract_http_streams.py's ``extract()``
+    reassembles (stdlib only, sharing no code with the library)."""
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    sys.path.insert(0, str(scripts))
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "extract_http_streams", scripts / "extract_http_streams.py"
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        # @dataclass looks its class's module up in sys.modules.
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(scripts))
+    streams = module.extract(
+        pcap_frames(FIXTURES / "tls" / "tls_session.pcap"), 443
+    )
+    hellos = [
+        client[: 5 + int.from_bytes(client[3:5], "big")]
+        for client, _ in streams[:2]
+    ]
+    assert [len(hello) for hello in hellos] == [1738, 1738]
+    return hellos
+
+
+#: The ClientHello records seeded: tests/fixtures/tls.pcap's (curl,
+#: gnutls-cli, openssl s_client without SNI and curl capped at TLS 1.2),
+#: Chromium's two from the session capture, GREASE and a post-quantum
+#: key share among their extensions, and the constructed one
+#: tests/conftest.py builds.
 _TLS_CAPTURED_HELLOS = [
-    payload
-    for payload in map(_tcp_payload, pcap_frames(FIXTURES / "tls.pcap"))
-    if payload[:1] == b"\x16" and payload[5:6] == b"\x01"
+    *(
+        payload
+        for payload in map(_tcp_payload, pcap_frames(FIXTURES / "tls.pcap"))
+        if payload[:1] == b"\x16" and payload[5:6] == b"\x01"
+    ),
+    *_chromium_hellos(),
+    tls_client_hello_record(),
 ]
+assert len(_TLS_CAPTURED_HELLOS) == 7
 
 #: The bytes TLS.decode() and the chaining predicate weigh in a record
 #: header's first three, the ones either side of what they accept, and

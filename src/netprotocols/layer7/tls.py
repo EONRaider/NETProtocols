@@ -247,10 +247,20 @@ _VERSION_NAMES: dict[int, str] = {
     0x0304: "TLS 1.3",
 }
 
-#: HandshakeType values, named as IANA's "TLS HandshakeType" registry
-#: names them (fetched 2026-11-01), except that the types it marks
-#: ``_RESERVED`` because TLS 1.3 retired them keep their TLS 1.2 names,
-#: since TLS 1.2 still sends them.
+#: HandshakeType values, named as RFC 9846 Appendix B.3's HandshakeType
+#: enum names them, except that the ones it marks ``_RESERVED``, which
+#: TLS 1.3 does not send, are named without the suffix: TLS 1.2 still
+#: sends hello_request, server_key_exchange, server_hello_done and
+#: client_key_exchange (RFC 5246 §7.4), and certificate_url,
+#: certificate_status (RFC 6066 §5, §8) and supplemental_data (RFC
+#: 4680) where an extension asks for them; DTLS 1.2 sends
+#: hello_verify_request (RFC 6347 §4.2.1); and hello_retry_request (6)
+#: was assigned for drafts of TLS 1.3 and is sent by no published
+#: version, TLS 1.3's HelloRetryRequest being a ServerHello (RFC 9846
+#: §4.2.4). The types B.3 leaves out are named as the RFCs that assign
+#: them name them: request_connection_id and new_connection_id (RFC
+#: 9147), client_certificate_request (RFC 9261), compressed_certificate
+#: (RFC 8879) and ekt_key (RFC 8870).
 _CLIENT_HELLO = 1
 _HANDSHAKE_TYPE_NAMES: dict[int, str] = {
     0: "hello_request",
@@ -280,9 +290,16 @@ _HANDSHAKE_TYPE_NAMES: dict[int, str] = {
     254: "message_hash",
 }
 
-#: ExtensionType values a ClientHello commonly carries, named as IANA's
-#: "TLS ExtensionType Values" registry names them (fetched 2026-11-01).
-#: The sixteen GREASE values of RFC 8701 are named by
+#: ExtensionType values: every one RFC 9846 §4.3's ExtensionType enum
+#: lists (those Recommended and allowed in TLS 1.3, its note says),
+#: named as it names them, and seven more a ClientHello commonly
+#: carries, named as the RFCs that define them do: max_fragment_length
+#: (RFC 6066), ec_point_formats (RFC 8422),
+#: signed_certificate_timestamp (RFC 6962), encrypt_then_mac (RFC
+#: 7366), extended_main_secret (RFC 7627's extended_master_secret,
+#: renamed by RFC 9846 §11.1), session_ticket (RFC 5077's SessionTicket
+#: TLS, renamed by RFC 8447) and renegotiation_info (RFC 5746). The
+#: sixteen GREASE values of RFC 8701 §2 are named by
 #: :attr:`TLSExtension.type_name` without a table.
 _SERVER_NAME = 0
 _EXTENSION_NAMES: dict[int, str] = {
@@ -305,6 +322,7 @@ _EXTENSION_NAMES: dict[int, str] = {
     28: "record_size_limit",
     34: "delegated_credential",
     35: "session_ticket",
+    39: "supported_ekt_ciphers",
     41: "pre_shared_key",
     42: "early_data",
     43: "supported_versions",
@@ -315,7 +333,11 @@ _EXTENSION_NAMES: dict[int, str] = {
     49: "post_handshake_auth",
     50: "signature_algorithms_cert",
     51: "key_share",
+    52: "transparency_info",
+    55: "external_id_hash",
+    56: "external_session_id",
     57: "quic_transport_parameters",
+    58: "ticket_request",
     64768: "ech_outer_extensions",
     65037: "encrypted_client_hello",
     65281: "renegotiation_info",
