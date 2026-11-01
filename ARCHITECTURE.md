@@ -921,9 +921,10 @@ one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
 loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
 strict walk raises `MaxDepthExceededError` on valid traffic and a lax
 one stops with `stopped_by` set and `consumed` short of the frame. A
-larger `max_depth` or a second walk,
-`decode_frame(frame[packet.consumed:], start=BGP)`, decodes the rest;
-the busiest segment of the captured session in the corpus, taken with
+larger `max_depth` decodes the rest, and so does walking on from
+`packet.consumed` with `start=BGP` as many times as it takes (a walk
+that starts there has room for 32 messages, so the 76 KEEPALIVEs take
+three walks); the busiest segment of the captured session in the corpus, taken with
 offload off, carries 7. Reassembling
 the stream is the caller's, as it is for `HTTP` below: see
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
@@ -1001,9 +1002,40 @@ carries 6. The case that matters is a ClientHello larger than a segment:
 Chromium's, with its X25519MLKEM768 key share, is a 1738-byte record
 that TCP carried in two segments in
 `tests/fixtures/tls/tls_session.pcap`, so a strict walk raises at both
-and a lax one stops at TCP. There is no lenient mode that reads a
-partial hello: the SNI of such a client comes from reassembling its
-stream and calling `TLS.decode()` on that, as for `HTTP` below.
+and a lax one stops at TCP. There is no lenient mode of `TLS.decode()`
+that reads a partial hello: the SNI of such a client comes for certain
+from reassembling its stream and calling `TLS.decode()` on that, as for
+`HTTP` below. Without reassembly, `peek_server_name()` (#285), a
+separate, opt-in function and not a decode mode, walks a ClientHello
+from the start of its record as far as the bytes go, the first record
+at most, and returns a `TLSServerNamePeek` with one of three outcomes:
+*found* (`complete`, the name), *absent* (`complete`, `None`: the
+first record carries no host name, because it is not a ClientHello,
+or enough of it is present to show it names no host) or *not reached*
+(not `complete`: the bytes ended first, which is not "no SNI").
+*Absent* speaks for the first record only: a ChangeCipherSpec and
+then a ClientHello with a name in one segment, as TLS 1.3's middlebox
+compatibility mode sends after a HelloRetryRequest (RFC 9846 Appendix
+E.4), is *absent*, as `TLS.server_name` is `None` for that first
+record; a caller who wants to look past whole records calls
+`TLS.decode()` on the first and peeks `data[tls.header_len:]`. Under
+ECH a *found* name is the outer ClientHello's, the client-facing
+server's `public_name`, as for `TLS.server_name`. A prefix that ends
+before the answer is known is *not reached*; where a prefix ends never
+by itself causes a raise. Bytes present that are malformed raise what
+the strict path raises for them, the guard's errors and the
+ClientHello's `InvalidFieldError`s with the same `field` and `offset`;
+nothing is re-encoded and no `TLS` is built. A ClientHello fragmented
+across records is read to its first record's end, where the strict
+accessors raise `TruncatedHeaderError`. How often it finds the name:
+curl's, gnutls-cli's and `openssl s_client`'s ClientHellos fit one
+segment, so always; Chromium's is 1738 bytes and shuffles its
+extensions, and the name ends inside the first 1448 bytes for 54.42% of
+its orders (exact; 54.45% and 54.40% over 100,000 `random.Random(0)`
+permutations of each captured hello's 17 non-GREASE extensions, GREASE
+kept first and last), as it did for the first of its two captured
+connections, at byte 184, and not the second, at byte 1729, behind its
+1267-byte key share. The function's docstring gives the method.
 `TLS.client_hello` and `TLS.server_name` parse the fragment on demand
 and never in `decode()`; there is no cryptography, and nothing past the
 ClientHello's fields and its server_name extension is decoded (the
@@ -1190,7 +1222,9 @@ src/netprotocols/
 │                   ntp.py (NTPv1-v4 time messages),
 │                   hsrp.py (HSRPv1 Hello, Coup and Resign),
 │                   tls.py (TLS records, the ClientHello and its
-│                   SNI: TLS + TLSClientHello + TLSExtension)
+│                   SNI: TLS + TLSClientHello + TLSExtension, and
+│                   peek_server_name + TLSServerNamePeek for a
+│                   ClientHello's prefix)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),
