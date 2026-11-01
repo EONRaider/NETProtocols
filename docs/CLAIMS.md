@@ -1201,12 +1201,12 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-6,143 statements, 1 missed (99.98%; re-measured 2026-11-01, after
-TLS, and the miss is still `Packet.__eq__`'s `NotImplemented`
-branch). Enforced, not merely reported:
-`[tool.coverage.report]` sets `fail_under = 98`, and the `test` CI job
-runs with `--cov-report=term` on every push and pull request, so a
-regression below the gate fails the build (#79).
+6,202 statements, 1 missed (99.98%; re-measured 2026-11-01, after
+TLS's `peek_server_name` (#285), and the miss is still
+`Packet.__eq__`'s `NotImplemented` branch). Enforced, not merely
+reported: `[tool.coverage.report]` sets `fail_under = 98`, and the
+`test` CI job runs with `--cov-report=term` on every push and pull
+request, so a regression below the gate fails the build (#79).
 
 ### 5.4 "Validation that cannot be skipped, on a decode path that does not pay for it"
 **Status: VERIFIED**
@@ -1415,7 +1415,7 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 228 raise sites in the library
+`protocol` is set at every one of the 230 raise sites in the library
 but `random_mac`'s (`utils/mac.py`), which belongs to no protocol
 (verified by an AST sweep, not just by eye); `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
