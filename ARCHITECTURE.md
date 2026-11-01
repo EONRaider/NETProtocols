@@ -1119,7 +1119,9 @@ src/netprotocols/
 │                   radius.py (RADIUS + RADIUSAttribute),
 │                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages),
-│                   hsrp.py (HSRPv1 Hello, Coup and Resign)
+│                   hsrp.py (HSRPv1 Hello, Coup and Resign),
+│                   tls.py (TLS records, the ClientHello and its
+│                   SNI: TLS + TLSClientHello + TLSExtension)
 └── utils/          validators (mac.py, ipv4.py), exceptions.py
 tests/              one file per protocol + test_contract.py
                     (truncation, lying lengths, chain walks),

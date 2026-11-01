@@ -62,6 +62,7 @@ from netprotocols import (
     STUN,
     TCP,
     TFTP,
+    TLS,
     UDP,
     VLAN,
     VRRP,
@@ -93,6 +94,8 @@ from netprotocols import (
     RIPEntry,
     SCTPChunk,
     TCPOption,
+    TLSClientHello,
+    TLSExtension,
     TruncatedHeaderError,
     VRRPv6,
     decode_frame,
@@ -113,6 +116,8 @@ from strategies import (
     sctp_chunks,
     sctp_headers,
     stp_headers,
+    tls_client_hellos,
+    tls_records,
     vrrp_headers,
 )
 from test_corpus import walk
@@ -159,6 +164,7 @@ ALL_PROTOCOLS = (
     BGP,
     TFTP,
     STUN,
+    TLS,
 )
 
 
@@ -1442,6 +1448,199 @@ class TestHSRPAccessorSafety:
         assert hsrp.state_name == f"unknown ({state})"
         for name in _HSRP_ACCESSORS:
             getattr(hsrp, name)
+
+
+#: The ClientHello records of tests/fixtures/tls.pcap (curl, gnutls-cli,
+#: openssl s_client without SNI and curl capped at TLS 1.2), and the
+#: constructed one tests/conftest.py builds.
+def _tcp_payload(frame: bytes) -> bytes:
+    """The payload of an Ethernet/IPv4/TCP frame, by its two lengths."""
+    tcp = 14 + (frame[14] & 0x0F) * 4
+    return frame[tcp + (frame[tcp + 12] >> 4) * 4 :]
+
+
+_TLS_CAPTURED_HELLOS = [
+    payload
+    for payload in map(_tcp_payload, pcap_frames(FIXTURES / "tls.pcap"))
+    if payload[:1] == b"\x16" and payload[5:6] == b"\x01"
+]
+
+#: The bytes TLS.decode() and the chaining predicate weigh in a record
+#: header's first three, the ones either side of what they accept, and
+#: a few others.
+_tls_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 19, 20, 22, 24, 25, 0x80, 255])
+
+
+@st.composite
+def _tls_seeded(draw: st.DrawFn) -> bytes:
+    """A captured ClientHello record, now and then a header byte redrawn
+    near the values decode() accepts, a length or another byte of the
+    fragment changed, cut anywhere and followed by nothing, a record
+    header or free bytes: the guard's boundaries, the ClientHello's
+    lying lengths and the chaining predicate, which free bytes rarely
+    reach."""
+    raw = bytearray(draw(st.sampled_from(_TLS_CAPTURED_HELLOS)))
+    for position in range(3):
+        if draw(st.integers(0, 3)) == 0:
+            raw[position] = draw(_tls_lead)
+    for _ in range(draw(st.integers(0, 3))):
+        raw[draw(st.integers(3, len(raw) - 1))] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""),
+            st.binary(min_size=1, max_size=3).map(
+                lambda head: bytes([0x17, 0x03, 0x03])[: len(head)]
+            ),
+            st.binary(max_size=40),
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+def _tls_rejection(data: bytes) -> str | None:
+    """What TLS.decode() must reject ``data`` for, judged in its order,
+    each once its bytes are present: ``"content_type"`` outside 20-24,
+    then ``"legacy_version"`` not starting 3 or above 0x0304, then a
+    ``"length"`` above 2**14 + 2048; then ``"truncated"``, shorter than
+    the header or the record; or ``None``."""
+    if len(data) > 0 and not 20 <= data[0] <= 24:
+        return "content_type"
+    if len(data) > 1 and data[1] != 3:
+        return "legacy_version"
+    if len(data) > 2 and data[2] > 4:
+        return "legacy_version"
+    if len(data) < 5:
+        return "truncated"
+    length = int.from_bytes(data[3:5], "big")
+    if length > 2**14 + 2048:
+        return "length"
+    return "truncated" if 5 + length > len(data) else None
+
+
+def _tls_decode(data: bytes) -> TLS | str:
+    """Decode ``data``, or say what TLS.decode() rejected it for, in
+    :func:`_tls_rejection`'s words."""
+    try:
+        return TLS.decode(data)
+    except TruncatedHeaderError:
+        return "truncated"
+    except InvalidFieldError as error:
+        return str(error.field)
+
+
+#: TLS's display accessors, every one of which must answer on any
+#: decoded or constructed instance.
+_TLS_DISPLAY = (
+    "content_type_name",
+    "legacy_version_name",
+    "handshake_type",
+    "handshake_type_name",
+    "header_len",
+)
+
+
+class TestTLSAccessorSafety:
+    @given(data=st.one_of(_tls_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for the first reason that applies, at
+        any length; a record keeps its own bytes and chains exactly when
+        what follows begins like a record; the display accessors never
+        raise, and the ClientHello parsers raise only TruncatedHeaderError
+        or InvalidFieldError on the fragment."""
+        tls = _tls_decode(data)
+        if not isinstance(tls, TLS):
+            assert tls == _tls_rejection(data)
+            event(f"TLS rejected: {tls}")
+            return
+        assert _tls_rejection(data) is None
+        assert bytes(tls) == data[: tls.header_len]
+        assert TLS.decode(bytes(tls)) == tls
+        rest = data[tls.header_len : tls.header_len + 3]
+        follows = bool(rest) and _tls_rejection(rest) in ("truncated", None)
+        assert (tls.next_protocol() is TLS) == follows
+        for name in _TLS_DISPLAY:
+            getattr(tls, name)
+        for name in ("client_hello", "server_name"):
+            try:
+                getattr(tls, name)
+            except (TruncatedHeaderError, InvalidFieldError) as error:
+                assert error.field == "fragment"
+                assert error.offset is not None
+                assert 0 <= error.offset <= tls.length
+        event(f"TLS {tls.content_type_name}, hello: {tls.handshake_type == 1}")
+
+    @given(hello=tls_client_hellos(), version=st.integers(0x0300, 0x0304))
+    def test_built_client_hellos_parse_back(
+        self, hello: TLSClientHello, version: int
+    ) -> None:
+        """A ClientHello built from fields, in a record of any version,
+        parses back into exactly those fields."""
+        body = bytes(hello)
+        handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+        tls = TLS.decode(
+            bytes([22])
+            + version.to_bytes(2, "big")
+            + len(handshake).to_bytes(2, "big")
+            + handshake
+        )
+        assert tls.client_hello == hello
+
+    @given(
+        name=st.text(
+            alphabet=st.characters(min_codepoint=0, max_codepoint=0x7F),
+            min_size=1,
+            max_size=40,
+        )
+    )
+    def test_any_ascii_host_name_reads_back(self, name: str) -> None:
+        """Every ASCII host_name is returned as sent, unjudged."""
+        raw = name.encode("ascii")
+        entry = b"\x00" + len(raw).to_bytes(2, "big") + raw
+        data = len(entry).to_bytes(2, "big") + entry
+        hello = TLSClientHello(
+            0x0303, bytes(32), extensions=(TLSExtension(0, data),)
+        )
+        body = bytes(hello)
+        handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+        tls = TLS(22, 0x0301, len(handshake), handshake)
+        assert TLS.decode(bytes(tls)).server_name == name
+
+    @given(record=tls_records(), trailer=st.binary(max_size=60))
+    def test_trailing_bytes_stay_out_of_the_record(
+        self, record: TLS, trailer: bytes
+    ) -> None:
+        """A record ends where its length says, whatever follows."""
+        try:
+            decoded = TLS.decode(bytes(record) + trailer)
+        except ProtocolError:
+            raise AssertionError("a canonical record must decode") from None
+        assert decoded == record
+        assert decoded.header_len == 5 + record.length
+
+    @given(
+        content_type=st.integers(0, 0xFF).filter(
+            lambda value: not 20 <= value <= 24
+        ),
+        version=st.integers(0, 0xFFFF).filter(
+            lambda value: not 0x0300 <= value <= 0x0304
+        ),
+        kind=st.integers(0, 0xFF),
+    )
+    def test_constructed_unknown_values_display(
+        self, content_type: int, version: int, kind: int
+    ) -> None:
+        """Construction accepts values decode() rejects, and the display
+        helpers name them as unknown rather than raising."""
+        tls = TLS(content_type, version, 1, bytes([kind]))
+        assert tls.content_type_name == f"unknown ({content_type})"
+        assert tls.legacy_version_name == f"unknown ({version:#06x})"
+        assert tls.handshake_type is None
+        handshake = TLS(22, version, 1, bytes([kind]))
+        assert handshake.handshake_type == kind
+        assert handshake.handshake_type_name
+        for name in _TLS_DISPLAY:
+            getattr(tls, name)
 
 
 #: VRRP's display and per-version accessors, every one of which must

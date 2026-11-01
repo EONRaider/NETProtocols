@@ -27,6 +27,7 @@ from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
 from netprotocols.layer7.tftp import TFTP
+from netprotocols.layer7.tls import TLS, TLSClientHello, TLSExtension
 from netprotocols.layer7.vxlan import VXLAN
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "RIP",
     "STUN",
     "TFTP",
+    "TLS",
     "VXLAN",
     "BGPOptionalParameter",
     "BGPPathAttribute",
@@ -62,4 +64,6 @@ __all__ = [
     "SOARecord",
     "STUNAddress",
     "STUNAttribute",
+    "TLSClientHello",
+    "TLSExtension",
 ]
