@@ -590,10 +590,12 @@ def _prefixed(
     return start, stop
 
 
-def _walk_extensions(
+def _extension_spans(
     data: bytes, at: int, end: int
-) -> Iterator[tuple[int, TLSExtension]]:
-    """Yield ``(offset, extension)`` for each extension in ``data[at:end]``.
+) -> Iterator[tuple[int, int, int, int]]:
+    """Yield ``(offset, type, start, stop)`` for each extension in
+    ``data[at:end]``: where its header and its data start, its type,
+    and where its data stops.
 
     :raises InvalidFieldError: an extension's header or data runs past
         ``end``.
@@ -602,14 +604,65 @@ def _walk_extensions(
         if at + 4 > end:
             raise _malformed("TLS extension header runs past the block", at)
         start, stop = _prefixed(data, at + 2, 2, end, "extension")
-        yield (
-            at,
-            TLSExtension(
-                type=int.from_bytes(data[at : at + 2], "big"),
-                data=data[start:stop],
-            ),
-        )
+        yield at, int.from_bytes(data[at : at + 2], "big"), start, stop
         at = stop
+
+
+def _walk_extensions(
+    data: bytes, at: int, end: int
+) -> Iterator[tuple[int, TLSExtension]]:
+    """Yield ``(offset, extension)`` for each extension in ``data[at:end]``.
+
+    :raises InvalidFieldError: an extension's header or data runs past
+        ``end``.
+    """
+    for offset, kind, start, stop in _extension_spans(data, at, end):
+        yield offset, TLSExtension(type=kind, data=data[start:stop])
+
+
+def _hello_spans(
+    fragment: bytes, end: int
+) -> tuple[
+    tuple[int, int],
+    tuple[int, int],
+    tuple[int, int],
+    tuple[int, int] | None,
+]:
+    """Locate a ClientHello's variable-length fields, the message ending
+    at ``end`` in ``fragment``.
+
+    Every length is judged against what contains it, as soon as it is
+    read and in wire order.
+
+    :returns: ``(start, stop)`` of the session ID, the cipher suites and
+        the compression methods, and of the extensions block's contents
+        or ``None`` when the message ends after the compression methods.
+    :raises InvalidFieldError: the message ends inside its Random, a
+        length runs past what contains it, the session ID exceeds 32
+        bytes, or bytes follow the extensions block.
+    """
+    if end < 4 + 2 + 32:
+        raise _malformed("TLS ClientHello ends inside its random", 4)
+    at = 4 + 2 + 32
+    session_id = _prefixed(fragment, at, 1, end, "legacy_session_id")
+    if session_id[1] - session_id[0] > _MAX_SESSION_ID:
+        raise _malformed(
+            f"TLS legacy_session_id of {session_id[1] - session_id[0]} "
+            f"bytes exceeds {_MAX_SESSION_ID}",
+            at,
+        )
+    suites = _prefixed(fragment, session_id[1], 2, end, "cipher_suites")
+    methods = _prefixed(
+        fragment, suites[1], 1, end, "legacy_compression_methods"
+    )
+    if methods[1] == end:
+        return session_id, suites, methods, None
+    block = _prefixed(fragment, methods[1], 2, end, "extensions block")
+    if block[1] != end:
+        raise _malformed(
+            "TLS ClientHello holds bytes after its extensions", block[1]
+        )
+    return session_id, suites, methods, block
 
 
 def _parse_client_hello(
@@ -639,39 +692,19 @@ def _parse_client_hello(
             actual=len(fragment),
         )
     end = 4 + length
-    if end < 4 + 2 + 32:
-        raise _malformed("TLS ClientHello ends inside its random", 4)
-    at = 4 + 2 + 32
-    sid_start, sid_stop = _prefixed(fragment, at, 1, end, "legacy_session_id")
-    if sid_stop - sid_start > _MAX_SESSION_ID:
-        raise _malformed(
-            f"TLS legacy_session_id of {sid_stop - sid_start} bytes "
-            f"exceeds {_MAX_SESSION_ID}",
-            at,
-        )
-    cs_start, cs_stop = _prefixed(fragment, sid_stop, 2, end, "cipher_suites")
-    cm_start, cm_stop = _prefixed(
-        fragment, cs_stop, 1, end, "legacy_compression_methods"
-    )
+    session_id, suites, methods, block = _hello_spans(fragment, end)
     extensions: tuple[TLSExtension, ...] | None = None
     offsets: tuple[int, ...] = ()
-    if cm_stop < end:
-        block_start, block_stop = _prefixed(
-            fragment, cm_stop, 2, end, "extensions block"
-        )
-        if block_stop != end:
-            raise _malformed(
-                "TLS ClientHello holds bytes after its extensions", block_stop
-            )
-        walked = tuple(_walk_extensions(fragment, block_start, block_stop))
+    if block is not None:
+        walked = tuple(_walk_extensions(fragment, *block))
         offsets = tuple(offset for offset, _ in walked)
         extensions = tuple(extension for _, extension in walked)
     hello = TLSClientHello(
         legacy_version=int.from_bytes(fragment[4:6], "big"),
         random=fragment[6:38],
-        legacy_session_id=fragment[sid_start:sid_stop],
-        cipher_suites=fragment[cs_start:cs_stop],
-        legacy_compression_methods=fragment[cm_start:cm_stop],
+        legacy_session_id=fragment[slice(*session_id)],
+        cipher_suites=fragment[slice(*suites)],
+        legacy_compression_methods=fragment[slice(*methods)],
         extensions=extensions,
     )
     return hello, offsets
@@ -738,6 +771,59 @@ def _reject(
         expected=expected,
         actual=actual,
     )
+
+
+def _judge_lead(owner: type, data: bytes | memoryview) -> None:
+    """Judge as much of a record header's first 3 bytes as ``data``
+    holds, each by its own rule, as :meth:`TLS.decode` does.
+
+    :raises InvalidFieldError: the ContentType is not 20-24, the
+        version's first byte is not 3, or its second is above 4.
+    """
+    size = len(data)
+    if size > 0 and data[0] not in _CONTENT_TYPE_NAMES:
+        _reject(
+            owner,
+            "content_type",
+            0,
+            "20-24",
+            data[0],
+            f"TLS content_type must be 20-24, got {data[0]}",
+        )
+    if size > 1 and data[1] != 3:
+        _reject(
+            owner,
+            "legacy_version",
+            1,
+            "0x03",
+            data[1],
+            f"TLS legacy_version must start 0x03, got {data[1]:#04x}",
+        )
+    if size > 2 and data[2] > 4:
+        _reject(
+            owner,
+            "legacy_version",
+            2,
+            "0x0300-0x0304",
+            0x0300 | data[2],
+            f"TLS legacy_version must be 0x0300-0x0304, got 0x03{data[2]:02x}",
+        )
+
+
+def _judge_length(owner: type, length: int) -> None:
+    """Judge a record's length against the bound any version sets.
+
+    :raises InvalidFieldError: it exceeds 2**14 + 2048.
+    """
+    if length > _MAX_LENGTH:
+        _reject(
+            owner,
+            "length",
+            3,
+            f"<={_MAX_LENGTH}",
+            length,
+            f"TLS record length {length} exceeds {_MAX_LENGTH}",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -846,44 +932,9 @@ class TLS(Protocol):
             ``"length"``).
         """
         size = len(data)
-        if size > 0 and data[0] not in _CONTENT_TYPE_NAMES:
-            _reject(
-                cls,
-                "content_type",
-                0,
-                "20-24",
-                data[0],
-                f"TLS content_type must be 20-24, got {data[0]}",
-            )
-        if size > 1 and data[1] != 3:
-            _reject(
-                cls,
-                "legacy_version",
-                1,
-                "0x03",
-                data[1],
-                f"TLS legacy_version must start 0x03, got {data[1]:#04x}",
-            )
-        if size > 2 and data[2] > 4:
-            _reject(
-                cls,
-                "legacy_version",
-                2,
-                "0x0300-0x0304",
-                0x0300 | data[2],
-                f"TLS legacy_version must be 0x0300-0x0304, "
-                f"got 0x03{data[2]:02x}",
-            )
+        _judge_lead(cls, data)
         content_type, version, length = cls._unpack_fixed(data)
-        if length > _MAX_LENGTH:
-            _reject(
-                cls,
-                "length",
-                3,
-                f"<={_MAX_LENGTH}",
-                length,
-                f"TLS record length {length} exceeds {_MAX_LENGTH}",
-            )
+        _judge_length(cls, length)
         end = _HEADER_LEN + length
         if end > size:
             raise TruncatedHeaderError(
