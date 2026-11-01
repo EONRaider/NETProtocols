@@ -589,10 +589,42 @@ What moved, and why:
 - **The wheel grew 44.0 KiB** with the five protocols, and
   the ratio fell from 15.3× to 12.2×.
 
+### Status audit (2026-11-01, #197)
+
+`master` (`8fe5076`) is 2.6.0 plus Tier 4 (NTP, TFTP, RADIUS, STUN and
+HSRP, #174) and Tier 5's TLS (#196), merged and unreleased; the
+version is still 2.6.0. Every claim below was walked against that tree
+for whether its status label is still accurate, without re-measuring
+anything:
+
+- **1.1-1.6 describe the 2.6.0 release tree**, which is what the README
+  quotes them as. Six modules and 101 corpus frames have been added
+  since, so each is now labelled `VERIFIED for 2.6.0` and `NEEDS
+  RE-MEASUREMENT` for the next release (Rule 2, Rule 4), the form 1.2
+  already used. Nothing in them changed.
+- **The competitors they name are still current.** `dpkt 1.9.8` and
+  `scapy 2.8.0` are the latest PyPI releases on the audit date (7.1),
+  so the versions in 1.1-1.6, 2.1 and 2.2 stand. scapy 2.8.0's wheel
+  still holds 121 modules under `scapy/layers/` (2.1).
+- **1.7's ten-project CI audit is dated 2026-09-04** and says to re-run
+  it before quoting; it was not re-run here.
+- **3.1's simulation table names no dpkt or pypacker version** (Rule
+  3). Re-running it means importing both, which this audit does not do.
+- **4.1's open-issue count has moved:** a GitHub search for
+  `repo:kbandla/dpkt is:issue is:open` returns 81, against the 77
+  recorded on 2026-09-04. dpkt's last release is still 1.9.8 of
+  2022-08-18 (PyPI); its last commit was not re-checked.
+- **The current-tree figures in 3.2 and 5.1-5.9** (corpus, fuzz,
+  coverage, raise-site and test counts) are re-derived by the pull
+  request that changes them (most recently `dab2580`, after TLS) and
+  are not touched here. The stdlib-module count (3.2, 15), the
+  `_base.py:202-207` citation (3.2) and the test counts of 5.5, 5.7 and
+  5.9 (66, 85, 37) were checked and still hold.
+
 ## 1. Performance
 
 ### 1.1 "3.4× faster than scapy at decoding"
-**Status: VERIFIED**
+**Status: VERIFIED for 2.6.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
 after #147 closed the dpkt-throughput regression below — see that
@@ -631,7 +663,7 @@ README should pick the number they are willing to defend on someone
 else's.
 
 ### 1.2 "dpkt decodes 1.3× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
-**Status: VERIFIED for 2.6.0 — the 15% claim no longer holds, on the 265-frame corpus or the 293-frame one**
+**Status: VERIFIED for 2.6.0 — the 15% claim no longer holds, on the 265-frame corpus or the 293-frame one** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Re-measured for 2.6.0 (2026-10-28, the 293-frame corpus; see above):
 **dpkt 1.33× faster** on the median run (87,744 against 116,720;
@@ -694,7 +726,7 @@ further into the stack on 79 of its 265 frames" (1.6); for 2.6.0, on
 94 of its 293.
 
 ### 1.3 "4.2× faster than dpkt at encoding"
-**Status: VERIFIED**
+**Status: VERIFIED for 2.6.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured under
 CPython 3.12, resolving the cross-version caveat this section used to
@@ -741,7 +773,7 @@ decode's cost), while dpkt's own number held essentially flat. Still a
 wide, clean win.
 
 ### 1.4 "Imports in 90 ms; scapy takes 436+ ms"
-**Status: VERIFIED**
+**Status: VERIFIED for 2.6.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Re-measured for 2.6.0 (2026-10-28; see above): best of three
 `benchmark_import.py` runs, netprotocols **89.8 ms** (97 modules),
@@ -786,7 +818,7 @@ original measurement. A codec that turns bytes into objects should
 never touch the host.
 
 ### 1.5 "12.2× smaller wheel than scapy"
-**Status: VERIFIED** — re-measure at each release (Rule 4)
+**Status: VERIFIED for 2.6.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Re-measured for 2.6.0 (2026-10-28): `netprotocols-2.6.0-py3-none-any.whl`
 is 225,832 bytes (220.5 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
@@ -823,7 +855,7 @@ since the version on file. Both move with releases — re-check before
 quoting.
 
 ### 1.6 "Decodes further into the stack than dpkt, on the same bytes"
-**Status: VERIFIED**
+**Status: VERIFIED for 2.6.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; see the 2026-11-01 status audit above)
 
 *Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
 against the Tiers-2-4 tree, again after #147's `decode_frame()`
