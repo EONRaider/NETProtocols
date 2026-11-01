@@ -712,10 +712,10 @@ def _check_tcp_payload(segment: bytes, stats: Counter) -> list[str]:
     return []
 
 
-#: HTTPS's port, where the corpus carries TLS (RFC 8446).
+#: HTTPS's port, where the corpus carries TLS (RFC 9846, RFC 5246).
 _TLS_PORT = 443
 
-#: TLS ContentTypes (RFC 8446 §5.1; heartbeat, RFC 6520), by the
+#: TLS ContentTypes (RFC 9846 §5.1; heartbeat, RFC 6520), by the
 #: counter name of each.
 _TLS_CONTENT_TYPES = {
     20: "change-cipher-spec",
@@ -747,8 +747,8 @@ def _check_tls(data: bytes, stats: Counter) -> list[str]:
     this checks the records' framing and what can be read in the clear:
     each record's length is at most 2**14 + 2048 (``tls-length``); a
     Handshake, Alert or ChangeCipherSpec record is not empty
-    (``tls-empty``, RFC 8446 §5.1, RFC 5246 §6.2.1); a ChangeCipherSpec
-    record is the single byte 1 (``tls-ccs``, RFC 5246 §7.1, RFC 8446
+    (``tls-empty``, RFC 9846 §5.1, RFC 5246 §6.2.1); a ChangeCipherSpec
+    record is the single byte 1 (``tls-ccs``, RFC 5246 §7.1, RFC 9846
     §5); and a ClientHello, a Handshake record starting with type 1,
     is whole in its record and its fields, session ID (at most 32
     bytes), cipher suites, compression methods and extensions, tile it
@@ -796,8 +796,8 @@ def _tls_vector(data: bytes, at: int, width: int) -> tuple[bytes, int] | None:
 
 
 def _check_tls_client_hello(fragment: bytes, stats: Counter) -> str | None:
-    """Check a ClientHello's framing and its server_name (RFC 8446
-    §4.1.2, RFC 5246 §7.4.1.2, RFC 6066 §3); the failure, or ``None``."""
+    """Check a ClientHello's framing and its server_name (RFC 9846
+    §4.2.2, RFC 5246 §7.4.1.2, RFC 6066 §3); the failure, or ``None``."""
     length = int.from_bytes(fragment[1:4], "big")
     if len(fragment) < 4 or 4 + length > len(fragment):
         return "tls-hello"

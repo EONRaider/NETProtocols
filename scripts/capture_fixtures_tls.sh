@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture TLS fixtures (RFC 8446, RFC 5246) for the corpus, ours and not
+# Capture TLS fixtures (RFC 9846, RFC 5246) for the corpus, ours and not
 # a public one.
 #
 #     sudo scripts/capture_fixtures_tls.sh

@@ -261,10 +261,10 @@ def install(registry: Registry) -> None:
     # to the next message in the segment.
     add(TABLE_TCP_PORT, 3478, STUN)
 
-    # TLS (RFC 8446 §5.1): HTTPS's port. A client connects from an
-    # ephemeral port, so the destination-first lookup finds both
-    # directions. Each record decodes as one layer and, like BGP's
-    # messages, chains to the next one in the segment. Only 443 is
-    # registered: 853, 465, 993, 995 and 8443 need decode_as (see
+    # TLS (RFC 9846 §5.1, RFC 5246 §6.2): HTTPS's port. A client
+    # connects from an ephemeral port, so the destination-first lookup
+    # finds both directions. Each record decodes as one layer and, like
+    # BGP's messages, chains to the next one in the segment. Only 443
+    # is registered: 853, 465, 993, 995 and 8443 need decode_as (see
     # layer7/tls.py).
     add(TABLE_TCP_PORT, 443, TLS)

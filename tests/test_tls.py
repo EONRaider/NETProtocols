@@ -1,4 +1,4 @@
-"""Test TLS record decoding (RFC 8446 §5.1), the ClientHello and its SNI.
+"""Test TLS record decoding (RFC 9846 §5.1), the ClientHello and its SNI.
 
 Covered: the 5-byte record header, both round trips, truncation at
 every length, the decode-time guard against a wrong port guess (each
@@ -296,7 +296,7 @@ class TestCapture:
 
     def test_record_versions(self):
         """ClientHellos say TLS 1.0, but gnutls-cli's TLS 1.2; every
-        other record says TLS 1.2, as RFC 8446 §5.1 has TLS 1.3 do."""
+        other record says TLS 1.2, as RFC 9846 §5.1 has TLS 1.3 do."""
         for index, raw in enumerate(CORPUS):
             for layer in tls_layers(decode_frame(raw)):
                 if layer.handshake_type == 1 and index != 4:
@@ -560,8 +560,10 @@ class TestRecord:
         assert TLS.decode(bytes(tls)) == tls
 
     def test_a_zero_length_record(self):
-        """A bare header, which RFC 8446 §5.1 allows for application
-        data (and the decoder for every type)."""
+        """A bare header: the decoder accepts it for every type, though
+        no real record is one. RFC 9846 §5.1's zero-length Application
+        Data is a TLSInnerPlaintext's content, which §5.2 protects with
+        the inner content type and an AEAD tag."""
         tls = TLS.decode(record(APPDATA))
         assert tls.fragment == b"" and tls.header_len == 5
         assert TLS.decode(record(HANDSHAKE)).handshake_type is None
@@ -791,6 +793,29 @@ class TestChaining:
         assert packet.consumed == 54 + 6
         assert packet.stopped_by is None
 
+    def test_a_padded_bare_ack_fails_the_guard(self):
+        """Over IPv4 a bare segment with no TCP options is a 54-byte
+        frame. Padded to Ethernet's 60-byte minimum, the 6 zero bytes
+        reach TLS, since the walk does not end its buffer at IPv4's
+        Total Length (#235): a ContentType of 0. Unpadded, the buffer is
+        empty. On BGP's port the padding is still too short to judge."""
+        bare = frame(b"")
+        assert len(bare) == 54
+        padded = bare + bytes(6)
+        with pytest.raises(InvalidFieldError) as caught:
+            decode_frame(padded)
+        error = caught.value
+        assert (error.protocol, error.field) == (TLS, "content_type")
+        assert (error.frame_offset, error.actual) == (54, 0)
+        packet = decode_frame(padded, lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, TCP]
+        with pytest.raises(TruncatedHeaderError) as caught:
+            decode_frame(bare)
+        assert (caught.value.protocol, caught.value.actual) == (TLS, 0)
+        with pytest.raises(TruncatedHeaderError) as caught:
+            decode_frame(frame(b"", dport=179) + bytes(6))
+        assert caught.value.actual == 6
+
     def test_equal_records_compare_equal_wherever_found(self):
         """The chaining answer is decode context, not a field."""
         alone = TLS.decode(record(APPDATA, b"a"))
@@ -803,10 +828,32 @@ class TestChaining:
 class TestMaxDepth:
     """A segment of many records against ``max_depth``."""
 
+    #: Bare 5-byte headers: the decoder's worst case, not real records.
     SEGMENT = record(APPDATA) * 40
 
+    #: The smallest TLS 1.3 record with a 16-byte AEAD tag: zero-length
+    #: Application Data, protected (RFC 9846 §5.2), 1 inner content type
+    #: byte and the tag, 17 bytes of ciphertext behind the header.
+    PROTECTED = record(APPDATA, bytes(1 + 16))
+
+    def test_the_smallest_protected_record(self):
+        assert len(self.PROTECTED) == 22
+        assert TLS.decode(self.PROTECTED).length == 17
+
+    def test_real_records_exceed_the_default_depth(self):
+        """29 of them pass; the 30th, 660 bytes in, exceeds the default,
+        and a 1,448-byte segment holds 65."""
+        assert 1448 // len(self.PROTECTED) == 65
+        packet = decode_frame(frame(self.PROTECTED * 29))
+        assert len(tls_layers(packet)) == 29
+        with pytest.raises(MaxDepthExceededError) as caught:
+            decode_frame(frame(self.PROTECTED * 30))
+        assert caught.value.frame_offset == 54 + 29 * 22
+        packet = decode_frame(frame(self.PROTECTED * 65), max_depth=68)
+        assert len(tls_layers(packet)) == 65
+
     def test_the_default_depth_stops_the_walk(self):
-        """29 records after Ethernet, IPv4 and TCP; valid traffic."""
+        """29 records after Ethernet, IPv4 and TCP."""
         raw = frame(self.SEGMENT)
         with pytest.raises(MaxDepthExceededError) as caught:
             decode_frame(raw)
@@ -870,6 +917,33 @@ class TestClientHello:
             TLSExtension(0x0A0A),
             TLSExtension(43, b"\x02\x03\x04"),
         )
+
+    @pytest.mark.parametrize(
+        "ciphertext,error,offset",
+        [
+            # Its next three bytes, read as a length, exceed the record:
+            # the likely case.
+            (b"\x01\x8c\x3f\x05" + bytes(36), TruncatedHeaderError, 1),
+            # A length of 0: the message ends inside its Random.
+            (b"\x01" + bytes(39), InvalidFieldError, 4),
+        ],
+        ids=["length-past-the-record", "length-zero"],
+    )
+    def test_an_encrypted_finished_starting_with_1(
+        self, ciphertext, error, offset
+    ):
+        """A TLS 1.2 encrypted Finished (40 bytes under AES-GCM) whose
+        ciphertext starts with 1 cannot be told from a ClientHello by
+        its first byte, so both accessors raise rather than answer
+        None."""
+        tls = TLS.decode(record(HANDSHAKE, ciphertext))
+        assert tls.length == 40
+        assert tls.handshake_type_name == "client_hello"
+        for name in ("client_hello", "server_name"):
+            with pytest.raises(error) as caught:
+                getattr(tls, name)
+            assert caught.value.field == "fragment"
+            assert caught.value.offset == offset
 
     def test_a_coalesced_message_after_it_is_ignored(self):
         """Only the first handshake message of a record is looked at."""

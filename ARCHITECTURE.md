@@ -954,15 +954,17 @@ one stop short. BGP's two ways past it work the same, with
 `start=STUN`; the corpus's TCP segments carry 2. See
 [`layer7/stun.py`](src/netprotocols/layer7/stun.py)'s module docstring.
 
-TLS on TCP 443 (RFC 8446 §5.1, RFC 5246 §6.2) has a weaker guard than
-BGP's or STUN's, but one byte at a time, as HSRP's is: a ContentType of
-20-24 (change_cipher_spec, alert, handshake, application_data and RFC
-6520's heartbeat), a version whose first byte is 3 and second 0-4 (SSL
-3.0 to TLS 1.3 in form), each judged as soon as it is in the buffer,
-then a length of at most 2^14 + 2048 (RFC 5246 §6.2.3's ciphertext
-bound, the loosest any version sets), and only then the length against
-the buffer. Random bytes pass the first three 25 times in 2^24, about
-once in 671,000. Measured the same way (`random.Random` seeds 0-2, each
+TLS on TCP 443 (RFC 9846 §5.1, which obsoletes RFC 8446 as TLS 1.3's
+specification, and RFC 5246 §6.2, TLS 1.2's, which RFC 9846 also
+obsoletes) has a weaker guard than BGP's or STUN's, but one byte at a
+time, as HSRP's is: a ContentType of 20-24 (change_cipher_spec, alert,
+handshake, application_data and RFC 6520's heartbeat), a version whose
+first byte is 3 and second 0-4 (SSL 3.0 to TLS 1.3 in form), each judged
+as soon as it is in the buffer, then a length of at most 2^14 + 2048
+(RFC 5246 §6.2.3's ciphertext bound, the loosest any version sets),
+judged once both its bytes are, and only then the length against the
+buffer. Random bytes pass the first three 25 times in 2^24, about once
+in 671,000. Measured the same way (`random.Random` seeds 0-2, each
 10,000 random 300-byte TCP payloads to port 443 and 10,000 of uniformly
 random length 0-600, the latter walked unpadded and padded: 90,000
 walks), every walk ended with `stopped_by` set and none decoded a TLS
@@ -974,30 +976,44 @@ near the 452 expected: a length of 0-295 is 296 of the 65,536 values.
 The fragment is not judged, and an SSL 2.0-compatible ClientHello, its
 first byte's top bit set, is turned away at the ContentType. Records
 follow one another in the stream as BGP's messages do, and chain the
-same way, so the rest of BGP's paragraph holds here: a segment that
-ends inside a record raises `TruncatedHeaderError` at it, one that
-begins inside one almost always fails the guard, a bare ACK raises at
-the empty payload (`tests/fixtures/tcp_https.pcap`'s five IPv6 ACKs
-do, and `tests/test_corpus.py` walks them lax), and `max_depth` bounds
-correctness (a record can be a bare 5-byte header, so a 1448-byte
-segment holds 289; the corpus's busiest segment carries 6). The case
-that matters is a ClientHello larger than a segment: Chromium's, with
-its X25519MLKEM768 key share, is a 1738-byte record that TCP carried in
-two segments in `tests/fixtures/tls/tls_session.pcap`, so a strict walk
-raises at both and a lax one stops at TCP. There is no lenient mode
-that reads a partial hello: the SNI of such a client comes from
-reassembling its stream and calling `TLS.decode()` on that, as for
-`HTTP` below. `TLS.client_hello` and `TLS.server_name` parse the
-fragment on demand and never in `decode()`; there is no cryptography,
-and nothing past the ClientHello's fields and its server_name
-extension is decoded (the ServerHello, certificates, key exchange and
-every other extension stay raw, handshake messages fragmented across
-records or coalesced into one are not reassembled or split, and DTLS
-and QUIC, on UDP 443, are not decoded). Under Encrypted Client Hello
-the name read is the outer ClientHello's, the client-facing server's.
-Only 443 is registered: DNS over TLS's 853, the mail ports 465, 993
-and 995, and 8443 need `decode_as`. See
-[`layer7/tls.py`](src/netprotocols/layer7/tls.py)'s module docstring.
+same way, so the rest of BGP's paragraph holds here: a segment that ends
+inside a record raises `TruncatedHeaderError` at it, one that begins
+inside one almost always fails the guard, a bare ACK raises
+`TruncatedHeaderError` at the empty payload
+(`tests/fixtures/tcp_https.pcap`'s five IPv6 ACKs do, and
+`tests/test_corpus.py` walks them lax), and `max_depth` bounds
+correctness. One difference from BGP's port: an IPv4 bare ACK with no
+TCP options is a 54-byte frame, and where the capture holds the padding
+that brings it to Ethernet's 60 bytes, the walk, which does not yet end
+a buffer at IPv4's Total Length (#235), hands TLS those 6 zero bytes,
+which it rejects as a ContentType of 0 (`InvalidFieldError`,
+`field="content_type"`), where BGP, judging nothing before its 19-byte
+header is whole, still raises `TruncatedHeaderError`. As for
+`max_depth`, the decoder's worst case is a bare 5-byte header, 289 to a
+1448-byte segment; a real TLS 1.3 record is at least 5 + 1 + 16 = 22
+bytes (an empty Application Data fragment is protected with its inner
+content type and, under AES-GCM or ChaCha20-Poly1305, a 16-byte tag; RFC
+9846 §5.2), or 14 with TLS_AES_128_CCM_8_SHA256's 8-byte tag, so a
+1448-byte segment holds 65 or 103 records and 30 of 22 bytes, 660 bytes,
+already exceed the 29 the default leaves; the corpus's busiest segment
+carries 6. The case that matters is a ClientHello larger than a segment:
+Chromium's, with its X25519MLKEM768 key share, is a 1738-byte record
+that TCP carried in two segments in
+`tests/fixtures/tls/tls_session.pcap`, so a strict walk raises at both
+and a lax one stops at TCP. There is no lenient mode that reads a
+partial hello: the SNI of such a client comes from reassembling its
+stream and calling `TLS.decode()` on that, as for `HTTP` below.
+`TLS.client_hello` and `TLS.server_name` parse the fragment on demand
+and never in `decode()`; there is no cryptography, and nothing past the
+ClientHello's fields and its server_name extension is decoded (the
+ServerHello, certificates, key exchange and every other extension stay
+raw, handshake messages fragmented across records or coalesced into one
+are not reassembled or split, and DTLS and QUIC, on UDP 443, are not
+decoded). Under Encrypted Client Hello the name read is the outer
+ClientHello's, the client-facing server's. Only 443 is registered: DNS
+over TLS's 853, the mail ports 465, 993 and 995, and 8443 need
+`decode_as`. See [`layer7/tls.py`](src/netprotocols/layer7/tls.py)'s
+module docstring.
 
 A rejected guess takes the ordinary decode-error path: the chain keeps
 the layers it did decode and records the failure. An accepted one

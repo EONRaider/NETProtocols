@@ -1,8 +1,8 @@
-"""TLS records (RFC 8446 §5.1, RFC 5246 §6.2), and the ClientHello's SNI.
+"""TLS records (RFC 9846 §5.1, RFC 5246 §6.2), and the ClientHello's SNI.
 
 TLS runs over TCP, HTTPS on port 443 among many others, and everything
 it sends is a sequence of records. Each starts with a 5-byte header
-(RFC 8446 §5.1, which keeps RFC 5246 §6.2.1's layout)::
+(RFC 9846 §5.1, which keeps RFC 5246 §6.2.1's layout)::
 
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -17,7 +17,7 @@ followed by ``length`` bytes of fragment. The ContentType is one of
 ``application_data`` (23) and ``heartbeat`` (24, RFC 6520). The version
 is SSL 3.0's ``0x0300`` through TLS 1.3's ``0x0304`` in form, though in
 practice ``0x0301`` (a ClientHello's, for compatibility) or ``0x0303``:
-RFC 8446 freezes it at TLS 1.2's value and negotiates the real version
+TLS 1.3 freezes it at TLS 1.2's value and negotiates the real version
 in the ``supported_versions`` extension. One :class:`TLS` instance is
 one record: the header decoded into :attr:`TLS.content_type`,
 :attr:`TLS.legacy_version` and :attr:`TLS.length`, and the fragment
@@ -26,6 +26,11 @@ holds by construction. Nothing is decrypted: under TLS 1.3 everything
 after the ServerHello is ``application_data`` on the wire, and under
 TLS 1.2 everything after ChangeCipherSpec is encrypted under its own
 content type.
+
+RFC 9846 is TLS 1.3's specification: it obsoletes RFC 8446, which
+first specified TLS 1.3, and RFC 5246, TLS 1.2's. TLS 1.2 is still
+spoken, and RFC 5246 is still where its rules are written, so it is
+cited here for what TLS 1.2 does.
 
 Validation
 ----------
@@ -37,13 +42,19 @@ does: a ContentType outside 20-24 (``field`` ``"content_type"``,
 ``offset`` 0), a version whose first byte is not 3 (``"legacy_version"``,
 1) or whose second is above 4 (``"legacy_version"``, 2), and a length
 above 2**14 + 2048 (``"length"``, 3), RFC 5246 §6.2.3's bound on an
-encrypted TLSCiphertext and the loosest any version sets (RFC 8446
-§5.2 allows 2**14 + 256). Each raises
-:class:`~netprotocols.InvalidFieldError`, so a payload that is not TLS
-is reported as that however short it is; only then does a record the
+encrypted TLSCiphertext and the loosest any version sets (RFC 9846
+§5.2 allows TLS 1.3 2**14 + 256). Each raises
+:class:`~netprotocols.InvalidFieldError`, with ``expected`` and
+``actual`` as its message words them. The first three bytes are judged
+one at a time, since each has a rule of its own, so a payload whose
+first three bytes are not a record header's is reported as that however
+short it is. The length is judged whole, once both its bytes are in the
+buffer: its bound does not split into a rule per byte (a first length
+byte of 0x48 is within it or not by the second). Only then does a record the
 buffer cuts short, or a buffer shorter than the 5-byte header whose
-bytes all pass (an empty one among them), raise
-:class:`~netprotocols.TruncatedHeaderError`.
+first three bytes pass, raise :class:`~netprotocols.TruncatedHeaderError`:
+an empty buffer, and ``17 03 03 ff`` too, although no second length
+byte can bring that length within the bound.
 
 Random bytes pass the first three checks 25 times in 2**24 (5 types, 1
 major and 5 minor version bytes), about once in 671,000, and then the
@@ -58,7 +69,7 @@ With the first three bytes forced to a valid header (a ContentType of
 20-24, ``0x03`` and 0-4), :meth:`TLS.decode` accepted 449 of 100,000
 random 300-byte payloads (``random.Random(0)``), near the 452 expected:
 a length of 0-295 is 296 of the 65,536 values. The fragment is not
-judged: a zero-length Handshake record, which RFC 8446 §5.1 forbids,
+judged: a zero-length Handshake record, which RFC 9846 §5.1 forbids,
 decodes, and so does Heartbeat.
 
 The guard is what turns away an SSL 2.0-compatible ClientHello, whose
@@ -94,7 +105,16 @@ what it can without reassembly:
 - A segment with no payload at all (the handshake, a bare ACK, a FIN)
   raises :class:`~netprotocols.TruncatedHeaderError` at the empty
   buffer, as it does on BGP's port 179: dispatch happens before anyone
-  looks at the payload.
+  looks at the payload. That holds where the frame ends with the TCP
+  header. Over IPv4 a bare segment whose TCP header has no options is a
+  54-byte frame, short of Ethernet's 60-byte minimum, and where the
+  capture holds the padding the sender added, the walk, which does not
+  yet end a layer's buffer at IPv4's Total Length (#235), hands TLS the
+  6 zero bytes as its payload: a ContentType of 0, so it raises
+  :class:`~netprotocols.InvalidFieldError` (``field``
+  ``"content_type"``) instead. BGP's decoder judges nothing before its
+  19-byte header is whole, so on port 179 the padded segment still
+  raises :class:`~netprotocols.TruncatedHeaderError`.
 
 A ClientHello larger than one segment is the case that matters most. A
 post-quantum key share makes one: Chromium's X25519MLKEM768 share is
@@ -110,11 +130,20 @@ such a client, reassemble the client's byte stream and call
 
 Each record being a layer, a segment of many is a deep chain: Ethernet,
 IPv4 and TCP are three layers, and the walk's default ``max_depth`` of
-:data:`~netprotocols.MAX_DEPTH` (32) leaves room for 29 records. A
-record can be a bare 5-byte header (a zero-length application_data
-fragment, which RFC 8446 §5.1 allows), so a 1,448-byte segment can hold
-289 of them, and a capture taken with GRO or TSO on holds segments of
-up to 64 KB. Past the limit a strict walk raises
+:data:`~netprotocols.MAX_DEPTH` (32) leaves room for 29 records. The
+decoder's worst case is a bare 5-byte header, a zero-length fragment,
+which it accepts for every content type: a 1,448-byte segment holds 289
+(1,448 / 5 = 289.6). Real records are longer, but not by enough. RFC
+9846 §5.1 lets TLS 1.3 send a zero-length fragment of Application Data,
+but that is the content of a TLSInnerPlaintext, which §5.2 protects
+with its 1-byte inner content type, so the smallest protected record is
+5 + 1 + 16 = 22 bytes with a 16-byte AEAD tag (AES-GCM,
+ChaCha20-Poly1305, AES-CCM) and 5 + 1 + 8 = 14 with
+TLS_AES_128_CCM_8_SHA256's 8-byte one. A 1,448-byte segment holds 65 of
+the former (1,448 / 22 = 65.8) and 103 of the latter (1,448 / 14 =
+103.4), and 30 records of 22 bytes, 660 bytes in all, already exceed the
+29; a capture taken with GRO or TSO on holds segments of up to 64 KB.
+Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic and a lax
 one stops with ``packet.stopped_by`` set; a larger ``max_depth``, or a
 second walk ``decode_frame(frame[packet.consumed:], start=TLS)``, decodes
@@ -125,12 +154,18 @@ The handshake and the ClientHello
 Accessors parse the fragment on demand, never in :meth:`TLS.decode`,
 and never re-encode it. A Handshake record's fragment begins with a
 handshake message's header, a 1-byte HandshakeType and a 3-byte length
-(RFC 8446 §4), so :attr:`TLS.handshake_type` is the fragment's first
+(RFC 9846 §4), so :attr:`TLS.handshake_type` is the fragment's first
 byte, for any non-empty Handshake record, and ``None`` otherwise. That
 byte is a HandshakeType only where the record is in the clear: under
 TLS 1.2 the Finished after ChangeCipherSpec is encrypted, and its
 record, still ``handshake`` on the wire, starts with ciphertext, which
-the record layer gives no way to tell apart.
+the record layer gives no way to tell apart. One such record in 256
+starts with the byte 1 and reads as a ClientHello, so
+:attr:`TLS.client_hello` and :attr:`TLS.server_name` raise on it, as
+below, rather than answer ``None``: almost always
+:class:`~netprotocols.TruncatedHeaderError`, since the 3 bytes of
+ciphertext read as the message's length almost always exceed the
+record, and otherwise :class:`~netprotocols.InvalidFieldError`.
 
 :attr:`TLS.client_hello` parses the first handshake message of a
 Handshake record whose type is ``client_hello`` (1) into a
@@ -215,18 +250,18 @@ from netprotocols.utils.exceptions import (
 
 __all__ = ["TLS", "TLSClientHello", "TLSExtension"]
 
-#: The record header's length (RFC 8446 §5.1).
+#: The record header's length (RFC 9846 §5.1).
 _HEADER_LEN = 5
 
 #: The largest record length any version allows: RFC 5246 §6.2.3's
-#: TLSCiphertext, 2**14 + 2048 (RFC 8446 §5.2 caps TLS 1.3's at
+#: TLS 1.2 TLSCiphertext, 2**14 + 2048 (RFC 9846 §5.2 caps TLS 1.3's at
 #: 2**14 + 256).
 _MAX_LENGTH = 2**14 + 2048
 
-#: ContentType values (RFC 8446 §5.1; heartbeat, RFC 6520), named as
-#: IANA's "TLS ContentType" registry names them (fetched 2026-11-01).
-#: Its 25-27 are DTLS's or connection-ID records, which the guard
-#: rejects.
+#: ContentType values, named as RFC 9846 §5.1's ContentType enum names
+#: them, and heartbeat (24) as RFC 6520 §6 does. The values after it
+#: belong to DTLS (25, RFC 9146's tls12_cid; 26, RFC 9147's ACK; 27,
+#: RFC 9853's return_routability_check), and the guard rejects them.
 _CHANGE_CIPHER_SPEC, _ALERT, _HANDSHAKE = 20, 21, 22
 _APPLICATION_DATA, _HEARTBEAT = 23, 24
 _CONTENT_TYPE_NAMES: dict[int, str] = {
@@ -238,7 +273,7 @@ _CONTENT_TYPE_NAMES: dict[int, str] = {
 }
 
 #: The version names a record or ClientHello can carry: SSL 3.0 (RFC
-#: 6101) and TLS 1.0-1.3 (RFCs 2246, 4346, 5246, 8446).
+#: 6101) and TLS 1.0-1.3 (RFCs 2246, 4346, 5246, 9846).
 _VERSION_NAMES: dict[int, str] = {
     0x0300: "SSL 3.0",
     0x0301: "TLS 1.0",
@@ -347,7 +382,7 @@ _EXTENSION_NAMES: dict[int, str] = {
 #: (RFC 6066 §3).
 _HOST_NAME = 0
 
-#: The ClientHello's longest legacy_session_id (RFC 8446 §4.1.2).
+#: The ClientHello's longest legacy_session_id (RFC 9846 §4.2.2).
 _MAX_SESSION_ID = 32
 
 _U16 = Struct("!H")
@@ -364,7 +399,7 @@ def _version_name(version: int) -> str:
 
 @dataclass(frozen=True, slots=True)
 class TLSExtension:
-    """One extension of a ClientHello (RFC 8446 §4.2).
+    """One extension of a ClientHello (RFC 9846 §4.3).
 
     :param type: ExtensionType, e.g. ``0`` server_name, ``43``
         supported_versions, ``51`` key_share (see :attr:`type_name`).
@@ -420,7 +455,7 @@ class TLSExtension:
 
 @dataclass(frozen=True, slots=True)
 class TLSClientHello:
-    """A ClientHello's fields (RFC 8446 §4.1.2, RFC 5246 §7.4.1.2).
+    """A ClientHello's fields (RFC 9846 §4.2.2, RFC 5246 §7.4.1.2).
 
     Built by :attr:`TLS.client_hello` from a record's fragment, never
     on decode; a value, not a layer.
@@ -946,7 +981,11 @@ class TLS(Protocol):
         """The ClientHello this record begins with, parsed on demand.
 
         ``None`` unless the record is Handshake and its first message a
-        ClientHello (:attr:`handshake_type` 1).
+        ClientHello (:attr:`handshake_type` 1). That is read from the
+        first byte alone, so an encrypted TLS 1.2 Finished whose
+        ciphertext starts with 1 is parsed as a ClientHello, and raises
+        one of the errors below, almost always TruncatedHeaderError,
+        instead of answering ``None`` (see the module docstring).
 
         :raises TruncatedHeaderError: the record holds less than the
             ClientHello's length says (``field`` ``"fragment"``).
@@ -966,11 +1005,12 @@ class TLS(Protocol):
         For example ``"example.com"``.
 
         The first ``host_name`` of the ``server_name`` extension,
-        decoded as ASCII. ``None`` when the record is not a ClientHello,
-        the ClientHello has no ``server_name`` extension, or its list
-        names no ``host_name``. Under
-        Encrypted Client Hello this is the outer ClientHello's name,
-        the client-facing server's (see the module docstring).
+        decoded as ASCII. ``None`` when :attr:`client_hello` is, the
+        ClientHello has no ``server_name`` extension, or its list names
+        no ``host_name``; like :attr:`client_hello`, it raises instead
+        on an encrypted TLS 1.2 Finished whose ciphertext starts with 1.
+        Under Encrypted Client Hello this is the outer ClientHello's
+        name, the client-facing server's (see the module docstring).
 
         :raises TruncatedHeaderError: as :attr:`client_hello`.
         :raises InvalidFieldError: as :attr:`client_hello`, or the

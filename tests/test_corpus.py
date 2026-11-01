@@ -59,7 +59,11 @@ def is_bare_segment(packet: Packet) -> bool:
 
     That is a bare ACK to a port whose decoder needs a payload: TCP
     hands it the empty buffer before anyone looks, and it raises
-    ``TruncatedHeaderError``, as on BGP's port 179 and TLS's 443.
+    ``TruncatedHeaderError``, as on BGP's port 179 and TLS's 443. An
+    IPv4 bare ACK without TCP options that carries Ethernet's padding
+    to the 60-byte minimum is not one: the walk hands TLS the 6 zero
+    bytes (#235), which it rejects with ``InvalidFieldError`` at
+    ``content_type``. The corpus holds none.
     """
     return (
         isinstance(packet.stopped_by, TruncatedHeaderError)
