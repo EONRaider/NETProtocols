@@ -29,16 +29,20 @@ the competitor's own source states, and, for scapy, whether
 needs ``load_layer()``).
 
 Every cell opens with its verdict. "yes" and "partial" both count as
-covering the row; "partial" is a decoder that lacks part of the
-protocol's own decoding the issue asks for (TLS without server_name,
-say). Whether a lower layer dispatches to the decoder is not scored,
-except in the two rows whose issue is that dispatch: IP-in-IP (#177,
-IP protocol 4) and 802.2 LLC / SNAP (#188, the 802.3 Length). "no" is
-evidence too, not an empty cell: a check that a class or handler
-pattern matches none of the package's source files, reported as "no
-match in N files". A check whose file is missing fails rather than
-passing, and any failed check makes the cell FAILED and the script
-exit 1.
+covering the row. A "partial" cell lacks the feature the row's title
+names (TLS's server_name, the SNI of "TLS records + SNI") or mis-frames
+the protocol's own header (pypacker's AH, every valid one, and its
+non-SNAP LLC, every one). How far a decoder goes beyond that, which
+message bodies, versions, formats or optional fields it covers, is not
+scored, since #170 counted modules: "yes" is a claim about a module,
+not about its depth (docs/CLAIMS.md 7.1 names the gaps known and left
+unscored). Dispatch is scored only in the two rows whose issue is that
+dispatch: IP-in-IP (#177, IP protocol 4) and 802.2 LLC / SNAP (#188,
+the 802.3 Length). "no" is evidence too, not an empty cell: a check
+that a class or handler pattern matches none of the package's source
+files, reported as "no match in N files". A check whose file is
+missing fails rather than passing, and any failed check makes the cell
+FAILED and the script exit 1.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -63,8 +67,9 @@ NETPROTOCOLS = REPOSITORY / "src" / "netprotocols"
 
 
 #: What a cell says when one of its checks holds: the default ``""``
-#: leaves it at "yes"; "partial" marks a decoder that lacks part of the
-#: protocol's own decoding the issue asks for; "no" marks the library as
+#: leaves it at "yes"; "partial" marks a decoder that lacks the feature
+#: the row's title names or mis-frames the protocol's own header (how
+#: far it goes beyond that is not scored); "no" marks the library as
 #: not decoding it.
 Verdict = Literal["", "partial", "no"]
 
@@ -173,9 +178,11 @@ GAP = (
             # header but IPv6's, AH included, as 8 + len * 8 octets: the
             # Hdr Ext Len rule of RFC 8200 4.3. AH's Payload Len counts
             # 32-bit words minus 2 (RFC 4302 2.2), so a header is
-            # (len + 2) * 4 octets and the two agree only at len 0: an
-            # HMAC-SHA1-96 AH (len 4) is 24 octets, which the walk reads
-            # as 40. That mis-frames the ICV and everything after it.
+            # (len + 2) * 4 octets. The two agree only at len 0, 8
+            # octets, which is below AH's 12-octet fixed part, so no valid
+            # AH has it and every valid one is mis-framed: an HMAC-SHA1-96
+            # AH (len 4) is 24 octets, which the walk reads as 40. That
+            # mis-frames the ICV and everything after it.
             Check("layer3/ip6.py", r"^\t+OPT_BASEHEADER_LEN = 8$"),
             Check(
                 "layer3/ip6.py",
@@ -187,8 +194,21 @@ GAP = (
                 " what follows are mis-framed",
                 verdict="partial",
             ),
-            # ...with no case of its own for AH anywhere in the module.
-            Check("layer3/ip6.py", r"[=!]= *IP_PROTO_AH\b", absent=True),
+            # ...with no case of its own for AH anywhere in the module. The
+            # module names IP_PROTO_AH three times, all as data: in its
+            # import list ("IP_PROTO_AH, IP_PROTO_ESP, ..."), as an
+            # EXT_HDRS item ("IP_PROTO_AH," closing the line) and as the
+            # ext_hdrs_cls entry ("IP_PROTO_AH: IP6AHHeader,"). Any other
+            # use of the name, such as a comparison or "in (IP_PROTO_AH,)",
+            # and any comparison or membership test against 51, AH's
+            # protocol number, fails the check.
+            Check(
+                "layer3/ip6.py",
+                r"\bIP_PROTO_AH\b(?!,(?: \w|$)|: IP6AHHeader,$)"
+                r"|[=!]= *(?:IP_PROTO_AH|51)\b|\b51 *[=!]="
+                r"|\bin [({][^)}]*\b(?:IP_PROTO_AH|51)\b",
+                absent=True,
+            ),
             # Dispatch is scored only in the IP-in-IP and LLC / SNAP rows,
             # so IPv4's missing AH handler is a caveat, not the "partial".
             Check(
@@ -300,6 +320,17 @@ GAP = (
                 "layer12/ethernet.py",
                 r"LLC format\) .* not supported",
                 'its Ethernet reads no 802.3 Length: "not supported"',
+                verdict="partial",
+            ),
+            # LLC._dissect deactivates the 5-byte snap field when DSAP is
+            # not 0xAA, leaving a 3-byte header, yet still returns 8 as
+            # the header length, so the body starts 5 bytes late.
+            Check(
+                "layer12/llc.py",
+                r"^\t+self\.snap = None\n\t+return 8$",
+                "its LLC drops the SNAP field from a non-SNAP header but"
+                " still returns a header length of 8, not 3, so every"
+                " non-SNAP PDU, STP's included, is read 5 bytes late",
                 verdict="partial",
             ),
         ),

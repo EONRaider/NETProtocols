@@ -1582,15 +1582,20 @@ names the file and the class (or, for IP-in-IP, the line that
 dispatches protocol 4) it matched, so it can be checked by opening that
 file; a "no" is a class or handler pattern that matches none of the
 package's source files, printed as "no match in N files". A "partial"
-cell is a decoder that lacks part of the protocol's own decoding the
-row's issue asks for (TLS without server_name decoding, say); it still
-counts toward the library's total, and the totals name how many are
-partial. Whether a lower layer dispatches to a decoder is not scored,
-except in the two rows whose issue is that dispatch: IP-in-IP (#177
-asks for IPv4/IPv6 protocol 4 to reach the inner IPv4, since IP-in-IP
-has no header of its own) and 802.2 LLC / SNAP (#188 asks for
-Ethernet's 802.3 Length to reach LLC). A check whose file is missing
-fails instead of passing, and any failed check makes the script exit 1.
+cell lacks the feature the row's title names (TLS's server_name, the
+SNI of "TLS records + SNI") or mis-frames the protocol's own header
+(pypacker's AH, every valid one, and its non-SNAP LLC, every one); it
+still counts toward the library's total, and the totals name how many
+are partial. How far a decoder goes beyond that, which message bodies,
+versions, formats or optional fields it covers, is not scored, since
+#170 counted modules: a "yes" is a claim about a module, not about its
+depth, and the gaps known and left unscored are listed below the
+table. Dispatch is scored only in the two rows whose issue is that
+dispatch: IP-in-IP (#177 asks for IPv4/IPv6 protocol 4 to reach the
+inner IPv4, since IP-in-IP has no header of its own) and 802.2 LLC /
+SNAP (#188 asks for Ethernet's 802.3 Length to reach LLC). A check
+whose file is missing fails instead of passing, and any failed check
+makes the script exit 1.
 Its output, condensed (the netprotocols column gives the release that
 first shipped each row instead of its file):
 
@@ -1608,7 +1613,7 @@ first shipped each row instead of its file):
 | BGP | #185 | 2.5.0 | yes | yes (`contrib`) | yes |
 | LLDP | #186 | 2.6.0 | no (an EtherType constant, no decoder) | yes (`contrib`) | yes |
 | MPLS | #187 | 2.6.0 | yes (labels folded into Ethernet.mpls_labels, not a layer) | yes (`contrib`) | no (EtherType and label-mask constants only) |
-| 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into LLC) | yes | partial (its Ethernet reads no 802.3 Length: "not supported") |
+| 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into LLC) | yes | partial (its Ethernet reads no 802.3 Length: "not supported"; its LLC drops the SNAP field from a non-SNAP header but still returns a header length of 8, not 3, so every non-SNAP PDU, STP's included, is read 5 bytes late) |
 | STP | #189 | 2.6.0 | yes | yes | yes |
 | CDP | #190 | 2.6.0 | yes | yes (`contrib`) | no (an EtherType constant only) |
 | NTP | #191 | `master`, unreleased | yes | yes | yes |
@@ -1658,11 +1663,17 @@ What it shows:
   and CDP, and covers AH, LLC / SNAP and TLS in part: its
   `layer3/ip6.py` extension-header walk sizes every header but IPv6's,
   AH included, as `8 + len * 8` octets, RFC 8200's rule for Hdr Ext
-  Len, where AH's Payload Len gives `(len + 2) * 4` (RFC 4302 §2.2), so
-  the two agree only at Payload Len 0 and an HMAC-SHA1-96 AH (Payload
-  Len 4, 24 octets) is read as 40, mis-framing the ICV #179 asks for and
-  everything after it; its Ethernet reads no 802.3 Length to reach LLC;
-  and its TLS has no server_name decoding.
+  Len, where AH's Payload Len gives `(len + 2) * 4` (RFC 4302 §2.2).
+  The two agree only at Payload Len 0, 8 octets, which is below the 12
+  octets of AH's fixed fields, so no valid AH has it and pypacker
+  mis-frames every valid one: an HMAC-SHA1-96 AH (Payload Len 4, 24
+  octets) is read as 40, mis-framing the ICV #179 asks for and
+  everything after it. Its Ethernet reads no 802.3 Length to reach LLC,
+  and its `layer12/llc.py` `LLC._dissect`, on the non-SNAP path,
+  deactivates the 5-octet SNAP field (`self.snap = None`) and then
+  `return 8`, so a 3-octet header is taken as 8 and every non-SNAP PDU,
+  an STP BPDU included, is read 5 octets late; and its TLS has no
+  server_name decoding.
   The list is the one this library drew from its own gaps, so
   covering more of it than dpkt or pypacker is not a coverage claim
   against either, and §6's "more protocols than X" stays off limits.
@@ -1679,6 +1690,40 @@ What it shows:
   to `IP6AHHeader`. That is a caveat, not what makes the AH cell
   partial: the cell is partial for the framing above, which no dispatch
   would fix. #170 counted modules, and so does this.
+- **"yes" is a module-level claim: known depth gaps are not scored.**
+  Read against their issues, several "yes" cells decode less than the
+  issue asks for and stay "yes" under the rule above, by design rather
+  than oversight. dpkt's and pypacker's OSPF (dpkt `ospf.py` `OSPF`,
+  pypacker `layer3/ospf.py` `OSPF`) and PIM (`pim.py` `PIM`,
+  `layer3/pim.py` `PIM`) decode the common header only, 24 and 4
+  octets, with no Hello, LSA header or Join/Prune, all of which #183
+  and #184 ask for (scapy's `contrib/ospf.py` has `OSPF_Hello` and
+  `OSPF_LSA_Hdr`, its `contrib/pim.py` `PIMv2Hello` and
+  `PIMv2JoinPrune`). dpkt's VRRP (`vrrp.py` `VRRP`) is v2 over IPv4
+  only, reading v2's Auth Type and Adver Int and 4-octet addresses, and
+  pypacker's (`layer12/vrrp.py` `VRRP`) is the 8-octet v2 header with
+  no `_dissect`, so its addresses are left undecoded, where #181 asks
+  for v2 and v3 over both families (scapy's `layers/vrrp.py` has
+  `VRRPv3`, bound to IPv6 too). dpkt's and pypacker's STUN (`stun.py`
+  `STUN` with `parse_attrs()`, `layer567/stun.py` `STUN` and
+  `StunAttr`) follow RFC 3489, with generic type-length-value
+  attributes and no XOR-MAPPED-ADDRESS, which #194 asks for (scapy's
+  `contrib/stun.py` has `STUNXorMappedAddress`). All three LLCs (dpkt
+  `llc.py` `LLC`, scapy `layers/l2.py` `LLC`, pypacker
+  `layer12/llc.py` `LLC`) decode a 1-octet Control only, where #188
+  asks for 1 or 2 octets: the U-format PDUs STP, SNAP and CDP ride
+  (Control 0x03, UI) have a 1-octet Control, and the I- and S-format
+  PDUs of connection-mode LLC, whose Control is 2 octets, are read one
+  octet short. That is counted as a format none of the three covers,
+  like VRRPv3 above, not as a mis-framing like pypacker's non-SNAP one,
+  which hits every non-SNAP PDU, U-format included. And all three
+  STPs (dpkt `stp.py` `STP`, scapy `layers/l2.py` `STP`, pypacker
+  `layer12/stp.py` `STP`) define one fixed 35-octet BPDU with no branch
+  on BPDU Type: none has a short form for the 4-octet Topology Change
+  Notification or a field for RSTP's Version 1 Length octet, both of
+  which #189 asks for. Scoring depth would make more cells partial
+  without changing which libraries have a decoder for a row, which is
+  what #170 counted.
 - **What the competitors gained since #170 opened (2026-09-09).** dpkt
   and pypacker have released nothing since: 1.9.8 (2022-08-18) and 5.4
   (2023-02-26) are still current. scapy released 2.8.0 on 2026-10-02.
