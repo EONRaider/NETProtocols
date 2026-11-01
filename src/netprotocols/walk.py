@@ -57,20 +57,25 @@ IPv4 and ICMPv4), and even a doubly-tagged QinQ frame carrying IPv6
 with three extension headers and DNS over TCP reaches 11. A tunnel
 nested inside a tunnel is what the ceiling is for: each level of VXLAN
 adds four layers, so the default stops a frame nested eight levels
-deep. BGP is the exception that nests nothing, and for it the default
-bounds correctness as well as cost: every message in a TCP segment is a
-layer of its own, so a segment of more than 29 messages exceeds the
-default, and valid segments do. The corpus's deepest chain is one, 10
-layers (a segment of 7 UPDATEs), but a 1448-byte segment can hold 76
-KEEPALIVEs or 30 one-prefix UPDATEs, and one captured with GRO or TSO
-on, over loopback or on a jumbo-frame link is larger still. A strict
-walk of such a segment raises :class:`~netprotocols.MaxDepthExceededError`
-and a lax one stops short with ``stopped_by`` set; a larger
-``max_depth``, or a second walk from ``packet.consumed`` with
-``start=BGP``, decodes the rest. See :mod:`netprotocols.layer7.bgp`.
-STUN over TCP chains its messages the same way, and a 1448-byte
-segment of bare 20-byte headers holds 72 of them: see
-:mod:`netprotocols.layer7.stun`.
+deep. BGP, STUN over TCP and TLS are the exceptions that nest nothing,
+and for them the default bounds correctness as well as cost: every
+message, or TLS record, in a TCP segment is a layer of its own, so a
+segment of more than 29 of them, the room the default leaves after
+Ethernet, IPv4 and TCP, exceeds it, and valid segments do. A 1448-byte
+segment can hold 76 BGP KEEPALIVEs or 30 one-prefix UPDATEs
+(:mod:`netprotocols.layer7.bgp`), 72 STUN messages that are bare
+20-byte headers (:mod:`netprotocols.layer7.stun`), and 65 of TLS 1.3's
+smallest protected records, 22 bytes with a 16-byte AEAD tag, or 103
+of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
+(:mod:`netprotocols.layer7.tls`), where 30 of 22 bytes already exceed
+the 29; one captured with GRO or TSO on, over loopback or on a
+jumbo-frame link is larger still. The corpus's deepest chain is one of
+these, 10 layers (a segment of 7 BGP UPDATEs), and TLS's busiest
+segment carries 6 records, 9 layers. A strict walk of such a segment
+raises :class:`~netprotocols.MaxDepthExceededError` and a lax one stops
+short with ``stopped_by`` set; a larger ``max_depth``, or a second walk
+``decode_frame(frame[packet.consumed:], start=BGP)`` (or
+``start=STUN``, ``start=TLS``), decodes the rest.
 
 802.3 Length
 ------------
@@ -118,9 +123,15 @@ __all__ = ["MAX_DEPTH", "decode_frame"]
 #: Default ceiling on how many headers one frame may chain. Generous
 #: against nested headers (the corpus peaks at 7, a VXLAN-tunnelled
 #: echo) and small enough that a hostile frame cannot turn one walk into
-#: thousands of decodes. Not generous for BGP, one layer per message: a
-#: valid TCP segment of more than 29 messages exceeds it (the corpus
-#: peaks at 7, a 10-layer chain); see :mod:`netprotocols.layer7.bgp`.
+#: thousands of decodes. Not generous for BGP, STUN over TCP or TLS,
+#: one layer per message or record: a valid TCP segment of more than 29
+#: exceeds it. A 1448-byte segment holds 76 BGP KEEPALIVEs or 30
+#: one-prefix UPDATEs, 72 bare 20-byte STUN headers, or 65 of TLS 1.3's
+#: 22-byte protected records (103 of 14 bytes); the corpus peaks at 7
+#: BGP UPDATEs, a 10-layer chain, and TLS at 6 records, 9 layers. Walk
+#: on with ``decode_frame(frame[packet.consumed:], start=BGP)``, or
+#: ``start=STUN`` or ``start=TLS``; see :mod:`netprotocols.layer7.bgp`,
+#: :mod:`netprotocols.layer7.stun` and :mod:`netprotocols.layer7.tls`.
 MAX_DEPTH = 32
 
 
