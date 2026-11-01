@@ -611,10 +611,13 @@ anything:
 - **1.7's ten-project CI audit is dated 2026-09-04** and says to re-run
   it before quoting; it was not re-run here, so 1.7 is now labelled
   `NEEDS RE-MEASUREMENT` (our own gate, in `.github/workflows/ci.yml`,
-  is unchanged).
+  is unchanged). The README quotes it as published for 2.6.0; re-run
+  the audit before the next release's README quotes it.
 - **3.1's simulation table names no dpkt or pypacker version** (Rule
   3). Re-running it means importing both, which this audit does not do,
-  so 3.1 is now labelled `NEEDS RE-MEASUREMENT`.
+  so 3.1 is now labelled `NEEDS RE-MEASUREMENT`. The README quotes it
+  as published for 2.6.0; re-run it, with both versions pinned, before
+  the next release's README quotes it.
 - **4.1's open-issue count has moved:** a GitHub search for
   `repo:kbandla/dpkt is:issue is:open` returns 81, against the 77
   recorded on 2026-09-04; 4.1 now records 81 with the command that
@@ -1579,19 +1582,24 @@ names the file and the class (or, for IP-in-IP, the line that
 dispatches protocol 4) it matched, so it can be checked by opening that
 file; a "no" is a class or handler pattern that matches none of the
 package's source files, printed as "no match in N files". A "partial"
-cell is a decoder that lacks part of what the row's issue asks for; it
-still counts toward the library's total, and the totals name how many
-are partial. A check whose file is missing fails instead of passing,
-and any failed check makes the script exit 1. Its output, condensed
-(the netprotocols column gives the release that first shipped each
-row instead of its file):
+cell is a decoder that lacks part of the protocol's own decoding the
+row's issue asks for (TLS without server_name decoding, say); it still
+counts toward the library's total, and the totals name how many are
+partial. Whether a lower layer dispatches to a decoder is not scored,
+except in the two rows whose issue is that dispatch: IP-in-IP (#177
+asks for IPv4/IPv6 protocol 4 to reach the inner IPv4, since IP-in-IP
+has no header of its own) and 802.2 LLC / SNAP (#188 asks for
+Ethernet's 802.3 Length to reach LLC). A check whose file is missing
+fails instead of passing, and any failed check makes the script exit 1.
+Its output, condensed (the netprotocols column gives the release that
+first shipped each row instead of its file):
 
 | Protocol | Issue | netprotocols | dpkt 1.9.8 | scapy 2.8.0 | pypacker 5.4 |
 |---|---|---|---|---|---|
 | SCTP | #176 | 2.4.0 | yes | yes | yes |
 | IP-in-IP | #177 | 2.4.0 | yes | yes | no (6in4 only, protocol 41; no handler for protocol 4) |
 | IPsec ESP | #178 | 2.4.0 | yes | yes | yes |
-| IPsec AH | #179 | 2.4.0 | yes | yes | partial (an IPv6 extension header only: IPv4 has no handler for it) |
+| IPsec AH | #179 | 2.4.0 | yes | yes | yes (an IPv6 extension header class; IPv4 has no handler for it) |
 | VXLAN | #180 | 2.4.0 | no | yes | no |
 | VRRP | #181 | 2.5.0 | yes | yes | yes |
 | RIP | #182 | 2.5.0 | yes | yes | yes |
@@ -1609,10 +1617,10 @@ row instead of its file):
 | STUN | #194 | `master`, unreleased | yes | yes (`contrib`) | yes |
 | HSRP | #195 | `master`, unreleased | yes | yes | yes |
 | TLS records + SNI | #196 | `master`, unreleased | partial (records and generic ClientHello extensions; no server_name decoding) | yes (`load_layer("tls")`) | partial (records and generic ClientHello extensions; no server_name decoding) |
-| **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 3 partial |
+| **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 2 partial |
 
 The script's own summary line reads "Of #170's 21 items: netprotocols
-21, dpkt 19 (1 partial), scapy 21, pypacker 17 (3 partial); a partial
+21, dpkt 19 (1 partial), scapy 21, pypacker 17 (2 partial); a partial
 cell counts." The release column is each module's first tag:
 
 ```
@@ -1647,17 +1655,21 @@ What it shows:
   in part (no server_name decoding); pypacker 5.4 lacks IP-in-IP (its
   `layer3/ip.py` dispatches protocol 41, IPv6 in IPv4, but nothing for
   protocol 4, which #177 and RFC 2003 define IP-in-IP as), VXLAN, MPLS
-  and CDP, and covers AH, LLC / SNAP and TLS in part.
+  and CDP, and covers LLC / SNAP and TLS in part.
   The list is the one this library drew from its own gaps, so
   covering more of it than dpkt or pypacker is not a coverage claim
   against either, and §6's "more protocols than X" stays off limits.
 - **A cell says a decoder exists, not that the library's own walk
-  reaches it.** dpkt's TCP and UDP leave the payload raw
+  reaches it**, except in the IP-in-IP and LLC / SNAP rows, whose
+  issues are that dispatch. dpkt's TCP and UDP leave the payload raw
   (`dpkt/tcp.py`'s `unpack`; `dpkt/udp.py` dispatches nothing), so its
   BGP, RIP, NTP, TFTP, RADIUS, STUN, HSRP and TLS decoders are called by
   hand (as 1.6 counts); pypacker's VRRP, RIP, HSRP, LLC and STP classes
   are in none of its handler tables (`layer3/ip.py`, `layer4/udp.py`,
-  `layer12/ethernet.py`). #170 counted modules, and so does this.
+  `layer12/ethernet.py`), and its AH class is reached from IPv6 only:
+  `layer3/ip.py` has no handler for protocol 51, and only
+  `layer3/ip6.py`'s extension-header walk (`ext_hdrs_cls`) dispatches
+  to `IP6AHHeader`. #170 counted modules, and so does this.
 - **What the competitors gained since #170 opened (2026-09-09).** dpkt
   and pypacker have released nothing since: 1.9.8 (2022-08-18) and 5.4
   (2023-02-26) are still current. scapy released 2.8.0 on 2026-10-02.
@@ -1699,11 +1711,16 @@ are in scapy too; five are not, so they are left out: IPX (dpkt
 `ipx.py`, pypacker `layer3/ipx.py`), RFB/VNC (`rfb.py`,
 `layer567/rfb.py`), SIP (`sip.py`, `layer567/sip.py`), Telnet
 (`telnet.py`, only a `strip_options()` function in dpkt;
-`layer567/telnet.py`) and TPKT (`tpkt.py`, `layer567/tpkt.py`) —
-`grep -rniE '^class (ipx|rfb|sip|telnet|tpkt)\b'
-/tmp/survey-scapy-src/scapy/layers /tmp/survey-scapy-src/scapy/contrib`
-prints nothing. The seventeenth is ASN.1 BER/DER, which all three do
-decode (dpkt `asn1.py`'s `decode()`, pypacker `layer567/der.py`'s
-`decode_der()`, scapy `asn1/ber.py`) but which is an encoding other
-protocols use rather than a protocol of its own, and scapy's sits
-outside `layers/` and `contrib/`, where #170 did not look.
+`layer567/telnet.py`) and TPKT (`tpkt.py`, `layer567/tpkt.py`).
+`grep -rniE '^\s*class (ipx|rfb|vnc|sip|telnet|tpkt)'
+/tmp/survey-scapy-src/scapy`, which searches every file of the whole
+scapy package, not only `layers/` and `contrib/`, for a class at any
+indentation whose name starts with IPX, RFB, VNC, SIP, Telnet or TPKT
+(any case), prints nothing. The same pattern finds all five in
+pypacker (`IPX`, `RFB`, `SIP`, `Telnet`, `TPKT`) and dpkt's `IPX`,
+`RFB` and `TPKT`; dpkt's SIP classes are `Request` and `Response`, and
+its Telnet is the function above. The seventeenth is ASN.1 BER/DER,
+which all three do decode (dpkt `asn1.py`'s `decode()`, pypacker
+`layer567/der.py`'s `decode_der()`, scapy `asn1/ber.py`) but which is
+an encoding other protocols use rather than a protocol of its own, and
+scapy's sits outside `layers/` and `contrib/`, where #170 did not look.

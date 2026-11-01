@@ -29,12 +29,16 @@ the competitor's own source states, and, for scapy, whether
 needs ``load_layer()``).
 
 Every cell opens with its verdict. "yes" and "partial" both count as
-covering the row; "partial" is a decoder that lacks part of what the
-issue asks for (TLS without server_name, say). "no" is evidence too, not
-an empty cell: a check that a class or handler pattern matches none of
-the package's source files, reported as "no match in N files". A check
-whose file is missing fails rather than passing, and any failed check
-makes the cell FAILED and the script exit 1.
+covering the row; "partial" is a decoder that lacks part of the
+protocol's own decoding the issue asks for (TLS without server_name,
+say). Whether a lower layer dispatches to the decoder is not scored,
+except in the two rows whose issue is that dispatch: IP-in-IP (#177,
+IP protocol 4) and 802.2 LLC / SNAP (#188, the 802.3 Length). "no" is
+evidence too, not an empty cell: a check that a class or handler
+pattern matches none of the package's source files, reported as "no
+match in N files". A check whose file is missing fails rather than
+passing, and any failed check makes the cell FAILED and the script
+exit 1.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -60,7 +64,8 @@ NETPROTOCOLS = REPOSITORY / "src" / "netprotocols"
 
 #: What a cell says when one of its checks holds: the default ``""``
 #: leaves it at "yes"; "partial" marks a decoder that lacks part of the
-#: issue's scope; "no" marks the library as not decoding it.
+#: protocol's own decoding the issue asks for; "no" marks the library as
+#: not decoding it.
 Verdict = Literal["", "partial", "no"]
 
 #: The ``path`` of a check that searches every source file in a package.
@@ -164,12 +169,13 @@ GAP = (
         (cls("layers/ipsec.py", "AH"),),
         (
             cls("layer3/ip6.py", "IP6AHHeader"),
+            # Dispatch is scored only in the IP-in-IP and LLC / SNAP rows,
+            # so IPv4's missing AH handler is a caveat, not a "partial".
             Check(
                 "layer3/ip.py",
                 r"\bIP_PROTO_AH\s*:",
-                "an IPv6 extension header only: IPv4 has no handler for it",
+                "an IPv6 extension header class; IPv4 has no handler for it",
                 absent=True,
-                verdict="partial",
             ),
         ),
     ),
@@ -177,9 +183,11 @@ GAP = (
         "VXLAN",
         "#180",
         (cls("layer7/vxlan.py", "VXLAN"),),
-        (nowhere(r"(?i)^\s*class \w*vxlan"),),
+        # The UDP class VXLAN would ride on anchors each "no", so an empty
+        # or wrong package directory cannot read as a missing decoder.
+        (cls("udp.py", "UDP"), nowhere(r"(?i)^\s*class \w*vxlan")),
         (cls("layers/vxlan.py", "VXLAN"),),
-        (nowhere(r"(?i)^\s*class \w*vxlan"),),
+        (cls("layer4/udp.py", "UDP"), nowhere(r"(?i)^\s*class \w*vxlan")),
     ),
     Row(
         "VRRP",
