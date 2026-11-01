@@ -123,6 +123,15 @@ Fixtures are captured and validated with the scripts under
   python3 scripts/check_fixtures.py tests/fixtures/staging
   ```
 
+`tests/fixtures/staging/` is an untracked, git-ignored workspace: capture
+there, validate with `check_fixtures.py`, then copy the validated pcap
+and any other files the capture script names into `tests/fixtures/` or
+the subdirectory it names, and commit only those:
+`capture_fixtures_http.sh`, for instance, has both `staging/http.pcap`
+and the per-connection stream files it writes under `staging/http/`
+folded into `tests/fixtures/http/`. Nothing under `staging/` is
+committed.
+
 Prefer a real capture, and build the conditions for one where a
 protocol won't appear in a normal environment. VLAN tags, for instance,
 are stripped by a switch on an access port, so
