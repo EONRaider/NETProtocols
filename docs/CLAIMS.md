@@ -605,15 +605,21 @@ anything:
 - **The competitors they name are still current.** `dpkt 1.9.8` and
   `scapy 2.8.0` are the latest PyPI releases on the audit date (7.1),
   so the versions in 1.1-1.6, 2.1 and 2.2 stand. scapy 2.8.0's wheel
-  still holds 121 modules under `scapy/layers/` (2.1).
+  still holds 121 modules under `scapy/layers/` (2.1), counted from the
+  wheel unpacked as in 7.1 with `(cd /tmp/survey-scapy-src/scapy &&
+  find layers -name '*.py' | wc -l)`.
 - **1.7's ten-project CI audit is dated 2026-09-04** and says to re-run
-  it before quoting; it was not re-run here.
+  it before quoting; it was not re-run here, so 1.7 is now labelled
+  `NEEDS RE-MEASUREMENT` (our own gate, in `.github/workflows/ci.yml`,
+  is unchanged).
 - **3.1's simulation table names no dpkt or pypacker version** (Rule
-  3). Re-running it means importing both, which this audit does not do.
+  3). Re-running it means importing both, which this audit does not do,
+  so 3.1 is now labelled `NEEDS RE-MEASUREMENT`.
 - **4.1's open-issue count has moved:** a GitHub search for
   `repo:kbandla/dpkt is:issue is:open` returns 81, against the 77
-  recorded on 2026-09-04. dpkt's last release is still 1.9.8 of
-  2022-08-18 (PyPI); its last commit was not re-checked.
+  recorded on 2026-09-04; 4.1 now records 81 with the command that
+  returns it. dpkt's last release is still 1.9.8 of 2022-08-18 (PyPI);
+  its last commit was not re-checked.
 - **The current-tree figures in 3.2 and 5.1-5.9** (corpus, fuzz,
   coverage, raise-site and test counts) are re-derived by the pull
   request that changes them (most recently `dab2580`, after TLS) and
@@ -898,7 +904,7 @@ which overstated how tightly the two are joined there — an independent
 audit for #101 caught the mismatch).
 
 ### 1.7 "Decode throughput is regression-gated in CI"
-**Status: VERIFIED** — including the comparative form, per the #124 audit below
+**Status: `NEEDS RE-MEASUREMENT`** — the gate itself stands; the comparative form rests on the #124 audit below, dated 2026-09-04 and not re-run since (Rule 4; see the 2026-11-01 status audit above)
 
 Every pull request runs the corpus benchmark and fails at 15% below
 `benchmarks/baseline.json` (`.github/workflows/ci.yml`). Throughput is
@@ -1047,7 +1053,7 @@ out of a full TCP/IP stack rather than a standalone codec. We are MIT,
 ## 3. Purity and portability
 
 ### 3.1 "Runs where scapy cannot — including the browser"
-**Status: VERIFIED**
+**Status: `NEEDS RE-MEASUREMENT`** — the simulation table below names no dpkt or pypacker version (Rule 3); re-run it with both pinned before quoting (see the 2026-11-01 status audit above)
 
 *Published 2026-09-04 (embargo lifted, #107). Corrected 2026-09-04: the
 original text of this section credited the whole table below to #99's
@@ -1141,8 +1147,10 @@ released **2022-08-18**, last committed **2024-05-05** (both
 unchanged, re-confirmed against PyPI's JSON API and `kbandla/dpkt` @
 `4f8958e`), still advertises Python 2.7 and 3.5–3.9 in its classifiers,
 is still marked `Development Status :: 4 - Beta` after twelve years,
-has **77 open issues** (down from 95; re-counted 2026-09-04), and
-cannot be type-checked at all.
+has **81 open issues** (77 on 2026-09-04, itself down from 95;
+re-counted 2026-11-01 with `gh api
+'search/issues?q=repo:kbandla/dpkt+is:issue+is:open' --jq
+.total_count`), and cannot be type-checked at all.
 
 This may be a stronger and more immediately usable wedge than the
 browser story. It also costs nothing to start saying.
@@ -1565,36 +1573,65 @@ python3 -I scripts/survey_protocols.py --dpkt /tmp/survey-dpkt-src/dpkt \
     --pypacker /tmp/survey-pypacker-src/pypacker-5.4/pypacker
 ```
 
-`scripts/survey_protocols.py` is stdlib-only and static: each cell is a
-regular expression over one source file (a class definition, or for
-IP-in-IP the line that dispatches protocol 4), printed with the file
-it matched, so any cell can be checked by opening that file. Its
-output, condensed:
+`scripts/survey_protocols.py` is stdlib-only and static. Every cell
+opens with a verdict and the evidence for it: a "yes" or "partial"
+names the file and the class (or, for IP-in-IP, the line that
+dispatches protocol 4) it matched, so it can be checked by opening that
+file; a "no" is a class or handler pattern that matches none of the
+package's source files, printed as "no match in N files". A "partial"
+cell is a decoder that lacks part of what the row's issue asks for; it
+still counts toward the library's total, and the totals name how many
+are partial. A check whose file is missing fails instead of passing,
+and any failed check makes the script exit 1. Its output, condensed
+(the netprotocols column gives the release that first shipped each
+row instead of its file):
 
 | Protocol | Issue | netprotocols | dpkt 1.9.8 | scapy 2.8.0 | pypacker 5.4 |
 |---|---|---|---|---|---|
 | SCTP | #176 | 2.4.0 | yes | yes | yes |
-| IP-in-IP | #177 | 2.4.0 | yes | yes | IPv6 in IP only; no handler for protocol 4 |
+| IP-in-IP | #177 | 2.4.0 | yes | yes | no (6in4 only, protocol 41; no handler for protocol 4) |
 | IPsec ESP | #178 | 2.4.0 | yes | yes | yes |
-| IPsec AH | #179 | 2.4.0 | yes | yes | as an IPv6 extension header only; IPv4 has no handler for it |
+| IPsec AH | #179 | 2.4.0 | yes | yes | partial (an IPv6 extension header only: IPv4 has no handler for it) |
 | VXLAN | #180 | 2.4.0 | no | yes | no |
 | VRRP | #181 | 2.5.0 | yes | yes | yes |
 | RIP | #182 | 2.5.0 | yes | yes | yes |
-| OSPF | #183 | 2.5.0 | yes | `contrib` | yes |
-| PIM | #184 | 2.5.0 | yes | `contrib` | yes |
-| BGP | #185 | 2.5.0 | yes | `contrib` | yes |
-| LLDP | #186 | 2.6.0 | no (an `ETH_TYPE_LLDP` constant, no decoder) | `contrib` | yes |
-| MPLS | #187 | 2.6.0 | labels folded into `Ethernet.mpls_labels` | `contrib` | no (EtherType constants only) |
-| 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into `LLC`) | yes | `LLC` class, but its Ethernet reads no 802.3 Length ("not supported") |
+| OSPF | #183 | 2.5.0 | yes | yes (`contrib`) | yes |
+| PIM | #184 | 2.5.0 | yes | yes (`contrib`) | yes |
+| BGP | #185 | 2.5.0 | yes | yes (`contrib`) | yes |
+| LLDP | #186 | 2.6.0 | no (an EtherType constant, no decoder) | yes (`contrib`) | yes |
+| MPLS | #187 | 2.6.0 | yes (labels folded into Ethernet.mpls_labels, not a layer) | yes (`contrib`) | no (EtherType and label-mask constants only) |
+| 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into LLC) | yes | partial (its Ethernet reads no 802.3 Length: "not supported") |
 | STP | #189 | 2.6.0 | yes | yes | yes |
-| CDP | #190 | 2.6.0 | yes | `contrib` | no |
+| CDP | #190 | 2.6.0 | yes | yes (`contrib`) | no (an EtherType constant only) |
 | NTP | #191 | `master`, unreleased | yes | yes | yes |
 | TFTP | #192 | `master`, unreleased | yes | yes | yes |
 | RADIUS | #193 | `master`, unreleased | yes | yes | yes |
-| STUN | #194 | `master`, unreleased | yes | `contrib` | yes |
+| STUN | #194 | `master`, unreleased | yes | yes (`contrib`) | yes |
 | HSRP | #195 | `master`, unreleased | yes | yes | yes |
-| TLS records + SNI | #196 | `master`, unreleased | yes (`ssl.py`) | `layers/tls`, loaded by `load_layer("tls")` | yes (`layer4/ssl.py`) |
-| **of 21** | | **21** (15 released) | **19** | **21** | **18**, three of them partial |
+| TLS records + SNI | #196 | `master`, unreleased | partial (records and generic ClientHello extensions; no server_name decoding) | yes (`load_layer("tls")`) | partial (records and generic ClientHello extensions; no server_name decoding) |
+| **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 3 partial |
+
+The script's own summary line reads "Of #170's 21 items: netprotocols
+21, dpkt 19 (1 partial), scapy 21, pypacker 17 (3 partial); a partial
+cell counts." The release column is each module's first tag:
+
+```
+for v in 2.3.0 2.4.0 2.5.0 2.6.0; do printf 'v%s:' $v
+  for m in layer4/sctp layer3/esp layer3/ah layer7/vxlan layer3/vrrp \
+      layer7/rip layer3/ospf layer3/pim layer7/bgp layer2/lldp layer2/mpls \
+      layer2/llc layer2/stp layer2/cdp layer7/ntp layer7/tftp layer7/radius \
+      layer7/stun layer7/hsrp layer7/tls; do
+    git cat-file -e v$v:src/netprotocols/$m.py 2>/dev/null && printf ' %s' ${m#*/}
+  done; echo
+done
+git grep -c 'IPProtocol.IPIP, IPv4' v2.3.0 v2.4.0 -- src/netprotocols/_defaults.py
+```
+
+prints nothing for `v2.3.0`; `sctp esp ah vxlan` for `v2.4.0`, plus
+the last line's `v2.4.0:src/netprotocols/_defaults.py:1` for IP-in-IP,
+which has no module of its own; `vrrp rip ospf pim bgp` added for
+`v2.5.0`; and `lldp mpls llc stp cdp` added for `v2.6.0`: fifteen
+released. The other six modules are in no tag.
 
 What it shows:
 
@@ -1606,8 +1643,11 @@ What it shows:
   decoder for every one, though eight of them do not load with `import
   scapy.all`: seven sit in `contrib/` and need `load_contrib()`, and
   `tls` is not in `conf.load_layers` (`scapy/config.py`'s
-  `load_layers` list). dpkt 1.9.8 lacks VXLAN and LLDP; pypacker 5.4
-  lacks VXLAN, MPLS and CDP and covers IP-in-IP, AH and LLC in part.
+  `load_layers` list). dpkt 1.9.8 lacks VXLAN and LLDP and covers TLS
+  in part (no server_name decoding); pypacker 5.4 lacks IP-in-IP (its
+  `layer3/ip.py` dispatches protocol 41, IPv6 in IPv4, but nothing for
+  protocol 4, which #177 and RFC 2003 define IP-in-IP as), VXLAN, MPLS
+  and CDP, and covers AH, LLC / SNAP and TLS in part.
   The list is the one this library drew from its own gaps, so
   covering more of it than dpkt or pypacker is not a coverage claim
   against either, and §6's "more protocols than X" stays off limits.
@@ -1629,16 +1669,41 @@ What it shows:
   structures) and `layers/msrpce/raw/ms_rrp.py` (the MS-RRP remote
   registry RPC interface), and `contrib/` modules for DICOM, SAE J1939,
   the MySQL client/server protocol, PTPv2, a CoAP socket and six
-  Bluetooth chip vendors' HCI commands; none is on #170's list. Reproduce with the 2.7.0 wheel unpacked the same way to
+  Bluetooth chip vendors' HCI commands; none is on #170's list.
+  Reproduce with the 2.7.0 wheel unpacked the same way to
   `/tmp/survey-scapy270-src`, then `diff <(cd
   /tmp/survey-scapy270-src/scapy && find layers contrib -name '*.py' |
   sort) <(cd /tmp/survey-scapy-src/scapy && find layers contrib -name
   '*.py' | sort)`. #170 read source trees and recorded no commits, so
   this compares releases, not what #170 saw.
 
-The script's second table is a survey, not a roadmap: nine protocols
-all three releases decode and this library does not export — PPP,
-PPPoE, IEEE 802.11, Radiotap, Cisco DTP, ATA over Ethernet, RTP,
-Diameter and SMB. It is recorded so the next roadmap starts from a
-measured list rather than a recollection, not as a promise to chase
-any of them.
+The script's second table is a survey, not a roadmap: the eleven
+protocols all three releases decode and this library does not export —
+PPP, PPPoE, IEEE 802.11, Radiotap, Linux cooked capture (SLL), Cisco
+DTP, ATA over Ethernet, RTP, Diameter, SMB and Portmap. Each
+netprotocols cell is checked twice: the name is not in `__all__`, and
+no class anywhere in `src/netprotocols/` carries the protocol's stem
+(`sll|cooked`, `pmap|portmap` and so on). It is recorded so the next
+roadmap starts from a measured list rather than a recollection, not as
+a promise to chase any of them.
+
+The list is meant to be complete, not a sample, and was swept for
+rather than recalled: every module of dpkt 1.9.8 (`(cd
+/tmp/survey-dpkt-src/dpkt && ls *.py)`) and every `layer*/` module of
+pypacker 5.4 (`(cd /tmp/survey-pypacker-src/pypacker-5.4/pypacker &&
+ls layer*/*.py)`), with the classes each defines, was matched by
+protocol; each protocol both decode and netprotocols does not was then
+looked for in scapy 2.8.0's `layers/` and `contrib/`. Seventeen
+protocols are in both dpkt and pypacker and not here. The eleven above
+are in scapy too; five are not, so they are left out: IPX (dpkt
+`ipx.py`, pypacker `layer3/ipx.py`), RFB/VNC (`rfb.py`,
+`layer567/rfb.py`), SIP (`sip.py`, `layer567/sip.py`), Telnet
+(`telnet.py`, only a `strip_options()` function in dpkt;
+`layer567/telnet.py`) and TPKT (`tpkt.py`, `layer567/tpkt.py`) —
+`grep -rniE '^class (ipx|rfb|sip|telnet|tpkt)\b'
+/tmp/survey-scapy-src/scapy/layers /tmp/survey-scapy-src/scapy/contrib`
+prints nothing. The seventeenth is ASN.1 BER/DER, which all three do
+decode (dpkt `asn1.py`'s `decode()`, pypacker `layer567/der.py`'s
+`decode_der()`, scapy `asn1/ber.py`) but which is an encoding other
+protocols use rather than a protocol of its own, and scapy's sits
+outside `layers/` and `contrib/`, where #170 did not look.

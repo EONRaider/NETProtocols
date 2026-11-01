@@ -28,9 +28,21 @@ the competitor's own source states, and, for scapy, whether
 ``load_contrib()``, and a ``layers/`` module outside ``conf.load_layers``
 needs ``load_layer()``).
 
+Every cell opens with its verdict. "yes" and "partial" both count as
+covering the row; "partial" is a decoder that lacks part of what the
+issue asks for (TLS without server_name, say). "no" is evidence too, not
+an empty cell: a check that a class or handler pattern matches none of
+the package's source files, reported as "no match in N files". A check
+whose file is missing fails rather than passing, and any failed check
+makes the cell FAILED and the script exit 1.
+
 The second table lists the protocols all three releases decode and
-netprotocols does not. It is a survey, not a gap list: the register's
-standing rule is never to race scapy on coverage (docs/CLAIMS.md 6).
+netprotocols does not: every one of dpkt's modules and pypacker's
+``layer*/`` modules was matched by protocol, and each protocol both
+decode and netprotocols does not was then looked for in scapy's
+``layers/`` and ``contrib/`` (docs/CLAIMS.md 7.1 has the sweep). It is
+a survey, not a gap list: the register's standing rule is never to race
+scapy on coverage (docs/CLAIMS.md 6).
 """
 
 from __future__ import annotations
@@ -40,19 +52,34 @@ import ast
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 NETPROTOCOLS = REPOSITORY / "src" / "netprotocols"
 
 
-class Check(NamedTuple):
-    """A regular expression that must (or must not) match a source file."""
+#: What a cell says when one of its checks holds: the default ``""``
+#: leaves it at "yes"; "partial" marks a decoder that lacks part of the
+#: issue's scope; "no" marks the library as not decoding it.
+Verdict = Literal["", "partial", "no"]
 
-    path: str  # relative to the package directory
+#: The ``path`` of a check that searches every source file in a package.
+EVERY_FILE = "**/*.py"
+
+
+class Check(NamedTuple):
+    """A regular expression that must (or must not) match a source file.
+
+    ``path`` is one file, which must exist whether the check asserts a
+    match or its absence, or :data:`EVERY_FILE`, which must find at least
+    one file; a missing file fails the check rather than passing it.
+    """
+
+    path: str  # relative to the package directory, or EVERY_FILE
     pattern: str  # searched with re.MULTILINE
     note: str = ""  # a caveat, reported when the check holds
     absent: bool = False  # the check holds when the pattern does NOT match
+    verdict: Verdict = ""  # what the cell is when this check holds
 
 
 class Row(NamedTuple):
@@ -68,6 +95,20 @@ def cls(path: str, name: str) -> Check:
     """A class definition, ``class <name>`` at the start of a line."""
     return Check(path, rf"^class {name}\b")
 
+
+def nowhere(pattern: str, note: str = "") -> Check:
+    """A cell's "no": ``pattern`` matches no source file in the package."""
+    return Check(EVERY_FILE, pattern, note, absent=True, verdict="no")
+
+
+#: A TLS decoder that keeps every ClientHello extension as raw bytes.
+NO_SNI = Check(
+    EVERY_FILE,
+    r"(?i)server_?name|\bsni\b",
+    "records and generic ClientHello extensions; no server_name decoding",
+    absent=True,
+    verdict="partial",
+)
 
 #: #170's gap list: every item of its five tiers, in tier order (#171-#175).
 GAP = (
@@ -91,12 +132,19 @@ GAP = (
         (Check("ipip.py", r"^from \.ip import IP as IPIP"),),
         (Check("layers/inet.py", r"^bind_layers\(IP, IP, frag=0, proto=4\)"),),
         (
-            Check("layer3/ip.py", r"IP_PROTO_IP6: ip6\.IP6"),
             Check(
                 "layer3/ip.py",
-                r"IP_PROTO_IPIP:",
-                "IPv6 in IP only: no handler for protocol 4",
+                r"IP_PROTO_IP6: ip6\.IP6",
+                "6in4 only, protocol 41",
+            ),
+            # IP_PROTO_IPIP is the module's one name for protocol 4.
+            Check("layer3/ip_shared.py", r"^IP_PROTO_IPIP\s*= 4\b"),
+            Check(
+                EVERY_FILE,
+                r"\bIP_PROTO_IPIP\s*:",
+                "no handler for protocol 4",
                 absent=True,
+                verdict="no",
             ),
         ),
     ),
@@ -118,9 +166,10 @@ GAP = (
             cls("layer3/ip6.py", "IP6AHHeader"),
             Check(
                 "layer3/ip.py",
-                r"IP_PROTO_AH:",
+                r"\bIP_PROTO_AH\s*:",
                 "an IPv6 extension header only: IPv4 has no handler for it",
                 absent=True,
+                verdict="partial",
             ),
         ),
     ),
@@ -128,9 +177,9 @@ GAP = (
         "VXLAN",
         "#180",
         (cls("layer7/vxlan.py", "VXLAN"),),
-        (),
+        (nowhere(r"(?i)^\s*class \w*vxlan"),),
         (cls("layers/vxlan.py", "VXLAN"),),
-        (),
+        (nowhere(r"(?i)^\s*class \w*vxlan"),),
     ),
     Row(
         "VRRP",
@@ -176,7 +225,14 @@ GAP = (
         "LLDP",
         "#186",
         (cls("layer2/lldp.py", "LLDP"),),
-        (),
+        (
+            Check(
+                "ethernet.py",
+                r"^ETH_TYPE_LLDP = 0x88CC\b",
+                "an EtherType constant, no decoder",
+            ),
+            nowhere(r"(?i)^\s*class \w*lldp"),
+        ),
         (cls("contrib/lldp.py", "LLDPDU"),),
         (cls("layer12/lldp.py", "LLDP"),),
     ),
@@ -192,13 +248,23 @@ GAP = (
             ),
         ),
         (cls("contrib/mpls.py", "MPLS"),),
-        (),
+        (
+            Check(
+                "layer12/ethernet.py",
+                r"^ETH_TYPE_MPLS_UCAST\s*= 0x8847\b",
+                "EtherType and label-mask constants only",
+            ),
+            nowhere(r"(?i)^\s*class \w*mpls|\bETH_TYPE_MPLS_\w+\s*:"),
+        ),
     ),
     Row(
         "802.2 LLC / SNAP",
         "#188",
         (cls("layer2/llc.py", "LLC"), cls("layer2/llc.py", "SNAP")),
-        (cls("llc.py", "LLC"),),
+        (
+            cls("llc.py", "LLC"),
+            Check("llc.py", r"def is_snap\(self\)", "SNAP folded into LLC"),
+        ),
         (cls("layers/l2.py", "LLC"), cls("layers/l2.py", "SNAP")),
         (
             cls("layer12/llc.py", "LLC"),
@@ -206,6 +272,7 @@ GAP = (
                 "layer12/ethernet.py",
                 r"LLC format\) .* not supported",
                 'its Ethernet reads no 802.3 Length: "not supported"',
+                verdict="partial",
             ),
         ),
     ),
@@ -223,7 +290,14 @@ GAP = (
         (cls("layer2/cdp.py", "CDP"),),
         (cls("cdp.py", "CDP"),),
         (cls("contrib/cdp.py", "CDPv2_HDR"),),
-        (),
+        (
+            Check(
+                "layer12/ethernet.py",
+                r"^ETH_TYPE_CDP\s*= 0x2000\b",
+                "an EtherType constant only",
+            ),
+            nowhere(r"(?i)^\s*class \w*cdp|\bETH_TYPE_CDP\s*:"),
+        ),
     ),
     Row(
         "NTP",
@@ -268,27 +342,45 @@ GAP = (
     Row(
         "TLS records + SNI",
         "#196",
-        (cls("layer7/tls.py", "TLS"),),
-        (cls("ssl.py", "TLS"),),
-        (cls("layers/tls/record.py", "TLS"),),
-        (cls("layer4/ssl.py", "SSL"),),
+        (
+            cls("layer7/tls.py", "TLS"),
+            Check("layer7/tls.py", r"^    def server_name\("),
+        ),
+        (
+            cls("ssl.py", "TLS"),
+            Check("ssl.py", r"extensions\.append\(\(ext_type, ext_data\)\)"),
+            NO_SNI,
+        ),
+        (
+            cls("layers/tls/record.py", "TLS"),
+            cls("layers/tls/extensions.py", "TLS_Ext_ServerName"),
+        ),
+        (
+            cls("layer4/ssl.py", "SSL"),
+            cls("layer4/ssl.py", "Extension"),
+            NO_SNI,
+        ),
     ),
 )
 
 
 def elsewhere(
-    protocol: str, name: str, dpkt: str, scapy: str, pypacker: str
+    protocol: str, name: str, stem: str, dpkt: str, scapy: str, pypacker: str
 ) -> Row:
     """A row for a protocol all three decode and netprotocols does not.
 
     Each library is ``"<file>:<class>"``; ``name`` is the class this
-    library would export, which the "netprotocols" check asserts is
-    absent from ``__all__``.
+    library would export, which the "netprotocols" checks assert is
+    absent from ``__all__``, and ``stem`` a regular expression no class
+    name anywhere in ``src/netprotocols`` contains.
     """
     return Row(
         protocol,
         "",
-        (Check("__init__.py", rf'^\s*"{name}",$', absent=True),),
+        (
+            Check("__init__.py", rf'^\s*"{name}",$', absent=True, verdict="no"),
+            nowhere(rf"(?i)^\s*class \w*(?:{stem})"),
+        ),
         (cls(*dpkt.split(":")),),
         (cls(*scapy.split(":")),),
         (cls(*pypacker.split(":")),),
@@ -298,11 +390,17 @@ def elsewhere(
 #: Protocols every one of the three releases decodes and this one does not.
 ELSEWHERE = (
     elsewhere(
-        "PPP", "PPP", "ppp.py:PPP", "layers/ppp.py:PPP", "layer12/ppp.py:PPP"
+        "PPP",
+        "PPP",
+        "ppp",
+        "ppp.py:PPP",
+        "layers/ppp.py:PPP",
+        "layer12/ppp.py:PPP",
     ),
     elsewhere(
         "PPPoE",
         "PPPoE",
+        "pppoe",
         "pppoe.py:PPPoE",
         "layers/ppp.py:PPPoE",
         "layer12/pppoe.py:PPPoE",
@@ -310,6 +408,7 @@ ELSEWHERE = (
     elsewhere(
         "IEEE 802.11",
         "IEEE80211",
+        "80211|dot11",
         "ieee80211.py:IEEE80211",
         "layers/dot11.py:Dot11",
         "layer12/ieee80211.py:IEEE80211",
@@ -317,13 +416,23 @@ ELSEWHERE = (
     elsewhere(
         "Radiotap",
         "Radiotap",
+        "radiotap",
         "radiotap.py:Radiotap",
         "layers/dot11.py:RadioTap",
         "layer12/radiotap.py:Radiotap",
     ),
     elsewhere(
+        "Linux cooked capture (SLL)",
+        "SLL",
+        "sll|cooked",
+        "sll.py:SLL",
+        "layers/l2.py:CookedLinux",
+        "layer12/linuxcc.py:LinuxCC",
+    ),
+    elsewhere(
         "Cisco DTP",
         "DTP",
+        "dtp",
         "dtp.py:DTP",
         "contrib/dtp.py:DTP",
         "layer12/dtp.py:DTP",
@@ -331,16 +440,23 @@ ELSEWHERE = (
     elsewhere(
         "ATA over Ethernet",
         "AOE",
+        "aoe",
         "aoe.py:AOE",
         "contrib/aoe.py:AOE",
         "layer12/aoe.py:AOE",
     ),
     elsewhere(
-        "RTP", "RTP", "rtp.py:RTP", "layers/rtp.py:RTP", "layer567/rtp.py:RTP"
+        "RTP",
+        "RTP",
+        "rtp",
+        "rtp.py:RTP",
+        "layers/rtp.py:RTP",
+        "layer567/rtp.py:RTP",
     ),
     elsewhere(
         "Diameter",
         "Diameter",
+        "diameter",
         "diameter.py:Diameter",
         "contrib/diameter.py:DiamG",
         "layer567/diameter.py:Diameter",
@@ -348,9 +464,18 @@ ELSEWHERE = (
     elsewhere(
         "SMB",
         "SMB",
+        "smb",
         "smb.py:SMB",
         "layers/smb.py:SMB_Header",
         "layer567/smb.py:SMB",
+    ),
+    elsewhere(
+        "Portmap",
+        "Portmap",
+        "pmap|portmap",
+        "pmap.py:Pmap",
+        "contrib/portmap.py:GETPORT_Call",
+        "layer567/pmap.py:Pmap",
     ),
 )
 
@@ -363,27 +488,73 @@ def read(root: Path, relative: str) -> str | None:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def evaluate(root: Path, checks: tuple[Check, ...]) -> tuple[bool, str]:
-    """Whether every check holds, and the cell text that says so."""
+class Cell(NamedTuple):
+    verdict: str  # "yes", "partial", "no", or "FAILED"
+    text: str
+
+
+def holds(root: Path, check: Check) -> tuple[bool, str]:
+    """Whether ``check`` holds under ``root``, and the evidence it does."""
+    if check.path == EVERY_FILE:
+        files = sorted(p for p in root.glob(EVERY_FILE) if p.is_file())
+        if not files:
+            return False, f"FAILED {EVERY_FILE}: no source files"
+        hits = [
+            str(p.relative_to(root))
+            for p in files
+            if re.search(
+                check.pattern,
+                p.read_text(encoding="utf-8", errors="replace"),
+                re.MULTILINE,
+            )
+        ]
+        if check.absent:
+            if hits:
+                return False, f"FAILED /{check.pattern}/ in {', '.join(hits)}"
+            return True, f"no match for /{check.pattern}/ in {len(files)} files"
+        if not hits:
+            return False, f"FAILED /{check.pattern}/ matches no file"
+        return True, f"`{hits[0]}` /{check.pattern}/"
+    text = read(root, check.path)
+    if text is None:
+        return False, f"FAILED {check.path}: no such file"
+    matched = bool(re.search(check.pattern, text, re.MULTILINE))
+    if matched == check.absent:
+        return False, f"FAILED {check.path}: /{check.pattern}/"
+    if check.absent:
+        return True, f"`{check.path}` lacks /{check.pattern}/"
+    name = re.fullmatch(r"\^class (\w+)\\b", check.pattern)
+    return True, f"`{check.path}` " + (
+        name.group(1) if name else f"/{check.pattern}/"
+    )
+
+
+def evaluate(root: Path, checks: tuple[Check, ...]) -> Cell:
+    """The cell's verdict, and the evidence behind it.
+
+    Every check must hold, or the cell reads FAILED. A cell is "no" when
+    a check marked "no" holds, else "partial" when one marked "partial"
+    does, else "yes"; a partial cell still counts as covered.
+    """
     if not checks:
-        return False, "—"
-    found, places, notes = True, [], []
+        return Cell("FAILED", "FAILED: no checks")
+    places, notes, verdicts = [], [], set()
     for check in checks:
-        text = read(root, check.path)
-        matched = text is not None and bool(
-            re.search(check.pattern, text, re.MULTILINE)
-        )
-        if matched == check.absent:
-            found = False
-            places.append(f"FAILED {check.path}: /{check.pattern}/")
+        held, place = holds(root, check)
+        places.append(place)
+        if not held:
+            verdicts.add("FAILED")
             continue
-        caveat = check.absent or (check.note and "class" not in check.pattern)
-        if not caveat:
-            what = re.sub(r"^\^(class )?|\\b$", "", check.pattern)
-            places.append(f"`{check.path}` {what.replace(chr(92), '')}")
+        verdicts.add(check.verdict)
         if check.note:
-            notes.append(f"({check.note})")
-    return found, " ".join([", ".join(places), *notes]).strip()
+            notes.append(check.note)
+    verdict = next(
+        (v for v in ("FAILED", "no", "partial") if v in verdicts), "yes"
+    )
+    text = ", ".join(places)
+    if notes:
+        text += f" ({'; '.join(notes)})"
+    return Cell(verdict, text)
 
 
 def scapy_loaded_layers(root: Path) -> set[str]:
@@ -433,31 +604,57 @@ def our_version() -> str:
     return "unknown"
 
 
+class Tally(NamedTuple):
+    covered: dict[str, int]  # "yes" or "partial" cells, per library
+    partial: dict[str, int]  # "partial" cells, per library
+    missing: dict[str, int]  # "no" cells, per library
+    failed: int  # cells with a check that did not hold
+
+
+LIBRARIES = ("ours", "dpkt", "scapy", "pypacker")
+
+
 def table(
     rows: tuple[Row, ...],
     roots: dict[str, Path],
     loaded: set[str],
     with_issue: bool,
-) -> tuple[list[str], dict[str, int]]:
+) -> tuple[list[str], Tally]:
     """Markdown table lines and, per library, how many rows it covers."""
-    libraries = ("ours", "dpkt", "scapy", "pypacker")
     header = ["Protocol", *(["Issue"] if with_issue else [])]
     header += ["netprotocols", "dpkt", "scapy", "pypacker"]
     lines = ["| " + " | ".join(header) + " |", "|---" * len(header) + "|"]
-    covered = dict.fromkeys(libraries, 0)
+    tally = Tally(
+        dict.fromkeys(LIBRARIES, 0),
+        dict.fromkeys(LIBRARIES, 0),
+        dict.fromkeys(LIBRARIES, 0),
+        0,
+    )
+    failed = 0
     for row in rows:
         cells = [row.protocol, *([row.issue] if with_issue else [])]
-        for library in libraries:
+        for library in LIBRARIES:
             checks: tuple[Check, ...] = getattr(row, library)
-            found, text = evaluate(roots[library], checks)
-            if library == "ours" and not with_issue and found:
-                text = "—"  # the absent check held: not exported here
-            if found and library == "scapy":
-                text += scapy_note(checks, loaded)
-            covered[library] += found
-            cells.append(text)
+            cell = evaluate(roots[library], checks)
+            text = f"{cell.verdict}: {cell.text}"
+            if cell.verdict in ("yes", "partial"):
+                tally.covered[library] += 1
+                if library == "scapy":
+                    text += scapy_note(checks, loaded)
+            tally.partial[library] += cell.verdict == "partial"
+            tally.missing[library] += cell.verdict == "no"
+            failed += cell.verdict == "FAILED"
+            cells.append(text.replace("|", "\\|"))
         lines.append("| " + " | ".join(cells) + " |")
-    return lines, covered
+    return lines, tally._replace(failed=failed)
+
+
+def counts(tally: Tally, library: str) -> str:
+    """``"<covered>"``, with how many of them are partial if any are."""
+    partial = tally.partial[library]
+    return f"{tally.covered[library]}" + (
+        f" ({partial} partial)" if partial else ""
+    )
 
 
 def main() -> int:
@@ -491,25 +688,29 @@ def main() -> int:
         f"Python {sys.version.split()[0]}"
     )
     print()
-    lines, covered = table(GAP, roots, loaded, with_issue=True)
+    lines, gap = table(GAP, roots, loaded, with_issue=True)
     print("\n".join(lines))
     print()
     print(
-        f"Of #170's {len(GAP)} items: netprotocols {covered['ours']}, "
-        f"dpkt {covered['dpkt']}, scapy {covered['scapy']}, "
-        f"pypacker {covered['pypacker']}."
+        f"Of #170's {len(GAP)} items: netprotocols {counts(gap, 'ours')}, "
+        f"dpkt {counts(gap, 'dpkt')}, scapy {counts(gap, 'scapy')}, "
+        f"pypacker {counts(gap, 'pypacker')}; a partial cell counts."
     )
-    gap_closed = covered["ours"] == len(GAP)
     print()
-    lines, covered = table(ELSEWHERE, roots, loaded, with_issue=False)
+    lines, other = table(ELSEWHERE, roots, loaded, with_issue=False)
     print("\n".join(lines))
     print()
     print(
         f"Decoded by all three and not exported by netprotocols: "
-        f"{covered['ours']} of {len(ELSEWHERE)} (dpkt has "
-        f"{covered['dpkt']}, scapy {covered['scapy']}, pypacker "
-        f"{covered['pypacker']})."
+        f"{other.missing['ours']} of {len(ELSEWHERE)} (dpkt has "
+        f"{counts(other, 'dpkt')}, scapy {counts(other, 'scapy')}, "
+        f"pypacker {counts(other, 'pypacker')})."
     )
+    failed = gap.failed + other.failed
+    if failed:
+        print(f"{failed} cell(s) FAILED a check; see above.", file=sys.stderr)
+        return 1
+    gap_closed = gap.covered["ours"] == len(GAP) and not gap.partial["ours"]
     return 0 if gap_closed else 1
 
 
