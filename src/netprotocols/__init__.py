@@ -100,7 +100,13 @@ from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
 from netprotocols.layer7.tftp import TFTP
-from netprotocols.layer7.tls import TLS, TLSClientHello, TLSExtension
+from netprotocols.layer7.tls import (
+    TLS,
+    TLSClientHello,
+    TLSExtension,
+    TLSServerNamePeek,
+    peek_server_name,
+)
 from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
@@ -252,6 +258,7 @@ __all__ = [
     "TCPOption",
     "TLSClientHello",
     "TLSExtension",
+    "TLSServerNamePeek",
     "TruncatedHeaderError",
     "UnknownTableError",
     "VRRPv6",
@@ -263,6 +270,7 @@ __all__ = [
     "flow_key",
     "internet_checksum",
     "lsa_checksum",
+    "peek_server_name",
     "random_mac",
     "read_captures",
     "read_pcap",
