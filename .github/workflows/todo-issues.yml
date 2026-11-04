@@ -1,4 +1,4 @@
-name: TODO issues
+name: Marker issues
 
 # Runs scripts/check_todos.py --check-open: every issue-tracked marker
 # in the tree must name an open issue, not a closed or missing issue or
