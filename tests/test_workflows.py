@@ -500,6 +500,18 @@ class TestCIWorkflow:
             ".flake8 no longer sets pydoclint's style to sphinx"
         )
 
+    def test_lint_runs_the_offline_marker_check(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The lint job runs scripts/check_todos.py with no flags: the
+        offline scan, which needs no token and no network."""
+        block = ci_jobs.get("lint")
+        assert block is not None, "ci.yml has no lint job"
+        assert re.search(
+            r"(?m)^ +- run: python3 scripts/check_todos\.py$", block
+        ), "lint job no longer runs `python3 scripts/check_todos.py`"
+        assert (ROOT / "scripts" / "check_todos.py").is_file()
+
     def test_test_job_runs_the_src_doctests(
         self, ci_jobs: dict[str, str]
     ) -> None:
@@ -699,6 +711,67 @@ class TestCIWorkflow:
         script = self._reproducibility_step_script(non_failing_step)
         with pytest.raises(AssertionError, match="exit 1"):
             self._assert_diffs_two_independent_builds(script)
+
+
+TODO_ISSUES = WORKFLOWS / "todo-issues.yml"
+
+
+class TestTodoIssuesWorkflow:
+    """todo-issues.yml runs scripts/check_todos.py against the GitHub
+    API on pull requests, pushes to master and a weekly schedule, with
+    read access to issues and nothing else."""
+
+    @pytest.fixture
+    def step(self) -> str:
+        steps = job_steps(job_blocks(TODO_ISSUES)["todo-issues"])
+        matches = [s for s in steps if "scripts/check_todos.py" in s]
+        assert len(matches) == 1, steps
+        return matches[0]
+
+    def test_triggers(self) -> None:
+        text = TODO_ISSUES.read_text()
+        on = text.partition("\non:\n")[2].partition("\n\n")[0]
+        for trigger in ("push", "pull_request", "schedule"):
+            assert re.search(rf"(?m)^  {trigger}:", on), trigger
+        assert re.search(r'(?m)^    - cron: "[^"]+"$', on)
+        assert re.search(
+            r"(?m)^    types: \[opened, edited, synchronize, reopened\]$", on
+        ), "a pull request body edit no longer re-runs the closing check"
+        assert re.search(r"(?m)^    branches: \[master\]$", on)
+
+    def test_ci_has_no_schedule(self) -> None:
+        """ci.yml runs on push, pull_request and workflow_call only."""
+        on = CI.read_text().partition("\non:\n")[2].partition("\n\n")[0]
+        assert not re.search(r"(?m)^  schedule:", on)
+
+    def test_the_step_checks_open_and_closing_issues(self, step: str) -> None:
+        run = step.partition("run: >-\n")[2]
+        command = " ".join(run.split())
+        assert command == (
+            "python3 scripts/check_todos.py --check-open "
+            '--closing-issues-from-event "$GITHUB_EVENT_PATH"'
+        )
+        assert step_key(step, "GITHUB_TOKEN") == "${{ github.token }}"
+        assert step_key(step, "if") is None
+        assert step_key(step, "continue-on-error") is None
+
+    def test_the_pull_request_body_is_never_expanded(self) -> None:
+        """The body reaches the script only through the event payload
+        file; an expression in a run line would be shell input."""
+        assert "github.event.pull_request.body" not in TODO_ISSUES.read_text()
+        assert "github.event.pull_request.body" not in CI.read_text()
+
+    def test_the_job_reads_issues_and_nothing_more(self) -> None:
+        block = job_blocks(TODO_ISSUES)["todo-issues"]
+        permissions = block.partition("    permissions:\n")[2]
+        granted = []
+        for line in permissions.splitlines():
+            if not line.startswith("      "):
+                break
+            granted.append(line.strip())
+        assert granted == ["contents: read", "issues: read"]
+        top = TODO_ISSUES.read_text().partition("\njobs:\n")[0]
+        assert re.search(r"(?m)^permissions:\n  contents: read$", top)
 
 
 class TestReleaseWorkflow:
@@ -1061,6 +1134,7 @@ NEW_WORKFLOW_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "lint-pr-title",
         ("action-semantic-pull-request",),
     ),
+    "todo-issues.yml": ("todo-issues", ("scripts/check_todos.py",)),
 }
 
 

@@ -18,12 +18,13 @@ becomes the PR description.
 
 ## Verification
 
-<!-- Paste the QA-ladder output, or tick the boxes. All five gates run in CI. -->
+<!-- Paste the QA-ladder output, or tick the boxes. All six gates run in CI. -->
 
 - [ ] `uv run ruff check` and `uv run ruff format --check` are clean
 - [ ] `uv run flake8 src` (pydoclint) is clean
 - [ ] `uv run mypy` is clean (strict)
 - [ ] `uv run pytest` passes locally (CI runs it on Python 3.12 / 3.13 / 3.14)
+- [ ] `python3 scripts/check_todos.py` is clean: every marker is `TODO(#N): <text>` for an open issue this PR does not close
 - [ ] `CHANGELOG.md` has an entry under `## [Unreleased]`
 
 ### New protocol or dispatch change — also:

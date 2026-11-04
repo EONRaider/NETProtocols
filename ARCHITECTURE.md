@@ -1237,9 +1237,11 @@ tests/              one file per protocol + test_contract.py
 ```
 
 Tooling: [uv](https://docs.astral.sh/uv/) manages the environment
-(`uv sync`); `uv run pytest`, `uv run mypy` (strict), and
-`uv run ruff check` are the three gates CI enforces on Python
-3.12–3.14.
+(`uv sync`); `uv run ruff check`, `uv run ruff format --check`,
+`uv run flake8 src` (pydoclint), `uv run mypy` (strict),
+`uv run pytest` and `python3 scripts/check_todos.py` are the six gates
+CI enforces, with `uv run pytest` on Python 3.12–3.14 and `ruff`,
+`flake8` and `mypy` on 3.12.
 
 ## Cookbook: adding a protocol
 
