@@ -31,8 +31,8 @@ class TestPacket:
         assert bytes(eth_arp_packet) == raw_eth_header + raw_arp_header
 
     def test_payload_property_was_removed(self, eth_arp_packet):
-        """Deleted at 2.0.0 (breaking change, #90): it was always exactly
-        ``bytes(self)``, a redundant duplicate of ``__bytes__``."""
+        """Packet has no ``payload`` attribute; ``bytes(packet)`` gives
+        its bytes."""
         with pytest.raises(AttributeError):
             _ = eth_arp_packet.payload
 
@@ -51,15 +51,14 @@ class TestPacket:
             Packet(b"raw bytes are not a protocol")  # type: ignore[arg-type]
 
     def test_inner_layer_instances_accepted(self, raw_arp_header):
-        """Regression: the old implementation validated members against
-        direct Protocol subclasses only, so indirect subclasses such as
-        decoded ARP/IPv4 instances were spuriously rejected."""
+        """A member may be an indirect Protocol subclass, such as a
+        decoded ARP or IPv4 instance."""
         packet = Packet(ARP.decode(raw_arp_header))
         assert len(packet) == 1
 
     def test_int_key_still_indexes_by_position(self, eth_arp_packet):
-        """Unchanged behaviour: an int key is positional, not a lookup
-        for a layer of type ``int``."""
+        """An int key is positional, not a lookup for a layer of type
+        ``int``."""
         assert eth_arp_packet[0] is eth_arp_packet.layers[0]
         assert eth_arp_packet[-1] is eth_arp_packet.layers[-1]
         with pytest.raises(IndexError):

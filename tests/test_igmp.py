@@ -1,9 +1,9 @@
 """IGMP decoding.
 
 Unit tests run against crafted frames whose checksums are computed by
-the library itself. The corpus test activates once a real IGMP capture
-is folded in (``scripts/capture_fixtures_igmp.sh``); until then it
-skips, so the suite stays green while the owner captures.
+the library itself. The corpus test runs when tests/fixtures/igmp.pcap
+exists (``scripts/capture_fixtures_igmp.sh`` captures it) and skips
+otherwise.
 """
 
 import struct
