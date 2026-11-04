@@ -1781,8 +1781,8 @@ on a raised `TruncatedHeaderError` was `args`, `add_note`,
 protocol-validation tool that wanted to know *where* a parse failed
 had to regex the message.
 
-Every site in `src/` that raises a decode or validation error now
-attaches structured context:
+Every site in `src/` that raises one of the decode or validation
+errors listed below now attaches structured context:
 
 ```python
 try:
@@ -1794,8 +1794,11 @@ except ProtocolError as e:
 
 `protocol` is set at every one of the 230 sites in `src/` that raise a
 decode or validation error but `random_mac`'s (`utils/mac.py`), which
-belongs to no protocol (verified by an AST sweep, not just by eye). A
-site here is a `raise` statement that builds `InvalidFieldError`,
+belongs to no protocol (verified by an AST sweep, not just by eye);
+`validate_mac_addr` and `validate_ipv4_addr` forward the `protocol=`
+their caller gives, which every header in `src/` does, so a direct
+call without one leaves it `None`. A site here is a `raise` statement
+that builds `InvalidFieldError`,
 `TruncatedHeaderError`, `InvalidMACAddressError`,
 `InvalidIPv4AddressError`, `InvalidManufacturerCodeError` or
 `MaxDepthExceededError`, directly or through the `_malformed` helpers of
@@ -1807,9 +1810,10 @@ statements in all, and the other 30 fall outside it: `pcap.py`'s 18
 than a protocol and set no `protocol`; the three registry errors in
 `registry.py`; the private `_Unreached` control-flow signal in
 `layer7/tls.py`, raised three times and caught within the module; and
-stdlib `ValueError`, `OSError` and `KeyError` raises and two bare
-re-raises. Reproduce the count from the repository root with
-`python3`; it prints `230 of 260`:
+four stdlib raises (`ValueError` in `checksum.py` and `walk.py`,
+`OSError` in `_base.py`, `KeyError` in `packet.py`) and two bare
+re-raises (`walk.py`, `layer3/pim.py`). Reproduce the count from the
+repository root with `python3`; it prints `230 of 260`:
 
 ```python
 import ast, pathlib
