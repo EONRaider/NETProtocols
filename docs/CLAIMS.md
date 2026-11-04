@@ -779,7 +779,7 @@ and optimization to its end (#250).
 | 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 149,090 / 152,096 / 158,328 f/s; dpkt 225,788 / 225,538 / 241,767; scapy 45,723 / 46,342 / 48,231. dpkt faster by 1.51×, 1.48×, 1.53×; against scapy 3.26×, 3.28×, 3.28×. Quoted: the median-ratio run, **dpkt 1.51× faster**, **3.3×** against scapy. netprotocols decodes 389 of 394 frames, dpkt 393 (see the depth bullet) |
 | 1.3 encode | `benchmark_encode.py` (whole frame, like for like; corrected, see 1.3), three runs | netprotocols 740,864 / 734,096 / 754,649 ops/s; dpkt 553,578 / 556,781 / 552,793; scapy 1,038,362 / 1,057,584 / 1,042,091. Against dpkt: 1.34×, 1.32×, 1.37×. Quoted: the median-ratio run, **1.34×** (the earlier 4.15× compared a header with a frame) |
 | 1.4 import | `env -u PYTHONDONTWRITEBYTECODE ... benchmark_import.py` after an untimed warm-up, best of three (warm) | netprotocols **55.2 ms** (117 modules), scapy.all **235.3 ms** (**4.3×**); dpkt 20.6 ms (117 modules) |
-| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.8.0-py3-none-any.whl` 291,922 bytes (285.1 KiB), **9.5×** smaller than scapy 2.8.0's 2,762,122 |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.8.0-py3-none-any.whl` 291,949 bytes (285.1 KiB), **9.5×** smaller than scapy 2.8.0's 2,762,122 |
 | 1.6 depth | `benchmark.py --depth` | deeper on **175 of 394** frames, not deeper on 213, 6 skipped |
 
 - **dpkt's lead rose from 1.37× to 1.51×.** On the 15 TLS frames dpkt
@@ -1105,7 +1105,7 @@ never touch the host.
 **Status: VERIFIED for 2.8.0**
 
 *Re-measured for 2.8.0 (2026-11-04): `netprotocols-2.8.0-py3-none-any.whl`
-is 291,922 bytes (285.1 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+is 291,949 bytes (285.1 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
 2,762,122 (2.63 MiB), **9.5× smaller**.*
 
 *Re-measured for 2.7.0 (2026-11-04): `netprotocols-2.7.0-py3-none-any.whl`
