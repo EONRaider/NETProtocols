@@ -72,8 +72,9 @@ _OPTION_TYPE_NAMES: dict[int, str] = {
 
 @dataclass(frozen=True, slots=True)
 class IPv6Option:
-    """One option TLV from a Hop-by-Hop / Destination Options extension
-    header (RFC 8200 §4.2).
+    """One option TLV from a Hop-by-Hop or Destination Options header.
+
+    RFC 8200 §4.2.
 
     :param type: Option type — ``0`` Pad1, ``1`` PadN, ``5`` Router
         Alert, ``194`` Jumbo Payload (see :attr:`type_name`). The two
@@ -88,16 +89,18 @@ class IPv6Option:
 
     @property
     def type_name(self) -> str:
-        """Display name of the option type, e.g. ``"Router Alert"``;
-        falls back to ``"unknown (n)"`` for types this library does not
-        name.
+        """Display name of the option type, e.g. ``"Router Alert"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
         """
         return _OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
     def unrecognized_action(self) -> int:
-        """What a node must do with an option it does not recognize —
-        the two high bits of the type (RFC 8200 §4.2): ``0`` skip it,
+        """What a node must do with an option it does not recognize.
+
+        The two high bits of the type (RFC 8200 §4.2): ``0`` skip it,
         ``1`` discard the packet, ``2`` discard and send an ICMP
         Parameter Problem, ``3`` discard and send the Parameter Problem
         only to a non-multicast destination.
@@ -106,8 +109,9 @@ class IPv6Option:
 
     @property
     def value(self) -> int | None:
-        """The decoded value, for the types this library understands:
-        the 2-byte value as an ``int`` for Router Alert (5, RFC 2711
+        """The decoded value, for the types this library understands.
+
+        The 2-byte value as an ``int`` for Router Alert (5, RFC 2711
         §2.1 — ``0`` MLD, ``1`` RSVP, ``2`` Active Networks); the
         4-byte jumbogram payload length as an ``int`` for Jumbo Payload
         (194, RFC 2675 §2 — used when the enclosing IPv6 header's
@@ -125,10 +129,12 @@ class IPv6Option:
 def _next_in_ipv6_chain(
     number: int, registry: Registry | None = None
 ) -> type[Protocol] | None:
+    """Return the class for IP protocol ``number`` in an IPv6 chain."""
     return _ip_protocol_class(number, ipv6=True, registry=registry)
 
 
 def _next_header_name(number: int) -> str:
+    """Return the display name of IP protocol ``number``."""
     return _ip_protocol_name(number)
 
 
@@ -151,6 +157,11 @@ class _IPv6OptionsHeader(Protocol):
     _struct: ClassVar[Struct] = Struct("!BB")
 
     def __post_init__(self) -> None:
+        """Check ``hdr_ext_len`` against the options' length.
+
+        :raises InvalidFieldError: if ``options`` is not
+            ``6 + hdr_ext_len * 8`` bytes long.
+        """
         expected = 6 + self.hdr_ext_len * 8
         if len(self.options) != expected:
             raise InvalidFieldError(
@@ -165,6 +176,16 @@ class _IPv6OptionsHeader(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the extension header at the start of ``data``.
+
+        The options are kept raw, not parsed, so past the length
+        ``hdr_ext_len`` declares this never raises.
+
+        :param data: The buffer, starting at the Next Header byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 2
+            bytes, or than the ``(hdr_ext_len + 1) * 8`` bytes the header
+            declares (``field="hdr_ext_len"``).
+        """
         next_header, hdr_ext_len = cls._unpack_fixed(data)
         declared = (hdr_ext_len + 1) * 8
         if declared > len(data):
@@ -190,11 +211,17 @@ class _IPv6OptionsHeader(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The header's length in bytes: ``(hdr_ext_len + 1) * 8``."""
         return (self.hdr_ext_len + 1) * 8
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
+        """Return the class for what follows, from the ``ip.proto.v6`` table.
+
+        Chosen by ``next_header``; ``None`` when it is not one this
+        library decodes.
+        """
         return _next_in_ipv6_chain(self.next_header, registry)
 
     @property
@@ -204,23 +231,25 @@ class _IPv6OptionsHeader(Protocol):
 
     @property
     def next_header_enum(self) -> IPProtocol | None:
-        """What follows this header as an
-        :class:`~netprotocols.IPProtocol` (see
-        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate.
+        """What follows this header as an :class:`~netprotocols.IPProtocol`.
+
+        See :attr:`~netprotocols.IPv4.protocol_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
         """
         return _ip_protocol_enum(self.next_header)
 
     @property
     def parsed_options(self) -> tuple[IPv6Option, ...]:
-        """The option TLVs as a tuple of :class:`IPv6Option`, in wire
-        order, parsed on demand (RFC 8200 §4.2) — padding included:
+        """The option TLVs as a tuple of :class:`IPv6Option`, in wire order.
+
+        Parsed on demand (RFC 8200 §4.2), padding included:
         Pad1 is a lone type byte, every other option is
         type/length/data.
 
         :raises InvalidFieldError: if an option's length byte is
             missing or its data runs past the header (bounded — never
-            hangs or over-reads).
+            hangs or over-reads; ``offset`` counts from the start of
+            :attr:`options`).
         """
         return tuple(
             IPv6Option(type=option_type, data=data)
@@ -251,7 +280,7 @@ class IPv6DestinationOptions(_IPv6OptionsHeader):
 
 #: Routing types whose type-specific data this library decodes into a
 #: :attr:`IPv6Routing.segments` address list: RH0 (deprecated by RFC
-#: 5095, but still seen — RFC 2460 §4.4, a 4-byte reserved field then
+#: 5095 and still seen on the wire; RFC 2460 §4.4, a 4-byte reserved field then
 #: one 16-byte address per segment) and Mobile IPv6 (RFC 6275 §6.4,
 #: the same 4-byte-reserved-then-addresses shape, always one address).
 _ROUTING_TYPE_RH0 = 0
@@ -293,6 +322,11 @@ class IPv6Routing(Protocol):
     _struct: ClassVar[Struct] = Struct("!BBBB")
 
     def __post_init__(self) -> None:
+        """Check ``hdr_ext_len`` against the data's length.
+
+        :raises InvalidFieldError: if ``data`` is not
+            ``4 + hdr_ext_len * 8`` bytes long.
+        """
         expected = 4 + self.hdr_ext_len * 8
         if len(self.data) != expected:
             raise InvalidFieldError(
@@ -307,6 +341,16 @@ class IPv6Routing(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the Routing header at the start of ``data``.
+
+        The type-specific data is kept raw, not parsed, so past the
+        length ``hdr_ext_len`` declares this never raises.
+
+        :param data: The buffer, starting at the Next Header byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 4
+            bytes, or than the ``(hdr_ext_len + 1) * 8`` bytes the header
+            declares (``field="hdr_ext_len"``).
+        """
         next_header, hdr_ext_len, routing_type, segments_left = (
             cls._unpack_fixed(data)
         )
@@ -342,11 +386,17 @@ class IPv6Routing(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The header's length in bytes: ``(hdr_ext_len + 1) * 8``."""
         return (self.hdr_ext_len + 1) * 8
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
+        """Return the class for what follows, from the ``ip.proto.v6`` table.
+
+        Chosen by ``next_header``; ``None`` when it is not one this
+        library decodes.
+        """
         return _next_in_ipv6_chain(self.next_header, registry)
 
     @property
@@ -356,23 +406,24 @@ class IPv6Routing(Protocol):
 
     @property
     def next_header_enum(self) -> IPProtocol | None:
-        """What follows this header as an
-        :class:`~netprotocols.IPProtocol` (see
-        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate.
+        """What follows this header as an :class:`~netprotocols.IPProtocol`.
+
+        See :attr:`~netprotocols.IPv4.protocol_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
         """
         return _ip_protocol_enum(self.next_header)
 
     @property
     def segments(self) -> tuple[IPv6Address, ...] | None:
-        """The segment list, for the routing types this library
-        decodes: RH0 (:data:`routing_type` ``0``) and Mobile IPv6
+        """The segment list, for the routing types this library decodes.
+
+        RH0 (:data:`routing_type` ``0``) and Mobile IPv6
         (``2``) both store a 4-byte reserved field followed by one
         :class:`~ipaddress.IPv6Address` per segment — decoded here
         as-is.
 
-        RPL Source Routing (``3``, RFC 6554) is deliberately **not**
-        decoded: RFC 6554 §3 elides a shared prefix from each
+        RPL Source Routing (``3``, RFC 6554) is **not** decoded: RFC
+        6554 §3 elides a shared prefix from each
         intermediate address, relative to the enclosing packet's
         *destination* address — context this accessor, scoped to one
         extension header, does not have. Read :attr:`data` raw for it,
@@ -380,8 +431,8 @@ class IPv6Routing(Protocol):
         rebuilds the one address the checksum and flow key need.
         The Segment Routing Header (``4``, RFC 8754) is not decoded
         either: its list is in reverse order (Segment List[0] is the
-        last segment) and is followed by TLVs, so it would not be the
-        visiting-order list this accessor returns for types 0 and 2;
+        last segment), unlike the visiting-order list this accessor
+        returns for types 0 and 2, and is followed by TLVs;
         :meth:`final_destination` reads its Segment List[0].
 
         ``None`` for every other routing type and for data whose
@@ -500,6 +551,15 @@ class IPv6Fragment(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 8-byte Fragment header at the start of ``data``.
+
+        Every field is carried verbatim, so past the 8 bytes this never
+        raises.
+
+        :param data: The buffer, starting at the Next Header byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 8
+            bytes.
+        """
         next_header, reserved, offset_res_m, identification = cls._unpack_fixed(
             data
         )
@@ -539,10 +599,11 @@ class IPv6Fragment(Protocol):
 
     @property
     def next_header_enum(self) -> IPProtocol | None:
-        """The reassembled payload's protocol as an
-        :class:`~netprotocols.IPProtocol` (see
+        """The reassembled payload's protocol as an ``IPProtocol``.
+
+        That is an :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate.
+        this library does not enumerate (degrades, never raises).
         """
         return _ip_protocol_enum(self.next_header)
 

@@ -25,8 +25,8 @@ constructor check that the body has its message's framing -- a Hello's
 fixed bytes and whole 20-byte LSA headers, whole 12-byte requests, whole
 LSA headers in an acknowledgment, and an update's LSA count and LSA
 lengths walking the body exactly -- so no accessor ever raises. A body
-of another type is kept as it is. The cost is that a malformed body of
-a known type fails the whole layer: ``decode`` raises, so a strict walk
+of another type is kept as it is. A malformed body of a known type
+fails the whole layer: ``decode`` raises, so a strict walk
 raises and a lax one stops after IPv4.
 
 Those framing errors are raised by ``decode``, so although they name
@@ -38,14 +38,14 @@ frame; the same errors raised by the constructor have no offset.
 This module decodes OSPF version 2 over IPv4 only. OSPFv3 (RFC 5340),
 which IPv6 carries under the same protocol number, changes the header
 and every message, so :meth:`OSPF.decode` rejects any version but 2,
-and protocol 89 is withheld from the IPv6 dispatch table: an IPv6
-packet carrying OSPFv3 ends its walk at the IPv6 header, as it did
-before this module existed, instead of failing to decode as OSPFv2.
+and protocol 89 is absent from the IPv6 dispatch table: an IPv6
+packet carrying OSPFv3 ends its walk at the IPv6 header instead of
+failing to decode as OSPFv2.
 
 **LSA bodies are not decoded.** A Link State Update's LSAs decode as a
 20-byte LSA header (§A.4.1) and a raw ``body`` -- the Router, Network,
 Summary, AS-external (and NSSA, opaque, ...) contents that the LS Type
-selects. Decoding those bodies is follow-up work. The LS Checksum, a
+selects. The LS Checksum, a
 Fletcher checksum over the whole LSA but its LS Age, is computed and
 verified by
 :func:`netprotocols.checksum.lsa_checksum` and
@@ -68,8 +68,8 @@ block, which a router appends to a Hello or Database Description when
 it sets the L bit (``0x10``) in Options. All three are left undecoded,
 after the OSPF layer: ``decode_frame`` ends the walk at OSPF, and
 ``frame[packet.consumed:]`` holds them. An LLS block is not part of the
-packet the checksum covers, so leaving it out keeps
-:func:`~netprotocols.checksum.verify` independent of it.
+packet the checksum covers, and :func:`~netprotocols.checksum.verify`
+does not read it.
 
 ``bytes(OSPF.decode(x)) == x[:header_len]`` holds by construction: the
 header fields are packed back and the body and authentication
@@ -185,10 +185,12 @@ _LS_TYPE_NAMES: dict[int, str] = {
 
 
 def _bit_names(value: int, names: tuple[tuple[int, str], ...]) -> str:
+    """Return the space-separated names of the bits set in ``value``."""
     return " ".join(name for bit, name in names if value & bit)
 
 
 def _ls_type_name(ls_type: int) -> str:
+    """Return the display name of an LS type, or ``"unknown (n)"``."""
     return _LS_TYPE_NAMES.get(ls_type, f"unknown ({ls_type})")
 
 
@@ -268,7 +270,8 @@ class OSPFLSAHeader:
     def ls_type_name(self) -> str:
         """Display name of the LS type, e.g. ``"Network-LSA"``.
 
-        Falls back to ``"unknown (n)"``.
+        ``"unknown (n)"`` for a value this library does not name
+        (degrades, never raises).
         """
         return _ls_type_name(self.ls_type)
 
@@ -301,7 +304,7 @@ class OSPFLSA:
     :param header: The 20-byte LSA header (RFC 2328 §A.4.1).
     :param body: Everything after the header, ``header.length - 20``
         bytes, kept raw: this library does not decode the LS types'
-        contents yet (§A.4.2-§A.4.5).
+        contents (§A.4.2-§A.4.5).
 
     :raises InvalidFieldError: if ``body`` is not ``header.length - 20``
         bytes.
@@ -354,7 +357,11 @@ class OSPFLSRequest:
 
     @property
     def ls_type_name(self) -> str:
-        """Display name of the LS type, e.g. ``"Router-LSA"``."""
+        """Display name of the LS type, e.g. ``"Router-LSA"``.
+
+        ``"unknown (n)"`` for a value this library does not name
+        (degrades, never raises).
+        """
         return _ls_type_name(self.ls_type)
 
 
@@ -585,8 +592,10 @@ class OSPF(Protocol):
     def _check_version(cls, version: int, *, offset: int | None) -> None:
         """Reject any version but 2.
 
-        :raises InvalidFieldError: ``offset`` is passed through -- ``0``
-            from :meth:`decode`, ``None`` from construction.
+        :param version: The version to check.
+        :param offset: The offset a raised error carries: ``0`` from
+            :meth:`decode`, ``None`` from construction.
+        :raises InvalidFieldError: if ``version`` is not 2.
         """
         if version != _VERSION:
             raise InvalidFieldError(
@@ -614,10 +623,13 @@ class OSPF(Protocol):
     def _check_body(cls, type_: int, body: bytes, *, base: int | None) -> None:
         """Check that ``body`` has message ``type_``'s framing.
 
+        :param type_: The message type, whose framing ``body`` must have.
+        :param body: The message body after the 24-byte header.
         :param base: Where ``body`` starts in the :meth:`decode` buffer,
             added to each error's offset; ``None`` from construction,
             which leaves the offset ``None``.
-        :raises InvalidFieldError: with ``field="body"``.
+        :raises InvalidFieldError: if ``body`` does not have the
+            framing, with ``field="body"``.
         """
         if type_ == _LS_UPDATE_TYPE:
             for _ in _walk_lsas(body, cls, base):
@@ -649,6 +661,7 @@ class OSPF(Protocol):
         authentication the trailer follows, Auth Data Len bytes: the
         digest, after the 64-bit sequence number under AuType 3.
 
+        :param data: The buffer, starting at the Version byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             24-byte header, than Packet Length, or than Packet Length
             plus the authentication trailer.
@@ -744,7 +757,8 @@ class OSPF(Protocol):
     def type_name(self) -> str:
         """Display name of the message type, e.g. ``"Hello"``.
 
-        Falls back to ``"unknown (n)"``.
+        ``"unknown (n)"`` for a value this library does not name
+        (degrades, never raises).
         """
         return self.type_names.get(self.type, f"unknown ({self.type})")
 
@@ -752,7 +766,8 @@ class OSPF(Protocol):
     def au_type_name(self) -> str:
         """Display name of the authentication type, e.g. ``"Null"``.
 
-        Falls back to ``"unknown (n)"``.
+        ``"unknown (n)"`` for a value this library does not name
+        (degrades, never raises).
         """
         return self.au_type_names.get(self.au_type, f"unknown ({self.au_type})")
 
@@ -763,6 +778,7 @@ class OSPF(Protocol):
 
     @property
     def _cryptographic(self) -> bool:
+        """Whether the AuType is 2 or 3, cryptographic authentication."""
         return self.au_type in self.CRYPTOGRAPHIC_AU_TYPES
 
     @property
@@ -895,6 +911,7 @@ class OSPF(Protocol):
         return self._lsa_headers(0)
 
     def _lsa_headers(self, start: int) -> tuple[OSPFLSAHeader, ...]:
+        """Parse the LSA headers that fill :attr:`body` from ``start``."""
         body = self.body
         return tuple(
             OSPFLSAHeader._parse(body, offset)
@@ -913,9 +930,12 @@ def _walk_lsas(
     The body must hold exactly the number of LSAs its count gives, each
     at least a header long, and nothing after the last.
 
+    :param body: The Link State Update's body.
+    :param protocol: The class to attach to a raised error.
     :param base: Added to each error's offset (relative to ``body``);
         ``None`` leaves the offset ``None``.
-    :raises InvalidFieldError: with ``field="body"``.
+    :raises InvalidFieldError: if the body does not hold exactly the
+        LSAs its count gives, with ``field="body"``.
 
     Bounded: every LSA advances the walk by at least 20 bytes, so a
     hostile count can neither hang nor over-read.
