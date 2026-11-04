@@ -331,6 +331,20 @@ Length 0.
 See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
 docstring.
 
+**One layer is one message.** A protocol whose self-delimiting
+messages, or records, follow one another in a transport payload decodes
+one of them per layer, and its `next_protocol()` answers its own class
+while another begins in the same buffer; today that is `BGP`, `STUN`
+over TCP and `TLS`. `decode_frame()`'s `max_depth` counts each of those
+layers as it counts any header, so a valid segment of many small
+messages can exceed it: a strict walk raises `MaxDepthExceededError`,
+and a lax one stops with `stopped_by` set and `consumed` short of the
+frame. The caller passes a larger `max_depth`, or walks on from
+`packet.consumed` with `start=` set to that class as many times as it
+takes. Each protocol's segment arithmetic is under *Port-based dispatch
+is best-effort* below and in the "Bounded depth" section of
+[`walk.py`](src/netprotocols/walk.py)'s module docstring.
+
 Decoding accepts `bytes` or `memoryview`. Views are a decode-time
 transient only: every stored field is a scalar or materialized
 `bytes`, so no decoded object ever aliases the buffer it came from.
