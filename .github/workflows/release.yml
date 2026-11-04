@@ -33,7 +33,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv build
       # Fails unless the tag names the version of the wheel about to be
       # uploaded, read back out of the built artifact.
@@ -99,7 +99,7 @@ jobs:
       # repository, this workflow file and the pypi environment, and
       # authenticated through `id-token: write` above. Scorecard's
       # Packaging check recognizes this action's `uses:` line.
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (v1.14.2)
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1 (v1.14.3)
 
   github-release:
     needs: publish

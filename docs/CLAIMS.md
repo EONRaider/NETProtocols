@@ -1435,7 +1435,7 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 
 15 stdlib modules imported (`__future__` and the type-checking-only
 `_typeshed` aside); `socket` used for exactly two
-`inet_pton`/`inet_ntop` calls (`_base.py:202-207`) and no socket ever
+`inet_pton`/`inet_ntop` calls (`_base.py:196-201`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
 
@@ -1508,7 +1508,7 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:137-142` asserts `bytes(layer) ==
+`tests/test_corpus.py:135-140` asserts `bytes(layer) ==
 frame[cursor:cursor+layer.header_len]` for **every layer of all 394
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
@@ -1781,7 +1781,8 @@ on a raised `TruncatedHeaderError` was `args`, `add_note`,
 protocol-validation tool that wanted to know *where* a parse failed
 had to regex the message.
 
-Every raise site in `src/` now attaches structured context:
+Every site in `src/` that raises one of the decode or validation
+errors listed below now attaches structured context:
 
 ```python
 try:
@@ -1791,9 +1792,47 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 230 raise sites in the library
-but `random_mac`'s (`utils/mac.py`), which belongs to no protocol
-(verified by an AST sweep, not just by eye); `field`
+`protocol` is set at every one of the 230 sites in `src/` that raise a
+decode or validation error but `random_mac`'s (`utils/mac.py`), which
+belongs to no protocol (verified by an AST sweep, not just by eye);
+`validate_mac_addr` and `validate_ipv4_addr` forward the `protocol=`
+their caller gives, which every header in `src/` does, so a direct
+call without one leaves it `None`. A site here is a `raise` statement
+that builds `InvalidFieldError`,
+`TruncatedHeaderError`, `InvalidMACAddressError`,
+`InvalidIPv4AddressError`, `InvalidManufacturerCodeError` or
+`MaxDepthExceededError`, directly or through the `_malformed` helpers of
+`layer7/bgp.py` and `layer7/tls.py` and `walk.py`'s `_too_deep`; every
+direct constructor call among them passes `protocol=`, except
+`random_mac`'s. The claim covers only those. `src/` holds 260 `raise`
+statements in all, and the other 30 fall outside it: `pcap.py`'s 18
+`MalformedCaptureError` raises, which describe the capture file rather
+than a protocol and set no `protocol`; the three registry errors in
+`registry.py`; the private `_Unreached` control-flow signal in
+`layer7/tls.py`, raised three times and caught within the module; and
+four stdlib raises (`ValueError` in `checksum.py` and `walk.py`,
+`OSError` in `_base.py`, `KeyError` in `packet.py`) and two bare
+re-raises (`walk.py`, `layer3/pim.py`). Reproduce the count from the
+repository root with `python3`; it prints `230 of 260`:
+
+```python
+import ast, pathlib
+NAMES = {"InvalidFieldError", "TruncatedHeaderError", "InvalidMACAddressError",
+         "InvalidIPv4AddressError", "InvalidManufacturerCodeError",
+         "MaxDepthExceededError", "_malformed", "_too_deep"}
+def name(e):
+    e = e.func if isinstance(e, ast.Call) else e
+    return e.attr if isinstance(e, ast.Attribute) else getattr(e, "id", None)
+raises = [n for p in pathlib.Path("src/netprotocols").rglob("*.py")
+          for n in ast.walk(ast.parse(p.read_text())) if isinstance(n, ast.Raise)]
+print(sum(n.exc is not None and name(n.exc) in NAMES for n in raises),
+      "of", len(raises))
+```
+
+The same rule gives 60 at `534f889`, 203 at `824893d`, 206 at
+`343427b`, 228 at `f12daf0` and 230 at `2705353`.
+
+`field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
 a single attribute to name. `offset` is honestly scoped: relative to
 the `decode()` buffer for a fixed-header error, relative to the
