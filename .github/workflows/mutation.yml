@@ -26,31 +26,6 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-      # Keyed by run id with a prefix restore-key: restores the most
-      # recent run's mutmut cache and saves this run's as a new entry,
-      # as fuzz.yml does.
-      - name: Restore accumulated mutmut cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            .mutmut-cache
-            mutants
-          key: mutmut-nightly-${{ github.run_id }}
-          restore-keys: |
-            mutmut-nightly-
-      # The restored cache also carries mutants/mutmut-stats.json, the
-      # map from each function to the tests that call it. When that map
-      # exists, mutmut 3.8 re-traces only tests it has never seen, so a
-      # function added since the cached run (a new helper called only
-      # by existing tests) maps to no tests and every one of its
-      # mutants reads "no tests"; so does an existing test edited to
-      # call a function it didn't before. Without the map, mutmut
-      # traces the configured test selection in full, which costs one
-      # traced pytest pass. Nothing else is lost: with the positional
-      # filters below, mutmut re-runs every in-scope mutant regardless
-      # of a cached result.
-      - name: Drop the cached function-to-test map
-        run: rm -f mutants/mutmut-stats.json
       - name: Install the project with dev dependencies
         run: uv sync --group dev --frozen
       # only_mutate in pyproject.toml's [tool.mutmut] table limits
@@ -63,6 +38,10 @@ jobs:
       # functions, the HTTP/1.1 grammar; checksum.py and _tlv.py are
       # mutated whole. A comment in the same [tool.mutmut] table gives
       # this command, and tests/test_workflows.py pins the filter set.
+      # The checkout holds no mutants/ directory, so mutmut generates
+      # every mutant, traces the configured test selection in full to
+      # map each function to the tests that call it, and checks every
+      # mutant the filters select.
       - name: Run mutmut against the scoped targets
         run: |
           uv run --frozen mutmut run \
@@ -81,9 +60,9 @@ jobs:
           uv run --frozen mutmut results --all true > mutmut-results.txt
           uv run --frozen python scripts/check_mutmut_survivors.py \
             mutmut-results.txt
-      # On failure, uploads the status listing, the .mutmut-cache file
-      # and the mutants directory; a path that does not exist is
-      # skipped.
+      # On failure, uploads the status listing and the mutants
+      # directory, which holds mutmut's per-file results and its
+      # function-to-test map; a path that does not exist is skipped.
       - name: Upload mutmut results on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -91,7 +70,6 @@ jobs:
           name: mutmut-nightly-failure-${{ github.run_id }}
           path: |
             mutmut-results.txt
-            .mutmut-cache
             mutants
           if-no-files-found: ignore
           retention-days: 30

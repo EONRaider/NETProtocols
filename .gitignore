@@ -157,8 +157,7 @@ benchmark.out
 # lockfile-pinned dependency.
 scripts/pyodide/node_modules/
 
-# mutmut's mutation-testing workspace/cache, and the status listing
+# mutmut's mutation-testing workspace, and the status listing
 # scripts/check_mutmut_survivors.py reads
 mutants/
-.mutmut-cache
 mutmut-results.txt
