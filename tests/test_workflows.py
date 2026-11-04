@@ -564,6 +564,12 @@ class TestCIWorkflow:
         assert "uv run --frozen pytest" in step, (
             "the step no longer runs pytest"
         )
+        assert '-o addopts=""' in step, (
+            "the step runs pytest with the configured addopts"
+        )
+        assert step_key(step, "continue-on-error") is None, (
+            "a failure in the step does not fail the job"
+        )
         listed = set(re.findall(r"tests/(test_\w+\.py)", step))
         tests = ROOT / "tests"
         users = {

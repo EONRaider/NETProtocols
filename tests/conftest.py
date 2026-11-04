@@ -104,7 +104,8 @@ def allocation_peak() -> Iterator[AllocationPeak]:
     ``PYTHONTRACEMALLOC=1``, stays on. Reset the peak on entry and
     measure it against the traced memory at that point, so memory
     allocated before the block is not counted. ``peak`` is set even
-    when the block raises.
+    when the block raises. Not reentrant: an inner block resets the
+    outer block's peak.
     """
     started = not tracemalloc.is_tracing()
     if started:
