@@ -469,6 +469,20 @@ class TestCIWorkflow:
             "dependency-scan job no longer runs pip-audit"
         )
 
+    def test_ci_has_no_schedule(self) -> None:
+        """ci.yml runs on push, pull_request and workflow_call only.
+
+        The ``on:`` mapping is read up to the next top-level key, so a
+        trigger after a blank line inside it is still seen.
+        """
+        found = re.search(r"(?ms)^on:\n(.*?)^(?=[^\s#])", CI.read_text())
+        assert found, "ci.yml has no block-style on: mapping"
+        on = found.group(1)
+        assert re.search(r"(?m)^  push:", on), "ci.yml lost its push trigger"
+        assert not re.search(r"(?m)^  schedule:", on), (
+            "ci.yml has a schedule trigger"
+        )
+
     def test_lint_runs_pydoclint(self, ci_jobs: dict[str, str]) -> None:
         """The lint job runs pydoclint through flake8 over src/, and
         .flake8 limits flake8 to pydoclint's DOC codes.
