@@ -17,13 +17,14 @@ import ipaddress
 import struct
 import sys
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 
 def internet_checksum(data: bytes) -> int:
     if len(data) % 2:
         data += b"\x00"
-    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    total: int = sum(struct.unpack(f"!{len(data) // 2}H", data))
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
@@ -79,7 +80,7 @@ def fletcher_verifies(data: bytes, offset: int) -> bool:
     return c0 == 0 and c1 == 0
 
 
-def read_pcap(path: Path):
+def read_pcap(path: Path) -> Iterator[bytes]:
     data = path.read_bytes()
     if len(data) < 24:
         raise ValueError("not a pcap: too short")
@@ -109,7 +110,7 @@ def pseudo_v6(src: bytes, dst: bytes, proto: int, length: int) -> bytes:
     return src + dst + struct.pack("!IBBBB", length, 0, 0, 0, proto)
 
 
-def _check_icmpv4(upper: bytes, stats: Counter) -> list[str]:
+def _check_icmpv4(upper: bytes, stats: Counter[str]) -> list[str]:
     stats["icmpv4"] += 1
     if (
         internet_checksum(upper[:2] + b"\x00\x00" + upper[4:])
@@ -119,7 +120,7 @@ def _check_icmpv4(upper: bytes, stats: Counter) -> list[str]:
     return []
 
 
-def _check_igmp(upper: bytes, stats: Counter) -> list[str]:
+def _check_igmp(upper: bytes, stats: Counter[str]) -> list[str]:
     stats["igmp"] += 1
     # IGMP: whole message, checksum at bytes 2-3, no pseudo-header.
     if (
@@ -138,7 +139,7 @@ _OSPF_MD5_KEYS = {1: b"NETProtocols-md5"}
 _OSPF_MD5_LEN = 16
 
 
-def _check_ospf(upper: bytes, stats: Counter) -> list[str]:
+def _check_ospf(upper: bytes, stats: Counter[str]) -> list[str]:
     # OSPFv2 (RFC 2328 §A.3.1): a 24-byte header whose Packet Length
     # bounds the packet, then (AuType 2) the digest after it.
     stats["ospf"] += 1
@@ -154,7 +155,9 @@ def _check_ospf(upper: bytes, stats: Counter) -> list[str]:
     return failures
 
 
-def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
+def _check_ospf_auth(
+    upper: bytes, packet: bytes, stats: Counter[str]
+) -> list[str]:
     """Check an OSPF packet's checksum, password or digest.
 
     The packet checksum under AuType 0 and 1 (the internet checksum of
@@ -189,7 +192,7 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
 
 
 def _check_ospf_md5(
-    upper: bytes, packet: bytes, wire: int, stats: Counter
+    upper: bytes, packet: bytes, wire: int, stats: Counter[str]
 ) -> list[str]:
     stats["ospf-md5"] += 1
     authentication = packet[16:24]
@@ -207,7 +210,7 @@ def _check_ospf_md5(
     return failures
 
 
-def _check_ospf_lsas(body: bytes, stats: Counter) -> list[str]:
+def _check_ospf_lsas(body: bytes, stats: Counter[str]) -> list[str]:
     """Check every LSA's LS Checksum in a Link State Update's body.
 
     Fletcher over the LSA but its 2-byte LS Age (RFC 2328 §12.1.7).
@@ -235,7 +238,7 @@ def _check_ospf_lsas(body: bytes, stats: Counter) -> list[str]:
 
 
 def _check_tcp(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter
+    src: bytes, dst: bytes, upper: bytes, stats: Counter[str]
 ) -> list[str]:
     stats["tcp"] += 1
     upper_len = len(upper)
@@ -252,7 +255,7 @@ def _check_udp(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -277,7 +280,7 @@ def _check_udp(
     return failures + _check_udp_payload(upper, stats, depth, strict=strict)
 
 
-def _check_sctp(upper: bytes, stats: Counter) -> list[str]:
+def _check_sctp(upper: bytes, stats: Counter[str]) -> list[str]:
     # SCTP: CRC32c over the whole packet with the checksum field (bytes
     # 8-11) zeroed and no pseudo-header, sent least significant byte
     # first (RFC 9260 Appendix A). The packet is the whole IP payload.
@@ -293,7 +296,7 @@ _VRRP = 112
 
 
 def _check_vrrp(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter, *, ipv6: bool
+    src: bytes, dst: bytes, upper: bytes, stats: Counter[str], *, ipv6: bool
 ) -> list[str] | None:
     """Validate a VRRP advertisement, the whole IP payload ``upper``.
 
@@ -333,7 +336,7 @@ def _check_gre(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -355,7 +358,7 @@ def _check_gre(
 
 
 def _check_ipv4(
-    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+    payload: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     failures: list[str] = []
     ihl = (payload[0] & 0x0F) * 4
@@ -392,7 +395,7 @@ def _check_transport_v4(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool,
@@ -421,7 +424,7 @@ def _check_upper_v4(
     proto: int,
     ip_header: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -468,7 +471,7 @@ def _check_routing_v4(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     strict: bool,
 ) -> list[str] | None:
@@ -484,7 +487,7 @@ def _check_routing_v4(
 
 
 def _check_icmpv6(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter
+    src: bytes, dst: bytes, upper: bytes, stats: Counter[str]
 ) -> list[str]:
     stats["icmpv6"] += 1
     upper_len = len(upper)
@@ -498,7 +501,7 @@ def _check_icmpv6(
 
 
 def _check_tcp6(
-    src: bytes, dst: bytes, upper: bytes, stats: Counter
+    src: bytes, dst: bytes, upper: bytes, stats: Counter[str]
 ) -> list[str]:
     stats["tcp6"] += 1
     upper_len = len(upper)
@@ -515,7 +518,7 @@ def _check_udp6(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -550,7 +553,7 @@ def _check_pim(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     ipv6: bool,
@@ -582,7 +585,7 @@ def _check_pim(
 
 
 def _check_pim_register(
-    upper: bytes, stats: Counter, depth: int, *, strict: bool
+    upper: bytes, stats: Counter[str], depth: int, *, strict: bool
 ) -> list[str]:
     """Validate the packet a PIM Register encapsulates, from its IP
     header; a Null-Register's dummy header goes to
@@ -600,7 +603,7 @@ def _check_pim_register(
 
 
 def _check_null_register(
-    inner: bytes, stats: Counter, *, strict: bool
+    inner: bytes, stats: Counter[str], *, strict: bool
 ) -> list[str] | None:
     """Validate a Null-Register's dummy header, or return ``None``.
 
@@ -622,7 +625,7 @@ def _check_null_register(
 
 
 def _check_null_register_v6(
-    inner: bytes, stats: Counter, *, strict: bool
+    inner: bytes, stats: Counter[str], *, strict: bool
 ) -> list[str]:
     """Validate an IPv6 Null-Register's dummy PIM header (RFC 7761 §4.9.3).
 
@@ -670,7 +673,7 @@ _HSRP_PORT = 1985
 
 
 def _check_udp_payload(
-    datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
+    datagram: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate what a UDP datagram carries, where it is something this
     checker can verify past the UDP checksum: a VXLAN tunnel (see
@@ -697,7 +700,7 @@ def _check_udp_payload(
     return []
 
 
-def _check_tcp_payload(segment: bytes, stats: Counter) -> list[str]:
+def _check_tcp_payload(segment: bytes, stats: Counter[str]) -> list[str]:
     """Validate what a TCP segment carries past the TCP checksum: STUN
     messages on port 3478 (see :func:`_check_stun`) and TLS records on
     port 443 (see :func:`_check_tls`), the only TCP payloads this
@@ -739,7 +742,7 @@ def _tls_record_header_ok(data: bytes) -> bool:
     )
 
 
-def _check_tls(data: bytes, stats: Counter) -> list[str]:
+def _check_tls(data: bytes, stats: Counter[str]) -> list[str]:
     """Validate the TLS records in a TCP segment on port 443.
 
     TLS has no checksum of its own, and TCP's covers every byte, so
@@ -820,7 +823,7 @@ def _tls_vector(data: bytes, at: int, width: int) -> tuple[bytes, int] | None:
     return data[at + width : end], end
 
 
-def _check_tls_client_hello(fragment: bytes, stats: Counter) -> str | None:
+def _check_tls_client_hello(fragment: bytes, stats: Counter[str]) -> str | None:
     """Check a ClientHello's framing and its server_name (RFC 9846
     §4.2.2, RFC 5246 §7.4.1.2, RFC 6066 §3); the failure, or ``None``."""
     length = int.from_bytes(fragment[1:4], "big")
@@ -888,7 +891,7 @@ _STUN_INTEGRITY_SHA256 = 0x001C
 _STUN_FINGERPRINT = 0x8028
 
 
-def _check_stun(data: bytes, stats: Counter, *, stream: bool) -> list[str]:
+def _check_stun(data: bytes, stats: Counter[str], *, stream: bool) -> list[str]:
     """Verify every STUN message in ``data``, back to back.
 
     Over UDP ``data`` is one datagram's payload, which must be exactly
@@ -910,7 +913,7 @@ def _check_stun(data: bytes, stats: Counter, *, stream: bool) -> list[str]:
 
 
 def _stun_message_end(
-    data: bytes, stats: Counter, *, stream: bool
+    data: bytes, stats: Counter[str], *, stream: bool
 ) -> int | None:
     """Where the STUN message at the start of ``data`` ends, by its
     Message Length; ``None``, counted, for one this checker cannot read.
@@ -921,7 +924,7 @@ def _stun_message_end(
     if len(data) < 20 or data[4:8] != _STUN_COOKIE:
         stats["stun-unchecked" if stream else "stun-rfc3489"] += 1
         return None
-    end = 20 + struct.unpack_from("!H", data, 2)[0]
+    end: int = 20 + struct.unpack_from("!H", data, 2)[0]
     if end > len(data) and stream:
         stats["stun-unchecked"] += 1
         return None
@@ -946,7 +949,7 @@ def _stun_attributes(message: bytes) -> list[tuple[int, int, bytes]] | None:
     return attributes
 
 
-def _check_stun_message(message: bytes, stats: Counter) -> list[str]:
+def _check_stun_message(message: bytes, stats: Counter[str]) -> list[str]:
     """Verify one STUN message's attributes (see
     :func:`_check_stun_attribute`)."""
     stats["stun"] += 1
@@ -964,7 +967,7 @@ def _check_stun_attribute(
     message: bytes,
     attribute: tuple[int, int, bytes],
     last: bool,
-    stats: Counter,
+    stats: Counter[str],
 ) -> list[str]:
     """Verify a FINGERPRINT or a MESSAGE-INTEGRITY in ``message``.
 
@@ -1012,7 +1015,7 @@ def _stun_integrity_verifies(message: bytes, offset: int, mac: bytes) -> bool:
 
 
 def _check_vxlan(
-    datagram: bytes, stats: Counter, depth: int, *, strict: bool = False
+    datagram: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate a VXLAN payload (destination port 4789, RFC 7348 §5):
     an 8-byte header and then a whole Ethernet frame, validated in
@@ -1063,7 +1066,7 @@ def _rip_digest(algorithm: str, key: bytes, covered: bytes) -> bytes:
     return hmac.new(key, covered + _RIP_APAD * 8, hashlib.sha256).digest()
 
 
-def _check_rip(datagram: bytes, stats: Counter) -> list[str]:
+def _check_rip(datagram: bytes, stats: Counter[str]) -> list[str]:
     """Verify a RIPv2 message's RFC 4822 digest, if it carries one.
 
     The UDP checksum already covers every RIP byte; this checks the
@@ -1119,7 +1122,7 @@ def _radius_attributes(radius: bytes) -> list[tuple[int, int]] | None:
     return found if offset == len(radius) else None
 
 
-def _check_radius(datagram: bytes, stats: Counter) -> list[str]:
+def _check_radius(datagram: bytes, stats: Counter[str]) -> list[str]:
     """Verify what a RADIUS packet's own bytes let this checker verify.
 
     The UDP checksum already covers every RADIUS byte. On top of it,
@@ -1165,7 +1168,7 @@ def _check_radius(datagram: bytes, stats: Counter) -> list[str]:
 
 
 def _check_radius_message_authenticator(
-    radius: bytes, offset: int, stats: Counter
+    radius: bytes, offset: int, stats: Counter[str]
 ) -> list[str]:
     """Verify the Message-Authenticator at ``offset`` in a request whose
     Authenticator is random (see :func:`_check_radius`)."""
@@ -1188,7 +1191,7 @@ _NTP_KEYS = {
 }
 
 
-def _ntp_mac_offset(ntp: bytes, stats: Counter) -> int | None:
+def _ntp_mac_offset(ntp: bytes, stats: Counter[str]) -> int | None:
     """Where an NTP message's MAC would start: after the 48-byte header
     and, in NTPv4, the extension fields (RFC 7822 §3), each a 2-byte
     type and a 2-byte Length counting its header, at least 16 and a
@@ -1208,7 +1211,7 @@ def _ntp_mac_offset(ntp: bytes, stats: Counter) -> int | None:
     return offset
 
 
-def _check_ntp(datagram: bytes, stats: Counter) -> list[str]:
+def _check_ntp(datagram: bytes, stats: Counter[str]) -> list[str]:
     """Verify an NTP message's MAC, if it carries one.
 
     The UDP checksum already covers every NTP byte; this checks the
@@ -1254,7 +1257,7 @@ _HSRP_OP_CODES = {0: "hello", 1: "coup", 2: "resign"}
 _HSRP_STATES = (0, 1, 2, 4, 8, 16)
 
 
-def _check_hsrp(datagram: bytes, stats: Counter) -> list[str]:
+def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     """Validate an HSRPv1 message (RFC 2281 §5.1).
 
     HSRP carries no checksum of its own, and the UDP checksum already
@@ -1307,7 +1310,7 @@ _IP_IN_IP = {4: 0x0800, 41: 0x86DD}
 def _check_ip_in_ip(
     proto: int,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -1386,7 +1389,7 @@ def _verify_icv(
 def _check_esp(
     ip_header: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     ipv6: bool,
@@ -1424,7 +1427,7 @@ def _check_esp(
 
 
 def _check_ah(
-    ip_header: bytes, upper: bytes, stats: Counter, depth: int
+    ip_header: bytes, upper: bytes, stats: Counter[str], depth: int
 ) -> list[str]:
     # AH (RFC 4302): next header, payload len, reserved, SPI, sequence
     # number, then the ICV — over the IPv4 header with its mutable
@@ -1479,7 +1482,7 @@ def _check_ah(
 
 
 def _check_ipv6(
-    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+    payload: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     failures: list[str] = []
     stats["ipv6"] += 1
@@ -1587,7 +1590,7 @@ def _check_transport_v6(
     src: bytes,
     dst: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool,
@@ -1612,7 +1615,7 @@ def _check_upper_v6(
     next_header: int,
     ip_header: bytes,
     upper: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -1652,7 +1655,7 @@ def _check_upper_v6(
 
 
 def _check_arp(
-    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+    payload: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Count an ARP packet, which carries no checksum.
 
@@ -1689,7 +1692,7 @@ def _mpls_stack_end(payload: bytes) -> tuple[int, int] | None:
 
 
 def _check_mpls(
-    payload: bytes, stats: Counter, depth: int, *, strict: bool = False
+    payload: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate an MPLS frame (EtherType 0x8847 or 0x8848, RFC 3032).
 
@@ -1714,7 +1717,7 @@ def _check_mpls(
     if bottom in _MPLS_BOTTOM_LABELS:
         ethertype = _MPLS_BOTTOM_LABELS[bottom]
     else:
-        ethertype = _MPLS_NIBBLES.get(nibble)
+        ethertype = None if nibble is None else _MPLS_NIBBLES.get(nibble)
     if ethertype is not None:
         return _check_l3(ethertype, inner, stats, depth + 1, strict=strict)
     if bottom not in _MPLS_BOTTOM_LABELS and nibble == 0 and len(inner) >= 4:
@@ -1726,7 +1729,7 @@ def _check_mpls(
 
 #: The EtherTypes :func:`_check_l3` hands to a helper of their own.
 def _check_lldp_l3(
-    payload: bytes, stats: Counter, depth: int, *, strict: bool
+    payload: bytes, stats: Counter[str], depth: int, *, strict: bool
 ) -> list[str]:
     """Adapt :func:`_check_lldp` to the ``_L3_HELPERS`` signature: an
     LLDPDU ends the walk, so neither ``depth`` nor ``strict`` applies."""
@@ -1745,7 +1748,7 @@ _L3_HELPERS = {
 def _check_l3(
     ethertype: int,
     payload: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int = 0,
     *,
     strict: bool = False,
@@ -1819,7 +1822,7 @@ def _lldp_mandatory_tlvs_ok(tlvs: list[tuple[int, bytes]]) -> bool:
     return len(ttl) == 2 and not {1, 2, 3} & {t for t, _ in tlvs[3:]}
 
 
-def _check_lldp(payload: bytes, stats: Counter) -> list[str]:
+def _check_lldp(payload: bytes, stats: Counter[str]) -> list[str]:
     """Validate an LLDPDU's structure; LLDP has no checksum to verify.
 
     The TLVs must walk to an End of LLDPDU TLV of length 0, with only
@@ -1844,7 +1847,7 @@ def _check_lldp(payload: bytes, stats: Counter) -> list[str]:
     return []
 
 
-def check_frame(frame: bytes, stats: Counter) -> list[str]:
+def check_frame(frame: bytes, stats: Counter[str]) -> list[str]:
     """Validate one Ethernet frame; returns a list of failure strings."""
     return _check_ethernet(frame, stats, 0)
 
@@ -1858,7 +1861,7 @@ SESSION_SUFFIX = "_session.pcap"
 
 
 def check_capture_frame(
-    frame: bytes, stats: Counter, *, session: bool
+    frame: bytes, stats: Counter[str], *, session: bool
 ) -> list[str]:
     """Validate one frame of a capture, as :func:`check_frame` does, and
     in a capture that is not a session one (``session``, see
@@ -1875,7 +1878,7 @@ def check_capture_frame(
 
 
 def _check_ethernet(
-    frame: bytes, stats: Counter, depth: int, *, strict: bool = False
+    frame: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate an Ethernet frame: the captured one, or one a VXLAN
     tunnel carries (at ``depth`` > 0)."""
@@ -1905,7 +1908,7 @@ def _check_ethernet(
 def _check_type_or_length(
     value: int,
     payload: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -1926,7 +1929,7 @@ def _check_type_or_length(
 def _check_8023(
     length: int,
     payload: bytes,
-    stats: Counter,
+    stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
@@ -1962,7 +1965,7 @@ _CDP_SNAP = b"\x00\x00\x0c\x20\x00"
 
 
 def _check_llc(
-    pdu: bytes, stats: Counter, depth: int, *, strict: bool = False
+    pdu: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate an 802.2 LLC PDU: its Control field fits (1 octet when
     the two low bits are 11, else 2), then SNAP (DSAP 0xAA), an 802.1D
@@ -1986,7 +1989,7 @@ def _check_llc(
 
 
 def _check_sap_0x42(
-    pdu: bytes, stats: Counter, *, strict: bool = False
+    pdu: bytes, stats: Counter[str], *, strict: bool = False
 ) -> list[str]:
     """Validate a PDU to the Bridge Spanning Tree SAP. Only a UI (either
     P/F) or I-format PDU carries one, as the library dispatches; any
@@ -2020,7 +2023,7 @@ _BPDU_TYPES = {
 }
 
 
-def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
+def _check_bpdu(bpdu: bytes, stats: Counter[str]) -> list[str]:
     """Validate an 802.1D BPDU: Protocol Identifier 0, a known BPDU Type
     and as many octets as it needs, 35 for a Configuration BPDU (type
     0x00), 36 for an RST BPDU (0x02) and 4 for a Topology Change
@@ -2045,7 +2048,7 @@ def _check_bpdu(bpdu: bytes, stats: Counter) -> list[str]:
 
 
 def _check_snap(
-    pdu: bytes, stats: Counter, depth: int, *, strict: bool = False
+    pdu: bytes, stats: Counter[str], depth: int, *, strict: bool = False
 ) -> list[str]:
     """Validate a SNAP PDU: SSAP 0xAA, a UI Control, then a 3-byte OUI
     and 2-byte PID. Under OUI 00-00-00 or 00-00-F8 the PID is an
@@ -2076,7 +2079,7 @@ def _cdp_checksum(data: bytes) -> int:
     padded_buffer[data_length-1]--;"). lldpd's CDP frames verify with
     it on both sides of 0x80 (llc.pcap holds one of each).
     """
-    total = sum(
+    total: int = sum(
         word for (word,) in struct.iter_unpack("!H", data[: len(data) & ~1])
     )
     if len(data) & 1:
@@ -2087,7 +2090,7 @@ def _cdp_checksum(data: bytes) -> int:
     return ~total & 0xFFFF
 
 
-def _check_cdp(pdu: bytes, stats: Counter) -> list[str]:
+def _check_cdp(pdu: bytes, stats: Counter[str]) -> list[str]:
     """Validate a CDP PDU (version 1 or 2): its TLVs, each at least 4
     bytes long, end exactly where the 802.3 Length ends the PDU, and
     its checksum, over exactly those bytes, verifies."""
@@ -2114,12 +2117,12 @@ def main() -> int:
         print(f"No pcaps found in {staging}/")
         return 1
 
-    corpus_stats: Counter = Counter()
+    corpus_stats: Counter[str] = Counter()
     bad_files = 0
     total_frames = 0
     for pcap in pcaps:
-        stats: Counter = Counter()
-        failures: Counter = Counter()
+        stats: Counter[str] = Counter()
+        failures: Counter[str] = Counter()
         frames = 0
         session = pcap.name.endswith(SESSION_SUFFIX)
         try:

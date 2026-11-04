@@ -35,8 +35,8 @@ def best_of(module: str, trials: int) -> tuple[float | None, int | None]:
         )
         if result.returncode != 0:
             return None, None  # not installed, or import failed
-        ms, loaded = result.stdout.split()
-        ms = float(ms)
+        ms_text, loaded = result.stdout.split()
+        ms = float(ms_text)
         if best_ms is None or ms < best_ms:
             best_ms, modules = ms, int(loaded)
     return best_ms, modules

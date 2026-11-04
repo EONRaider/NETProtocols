@@ -108,7 +108,7 @@ AH_BUNDLE = SA(
 def internet_checksum(data: bytes) -> int:
     if len(data) % 2:
         data += b"\x00"
-    total = sum(struct.unpack(f"!{len(data) // 2}H", data))
+    total: int = sum(struct.unpack(f"!{len(data) // 2}H", data))
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
