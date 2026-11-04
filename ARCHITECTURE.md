@@ -1122,7 +1122,7 @@ first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
 stack before sending. (The RFC 768 subtlety lives where it belongs:
 the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
-(`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
+(`crc32c()`, RFC 9260 §A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
 STUN's FINGERPRINT is a checksum that lives in an attribute rather

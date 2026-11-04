@@ -121,9 +121,11 @@ Without reassembly, :func:`peek_server_name`, a separate function and
 opt-in, walks the ClientHello in the first segment as far as its bytes
 go and answers whether the name was *found*, is *absent*, or was *not
 reached*, which is not "no SNI" (see :class:`TLSServerNamePeek`).
-Chromium shuffles its extensions per connection, so whether its name
-lies in the first segment varies by connection; a ClientHello that
-fits one segment always gets a complete answer.
+Chromium shuffles its extensions per connection, and its first
+1,448-byte segment holds the whole name when the key share follows
+``server_name``, and otherwise only if the extensions before the name
+are short. A ClientHello that fits one segment always gets a complete
+answer.
 
 Each record being a layer, a segment of many is a deep chain: Ethernet,
 IPv4 and TCP are three layers, and the walk's default ``max_depth`` of
@@ -1307,10 +1309,10 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     :attr:`TLS.server_name` raises for its whole record.
 
     A record that fits in ``data`` always gets a complete answer. When
-    a ClientHello whose extensions are shuffled is cut at a segment
-    boundary, the name ends before the cut when the key share follows
-    ``server_name``, and otherwise only if the extensions before the
-    name are short.
+    Chromium's ClientHello, whose extensions it shuffles, is cut at its
+    first 1,448-byte segment, the name ends before the cut whenever the
+    key share follows ``server_name``, and otherwise only if the
+    extensions before the name are short.
 
     :param data: Bytes starting at a record header, cut anywhere.
     :returns: *found*, *absent* or *not reached*.

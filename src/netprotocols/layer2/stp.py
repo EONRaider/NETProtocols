@@ -555,8 +555,8 @@ class STP(Protocol):
     def port_role_name(self) -> str | None:
         """Display name of :attr:`port_role`, e.g. ``"Designated"``.
 
-        Every two-bit role has a name; ``None`` when :attr:`port_role`
-        is (degrades, never raises).
+        Every two-bit role has a name, so this never raises; ``None``
+        when :attr:`port_role` is.
         """
         role = self.port_role
         return None if role is None else _ROLE_NAMES[role]

@@ -49,37 +49,34 @@ Bounded depth
 
 Every header validates its own declared length against the buffer, so a
 chain always terminates; but a crafted frame can nest far enough to
-waste real time. ``max_depth`` bounds it, and
-exceeding it raises :class:`~netprotocols.MaxDepthExceededError` (or,
-in lax mode, ends the walk and is reported). The default of
-:data:`MAX_DEPTH` is generous for nested headers: an ICMP echo
-tunnelled through VXLAN is 7 layers (Ethernet, IPv4, UDP, VXLAN, then
-the inner Ethernet, IPv4 and ICMPv4), and even a doubly-tagged QinQ
-frame carrying IPv6 with three extension headers and DNS over TCP
-reaches 11. A tunnel
-nested inside a tunnel is what the ceiling is for: each level of VXLAN
-adds four layers, so the default stops a frame nested eight levels
-deep. BGP, STUN over TCP and TLS are the exceptions that nest nothing,
-and for them the default bounds correctness as well as cost: every
-message, or TLS record, in a TCP segment is a layer of its own, so a
-segment of more than 29 of them, the room the default leaves after
-Ethernet, IPv4 and TCP, exceeds it, and valid segments do. A 1448-byte
-segment can hold 76 BGP KEEPALIVEs or 30 one-prefix UPDATEs
-(:mod:`netprotocols.layer7.bgp`), 72 STUN messages that are bare
-20-byte headers (:mod:`netprotocols.layer7.stun`), and 65 of TLS 1.3's
-smallest protected records, 22 bytes with a 16-byte AEAD tag, or 103
-of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
+waste real time. ``max_depth`` bounds it, and exceeding it raises
+:class:`~netprotocols.MaxDepthExceededError` (or, in lax mode, ends the
+walk and is reported). The default of :data:`MAX_DEPTH` is generous for
+nested headers: an ICMP echo tunnelled through VXLAN is 7 layers
+(Ethernet, IPv4, UDP, VXLAN, then the inner Ethernet, IPv4 and ICMPv4),
+and even a doubly-tagged QinQ frame carrying IPv6 with three extension
+headers and DNS over TCP reaches 11. A tunnel nested inside a tunnel is
+what the ceiling is for: each level of VXLAN adds four layers, so the
+default stops a frame nested eight levels deep. BGP, STUN over TCP and
+TLS are the exceptions that nest nothing, and for them the default
+bounds correctness as well as cost: every message, or TLS record, in a
+TCP segment is a layer of its own, so a segment of more than 29 of them,
+the room the default leaves after Ethernet, IPv4 and TCP, exceeds it,
+and valid segments do. A 1448-byte segment can hold 76 BGP KEEPALIVEs or
+30 one-prefix UPDATEs (:mod:`netprotocols.layer7.bgp`), 72 STUN messages
+that are bare 20-byte headers (:mod:`netprotocols.layer7.stun`), and 65
+of TLS 1.3's smallest protected records, 22 bytes with a 16-byte AEAD
+tag, or 103 of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
 (:mod:`netprotocols.layer7.tls`), where 30 of 22 bytes already exceed
 the 29; one captured with GRO or TSO on, over loopback or on a
 jumbo-frame link is larger still. A strict walk of a segment past the
-limit raises :class:`~netprotocols.MaxDepthExceededError` and a lax
-one stops short with ``stopped_by`` set. A larger ``max_depth``
-decodes the rest, and
-so does walking on from ``packet.consumed`` with ``start=BGP`` (or
-``start=STUN``, ``start=TLS``) as many times as it takes: a walk that
-starts there has room for 32 messages or records, so the 76 KEEPALIVEs,
-72 STUN messages or 65 TLS records above take three walks and the 103
-records four (the loop in :mod:`netprotocols.layer7.bgp`).
+limit raises :class:`~netprotocols.MaxDepthExceededError` and a lax one
+stops short with ``stopped_by`` set. A larger ``max_depth`` decodes the
+rest, and so does walking on from ``packet.consumed`` with ``start=BGP``
+(or ``start=STUN``, ``start=TLS``) as many times as it takes: a walk
+that starts there has room for 32 messages or records, so the 76
+KEEPALIVEs, 72 STUN messages or 65 TLS records above take three walks
+and the 103 records four (the loop in :mod:`netprotocols.layer7.bgp`).
 
 802.3 Length
 ------------
@@ -102,8 +99,8 @@ On ``memoryview``
 The walk slices whatever it is given and does not convert: each
 decoder receives a slice of the caller's own ``bytes`` or
 ``memoryview``. A ``memoryview`` over a large contiguous buffer keeps
-the slices zero-copy; for a small frame, ``bytes`` slices are copies
-of a few bytes.
+the slices zero-copy; with ``bytes``, each layer's slice copies the
+rest of the frame, which for a small frame is a few dozen bytes.
 """
 
 from __future__ import annotations

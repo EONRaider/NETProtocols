@@ -43,8 +43,9 @@ __all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 #: The flat ``ip.proto`` and ``ip.proto.v6`` dispatch tables of the
 #: default registry, bound once at import. The v6 table inherits the
-#: other, adds the four extension headers, and holds its own entries
-#: for AH (51), ``AHv6``, and VRRP (112), ``VRRPv6``, where IPv4's holds
+#: other, adds the four extension headers, lacks OSPF (89)
+#: (``_defaults.IPV4_ONLY_NUMBERS``), and holds its own entries for AH
+#: (51), ``AHv6``, and VRRP (112), ``VRRPv6``, where IPv4's holds
 #: ``AH`` and ``VRRP`` (``_defaults.FAMILY_SPECIFIC_NUMBERS``). The
 #: per-family gating is the tables' shape, with no test on the hot
 #: path: an IPv4 packet with ``protocol=0`` cannot conjure a
@@ -64,14 +65,17 @@ def _ip_protocol_class(
 ) -> type[Protocol] | None:
     """Map an IP protocol number to the class that decodes its payload.
 
-    The number space is shared between IPv4 ``protocol`` and IPv6
-    ``next_header`` (the values are disjoint), so the two dispatch
-    through tables that share their entries — but the IPv6 extension
-    headers live in the v6 table alone and are handed out only when the
-    caller is part of an IPv6 chain (``ipv6=True``), and protocols 51
-    and 112 name a different class in each: ``AH``/``AHv6``, so that AH
-    keeps dispatching in its own family's chain, and ``VRRP``/``VRRPv6``,
-    so that VRRP reads its addresses at its own family's width.
+    IPv4 ``protocol`` and IPv6 ``next_header`` take their values from
+    one IANA registry, Assigned Internet Protocol Numbers, so the two
+    dispatch through tables that share their entries, with three
+    differences: the IPv6 extension headers (0, 43, 44, 60) live in the
+    v6 table alone and are handed out only when the caller is part of
+    an IPv6 chain (``ipv6=True``); OSPF (89) lives in the v4 table
+    alone, since IPv6's 89 is OSPFv3, which this library does not
+    decode; and protocols 51 and 112 name a different class in each:
+    ``AH``/``AHv6``, so that AH keeps dispatching in its own family's
+    chain, and ``VRRP``/``VRRPv6``, so that VRRP reads its addresses at
+    its own family's width.
     """
     if registry is None:
         table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES

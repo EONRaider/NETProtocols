@@ -60,20 +60,20 @@ Decoding a guess
 
 HSRP is reached through ``udp.port``, which is best-effort (see
 :mod:`netprotocols.registry`), and any 20 bytes would make a header.
-:meth:`HSRP.decode` therefore rejects the three leading values no
-HSRPv1 message carries: a Version other than 0, an Op Code other than
-Hello, Coup or Resign, and a State §5.1 does not list. Each is judged as
-soon as its byte is in the buffer, before the length, so a message of
-another kind is reported as that (``InvalidFieldError``, ``offset`` 0,
-1 or 2) however short it is, and ``TruncatedHeaderError`` is left for a
-buffer whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States
-pass of the 16,777,216 values the first three bytes can take, so a
-random datagram on port 1985 is rejected all but 18 times in that many
-(about 1 in 932,000), and always when it is shorter than 20 bytes.
-That is rare, not never: a random payload of 20 bytes or more decodes
-as HSRP about once in 932,000. The other fields are not judged: any Hellotime,
-Holdtime, Priority, Group, Reserved byte, Authentication Data and
-Virtual IP Address decodes.
+:meth:`HSRP.decode` therefore rejects the three leading values no HSRPv1
+message carries: a Version other than 0, an Op Code other than Hello,
+Coup or Resign, and a State §5.1 does not list. Each is judged as soon
+as its byte is in the buffer, before the length, so a message of another
+kind is reported as that (``InvalidFieldError``, ``offset`` 0, 1 or 2)
+however short it is, and ``TruncatedHeaderError`` is left for a buffer
+whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States pass of
+the 16,777,216 values the first three bytes can take, so a random
+datagram on port 1985 is rejected all but 18 times in that many (about 1
+in 932,000), and always when it is shorter than 20 bytes. That is rare,
+not never: a random payload of 20 bytes or more decodes as HSRP that
+often. The other fields are not judged: any Hellotime, Holdtime,
+Priority, Group, Reserved byte, Authentication Data and Virtual IP
+Address decodes.
 
 Two kinds of message on the same port are not HSRPv1, and are rejected
 by that guard rather than misread as it:

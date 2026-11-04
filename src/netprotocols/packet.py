@@ -252,8 +252,9 @@ class Packet:
         The recomputed fields are TCP's, UDP's, SCTP's, ICMPv4's,
         ICMPv6's, VRRP's and PIM's checksums, the IPv4 header checksum,
         CDP's checksum, and OSPF's checksum unless the packet uses
-        cryptographic authentication. IGMP's and GRE's checksums are
-        carried over unchanged.
+        cryptographic authentication. IGMP's and GRE's checksums, and
+        the LS checksums of the LSAs an OSPF packet carries, are carried
+        over unchanged.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``

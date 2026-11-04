@@ -70,8 +70,8 @@ _MAX_VALUE_LEN = 0xFFFF - _CHUNK_HEADER.size
 #: Chunk types this library names: RFC 9260 §3.2 (0-14), then the
 #: extensions in common use (RFC 4895 AUTH, RFC 8260 I-DATA and
 #: I-FORWARD-TSN, RFC 5061 ASCONF and ASCONF-ACK, RFC 6525 RE-CONFIG,
-#: RFC 4820 PAD, RFC 3758 FORWARD-TSN). Unknown types fall back to
-#: their numeric value.
+#: RFC 4820 PAD, RFC 3758 FORWARD-TSN). Unknown types read
+#: ``"unknown (n)"``.
 _CHUNK_TYPE_NAMES: dict[int, str] = {
     0: "DATA",
     1: "INIT",
