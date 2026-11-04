@@ -36,6 +36,7 @@ dev = [
     "hypothesis>=6.100",
     "mutmut>=3.8.1",
     "mypy>=1.14",
+    "pydoclint[flake8]==0.11.1",
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.9",
@@ -63,24 +64,19 @@ select = [
     "C4",        # flake8-comprehensions
     "SIM",       # flake8-simplify
     "RUF",       # ruff-specific
-    "D100", "D101", "D103", # pydocstyle: missing docstring on a
-                             # public module/class/function -- the
-                             # narrow slice of pydocstyle that already
-                             # holds repo-wide (see per-file-ignores)
-                             # without adopting its prose-style rules
-                             # (D2xx/D4xx) or its "public" definition's
-                             # blind spot for underscore-prefixed
-                             # helpers, which this can't catch.
+    "D",         # pydocstyle, PEP 257 convention (see below)
 ]
+# D105: a magic method needs no docstring.
+# D107: an __init__ method needs no docstring.
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
 
 [tool.ruff.lint.per-file-ignores]
-# Tests rely on descriptive names, not docstrings, by established
-# convention (95 classes / 42 functions currently undocumented), and
-# scripts/ is maintainer-only benchmark/fixture tooling, not the
-# shipped package -- scoping the new pydocstyle rules to src/ avoids
-# mandating a sweep unrelated to what they exist to catch.
-"tests/*" = ["D100", "D101", "D103"]
-"scripts/*" = ["D100", "D101", "D103"]
+# pydocstyle applies to src/ only.
+"tests/*" = ["D"]
+"scripts/*" = ["D"]
 
 [tool.mypy]
 strict = true
@@ -88,29 +84,25 @@ python_version = "3.12"
 files = ["src", "tests/conftest.py", "tests/strategies.py"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
+# src/ is collected for the doctests in its docstrings.
+# tests/fuzz/ holds Atheris harnesses, which are not pytest modules.
+testpaths = ["tests", "src"]
+addopts = "-q --doctest-modules --ignore=tests/fuzz"
 
 [tool.coverage.run]
 source = ["netprotocols"]
 
 [tool.coverage.report]
 show_missing = true
-# The suite covers 99.98% of 6202 statements (6201 hit, 1 miss); the
-# only miss is Packet's __eq__ NotImplemented branch. Gate at 98 rather
-# than at the current figure so a legitimately unreachable branch does
-# not fail CI, and well above it so the bar is actually held.
+# A run that covers less than 98% of the statements fails.
 fail_under = 98
 
 [tool.mutmut]
-# Scoped mutation-testing audit (backlog: mutmut-audit), not a
-# full-codebase run: only the checksum module (every protocol's
-# checksum handling routes through it), the shared TLV walker, and
-# DNS's name-compression byte walk carry real correctness stakes dense
-# enough to justify the runtime. `source_paths` still lists the whole
-# `src` tree because mutmut mirrors it under `mutants/` to keep the
-# package importable; `only_mutate` is what actually narrows which
-# files get mutated (everything else is copied through unmodified).
+# Scoped mutation testing: `only_mutate` lists the files mutated, the
+# checksum module (every protocol's checksum handling routes through
+# it), the shared TLV walker, DNS and HTTP; every other file is copied
+# through unmodified. `source_paths` lists the whole `src` tree, which
+# mutmut mirrors under `mutants/` so the package stays importable.
 source_paths = ["src"]
 only_mutate = [
     "src/netprotocols/checksum.py",
@@ -124,17 +116,17 @@ pytest_add_cli_args_test_selection = [
     "tests/test_dns.py",
     "tests/test_http.py",
 ]
-# mutmut runs the tests from its `mutants/` copy, which holds the
-# source paths and, by default, only `tests/`, `test/`, root-level
-# `test*.py`, `pyproject.toml`, `setup.cfg` and the lockfiles;
+# mutmut runs the tests from its `mutants/` copy, which holds the source
+# paths and, by default, only `tests/`, `test/`, root-level `test*.py`,
+# `pyproject.toml`, `setup.cfg` and the lockfiles;
 # tests/test_checksum.py loads scripts/check_fixtures.py (the
 # independent fixture checker) by a path relative to itself, so it has
-# to be copied too. The whole directory, not the one file: mutmut
-# (3.8.1) copies a file entry without creating its parent directory,
-# and `mutants/scripts/` does not otherwise exist. On a dev machine
-# where `npm ci` ran in scripts/pyodide, the gitignored node_modules
-# there is copied too, which slows each local run; CI never has it.
-# tests/test_workflows.py (TestMutmutAlsoCopy) pins this.
+# to be copied too. `also_copy` names the whole `scripts/` directory:
+# mutmut (3.8.1) copies a file entry only into a parent directory that
+# already exists. On a dev machine where `npm ci` ran in
+# scripts/pyodide, the gitignored node_modules there is copied too,
+# which slows each local run; CI never has it. tests/test_workflows.py
+# (TestMutmutAlsoCopy) pins this.
 also_copy = ["scripts"]
 # dns.py's in-scope surface is narrower still: only the low-level
 # name-compression byte walk (_read_name/_labels and any private
@@ -146,11 +138,12 @@ also_copy = ["scripts"]
 #       'netprotocols.layer7.dns.x__read_name*' \
 #       'netprotocols.layer7.dns.x__labels*' \
 #       'netprotocols.layer7.http.x__*'
-# http.py (the HTTP/1.1 grammar) is audited whole: every rule is a
-# private module-level function, matched by 'x__*'.
+# In http.py (the HTTP/1.1 grammar) the private module-level
+# functions are audited, matched by 'x__*'; the HTTP class's methods
+# are not mutated.
 # Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
-# the DNS/DNSOverTCP dataclass methods, ...) are out of scope for this
-# audit and were not triaged. mutmut (3.8.1) generates none at all for
+# the DNS/DNSOverTCP dataclass methods, ...) are out of scope and not
+# triaged. mutmut (3.8.1) generates none at all for
 # a decorated function other than a lone @staticmethod/@classmethod, so
 # the @lru_cache section parsers are never mutated, whatever the
 # filters say; logic meant to be audited belongs in undecorated

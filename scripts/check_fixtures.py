@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Validate the internal checksum consistency of captured fixture pcaps.
 
-Deliberately standalone (stdlib only, its own RFC 1071, CRC32c, CRC-32
-and Fletcher implementations, its own minimal parsers): it must be able to
-disqualify a capture even if netprotocols itself has a bug, and later
-it cross-validates the library's checksum module (plan item L-2) with
-an independent implementation.
+Standalone (stdlib only, its own RFC 1071, CRC32c, CRC-32 and Fletcher
+implementations, its own minimal parsers, no import of netprotocols), so
+it disqualifies a capture even when netprotocols itself has a bug, and
+the tests cross-validate the library's checksum module against it.
 
 Usage: python3 scripts/check_fixtures.py tests/fixtures/staging
 """
@@ -35,8 +34,8 @@ _CRC32C_POLY = 0x82F63B78
 
 
 def crc32c(data: bytes) -> int:
-    """SCTP's CRC32c, bit by bit: slow, and deliberately not the
-    library's table-driven loop."""
+    """SCTP's CRC32c, bit by bit: slow, and independent of the library's
+    table-driven loop."""
     crc = 0xFFFFFFFF
     for byte in data:
         crc ^= byte
@@ -51,7 +50,7 @@ _CRC32_POLY = 0xEDB88320
 
 
 def crc32(data: bytes) -> int:
-    """The IEEE CRC-32, bit by bit: slow, and deliberately not the
+    """The IEEE CRC-32, bit by bit: slow, and independent of the
     standard library's ``binascii.crc32``, which the library uses."""
     crc = 0xFFFFFFFF
     for byte in data:
@@ -163,7 +162,8 @@ def _check_ospf_auth(upper: bytes, packet: bytes, stats: Counter) -> list[str]:
     published password under AuType 1, or the keyed-MD5 digest under
     AuType 2 (§D.4.3: MD5 over the packet and the key NUL-padded to 16
     bytes; the packet checksum is not computed and must be zero).
-    AuType is header byte 15: RFC 6549 §2 made byte 14 the Instance ID.
+    AuType is header byte 15: RFC 6549 §2 defines byte 14 as the
+    Instance ID.
     Any other AuType fails as ``ospf-autype-N``, AuType 3 (RFC 7474)
     included: its HMAC-SHA digest needs a key the corpus does not
     publish and an HMAC-SHA check this checker does not have, so it
@@ -473,8 +473,7 @@ def _check_routing_v4(
     strict: bool,
 ) -> list[str] | None:
     """Validate a PIM or OSPF message carried by IPv4, or return
-    ``None`` for any other protocol. Split from :func:`_check_upper_v4`
-    to keep that dispatcher small."""
+    ``None`` for any other protocol."""
     if proto == _PIM:
         return _check_pim(
             src, dst, upper, stats, depth, ipv6=False, strict=strict
@@ -1020,17 +1019,13 @@ def _check_vxlan(
     turn.
 
     The destination port alone decides which datagrams are peeled,
-    which is deliberately stricter than the library's port selection
-    (it falls back to the source port when the destination is not
-    registered). The checker does not apply the decoder's I-flag
-    rule: it validates checksums, not VXLAN semantics. An
-    encapsulating endpoint sends to the tunnel's port, 4789 in every
-    capture here, from a source port hashed from the inner flow, so
-    every tunnel datagram matches by its destination alone. Matching
-    the library's fallback exactly would mean copying its port table
-    into a checker that must stay independent of it, and peeling a
-    datagram that is not VXLAN would report its bytes as checksum
-    failures; skipping one costs only the inner check."""
+    which is stricter than the library's port selection (it falls back
+    to the source port when the destination is not registered). The
+    checker does not apply the decoder's I-flag rule: it validates
+    checksums, not VXLAN semantics. An encapsulating endpoint sends to
+    the tunnel's port, 4789 in every capture here, from a source port
+    hashed from the inner flow, so every tunnel datagram matches by its
+    destination alone."""
     if len(datagram) < 8 + 8:
         stats["vxlan-truncated"] += 1
         return ["vxlan-truncated"] if strict else []
@@ -1354,8 +1349,8 @@ _ICV_LEN = 16
 
 #: How many encapsulations (GRE, IP-in-IP, IPsec) one frame may nest
 #: before the checker refuses it. The corpus peaks at 2 (ah.pcap's
-#: AH-over-ESP bundle); the bound exists so a hostile capture cannot
-#: exhaust the interpreter's stack.
+#: AH-over-ESP bundle); the bound keeps a hostile capture from
+#: exhausting the interpreter's stack.
 _MAX_DEPTH = 8
 
 
@@ -1374,14 +1369,11 @@ def _verify_icv(
     key of SA ``spi`` in ``sas``. Returns ``[]`` or one failure,
     prefixed with ``protocol`` ("esp", "ah").
 
-    An SPI with no key in ``sas`` is a failure, not a skip. MANIFEST.md
-    promises every IPsec ICV in the corpus verifies, and an unknown SPI
-    is either a corrupted frame or a fixture on an SA whose key was
-    never published — a fixture on a new SA publishes its key there and
-    adds it here. There is deliberately no mode that tolerates unknown
-    SAs: this checks the corpus, where every key is published, and a
-    capture of genuinely encrypted IPsec cannot be verified, so it
-    cannot back MANIFEST's promise and does not belong in the corpus.
+    An SPI with no key in ``sas`` is a failure, not a skip, in every
+    mode. MANIFEST.md promises every IPsec ICV in the corpus verifies, so
+    an unknown SPI is either a corrupted frame or a fixture on an SA whose
+    key is not published; a fixture on a new SA publishes its key there
+    and adds it here.
     """
     key = sas.get(spi)
     if key is None:
@@ -1443,8 +1435,8 @@ def _check_ah(
         return ["ah-truncated"]
     if len(ip_header) != 20:
         # Options have their own mutability rules (RFC 4302 Appendix
-        # A); no corpus frame carries any, so none are implemented, and
-        # an ICV this cannot compute fails rather than passing unread.
+        # A), which are not implemented: an ICV over options fails
+        # rather than passing unread.
         return ["ah-ipv4-options-unverified"]
     next_header, payload_len = upper[0], upper[1]
     ah_len = (payload_len + 2) * 4
@@ -1648,8 +1640,8 @@ def _check_upper_v6(
     if next_header == 51:
         # The ICV would cover the IPv6 header and its extension headers
         # under their own mutability rules (RFC 4302 §3.3.3.1.2), which
-        # are not implemented; no corpus frame needs them, so one that
-        # does fails rather than passing unverified.
+        # are not implemented, so it fails rather than passing
+        # unverified.
         stats["ah"] += 1
         return ["ah-ipv6-unverified"]
     if next_header == _PIM:
@@ -1664,8 +1656,7 @@ def _check_arp(
 ) -> list[str]:
     """Count an ARP packet, which carries no checksum.
 
-    Under strict, at least insist on the 28-byte Ethernet/IPv4 form
-    rather than vouching for a stub.
+    Under strict, require the 28-byte Ethernet/IPv4 form.
     """
     stats["arp"] += 1
     if strict and len(payload) < 28:

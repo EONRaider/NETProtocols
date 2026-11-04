@@ -48,8 +48,9 @@ def walk_kind_length_value(
     width: int = 1,
     align: int = 1,
 ) -> Iterator[tuple[int, bytes]]:
-    """Walk a TLV-encoded options blob, yielding ``(kind, data)`` pairs
-    in wire order.
+    """Walk a TLV-encoded options blob, yielding ``(kind, data)`` pairs.
+
+    The pairs come in wire order.
 
     :param raw: The options bytes to walk.
     :param lone_byte_kinds: Kind values that are a single byte with no

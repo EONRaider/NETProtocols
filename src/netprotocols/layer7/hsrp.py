@@ -60,23 +60,20 @@ Decoding a guess
 
 HSRP is reached through ``udp.port``, which is best-effort (see
 :mod:`netprotocols.registry`), and any 20 bytes would make a header.
-:meth:`HSRP.decode` therefore rejects the three leading values no
-HSRPv1 message carries: a Version other than 0, an Op Code other than
-Hello, Coup or Resign, and a State §5.1 does not list. Each is judged as
-soon as its byte is in the buffer, before the length, so a message of
-another kind is reported as that (``InvalidFieldError``, ``offset`` 0,
-1 or 2) however short it is, and ``TruncatedHeaderError`` is left for a
-buffer whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States
-pass of the 16,777,216 values the first three bytes can take, so a
-random datagram on port 1985 is rejected all but 18 times in that many
-(about 1 in 932,000), and always when it is shorter than 20 bytes.
-That is rare, not never: of the 90,000 random walks to port 1985
-ARCHITECTURE.md describes, about 0.1 are expected to decode an HSRP
-layer (90,000 x 18 / 2^24 = 0.097, a little less since a few payloads
-are too short to reach 20 bytes), and 2 did, one 46-byte payload walked
-both unpadded and padded. The other fields are not judged: any Hellotime,
-Holdtime, Priority, Group, Reserved byte, Authentication Data and
-Virtual IP Address decodes.
+:meth:`HSRP.decode` therefore rejects the three leading values no HSRPv1
+message carries: a Version other than 0, an Op Code other than Hello,
+Coup or Resign, and a State §5.1 does not list. Each is judged as soon
+as its byte is in the buffer, before the length, so a message of another
+kind is reported as that (``InvalidFieldError``, ``offset`` 0, 1 or 2)
+however short it is, and ``TruncatedHeaderError`` is left for a buffer
+whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States pass of
+the 16,777,216 values the first three bytes can take, so a random
+datagram on port 1985 is rejected all but 18 times in that many (about 1
+in 932,000), and always when it is shorter than 20 bytes. That is rare,
+not never: a random payload of 20 bytes or more decodes as HSRP that
+often. The other fields are not judged: any Hellotime, Holdtime,
+Priority, Group, Reserved byte, Authentication Data and Virtual IP
+Address decodes.
 
 Two kinds of message on the same port are not HSRPv1, and are rejected
 by that guard rather than misread as it:
@@ -225,9 +222,9 @@ class HSRP(Protocol):
     :param auth_data: The 8 bytes of Authentication Data, kept raw: a
         clear-text password, NUL-padded (see :attr:`password`).
     :param virtual_ip: The group's virtual IP address, dotted-decimal.
-    :raises InvalidFieldError: an integer field does not fit its byte,
-        or ``auth_data`` is not 8 bytes long.
-    :raises InvalidIPv4AddressError: ``virtual_ip`` is not a
+    :raises InvalidFieldError: if an integer field does not fit its
+        byte, or ``auth_data`` is not 8 bytes long.
+    :raises InvalidIPv4AddressError: if ``virtual_ip`` is not a
         dotted-decimal IPv4 address.
     """
 
@@ -277,11 +274,12 @@ class HSRP(Protocol):
         guess" in the module docstring). Anything after the 20 bytes is
         left undecoded.
 
-        :raises InvalidFieldError: the Version is not 0 (``field``
+        :param data: The buffer, starting at the Version byte.
+        :raises InvalidFieldError: if the Version is not 0 (``field``
             ``"version"``, ``offset`` 0), else the Op Code is not 0-2
             (``"opcode"``, 1), else the State is not one RFC 2281
             lists (``"state"``, 2), at any length.
-        :raises TruncatedHeaderError: ``data`` is shorter than 20 bytes
+        :raises TruncatedHeaderError: if ``data`` is shorter than 20 bytes
             and every leading byte it holds passes.
         """
         if len(data) > 0 and data[0] != _VERSION:
@@ -335,8 +333,8 @@ class HSRP(Protocol):
         """Name the Op Code, e.g. ``"Coup"``.
 
         Falls back to ``"unknown (n)"`` for a value RFC 2281 does not
-        list, which only construction can give (Op Code 3, an
-        Advertise, among them).
+        list (degrades, never raises); only construction can give one,
+        Op Code 3, an Advertise, among them.
         """
         return _OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
 
@@ -345,7 +343,7 @@ class HSRP(Protocol):
         """Name the sender's state, e.g. ``"Standby"``.
 
         Falls back to ``"unknown (n)"`` for a value RFC 2281 does not
-        list, which only construction can give.
+        list, which only construction can give (degrades, never raises).
         """
         return _STATE_NAMES.get(self.state, f"unknown ({self.state})")
 

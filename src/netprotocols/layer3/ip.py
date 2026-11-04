@@ -43,11 +43,12 @@ __all__ = ["IPv4", "IPv4Option", "IPv6"]
 
 #: The flat ``ip.proto`` and ``ip.proto.v6`` dispatch tables of the
 #: default registry, bound once at import. The v6 table inherits the
-#: other, adds the four extension headers, and holds its own entries
-#: for AH (51), ``AHv6``, and VRRP (112), ``VRRPv6``, where IPv4's holds
-#: ``AH`` and ``VRRP`` (``_defaults.FAMILY_SPECIFIC_NUMBERS``). So the
-#: per-family gating is the tables' shape rather than a test on the
-#: hot path: an IPv4 packet with ``protocol=0`` cannot conjure a
+#: other, adds the four extension headers, lacks OSPF (89)
+#: (``_defaults.IPV4_ONLY_NUMBERS``), and holds its own entries for AH
+#: (51), ``AHv6``, and VRRP (112), ``VRRPv6``, where IPv4's holds
+#: ``AH`` and ``VRRP`` (``_defaults.FAMILY_SPECIFIC_NUMBERS``). The
+#: per-family gating is the tables' shape, with no test on the hot
+#: path: an IPv4 packet with ``protocol=0`` cannot conjure a
 #: Hop-by-Hop layer because the table it reads has no entry for 0.
 #: Registering mutates these dicts in place, so the references stay
 #: live — see :mod:`netprotocols.registry`.
@@ -64,14 +65,17 @@ def _ip_protocol_class(
 ) -> type[Protocol] | None:
     """Map an IP protocol number to the class that decodes its payload.
 
-    The number space is shared between IPv4 ``protocol`` and IPv6
-    ``next_header`` (the values are disjoint), so the two dispatch
-    through tables that share their entries — but the IPv6 extension
-    headers live in the v6 table alone and are handed out only when the
-    caller is part of an IPv6 chain (``ipv6=True``), and protocols 51
-    and 112 name a different class in each: ``AH``/``AHv6``, so that AH
-    keeps dispatching in its own family's chain, and ``VRRP``/``VRRPv6``,
-    so that VRRP reads its addresses at its own family's width.
+    IPv4 ``protocol`` and IPv6 ``next_header`` take their values from
+    one IANA registry, Assigned Internet Protocol Numbers, so the two
+    dispatch through tables that share their entries, with three
+    differences: the IPv6 extension headers (0, 43, 44, 60) live in the
+    v6 table alone and are handed out only when the caller is part of
+    an IPv6 chain (``ipv6=True``); OSPF (89) lives in the v4 table
+    alone, since IPv6's 89 is OSPFv3, which this library does not
+    decode; and protocols 51 and 112 name a different class in each:
+    ``AH``/``AHv6``, so that AH keeps dispatching in its own family's
+    chain, and ``VRRP``/``VRRPv6``, so that VRRP reads its addresses at
+    its own family's width.
     """
     if registry is None:
         table = _IPV6_PROTOCOL_CLASSES if ipv6 else _IPV4_PROTOCOL_CLASSES
@@ -81,6 +85,10 @@ def _ip_protocol_class(
 
 
 def _ip_protocol_name(number: int) -> str:
+    """Return the display name of an IP protocol number, e.g. ``"TCP"``.
+
+    ``"unknown (n)"`` for a number this library does not enumerate.
+    """
     try:
         return IPProtocol(number).display_name
     except ValueError:
@@ -88,8 +96,10 @@ def _ip_protocol_name(number: int) -> str:
 
 
 def _ip_protocol_enum(number: int) -> IPProtocol | None:
-    """The ``IPProtocol`` member for a numeric value, or ``None`` if it
-    isn't one this library recognizes."""
+    """Return the ``IPProtocol`` member for a numeric value, or ``None``.
+
+    ``None`` when the value is not one this library recognizes.
+    """
     try:
         return IPProtocol(number)
     except ValueError:
@@ -106,13 +116,13 @@ _OPT_NOP = 1
 _LONE_BYTE_KINDS = frozenset({_OPT_EOL, _OPT_NOP})
 
 #: Option kinds this library decodes a typed :attr:`IPv4Option.value`
-#: for, beyond naming (RFC 791 §3.1; RFC 2113 for Router Alert).
+#: for, beyond naming (RFC 791 §3.1, RFC 2113 for Router Alert).
 _OPT_RECORD_ROUTE = 7
 _OPT_TIMESTAMP = 68
 _OPT_ROUTER_ALERT = 148
 
-#: IPv4 option kinds this library names (RFC 791 §3.1; RFC 2113 for
-#: Router Alert); unknown kinds fall back to their numeric value.
+#: IPv4 option kinds this library names (RFC 791 §3.1, RFC 2113 for
+#: Router Alert); unknown kinds read ``"unknown (n)"``.
 _OPTION_KIND_NAMES: dict[int, str] = {
     _OPT_EOL: "End of Option List",
     _OPT_NOP: "No-Operation",
@@ -138,9 +148,11 @@ class IPv4Option:
 
     @property
     def kind_name(self) -> str:
-        """Display name of the option kind, e.g. ``"Router Alert"``;
-        falls back to ``"unknown (n)"`` for kinds this library does not
-        name."""
+        """Display name of the option kind, e.g. ``"Router Alert"``.
+
+        ``"unknown (n)"`` for a kind this library does not name
+        (degrades, never raises).
+        """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
     @property
@@ -153,7 +165,7 @@ class IPv4Option:
         | tuple[tuple[IPv4Address, int], ...]
         | None
     ):
-        """The decoded value, for the kinds this library understands:
+        """The decoded value, for the kinds this library understands.
 
         - Record Route (7): the addresses recorded so far, as a tuple
           of :class:`~ipaddress.IPv4Address` — ``data[0]`` is the
@@ -175,7 +187,8 @@ class IPv4Option:
         ``None`` — read :attr:`data` raw instead — for kinds this
         library does not decode, an unrecognized Timestamp flag, and
         data whose length or pointer is inconsistent with its kind
-        (degrades, never raises)."""
+        (degrades, never raises).
+        """
         if self.kind == _OPT_RECORD_ROUTE and len(self.data) >= 1:
             return self._record_route_addresses()
         if self.kind == _OPT_TIMESTAMP and len(self.data) >= 2:
@@ -234,8 +247,8 @@ class IPv4(Protocol):
     :param ttl: Time to live.
     :param protocol: Protocol number of the payload (see
         :class:`~netprotocols.IPProtocol`).
-    :param checksum: Header checksum, carried verbatim (this library
-        neither computes nor verifies checksums).
+    :param checksum: Header checksum, carried verbatim (compute/verify
+        via :mod:`netprotocols.checksum`).
     :param src: Source address in dotted-decimal notation.
     :param dst: Destination address in dotted-decimal notation.
     :param options: Raw options bytes; length must be a multiple of 4
@@ -258,13 +271,9 @@ class IPv4(Protocol):
     dst: str
     options: bytes = b""
 
-    #: Curated positional form for `match`/`case` (#94): declared by
-    #: hand because the auto-generated tuple would list all 14 fields,
-    #: unusable positionally. ``src``/``dst`` identify the two
-    #: endpoints, ``protocol`` says what the payload is — the fields
-    #: someone drafting ``case IPv4(...)`` actually reaches for.
-    #: Keyword patterns (``case IPv4(protocol=6)``) are unaffected and
-    #: stay the documented default.
+    #: The positional form for ``match``/``case``: ``src`` and ``dst``,
+    #: the two endpoints, then ``protocol``, what the payload is. Keyword
+    #: patterns (``case IPv4(protocol=6)``) match any field.
     __match_args__ = ("src", "dst", "protocol")
 
     _struct: ClassVar[Struct] = Struct("!BBHHHBBH4s4s")
@@ -276,6 +285,13 @@ class IPv4(Protocol):
     }
 
     def __post_init__(self) -> None:
+        """Check the IHL against its range and the options, and both addresses.
+
+        :raises InvalidFieldError: if the IHL is outside 5-15 or
+            disagrees with the options' length.
+        :raises InvalidIPv4AddressError: if ``src`` or ``dst`` is not a
+            dotted-decimal IPv4 address.
+        """
         if not 5 <= self.ihl <= 15:
             raise InvalidFieldError(
                 f"IPv4 IHL must be within 5-15, got {self.ihl}",
@@ -298,6 +314,18 @@ class IPv4(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the IPv4 header, options included, at the start of ``data``.
+
+        The Version nibble is carried verbatim, not checked, and
+        whatever follows the header is left to the next layer.
+
+        :param data: The buffer, starting at the Version/IHL byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            20-byte fixed header, or than the ``ihl * 4`` bytes the IHL
+            declares (``field="ihl"``).
+        :raises InvalidFieldError: if the IHL is below 5
+            (``field="ihl"``).
+        """
         (
             ver_ihl,
             dscp_ecn,
@@ -330,11 +358,12 @@ class IPv4(Protocol):
                 expected=ihl * 4,
                 actual=len(data),
             )
-        # As in Ethernet/ARP, the addresses are generated here and
-        # cannot fail validation. The constructor's other checks are
-        # already established above: the IHL is 4 bits (so <= 15), it
-        # was rejected below 5, and the options are sliced to exactly
-        # ihl * 4 bytes after the buffer was confirmed to hold them.
+        # Every check the constructor runs holds here, so the instance
+        # is built directly, without __post_init__ (see "Decode-path
+        # construction" in _base.py): bytes_to_ipv4() produces valid
+        # addresses, the IHL is 4 bits (so <= 15) and is rejected below
+        # 5 above, and the options are sliced to exactly ihl * 4 bytes
+        # after the buffer is confirmed to hold them.
         header = object.__new__(cls)
         set_field = object.__setattr__
         set_field(header, "version", ver_ihl >> 4)
@@ -372,12 +401,13 @@ class IPv4(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The header's length in bytes: ``ihl * 4``, options included."""
         return self.ihl * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """See :meth:`Protocol.next_protocol`.
+        """Return the class for the payload, from the ``ip.proto`` table.
 
         A non-first fragment (``fragment_offset > 0``) carries a slice
         from the middle of the original payload — no upper-layer header
@@ -389,22 +419,30 @@ class IPv4(Protocol):
 
     @property
     def protocol_name(self) -> str:
-        """Display name of the payload protocol, e.g. ``"TCP"``."""
+        """Display name of the payload protocol, e.g. ``"TCP"``.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _ip_protocol_name(self.protocol)
 
     @property
     def protocol_enum(self) -> IPProtocol | None:
-        """The payload protocol as an
-        :class:`~netprotocols.IPProtocol`, or ``None`` for a value this
-        library does not enumerate; :attr:`protocol` stays the
-        canonical ``int`` (see :attr:`protocol_name` for the display
-        form)."""
+        """The payload protocol as an :class:`~netprotocols.IPProtocol`.
+
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`protocol` stays the canonical ``int`` (see
+        :attr:`protocol_name` for the display form).
+        """
         return _ip_protocol_enum(self.protocol)
 
     @property
     def flags_name(self) -> str:
-        """Display name of the fragmentation flags, e.g.
-        ``"Don't fragment (DF)"``."""
+        """Display name of the fragmentation flags, e.g. ``"Not set"``.
+
+        ``"unknown (0b...)"`` for a combination this library does not
+        name (degrades, never raises).
+        """
         return self.flag_names.get(self.flags, f"unknown ({self.flags:#05b})")
 
     @property
@@ -414,31 +452,36 @@ class IPv4(Protocol):
 
     @property
     def src_address(self) -> IPv4Address:
-        """The source address as a stdlib
-        :class:`~ipaddress.IPv4Address`, for comparison, subnet
-        membership, and arithmetic; :attr:`src` stays the canonical
-        string form."""
+        """The source address as an :class:`~ipaddress.IPv4Address`.
+
+        For comparison, subnet membership, and arithmetic; :attr:`src`
+        stays the canonical string form.
+        """
         return IPv4Address(self.src)
 
     @property
     def dst_address(self) -> IPv4Address:
-        """The destination address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`src_address`)."""
+        """The destination address as an :class:`~ipaddress.IPv4Address`.
+
+        See :attr:`src_address`.
+        """
         return IPv4Address(self.dst)
 
     # -- options TLV list (parsed on demand, never re-encoded) --
 
     @property
     def parsed_options(self) -> tuple[IPv4Option, ...]:
-        """The options as a tuple of :class:`IPv4Option`, in wire order,
-        parsed on demand (RFC 791 §3.1). The single-byte kinds (EOL,
+        """The options as a tuple of :class:`IPv4Option`, in wire order.
+
+        Parsed on demand (RFC 791 §3.1). The single-byte kinds (EOL,
         NOP) carry no data; an End of Option List option ends the parse,
         so whatever follows it is padding and is not returned. Empty for
         a header without options.
 
         :raises InvalidFieldError: if an option's declared length is
             below the 2-byte minimum or runs past the options bytes
-            (bounded — never hangs or over-reads).
+            (bounded — never hangs or over-reads; ``offset`` counts from
+            the start of :attr:`options`).
         """
         return tuple(
             IPv4Option(kind=kind, data=data)
@@ -482,6 +525,15 @@ class IPv6(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 40-byte IPv6 header at the start of ``data``.
+
+        Every field read is carried verbatim, so past the 40-byte header
+        this never raises.
+
+        :param data: The buffer, starting at the Version nibble.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 40
+            bytes.
+        """
         (
             ver_tc_flabel,
             payload_length,
@@ -514,21 +566,31 @@ class IPv6(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
+        """Return the class for the payload, from the ``ip.proto.v6`` table.
+
+        Chosen by ``next_header``; ``None`` when it is not one this
+        library decodes.
+        """
         return _ip_protocol_class(
             self.next_header, ipv6=True, registry=registry
         )
 
     @property
     def next_header_name(self) -> str:
-        """Display name of the payload protocol, e.g. ``"IPv6-ICMP"``."""
+        """Display name of the payload protocol, e.g. ``"IPv6-ICMP"``.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _ip_protocol_name(self.next_header)
 
     @property
     def next_header_enum(self) -> IPProtocol | None:
-        """The payload protocol as an
-        :class:`~netprotocols.IPProtocol` (see
-        :attr:`IPv4.protocol_enum`); ``None`` for a value this library
-        does not enumerate."""
+        """The payload protocol as an :class:`~netprotocols.IPProtocol`.
+
+        See :attr:`IPv4.protocol_enum`. ``None`` for a value this library
+        does not enumerate (degrades, never raises).
+        """
         return _ip_protocol_enum(self.next_header)
 
     @property
@@ -543,14 +605,17 @@ class IPv6(Protocol):
 
     @property
     def src_address(self) -> IPv6Address:
-        """The source address as a stdlib
-        :class:`~ipaddress.IPv6Address`, for comparison, subnet
-        membership, and arithmetic; :attr:`src` stays the canonical
-        string form."""
+        """The source address as an :class:`~ipaddress.IPv6Address`.
+
+        For comparison, subnet membership, and arithmetic; :attr:`src`
+        stays the canonical string form.
+        """
         return IPv6Address(self.src)
 
     @property
     def dst_address(self) -> IPv6Address:
-        """The destination address as a stdlib
-        :class:`~ipaddress.IPv6Address` (see :attr:`src_address`)."""
+        """The destination address as an :class:`~ipaddress.IPv6Address`.
+
+        See :attr:`src_address`.
+        """
         return IPv6Address(self.dst)

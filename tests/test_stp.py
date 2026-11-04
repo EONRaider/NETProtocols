@@ -880,7 +880,7 @@ class TestOtherProtocolIdentifiers:
         assert llc.next_protocol(registry) is Own
 
     def test_a_direct_decode_still_rejects_it(self):
-        """Test STP.decode on GARP's PDU raises, as before."""
+        """Test STP.decode raises on GARP's PDU, at its protocol_id."""
         with pytest.raises(InvalidFieldError) as excinfo:
             STP.decode(GVRP_PDU[3:])
         assert excinfo.value.field == "protocol_id"

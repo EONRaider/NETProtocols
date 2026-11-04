@@ -91,12 +91,12 @@ is XORed with the cookie's top 16 bits, an IPv4 address with the
 cookie, and an IPv6 address with the cookie followed by the 12-byte
 transaction ID. The un-XOR is an accessor, :attr:`STUN.
 xor_mapped_address`, like the library's other display helpers, so the
-wire bytes stay untouched in :attr:`STUN.attributes`; it needs the
-message's cookie and transaction ID, which is why it lives on
-:class:`STUN` rather than on the attribute. :meth:`STUN.xor_address`
-reads any attribute in that encoding, such as TURN's XOR-PEER-ADDRESS
-and XOR-RELAYED-ADDRESS, and :attr:`STUNAttribute.address` any in the
-clear one, such as RFC 5780's RESPONSE-ORIGIN and OTHER-ADDRESS.
+wire bytes stay untouched in :attr:`STUN.attributes`; it is on
+:class:`STUN`, which holds the cookie and transaction ID it needs.
+:meth:`STUN.xor_address` reads any attribute in that encoding, such as
+TURN's XOR-PEER-ADDRESS and XOR-RELAYED-ADDRESS, and
+:attr:`STUNAttribute.address` any in the clear one, such as RFC 5780's
+RESPONSE-ORIGIN and OTHER-ADDRESS.
 
 Integrity and the fingerprint
 -----------------------------
@@ -140,8 +140,7 @@ lax one stops with ``packet.stopped_by`` set. A larger ``max_depth``
 decodes the rest, and so does walking on from ``packet.consumed`` with
 ``start=STUN`` as many times as it takes, as
 :mod:`netprotocols.layer7.bgp` describes: a walk that starts there has
-room for 32 messages, so the 72 take three walks. The corpus's TCP
-segments carry 2 messages each.
+room for 32 messages, so the 72 take three walks.
 
 Decoding a guess
 ----------------
@@ -262,8 +261,8 @@ _ATTRIBUTE_NAMES: dict[int, str] = {
 }
 
 #: Methods: IANA's "STUN Methods" registry (RFC 8489 Binding; RFC 8656
-#: TURN; RFC 6062 TURN over TCP). 0x002 was RFC 3489's Shared Secret
-#: and is reserved since RFC 5389.
+#: TURN; RFC 6062 TURN over TCP). 0x002, RFC 3489's Shared Secret, is
+#: reserved (RFC 5389 §18.1) and not named.
 _METHOD_NAMES: dict[int, str] = {
     0x001: "Binding",
     0x003: "Allocate",
@@ -299,8 +298,11 @@ def _check_width(owner: type, name: str, value: int, bits: int) -> None:
 
 
 def _check_length(owner: type, name: str, value: bytes) -> None:
-    """Raise :class:`InvalidFieldError` unless ``value`` fits a 16-bit
-    length field."""
+    """Raise :class:`InvalidFieldError` unless ``value`` fits a length.
+
+    The length field is 16 bits wide, so ``value`` holds at most 65535
+    bytes.
+    """
     if len(value) > 0xFFFF:
         raise InvalidFieldError(
             f"{owner.__name__} {name} must be at most 65535 bytes, "
@@ -313,9 +315,9 @@ def _check_length(owner: type, name: str, value: bytes) -> None:
 
 
 def _text(value: bytes) -> str:
-    """Read a text attribute's value: UTF-8 (RFC 8489 §14.8, §14.14),
-    any undecodable byte replaced, and trailing NUL bytes dropped.
+    """Read a text attribute's value as UTF-8 (RFC 8489 §14.8, §14.14).
 
+    Any undecodable byte is replaced, and trailing NUL bytes are dropped.
     Those NULs are padding some senders count into the value: coturn
     4.6.1 pads its error reason phrases that way, and the SOFTWARE it
     sends an RFC 3489 client.
@@ -341,7 +343,7 @@ class STUNAddress:
         """Name the family: ``"IPv4"`` or ``"IPv6"``.
 
         Falls back to ``"unknown (n)"`` for a family built here that no
-        address attribute carries.
+        address attribute carries (degrades, never raises).
         """
         known = _FAMILIES.get(self.family)
         return f"unknown ({self.family})" if known is None else known[0]
@@ -397,14 +399,18 @@ class STUNAttribute:
     def type_name(self) -> str:
         """Name the type, e.g. ``"XOR-MAPPED-ADDRESS"``.
 
-        Falls back to ``"unknown (0x7ff0)"`` for a type not named here.
+        Falls back to ``"unknown (0x7ff0)"`` for a type not named here
+        (degrades, never raises).
         """
         return _ATTRIBUTE_NAMES.get(self.type, f"unknown ({self.type:#06x})")
 
     @property
     def comprehension_required(self) -> bool:
-        """Whether a receiver must understand this type to process the
-        message: types ``0x0000``-``0x7FFF`` (RFC 8489 §14)."""
+        """Whether a receiver must understand this type (RFC 8489 §14).
+
+        True for types ``0x0000``-``0x7FFF``, which a receiver must
+        understand to process the message.
+        """
         return self.type < 0x8000
 
     @property
@@ -415,7 +421,7 @@ class STUNAttribute:
         RFC 5780's RESPONSE-ORIGIN and OTHER-ADDRESS, and RFC 3489's
         SOURCE-ADDRESS and CHANGED-ADDRESS share. ``None`` for a value
         that is not one: an unknown family, or a length other than 8
-        for IPv4 or 20 for IPv6.
+        for IPv4 or 20 for IPv6 (degrades, never raises).
         """
         return _parse_address(self.value, bytes(18))
 
@@ -466,7 +472,7 @@ class STUN(Protocol):
     def __post_init__(self) -> None:
         """Check each field fits its width.
 
-        :raises InvalidFieldError: a field does not.
+        :raises InvalidFieldError: if a field does not.
         """
         _check_width(type(self), "message_type", self.message_type, 14)
         _check_width(type(self), "magic_cookie", self.magic_cookie, 32)
@@ -485,10 +491,11 @@ class STUN(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the message at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :param data: The buffer, starting at the message type.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             20-byte header, or than the Message Length says
             (``field`` ``"length"``).
-        :raises InvalidFieldError: the two bits above the Message Type
+        :raises InvalidFieldError: if the two bits above the Message Type
             are not zero (``field`` ``"message_type"``), the Magic
             Cookie is not ``0x2112A442`` (``"magic_cookie"``), or the
             Message Length is not a multiple of 4 (``"length"``).
@@ -536,7 +543,7 @@ class STUN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Name the next message in the same buffer, if one begins there.
+        """Return the class for the next message in the buffer, if one begins.
 
         :class:`STUN` when the 8 bytes after this message began like a
         message, the cookie in place, when it was decoded; ``None``
@@ -572,20 +579,28 @@ class STUN(Protocol):
 
     @property
     def class_name(self) -> str:
-        """Name the class, e.g. ``"Success Response"``."""
+        """Name the class, e.g. ``"Success Response"``.
+
+        All four two-bit classes have a name, so this never raises.
+        """
         return _CLASS_NAMES[self.message_class]
 
     @property
     def method_name(self) -> str:
         """Name the method, e.g. ``"Binding"``.
 
-        Falls back to ``"unknown (0x5)"`` for a method not named here.
+        Falls back to ``"unknown (0x5)"`` for a method not named here
+        (degrades, never raises).
         """
         return _METHOD_NAMES.get(self.method, f"unknown ({self.method:#x})")
 
     @property
     def message_type_name(self) -> str:
-        """Name the method and class, e.g. ``"Binding Request"``."""
+        """Name the method and class, e.g. ``"Binding Request"``.
+
+        The method part falls back as :attr:`method_name` does (degrades,
+        never raises).
+        """
         return f"{self.method_name} {self.class_name}"
 
     def _walk(self) -> Iterator[STUNAttribute]:
@@ -606,7 +621,7 @@ class STUN(Protocol):
     def parsed_attributes(self) -> tuple[STUNAttribute, ...]:
         """Parse every attribute, in wire order, on demand.
 
-        :raises InvalidFieldError: an attribute header or value runs
+        :raises InvalidFieldError: if an attribute header or value runs
             past :attr:`attributes` (``field`` ``"attributes"``,
             ``offset`` into them).
         """
@@ -614,8 +629,11 @@ class STUN(Protocol):
 
     @property
     def _readable(self) -> tuple[tuple[STUNAttribute, ...], bool]:
-        """Return the attributes up to the first malformed one, and
-        whether the walk reached the end without one."""
+        """The attributes up to the first malformed one, and a flag.
+
+        The flag is whether the walk reached the end without a malformed
+        attribute.
+        """
         found: list[STUNAttribute] = []
         try:
             found.extend(self._walk())
@@ -684,9 +702,8 @@ class STUN(Protocol):
 
         That is the Class times 100 plus the Number. ``None`` without
         the attribute, with one shorter than 4 bytes, or with one whose
-        Class is not 3-6 or whose Number is above 99, which RFC 8489
-        §14.8 rules out and which would otherwise read as a code of
-        0-955, or as another, valid code (Class 3, Number 150 as 450).
+        Class is not 3-6 or whose Number is above 99, both of which
+        RFC 8489 §14.8 rules out (degrades, never raises).
         :attr:`error_reason` reads the reason phrase all the same.
         """
         found = self._error
@@ -738,7 +755,8 @@ class STUN(Protocol):
         Only a FINGERPRINT that is the last attribute, of 4 bytes, in a
         list that walks to its end, counts; one anywhere else is not
         a fingerprint RFC 8489 §14.7 defines, and
-        :func:`~netprotocols.checksum.verify` fails it.
+        :func:`~netprotocols.checksum.verify` fails it. ``None`` when no
+        attribute counts (degrades, never raises).
         """
         found, whole = self._readable
         if not whole or not found:
@@ -752,9 +770,11 @@ class STUN(Protocol):
 def _check_header(
     cls: type[STUN], message_type: int, length: int, cookie: int
 ) -> None:
-    """Raise :class:`InvalidFieldError` for a header no STUN message
-    has: a nonzero top two bits, another cookie, or a Message Length
-    that is not a multiple of 4."""
+    """Raise :class:`InvalidFieldError` for a header no STUN message has.
+
+    That is a nonzero top two bits, another cookie, or a Message Length
+    that is not a multiple of 4.
+    """
     if message_type >> 14:
         raise InvalidFieldError(
             f"STUN message type {message_type:#06x} does not start with "

@@ -1,7 +1,7 @@
-"""#236: flow keys and the final-destination rules behind an IPv6
-Routing header (RFC 8200 §8.1).
+"""Flow keys and the final-destination rules behind an IPv6 Routing
+header (RFC 8200 §8.1).
 
-The checksum tests for the same change live in tests/test_checksum.py,
+The checksum tests for these rules live in tests/test_checksum.py,
 which is the file the mutation audit runs; the frame builders and the
 independent reference checksum are theirs, imported here.
 """
@@ -48,7 +48,7 @@ class TestFlowKeyBehindRouting:
         expected = FlowKey(lo[0], hi[0], lo[1], hi[1], 17)
         assert p.flow_key() == expected
         assert flow_key(p[UDP], ip=p[IPv6], routing=p[IPv6Routing]) == expected
-        # The old behaviour keyed on the next hop.
+        # Keyed on the next hop, ip.dst, the flow differs.
         assert flow_key(p[UDP], ip=p[IPv6]) != expected
 
     def test_reply_has_the_same_key(self, name, routing, wire_dst, final):

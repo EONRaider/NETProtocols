@@ -116,8 +116,8 @@ class TestMinOptionLength:
         length below 2 can never advance the cursor (0 leaves it in
         place; 1 backs it up into the length byte) -- this floor is
         structural, so it applies even if a caller passes no
-        min_option_length, or one weaker than 2. Regression against a
-        hang: every one of these must raise, never loop forever."""
+        min_option_length, or one weaker than 2. Every one of these
+        must raise, never loop forever."""
         with pytest.raises(InvalidFieldError) as excinfo:
             walk(
                 bytes([2, declared_length]),
@@ -132,7 +132,7 @@ class TestMinOptionLength:
     ):
         """The structural floor of 2 is a minimum, not a replacement: a
         caller's stricter min_option_length still applies on top of it.
-        No current call site passes more than 2, so only a direct test
+        No call site passes more than 2, so only a direct test
         pins this (it kills the mutant that drops the caller's floor)."""
         with pytest.raises(InvalidFieldError) as excinfo:
             walk(b"\x05\x02", min_option_length=3)
@@ -272,9 +272,8 @@ def _byte_wide_walk_before_width(
     protocol: type,
     field: str = "options",
 ) -> Iterator[tuple[int, bytes]]:
-    """The walker as it stood before it took a ``width`` (2.4.0),
-    verbatim but for this docstring: the oracle the byte-wide callers'
-    behaviour is pinned against."""
+    """A byte-wide kind/length/value walker, with no ``width``: the
+    oracle the byte-wide callers' behaviour is pinned against."""
     cursor = 0
     while cursor < len(raw):
         kind = raw[cursor]
@@ -358,7 +357,7 @@ _ALPHABET = (0, 1, 2, 3, 4, 5, 0x40, 0xFF)
 def _byte_wide_cases() -> list[tuple[bytes, dict[str, object]]]:
     """A fixed, seeded sample of inputs and parameter combinations.
 
-    Deterministic rather than a hypothesis property: this file is in the
+    Deterministic, not a hypothesis property: this file is in the
     mutation audit's test selection (pyproject.toml's [tool.mutmut]),
     which needs every run of a test to exercise the same inputs."""
     rng = random.Random(184)
@@ -384,10 +383,11 @@ def _byte_wide_cases() -> list[tuple[bytes, dict[str, object]]]:
 
 
 class TestByteWideBehaviourIsUnchanged:
-    """Generalizing the walker to a ``width`` must leave every byte-wide
-    caller (TCP, IPv4, the IPv6 options headers) exactly as it was: the
-    same pairs, the same error, message and structured fields included,
-    for any bytes and any combination of the other parameters."""
+    """At its default ``width`` of 1, the walker every byte-wide caller
+    (TCP, IPv4, the IPv6 options headers) uses walks as the oracle does:
+    the same pairs, the same error, message and structured fields
+    included, for any bytes and any combination of the other
+    parameters."""
 
     def test_matches_the_walker_before_width(self) -> None:
         for raw, kwargs in _byte_wide_cases():

@@ -51,10 +51,9 @@
 # 2 Link State Acknowledgments, and its updates exactly six LSAs: two
 # router LSAs from each router (each re-originates its own once the
 # adjacency is Full), A's network LSA (it is the DR) and A's AS-external
-# LSA. Only how B's two router LSAs are packed is left open, as it
-# varied between runs: together in one update or one per update, so 3
-# or 4 updates. The Hello count depends on where the routers' 2 s hello
-# timers fall, and was 6 in every segment of every run. A capture that
+# LSA. Only how B's two router LSAs are packed is left open: together
+# in one update or one per update, so 3 or 4 updates. The Hello count
+# depends on where the routers' 2 s hello timers fall. A capture that
 # differs stops the script, and must not be folded in.
 
 set -euo pipefail

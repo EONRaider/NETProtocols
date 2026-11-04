@@ -108,8 +108,8 @@ class TestCheck:
 
     @pytest.mark.parametrize("status", ["killed", None])
     def test_a_stale_allowlist_entry_fails(self, status: str | None) -> None:
-        """An entry whose mutant is now killed, or no longer exists
-        (renumbered by an edit), must be removed or re-triaged."""
+        """An entry whose mutant is killed, or does not exist (renumbered
+        by an edit), must be removed or re-triaged."""
         results = statuses()
         name = "netprotocols._tlv.x_g__mutmut_9"
         if status is not None:

@@ -37,7 +37,7 @@
 #
 # The first five go to tests/fixtures/staging/stun.pcap (the corpus);
 # the classic exchange, which netprotocols.STUN rejects at its magic
-# cookie by design, goes to tests/fixtures/staging/stun/stun_rfc3489.pcap,
+# cookie, goes to tests/fixtures/staging/stun/stun_rfc3489.pcap,
 # outside the corpus globs. Only TCP segments that carry data are kept:
 # a bare ACK on port 3478 hands STUN an empty payload, as one on port
 # 179 hands BGP. The script asserts the selection exactly, message by

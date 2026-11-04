@@ -1,0 +1,28 @@
+# flake8 runs only pydoclint here: `select` limits it to pydoclint's DOC
+# codes, and ruff covers everything else. Run it as `uv run flake8 src`.
+# The standard these settings enforce is CONTRIBUTING.md's "Docstrings
+# and comments" section.
+[flake8]
+select = DOC
+extend-ignore =
+    # DOC201: a function that returns a value needs no :returns: field.
+    DOC201,
+    # DOC402: a generator needs no :yields: field.
+    DOC402,
+    # DOC502: a :raises: field may name an exception that a callee raises.
+    DOC502,
+    # DOC503: the :raises: fields may differ from the body's own raise
+    # statements; DOC501 still requires a :raises: field when the body
+    # raises.
+    DOC503,
+
+# pydoclint's own options.
+style = sphinx
+# Docstrings carry no types: the signature's annotations hold them.
+arg-type-hints-in-docstring = False
+check-return-types = False
+check-yield-types = False
+# A docstring with no fields (:param:, :raises:, ...) is not checked.
+skip-checking-short-docstrings = True
+# Class attributes are not checked against the class docstring.
+check-class-attributes = False

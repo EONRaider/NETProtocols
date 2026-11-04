@@ -3,9 +3,9 @@
 The top-level package re-exports every public name, so an omission in a
 layer's own ``__init__`` is invisible until someone writes
 ``from netprotocols.layer7 import DHCP`` and it fails while
-``from netprotocols import DHCP`` works. Deriving the expectation from
-``__module__`` rather than a hand-written list means a protocol added to
-the top level but forgotten in its layer fails here.
+``from netprotocols import DHCP`` works. The expectation is derived
+from ``__module__``, so a protocol added to the top level but missing
+from its layer fails here.
 """
 
 import importlib

@@ -1,4 +1,4 @@
-"""The shipped chain walker (#88): decode_frame()."""
+"""The shipped chain walker: decode_frame()."""
 
 from dataclasses import dataclass
 from struct import Struct
@@ -87,8 +87,8 @@ class TestReturnsAPacket:
 
     @pytest.mark.parametrize("frame", CORPUS[:40])
     def test_matches_a_hand_rolled_walk_over_the_corpus(self, frame):
-        """The shipped walker must agree with the loop it replaces —
-        this is what makes retiring the copies safe."""
+        """The shipped walker agrees with a hand-rolled walk of the
+        same corpus frames."""
         expected: list[Protocol] = []
         cursor, protocol = 0, Ethernet
         try:
@@ -215,7 +215,7 @@ class TestMemoryviewInput:
 
 
 class TestRegistryOverrides:
-    """Per-call decoder overrides, the "Decode As" of #87's Q4."""
+    """Per-call decoder overrides ("Decode As")."""
 
     #: A minimal well-formed DNS message: id 12, no flags, all four
     #: section counts zero. Enough for a forced decoder to succeed, so
@@ -315,8 +315,8 @@ class TestRegistryOverrides:
     def test_an_explicit_registry_reaches_every_dispatch_point(
         self, ipv4_frame
     ):
-        """from_defaults() must walk exactly as the global does — the
-        proof that threading a registry did not skip a layer."""
+        """from_defaults() must walk exactly as the global does, every
+        layer included."""
         for frame in CORPUS:
             explicit = decode_frame(
                 frame, lax=True, registry=Registry.from_defaults()

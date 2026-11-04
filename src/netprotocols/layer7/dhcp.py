@@ -69,8 +69,8 @@ _MESSAGE_TYPE_NAMES: dict[int, str] = {
     8: "INFORM",
 }
 
-#: DHCP option codes this library names (RFC 2132); unknown codes fall
-#: back to their numeric value.
+#: DHCP option codes this library names (RFC 2132); unknown codes read
+#: ``"unknown (n)"``.
 _OPTION_CODE_NAMES: dict[int, str] = {
     1: "Subnet Mask",
     3: "Router",
@@ -84,8 +84,10 @@ _OPTION_CODE_NAMES: dict[int, str] = {
 
 @dataclass(frozen=True, slots=True)
 class DHCPOption:
-    """One DHCP option (RFC 2132), already RFC-3396-concatenated if it
-    appeared more than once — see :attr:`DHCP.option_map`, which
+    """One DHCP option (RFC 2132).
+
+    An option that appeared more than once is already concatenated
+    (RFC 3396); see :attr:`DHCP.option_map`, which
     :attr:`DHCP.parsed_options` wraps.
 
     :param code: Option code — ``1`` Subnet Mask, ``3`` Router, ``6``
@@ -100,17 +102,20 @@ class DHCPOption:
 
     @property
     def code_name(self) -> str:
-        """Display name of the option code, e.g. ``"Subnet Mask"``;
-        falls back to ``"unknown (n)"`` for codes this library does
-        not name."""
+        """Display name of the option code, e.g. ``"Subnet Mask"``.
+
+        ``"unknown (n)"`` for codes this library does not name (degrades,
+        never raises).
+        """
         return _OPTION_CODE_NAMES.get(self.code, f"unknown ({self.code})")
 
     @property
     def value(
         self,
     ) -> int | IPv4Address | tuple[IPv4Address, ...] | None:
-        """The decoded value, for the codes this library understands:
-        a single :class:`~ipaddress.IPv4Address` for Subnet Mask (1),
+        """The decoded value, for the codes this library understands.
+
+        A single :class:`~ipaddress.IPv4Address` for Subnet Mask (1),
         Requested IP Address (50) and Server Identifier (54); a tuple
         of one or more, most preferred first, for Router (3) and
         Domain Name Server (6) (RFC 2132 permits repeating either); the
@@ -119,7 +124,8 @@ class DHCPOption:
         :attr:`DHCP.message_type`). ``None`` — read :attr:`data` raw
         instead — for codes this library does not decode and data
         whose length does not match its code (degrades, never
-        raises)."""
+        raises).
+        """
         if self.code in _SINGLE_ADDRESS_CODES and len(self.data) == 4:
             return IPv4Address(bytes_to_ipv4(self.data))
         if (
@@ -183,20 +189,26 @@ class DHCP(Protocol):
     file: bytes = b"\x00" * 128
     options: bytes = b""
 
-    #: Curated positional form for `match`/`case` (#94): declared by
-    #: hand because the auto-generated tuple would list all 15 fields,
-    #: unusable positionally. ``op`` gives message direction
-    #: (BOOTREQUEST/BOOTREPLY); ``chaddr`` is the client's persistent
-    #: hardware identity, correlating a client across an exchange more
-    #: reliably than ``xid`` alone (RFC 2131 §4.1); ``yiaddr`` is the
-    #: assigned/offered lease address — the fields a consumer walking a
-    #: DORA exchange actually keys on.
+    #: Positional form for ``match``/``case``: ``op`` gives message
+    #: direction (BOOTREQUEST/BOOTREPLY); ``chaddr`` is the client's
+    #: persistent hardware identity, which correlates a client across an
+    #: exchange more reliably than ``xid`` alone (RFC 2131 §4.1);
+    #: ``yiaddr`` is the assigned or offered lease address.
     __match_args__ = ("op", "chaddr", "yiaddr")
 
     _struct: ClassVar[Struct] = Struct("!4BIHH4s4s4s4s16s64s128s")
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the message at the start of ``data``.
+
+        The fixed 236-byte header is decoded; everything after it is
+        kept as :attr:`options`, so past the header this never raises.
+
+        :param data: The buffer, starting at the op byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            236-byte fixed header.
+        """
         (
             op,
             htype,
@@ -254,20 +266,28 @@ class DHCP(Protocol):
 
     @property
     def header_len(self) -> int:
-        # A DHCP message is the whole UDP payload: consume it all so the
-        # chain ends here with no stray payload.
+        """The whole message: the fixed header and the options.
+
+        A DHCP message is the whole UDP payload, so the chain ends here.
+        """
         return self._struct.size + len(self.options)
 
     @property
     def op_name(self) -> str:
-        """Display name of the op code, e.g. ``"BOOTREQUEST"``."""
+        """Display name of the op code, e.g. ``"BOOTREQUEST"``.
+
+        ``"unknown (0x..)"`` for an op code RFC 2131 does not define
+        (degrades, never raises).
+        """
         return _OP_NAMES.get(self.op, f"unknown ({self.op:#04x})")
 
     @property
     def htype_name(self) -> str:
-        """Display name of the hardware type, e.g. ``"Ethernet"``; falls
-        back to the numeric value for types this library does not
-        name."""
+        """Display name of the hardware type, e.g. ``"Ethernet"``.
+
+        ``"unknown (n)"`` for types this library does not name (degrades,
+        never raises).
+        """
         try:
             return ARPHardwareType(self.htype).display_name
         except ValueError:
@@ -275,11 +295,12 @@ class DHCP(Protocol):
 
     @property
     def htype_enum(self) -> ARPHardwareType | None:
-        """The hardware type as an
-        :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
-        this library does not enumerate; :attr:`htype` stays the
-        canonical ``int`` (see :attr:`htype_name` for the display
-        form)."""
+        """The hardware type as an :class:`~netprotocols.ARPHardwareType`.
+
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`htype` stays the canonical ``int`` (see
+        :attr:`htype_name` for the display form).
+        """
         try:
             return ARPHardwareType(self.htype)
         except ValueError:
@@ -292,8 +313,11 @@ class DHCP(Protocol):
 
     @property
     def client_mac(self) -> str | None:
-        """The client hardware address as a MAC string, for Ethernet
-        (``htype`` 1, ``hlen`` 6); ``None`` for other link types."""
+        """The client hardware address as a MAC string, for Ethernet.
+
+        Read for ``htype`` 1 and ``hlen`` 6; ``None`` for other link
+        types.
+        """
         if self.htype == 1 and self.hlen == 6:
             return bytes_to_mac(self.chaddr[:6])
         return None
@@ -310,41 +334,51 @@ class DHCP(Protocol):
 
     @property
     def ciaddr_address(self) -> IPv4Address:
-        """The client address as a stdlib
-        :class:`~ipaddress.IPv4Address`, for comparison, subnet
-        membership, and arithmetic; :attr:`ciaddr` stays the canonical
-        string form (likewise the three accessors below)."""
+        """The client address as an :class:`~ipaddress.IPv4Address`.
+
+        For comparison, subnet membership, and arithmetic; :attr:`ciaddr` stays
+        the canonical string form (likewise the three accessors below).
+        """
         return IPv4Address(self.ciaddr)
 
     @property
     def yiaddr_address(self) -> IPv4Address:
-        """The "your" (assigned) address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        """The "your" (assigned) address as an IPv4Address.
+
+        See :attr:`ciaddr_address`.
+        """
         return IPv4Address(self.yiaddr)
 
     @property
     def siaddr_address(self) -> IPv4Address:
-        """The next-server address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        """The next-server address as an IPv4Address.
+
+        See :attr:`ciaddr_address`.
+        """
         return IPv4Address(self.siaddr)
 
     @property
     def giaddr_address(self) -> IPv4Address:
-        """The relay-agent address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        """The relay-agent address as an IPv4Address.
+
+        See :attr:`ciaddr_address`.
+        """
         return IPv4Address(self.giaddr)
 
     @property
     def has_magic_cookie(self) -> bool:
-        """Whether the options begin with the DHCP magic cookie — false
-        for a plain BOOTP message that carries none."""
+        """Whether the options begin with the DHCP magic cookie.
+
+        False for a plain BOOTP message that carries none.
+        """
         return self.options[:4] == _MAGIC_COOKIE
 
     @property
     def option_map(self) -> dict[int, bytes]:
-        """The TLV options after the magic cookie as a ``{code: value}``
-        map. An option split across several appearances is concatenated
-        (RFC 3396); ``pad`` (0) and ``end`` (255) are consumed, not
+        """The TLV options after the magic cookie, by code.
+
+        A ``{code: value}`` map. An option split across several appearances is
+        concatenated (RFC 3396); ``pad`` (0) and ``end`` (255) are consumed, not
         returned. Empty when the message carries no options.
 
         :raises InvalidFieldError: if the options are present but do not
@@ -392,8 +426,9 @@ class DHCP(Protocol):
 
     @property
     def parsed_options(self) -> tuple[DHCPOption, ...]:
-        """The TLV options as a tuple of :class:`DHCPOption`, one per
-        option code, in first-appearance wire order — a typed view
+        """The TLV options as :class:`DHCPOption` objects, one per code.
+
+        In first-appearance wire order — a typed view
         over :attr:`option_map` (an option split across several
         appearances is concatenated there already, per RFC 3396).
         Empty when the message carries no options.
@@ -408,9 +443,11 @@ class DHCP(Protocol):
 
     @property
     def message_type(self) -> int | None:
-        """The DHCP message type (option 53) — ``1`` DISCOVER, ``2``
-        OFFER, ``3`` REQUEST, ``5`` ACK, ... — or ``None`` for a plain
-        BOOTP message that carries no such option.
+        """The DHCP message type (option 53).
+
+        ``1`` DISCOVER, ``2`` OFFER, ``3`` REQUEST, ``5`` ACK, ... — or
+        ``None`` for a plain BOOTP message that carries no such option,
+        or one whose value is not 1 byte.
 
         :raises InvalidFieldError: if the options are malformed (see
             :attr:`option_map`).
@@ -422,8 +459,14 @@ class DHCP(Protocol):
 
     @property
     def message_type_name(self) -> str | None:
-        """Display name of the DHCP message type, e.g. ``"DISCOVER"``;
-        ``None`` when no message-type option is present."""
+        """Display name of the DHCP message type, e.g. ``"DISCOVER"``.
+
+        ``None`` when :attr:`message_type` is ``None``, and
+        ``"unknown (0x09)"`` for a type this library does not name.
+
+        :raises InvalidFieldError: if the options are malformed (see
+            :attr:`option_map`).
+        """
         message_type = self.message_type
         if message_type is None:
             return None

@@ -280,7 +280,7 @@ than raise when the order is broken, since that is not framing. See
 docstring.
 
 **802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
-length (IEEE 802.3 Clause 3.2.6): from 0x0600 an EtherType, up to 1500
+length (IEEE 802.3 §3.2.6): from 0x0600 an EtherType, up to 1500
 the length of an IEEE 802.2 LLC PDU, and undefined between, where the
 walk ends. `Ethernet.ethertype` holds the raw value either way, and
 `VLAN` reads the 2 bytes after a tag the same way. Neither `LLC` nor
@@ -1015,8 +1015,8 @@ or enough of it is present to show it names no host) or *not reached*
 (not `complete`: the bytes ended first, which is not "no SNI").
 *Absent* speaks for the first record only: a ChangeCipherSpec and
 then a ClientHello with a name in one segment, as TLS 1.3's middlebox
-compatibility mode sends after a HelloRetryRequest (RFC 9846 Appendix
-E.4), is *absent*, as `TLS.server_name` is `None` for that first
+compatibility mode sends after a HelloRetryRequest (RFC 9846
+§E.4), is *absent*, as `TLS.server_name` is `None` for that first
 record; a caller who wants to look past whole records calls
 `TLS.decode()` on the first and peeks `data[tls.header_len:]`. Under
 ECH a *found* name is the outer ClientHello's, the client-facing
@@ -1035,7 +1035,11 @@ its orders (exact; 54.45% and 54.40% over 100,000 `random.Random(0)`
 permutations of each captured hello's 17 non-GREASE extensions, GREASE
 kept first and last), as it did for the first of its two captured
 connections, at byte 184, and not the second, at byte 1729, behind its
-1267-byte key share. The function's docstring gives the method.
+1267-byte key share. The exact figure counts the orders of those 17
+extensions, at their captured sizes, in which `server_name` ends inside
+the first 1448 bytes: every order that puts the key share after
+`server_name`, and of the others only those whose extensions before the
+name hold 40 bytes or fewer.
 `TLS.client_hello` and `TLS.server_name` parse the fragment on demand
 and never in `decode()`; there is no cryptography, and nothing past the
 ClientHello's fields and its server_name extension is decoded (the
@@ -1118,7 +1122,7 @@ first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
 stack before sending. (The RFC 768 subtlety lives where it belongs:
 the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
-(`crc32c()`, RFC 9260 Appendix A) covers the whole packet with no
+(`crc32c()`, RFC 9260 §A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so
 `compute()` returns it byte-swapped to match the field as decoded.
 STUN's FINGERPRINT is a checksum that lives in an attribute rather
@@ -1237,9 +1241,11 @@ tests/              one file per protocol + test_contract.py
 ```
 
 Tooling: [uv](https://docs.astral.sh/uv/) manages the environment
-(`uv sync`); `uv run pytest`, `uv run mypy` (strict), and
-`uv run ruff check` are the three gates CI enforces on Python
-3.12–3.14.
+(`uv sync`); `uv run ruff check`, `uv run ruff format --check`,
+`uv run flake8 src` (pydoclint), `uv run mypy` (strict),
+`uv run pytest` and `python3 scripts/check_markers.py` are the six gates
+CI enforces, with `uv run pytest` on Python 3.12–3.14 and `ruff`,
+`flake8` and `mypy` on 3.12.
 
 ## Cookbook: adding a protocol
 

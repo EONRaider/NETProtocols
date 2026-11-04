@@ -569,10 +569,13 @@ corpus fixture and `ipaddress` accessors — shipped in 1.3.0; see
 ## Contributing
 
 Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
-`uv run pytest`, `uv run mypy`, and `uv run ruff check` — all three are
-enforced by CI; the test suite runs across Python 3.12–3.14, while
-`mypy` and `ruff check` run on 3.12. The test suite is anchored by a
-394-frame corpus of real captured traffic across 36 scenarios
+the six checks CI enforces: `uv run ruff check`,
+`uv run ruff format --check`, `uv run flake8 src` (docstrings, via
+pydoclint), `uv run mypy`, `uv run pytest` and
+`python3 scripts/check_markers.py` (no work markers). The test
+suite runs across Python 3.12–3.14; `ruff`, `flake8` and `mypy` run on
+3.12. The test suite is anchored by a 394-frame corpus of real
+captured traffic across 36 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

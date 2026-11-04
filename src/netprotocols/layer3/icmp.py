@@ -17,16 +17,11 @@ target and option TLVs (a source/target link-layer address reads back
 as a MAC string).
 
 ``embedded_chain`` goes one step further than ``embedded_packet`` and
-decodes it, via :func:`~netprotocols.decode_frame` in **lax** mode —
-deliberately, not out of caution: RFC 792 only guarantees the invoking
-IP header plus 8 bytes of what follows, so the embedded transport
-header is routinely truncated, and that is expected input, not
-malformed input. Reach for ``embedded_chain`` when you want the
-decoded headers and are prepared to read ``stopped_by``; reach for
-``embedded_packet`` when you want the raw bytes and will decode them
-yourself. Neither accessor is a reason to default to ``lax=True``
-elsewhere — a *complete* frame that fails to decode is still a bug to
-raise on, not to quietly report.
+decodes it, via :func:`~netprotocols.decode_frame` in **lax** mode:
+RFC 792 only guarantees the invoking IP header plus 8 bytes of what
+follows, so the embedded transport header is routinely truncated, and
+the walk reports that on ``stopped_by`` instead of raising.
+``embedded_packet`` gives the raw bytes.
 """
 
 from __future__ import annotations
@@ -44,7 +39,7 @@ from netprotocols.walk import decode_frame
 __all__ = ["ICMPv4", "ICMPv6", "NDPOption"]
 
 #: Neighbor Discovery option types this library names (RFC 4861 §4.6);
-#: unknown types fall back to their numeric value.
+#: unknown types read ``"unknown (n)"``.
 _NDP_OPTION_TYPE_NAMES: dict[int, str] = {
     1: "Source Link-Layer Address",
     2: "Target Link-Layer Address",
@@ -74,17 +69,21 @@ class NDPOption:
 
     @property
     def type_name(self) -> str:
-        """Display name of the option type, e.g. ``"Source Link-Layer
-        Address"``; falls back to ``"unknown (n)"`` for types this
-        library does not name."""
+        """Display name of the option type, e.g. ``"MTU"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return _NDP_OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
     def link_layer_address(self) -> str | None:
-        """The MAC of a Source/Target Link-Layer Address option (types
-        1/2) over Ethernet, e.g. ``"84:01:12:be:7e:d9"``; ``None`` for
-        other option types and for a payload that is not the 6-byte
-        Ethernet form (degrades, never raises)."""
+        """The MAC of a Source/Target Link-Layer Address option.
+
+        Types 1 and 2 over Ethernet, e.g. ``"84:01:12:be:7e:d9"``;
+        ``None`` for other option types and for a payload that is not
+        the 6-byte Ethernet form (degrades, never raises).
+        """
         if self.type in _NDP_LLA_TYPES and len(self.data) == 6:
             return bytes_to_mac(self.data)
         return None
@@ -120,6 +119,10 @@ class _ICMP(Protocol):
     _error_types: ClassVar[frozenset[int]] = frozenset()
 
     def __post_init__(self) -> None:
+        """Check that ``rest`` is exactly 4 bytes.
+
+        :raises InvalidFieldError: if ``rest`` is not 4 bytes long.
+        """
         if len(self.rest) != 4:
             raise InvalidFieldError(
                 f"{self.__class__.__name__} rest-of-header must be exactly "
@@ -132,6 +135,15 @@ class _ICMP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the ICMP message at the start of ``data``.
+
+        Past the 8-byte header, this never raises: the rest of ``data``
+        becomes :attr:`body`.
+
+        :param data: The buffer, starting at the Type byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            8-byte header.
+        """
         type_, code, checksum, rest = cls._unpack_fixed(data)
         return cls(
             type=type_,
@@ -149,13 +161,20 @@ class _ICMP(Protocol):
 
     @property
     def header_len(self) -> int:
-        # An ICMP message is the whole IP payload: consume it all so the
-        # chain ends here with no stray payload (terminal).
+        """The whole message: the 8-byte header and :attr:`body`.
+
+        An ICMP message is the whole IP payload, so the chain ends here
+        with nothing left over.
+        """
         return self._struct.size + len(self.body)
 
     @property
     def type_name(self) -> str:
-        """Display name of the message type, e.g. ``"Echo Request"``."""
+        """Display name of the message type, e.g. ``"Echo Request"``.
+
+        ``"Unknown, Unassigned or Deprecated"`` for a type this library
+        does not name (degrades, never raises).
+        """
         return self.type_names.get(
             self.type, "Unknown, Unassigned or Deprecated"
         )
@@ -169,48 +188,54 @@ class _ICMP(Protocol):
 
     @property
     def identifier(self) -> int | None:
-        """The identifier of an echo request/reply (``rest`` bytes 0-1),
-        used to match replies to requests; ``None`` for other message
-        types."""
+        """The identifier of an echo request/reply (``rest`` bytes 0-1).
+
+        Used to match replies to requests; ``None`` for other message
+        types.
+        """
         if self.type not in self._echo_types:
             return None
         return int.from_bytes(self.rest[:2], "big")
 
     @property
     def sequence_number(self) -> int | None:
-        """The sequence number of an echo request/reply (``rest`` bytes
-        2-3); ``None`` for other message types."""
+        """The sequence number of an echo request/reply.
+
+        ``rest`` bytes 2-3; ``None`` for other message types.
+        """
         if self.type not in self._echo_types:
             return None
         return int.from_bytes(self.rest[2:], "big")
 
     @property
     def embedded_packet(self) -> bytes | None:
-        """The invoking packet an error message embeds — its ``body``,
-        starting at the original datagram's IP header, decodable as
-        :class:`~netprotocols.IPv4` / :class:`~netprotocols.IPv6`.
+        """The invoking packet an error message embeds.
+
+        That is its ``body``, starting at the original datagram's IP
+        header, decodable as :class:`~netprotocols.IPv4` /
+        :class:`~netprotocols.IPv6`.
         ``None`` for non-error message types and for an error whose body
-        is empty (degrades, never raises)."""
+        is empty (degrades, never raises).
+        """
         if self.type not in self._error_types or not self.body:
             return None
         return self.body
 
     @property
     def embedded_chain(self) -> Packet | None:
-        """:attr:`embedded_packet`, decoded as far as the RFC-792
-        truncation allows — ``None`` for the same cases
-        :attr:`embedded_packet` degrades to (non-error message types,
-        an empty body).
+        """:attr:`embedded_packet`, decoded as far as RFC 792 lets it.
+
+        ``None`` for the same cases :attr:`embedded_packet` degrades to
+        (non-error message types, an empty body).
 
         RFC 792 says an error message quotes only the invoking IP
         header plus the first 8 bytes of what follows it — not a full
-        TCP/UDP header — so this is a *legitimate* partial decode, not
-        malformed input. It uses :func:`~netprotocols.decode_frame` in
-        lax mode for exactly that reason: no ``try``/``except`` needed,
-        and the walk reports why it stopped on the returned packet's
-        ``stopped_by`` (typically
+        TCP/UDP header — so the decode is often partial. It uses
+        :func:`~netprotocols.decode_frame` in lax mode, so it never
+        raises a decode error: the walk reports why it stopped on the
+        returned packet's ``stopped_by`` (typically
         :class:`~netprotocols.TruncatedHeaderError` for the truncated
-        transport header) rather than raising. Starts at
+        transport header). Starts at
         :class:`~netprotocols.IPv4` for an :class:`ICMPv4` message,
         :class:`~netprotocols.IPv6` for :class:`ICMPv6`.
         """
@@ -323,22 +348,27 @@ class ICMPv6(_ICMP):
 
     @property
     def ndp_target_address(self) -> str | None:
-        """The target address of a Neighbor Solicitation/Advertisement
-        (types 135/136) — the 16 bytes after the reserved word, e.g.
+        """The target address of a Neighbor Solicitation/Advertisement.
+
+        Types 135 and 136: the 16 bytes after the reserved word, e.g.
         ``"fe80::f6d7:8b9a:993e:5efa"``; ``None`` for other message
         types and for a body too short to hold it (degrades, never
-        raises)."""
+        raises).
+        """
         if self.type not in (135, 136) or len(self.body) < 16:
             return None
         return bytes_to_ipv6(self.body[:16])
 
     @property
     def ndp_options(self) -> tuple[NDPOption, ...] | None:
-        """The option TLVs of a Neighbor Discovery message (Router
-        Solicitation/Advertisement, Neighbor Solicitation/Advertisement,
-        Redirect), parsed on demand — one :class:`NDPOption` per option,
-        in wire order; ``None`` for non-NDP message types and empty for
-        an NDP message carrying no options.
+        """The option TLVs of a Neighbor Discovery message.
+
+        For a Router Solicitation/Advertisement, Neighbor
+        Solicitation/Advertisement or Redirect, parsed on demand: one
+        :class:`NDPOption` per option, in wire order; ``None`` for
+        non-NDP message types and empty for an NDP message carrying no
+        options. A raised error's ``offset`` counts from the start of
+        :attr:`body`.
 
         :raises InvalidFieldError: if the body ends before the message's
             fixed fields, an option's length is zero (lengths count in

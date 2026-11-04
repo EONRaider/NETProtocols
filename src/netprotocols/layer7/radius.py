@@ -41,14 +41,13 @@ raises :class:`~netprotocols.TruncatedHeaderError`, for RFC 2865 §3 says
 a packet shorter than its Length is discarded. Bytes past the Length
 are padding to be ignored (§3), and an Ethernet FCS a capture kept is
 too; both are left undecoded, past ``packet.consumed``. RFC 2865's
-upper bound of 4096 is not enforced: RFC 7930 §2 lets RADIUS over TCP
-and TLS carry packets up to 65535 bytes, and a decoder reading one
-through ``decode_as`` has no reason to refuse it.
+upper bound of 4096 is not enforced, so a packet of up to 65535 bytes,
+which RFC 7930 §2 allows for RADIUS over TCP and TLS, decodes.
 
 The buffer is not the datagram, though. :func:`~netprotocols.decode_frame`
-does not yet bound a layer by the UDP or IP length (#235), so behind
-UDP the buffer runs to the end of the frame, trailing bytes such as an
-Ethernet FCS included. A Length that overstates the datagram but stays
+does not bound a layer by the UDP or IP length, so behind UDP the
+buffer runs to the end of the frame, trailing bytes such as an Ethernet
+FCS included. A Length that overstates the datagram but stays
 within the frame therefore does not raise: the packet takes the
 trailing bytes as attributes, and :attr:`RADIUS.parsed_attributes` walks
 them as it would any other (an Accounting-Response whose Length is 24
@@ -67,7 +66,6 @@ its options.
 
 Attributes
 ----------
-
 Every attribute is a :class:`RADIUSAttribute` of its type and its raw
 ``data``; :attr:`RADIUSAttribute.type_name` names the types of RFC 2865
 §5, RFC 2866 §5 and RFC 3579 §3, and RFC 2869 §5's Event-Timestamp
@@ -87,7 +85,7 @@ Out of scope
 Everything that needs the shared secret between client and server: the
 Request Authenticator of an Accounting-Request (RFC 2866 §3), and of a
 Disconnect-Request or CoA-Request, keyed the same way (RFC 5176 §2.3), and
-the Response Authenticator of every reply (RFC 2865 §3; RFC 2866 §3
+the Response Authenticator of every reply (RFC 2865 §3, RFC 2866 §3
 for an Accounting-Response), which are MD5 hashes keyed with it; the
 Message-Authenticator attribute (RFC 3579 §3.2), an HMAC-MD5 under it;
 and the hiding of User-Password (RFC 2865 §5.2) and Tunnel-Password
@@ -100,8 +98,8 @@ independently of this module.
 Dynamic Authorization (RFC 5176: Disconnect and CoA, on UDP 3799)
 shares the packet format and decodes with this class, its codes named,
 but its port is not registered; ``decode_as={"udp.port": {3799:
-RADIUS}}`` reads it. Neither are the legacy 1645 and 1646, which
-predate IANA's assignment and a few servers still use.
+RADIUS}}`` reads it. Neither are ports 1645 and 1646, which some
+servers use for authentication and accounting.
 """
 
 from __future__ import annotations
@@ -229,10 +227,9 @@ def _text(data: bytes) -> str:
     """Read a value as UTF-8 text, never raising.
 
     Only User-Name (1) is read this way. RFC 2865 §5.1 types it as
-    ``string``, any octets, not ``text``; reading it as UTF-8, with
-    undecodable bytes replaced, is this library's choice, made because
-    user names are mostly text. :attr:`RADIUSAttribute.data` keeps the
-    octets.
+    ``string``, any octets, not ``text``; this reads it as UTF-8, with
+    undecodable bytes replaced, and :attr:`RADIUSAttribute.data` keeps
+    the octets.
     """
     return data.decode("utf-8", "replace")
 
@@ -289,7 +286,7 @@ class RADIUSAttribute:
         :attr:`type_name`).
     :param data: The Value, kept raw: at most 253 bytes, the Length
         byte counting the 2-byte header too.
-    :raises InvalidFieldError: ``type`` does not fit a byte, or ``data``
+    :raises InvalidFieldError: if ``type`` does not fit a byte, or ``data``
         is longer than 253 bytes.
 
     ``bytes(attribute)`` is the on-wire attribute, so ``RADIUS(...,
@@ -320,7 +317,8 @@ class RADIUSAttribute:
     def type_name(self) -> str:
         """Name the attribute type, e.g. ``"User-Name"``.
 
-        Falls back to ``"unknown (n)"`` for a type not named here.
+        Falls back to ``"unknown (n)"`` for a type not named here
+        (degrades, never raises).
         """
         return _TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
@@ -362,7 +360,7 @@ class RADIUS(Protocol):
         an Access-Request or a Status-Server; an MD5 hash keyed with
         the shared secret in an Accounting-Request (RFC 2866 §3), in a
         Disconnect-Request or CoA-Request, keyed like an
-        Accounting-Request (RFC 5176 §2.3), and in every reply (RFC 2865 §3;
+        Accounting-Request (RFC 5176 §2.3), and in every reply (RFC 2865 §3,
         RFC 2866 §3 for an Accounting-Response), which this library
         does not verify.
     :param attributes: The attribute list, kept raw; read via
@@ -388,7 +386,8 @@ class RADIUS(Protocol):
     def __post_init__(self) -> None:
         """Check each header field fits and the Length matches.
 
-        :raises InvalidFieldError: a field does not.
+        :raises InvalidFieldError: if a field does not fit, or
+            :attr:`length` is not ``20 + len(attributes)``.
         """
         _check_width(type(self), "code", self.code, 8)
         _check_width(type(self), "identifier", self.identifier, 8)
@@ -426,10 +425,11 @@ class RADIUS(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the packet at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :param data: The buffer, starting at the Code byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             20-byte header, or than the packet's Length (``field``
             ``"length"``).
-        :raises InvalidFieldError: the Length is below 20 (``field``
+        :raises InvalidFieldError: if the Length is below 20 (``field``
             ``"length"``, ``offset`` ``2``).
         """
         code, identifier, length, authenticator = cls._unpack_fixed(data)
@@ -470,7 +470,7 @@ class RADIUS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole packet: the 20-byte header and the attributes.
+        """The whole message: the 20-byte header and the attributes.
 
         RADIUS is terminal; bytes past it are padding (RFC 2865 §3).
         """
@@ -480,7 +480,8 @@ class RADIUS(Protocol):
     def code_name(self) -> str:
         """Name the packet type, e.g. ``"Access-Request"``.
 
-        Falls back to ``"unknown (n)"`` for a code not named here.
+        Falls back to ``"unknown (n)"`` for a code not named here
+        (degrades, never raises).
         """
         return _CODE_NAMES.get(self.code, f"unknown ({self.code})")
 
@@ -491,7 +492,7 @@ class RADIUS(Protocol):
         Parsed on demand; a type may repeat (RFC 2865 §5), and every
         occurrence is kept. Empty for a packet with no attributes.
 
-        :raises InvalidFieldError: an attribute's Length is below 2, or
+        :raises InvalidFieldError: if an attribute's Length is below 2, or
             runs past the packet (``field`` ``"attributes"``, ``offset``
             relative to the first attribute; bounded, so it never hangs
             or over-reads).
@@ -510,7 +511,14 @@ class RADIUS(Protocol):
         )
 
     def _first_value(self, kind: int) -> _Value:
-        """The :attr:`RADIUSAttribute.value` of the first ``kind``."""
+        """Return the :attr:`RADIUSAttribute.value` of the first ``kind``.
+
+        ``None`` if no attribute has type ``kind``.
+
+        :param kind: The attribute type to look for.
+        :raises InvalidFieldError: if the attributes are malformed (see
+            :attr:`parsed_attributes`).
+        """
         for attribute in self.parsed_attributes:
             if attribute.type == kind:
                 return attribute.value
@@ -520,7 +528,7 @@ class RADIUS(Protocol):
     def user_name(self) -> str | None:
         """The first User-Name (1), as text; ``None`` if there is none.
 
-        :raises InvalidFieldError: the attributes are malformed (see
+        :raises InvalidFieldError: if the attributes are malformed (see
             :attr:`parsed_attributes`).
         """
         value = self._first_value(_USER_NAME)
@@ -530,7 +538,7 @@ class RADIUS(Protocol):
     def nas_ip_address(self) -> IPv4Address | None:
         """The first NAS-IP-Address (4); ``None`` if absent or not 4 bytes.
 
-        :raises InvalidFieldError: the attributes are malformed (see
+        :raises InvalidFieldError: if the attributes are malformed (see
             :attr:`parsed_attributes`).
         """
         value = self._first_value(_NAS_IP_ADDRESS)
@@ -540,7 +548,7 @@ class RADIUS(Protocol):
     def nas_port(self) -> int | None:
         """The first NAS-Port (5); ``None`` if absent or not 4 bytes.
 
-        :raises InvalidFieldError: the attributes are malformed (see
+        :raises InvalidFieldError: if the attributes are malformed (see
             :attr:`parsed_attributes`).
         """
         value = self._first_value(_NAS_PORT)
@@ -552,7 +560,7 @@ class RADIUS(Protocol):
 
         ``None`` if there is none, or if its value is not 4 bytes.
 
-        :raises InvalidFieldError: the attributes are malformed (see
+        :raises InvalidFieldError: if the attributes are malformed (see
             :attr:`parsed_attributes`).
         """
         value = self._first_value(_FRAMED_IP_ADDRESS)

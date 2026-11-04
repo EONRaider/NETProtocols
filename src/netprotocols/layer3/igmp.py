@@ -25,7 +25,7 @@ from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["IGMP", "IGMPv3GroupRecord"]
 
-#: Message types whose bytes 4-7 hold a group address (RFC 2236 §2;
+#: Message types whose bytes 4-7 hold a group address (RFC 2236 §2,
 #: RFC 3376 §4.1 for the v3 query). The v3 report (0x22) does not.
 _GROUP_ADDRESS_TYPES = frozenset({0x11, 0x12, 0x16, 0x17})
 
@@ -72,7 +72,11 @@ class IGMPv3GroupRecord:
 
     @property
     def record_type_name(self) -> str:
-        """Display name of the record type, e.g. ``"MODE_IS_EXCLUDE"``."""
+        """Display name of the record type, e.g. ``"MODE_IS_EXCLUDE"``.
+
+        ``"unknown (0x..)"`` for a type RFC 3376 does not define
+        (degrades, never raises).
+        """
         return _RECORD_TYPE_NAMES.get(
             self.record_type, f"unknown ({self.record_type:#04x})"
         )
@@ -108,6 +112,15 @@ class IGMP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the IGMP message at the start of ``data``.
+
+        Past the 4-byte common header, this never raises: the rest of
+        ``data`` becomes :attr:`body`, which the accessors parse.
+
+        :param data: The buffer, starting at the Type byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 4
+            bytes.
+        """
         type_, max_resp_code, checksum = cls._unpack_fixed(data)
         return cls(
             type=type_,
@@ -124,30 +137,44 @@ class IGMP(Protocol):
 
     @property
     def header_len(self) -> int:
-        # IGMP is the whole IP payload: consume it all (terminal).
+        """The whole message: the 4-byte header and :attr:`body`.
+
+        IGMP is the whole IP payload, so the chain ends here with nothing
+        left over.
+        """
         return self._struct.size + len(self.body)
 
     @property
     def type_name(self) -> str:
-        """Display name of the message type, e.g. ``"Membership Query"``."""
+        """Display name of the message type, e.g. ``"Membership Query"``.
+
+        ``"unknown (0x..)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return self.type_names.get(self.type, f"unknown ({self.type:#04x})")
 
     @property
     def group_address(self) -> str | None:
-        """The multicast group in dotted-decimal, for the message types
-        that carry it in bytes 4-7 (query, v1/v2 report, leave); ``None``
-        for the v3 report, which uses that space for a record count (read
-        its groups via :attr:`group_records`)."""
+        """The multicast group in dotted-decimal, or ``None``.
+
+        Read from bytes 4-7 for the message types that carry it there
+        (query, v1/v2 report, leave); ``None`` for the v3 report, which
+        uses that space for a record count (read its groups via
+        :attr:`group_records`), for other types, and for a body shorter
+        than 4 bytes (degrades, never raises).
+        """
         if self.type in _GROUP_ADDRESS_TYPES and len(self.body) >= 4:
             return bytes_to_ipv4(self.body[:4])
         return None
 
     @property
     def num_group_records(self) -> int | None:
-        """Number of group records in a v3 Membership Report (message
-        bytes 6-7), or ``None`` for other message types.
+        """Number of group records in a v3 Membership Report, or ``None``.
 
-        :raises InvalidFieldError: if the report ends before the count.
+        Read from message bytes 6-7; ``None`` for other message types.
+
+        :raises InvalidFieldError: if the report ends before the count
+            (``offset`` counts from the start of :attr:`body`).
         """
         if self.type != _V3_REPORT_TYPE:
             return None
@@ -164,12 +191,14 @@ class IGMP(Protocol):
 
     @property
     def group_records(self) -> tuple[IGMPv3GroupRecord, ...] | None:
-        """The group records of a v3 Membership Report (type ``0x22``),
-        parsed on demand; ``None`` for other message types.
+        """The group records of a v3 Membership Report (type ``0x22``).
 
-        :raises InvalidFieldError: if a record, its source list, or its
-            auxiliary data runs past the message (bounded — never hangs
-            or over-reads).
+        Parsed on demand; ``None`` for other message types.
+
+        :raises InvalidFieldError: if the report ends before the record
+            count, or a record, its source list, or its auxiliary data
+            runs past the message (bounded — never hangs or over-reads;
+            ``offset`` counts from the start of :attr:`body`).
         """
         count = self.num_group_records
         if count is None:
@@ -223,51 +252,64 @@ class IGMP(Protocol):
 
     @property
     def _is_v3_query(self) -> bool:
-        """Whether this is an IGMPv3 Membership Query — a query whose body
-        is long enough to carry the v3 fields past the group address."""
+        """Whether this is an IGMPv3 Membership Query.
+
+        That is a query whose body is long enough to carry the v3 fields
+        past the group address.
+        """
         return self.type == _QUERY_TYPE and len(self.body) >= _V3_QUERY_MIN_BODY
 
     @property
     def s_flag(self) -> int | None:
-        """Suppress Router-Side Processing (S) flag of a v3 Membership
-        Query (RFC 3376 §4.1.5); ``None`` for other messages and for a
-        v2 query, which carries no such field."""
+        """The Suppress Router-Side Processing (S) flag of a v3 query.
+
+        RFC 3376 §4.1.5; ``None`` for other messages and for a v2 query,
+        which carries no such field.
+        """
         if not self._is_v3_query:
             return None
         return (self.body[4] >> 3) & 1
 
     @property
     def qrv(self) -> int | None:
-        """Querier's Robustness Variable (QRV) of a v3 query (RFC 3376
-        §4.1.6); ``None`` otherwise."""
+        """The Querier's Robustness Variable (QRV) of a v3 query.
+
+        RFC 3376 §4.1.6; ``None`` otherwise.
+        """
         if not self._is_v3_query:
             return None
         return self.body[4] & 0x07
 
     @property
     def qqic(self) -> int | None:
-        """Querier's Query Interval Code (QQIC) of a v3 query (RFC 3376
-        §4.1.7); ``None`` otherwise."""
+        """The Querier's Query Interval Code (QQIC) of a v3 query.
+
+        RFC 3376 §4.1.7; ``None`` otherwise.
+        """
         if not self._is_v3_query:
             return None
         return self.body[5]
 
     @property
     def num_query_sources(self) -> int | None:
-        """Number of source addresses in a v3 query (RFC 3376 §4.1.8),
-        or ``None`` for other messages and a v2 query."""
+        """Number of source addresses in a v3 query (RFC 3376 §4.1.8).
+
+        ``None`` for other messages and a v2 query.
+        """
         if not self._is_v3_query:
             return None
         return int.from_bytes(self.body[6:8], "big")
 
     @property
     def query_source_addresses(self) -> tuple[str, ...] | None:
-        """The source addresses of a v3 Membership Query (RFC 3376
-        §4.1.10), parsed on demand; ``None`` for other messages and a v2
-        query (empty for a General or Group-Specific query).
+        """The source addresses of a v3 Membership Query (RFC 3376 §4.1.10).
+
+        Parsed on demand; ``None`` for other messages and a v2 query
+        (empty for a General or Group-Specific query).
 
         :raises InvalidFieldError: if the source count runs past the
-            message (bounded — never hangs or over-reads).
+            message (bounded — never hangs or over-reads; ``offset``
+            counts from the start of :attr:`body`).
         """
         count = self.num_query_sources
         if count is None:

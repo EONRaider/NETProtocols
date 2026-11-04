@@ -6,11 +6,7 @@ name: PR Title Lint
 # individual commit messages within a PR (see CONTRIBUTING.md); nothing
 # here checks or rewrites those.
 #
-# Runs on `pull_request` (not `pull_request_target`) so it only ever sees
-# the PR's own metadata with a read-only, non-elevated token — no need for
-# the elevated-permissions trigger the action's own docs suggest for
-# repos that also want its optional "[WIP]" title support, which this
-# repo doesn't use.
+# Runs on `pull_request`, with a read-only token.
 on:
   pull_request:
     branches: [master]

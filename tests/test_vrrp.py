@@ -614,7 +614,7 @@ class TestCorpusVRRP:
 
     def test_recomputed_checksums_match_the_wire(self):
         # check_fixtures.py, which shares no code with this library,
-        # verified every checksum; with_checksums() must agree.
+        # verifies every checksum; with_checksums() must agree.
         for frame in self.FRAMES:
             packet = decode_frame(frame)
             assert packet.with_checksums() == packet

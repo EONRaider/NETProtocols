@@ -192,7 +192,7 @@ class TestDHCPOptions:
 
 
 class TestDHCPParsedOptions:
-    """#96: `parsed_options` is a typed view over `option_map` -- one
+    """`parsed_options` is a typed view over `option_map` -- one
     `DHCPOption` per (already RFC-3396-concatenated) code, decoding the
     well-known ones into real values."""
 

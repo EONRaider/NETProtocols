@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Supplementary corpus capture: the two scenarios the first run missed
-# (see tests/fixtures/MANIFEST.md "Known gaps").
+# Supplementary corpus capture: two scenarios capture_fixtures.sh does
+# not capture.
 #
 #     sudo scripts/capture_fixtures_supplement.sh
 #
-# 1. MLD behind hop-by-hop: the original run filtered with BPF `icmp6`,
-#    which matches next_header == 58 directly and therefore *excludes*
-#    MLD (which rides behind a hop-by-hop header, next_header == 0).
-#    This captures `ip6 proto 0` while joining/leaving a multicast
-#    group to provoke reports.
+# 1. MLD behind hop-by-hop: MLD rides behind a hop-by-hop header
+#    (next_header == 0), which BPF `icmp6` (next_header == 58) does not
+#    match. This captures `ip6 proto 0` while joining/leaving a
+#    multicast group to provoke reports.
 # 2. IPv6 fragment pair: an oversized ping -6 to an external host
 #    fragments on any 1500-MTU path (ip6 proto 44, inbound).
 

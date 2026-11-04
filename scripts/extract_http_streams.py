@@ -12,7 +12,7 @@ neither has to reassemble TCP itself. :func:`extract` takes any port:
 with 443 to reassemble the TLS session capture, whose ClientHellos can
 span segments.
 
-Deliberately standalone, like ``check_fixtures.py``: stdlib only, its own
+Standalone, like ``check_fixtures.py``: stdlib only, its own
 minimal Ethernet/IPv4/TCP parsing, and no netprotocols import, so a
 codec bug cannot shape the vectors the codec is tested against. It
 handles exactly what the capture script produces: Ethernet II, IPv4,

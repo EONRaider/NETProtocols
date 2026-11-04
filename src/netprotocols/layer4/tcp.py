@@ -41,9 +41,9 @@ _OPT_SACK_PERMITTED = 4
 _OPT_SACK = 5
 _OPT_TIMESTAMPS = 8
 
-#: TCP option kinds this library names (RFC 9293 §3.2; RFC 7323 for
-#: Window Scale and Timestamps; RFC 2018 for SACK); unknown kinds fall
-#: back to their numeric value.
+#: TCP option kinds this library names (RFC 9293 §3.2, RFC 7323 for
+#: Window Scale and Timestamps, RFC 2018 for SACK); unknown kinds read
+#: ``"unknown (n)"``.
 _OPTION_KIND_NAMES: dict[int, str] = {
     _OPT_EOL: "End of Option List",
     _OPT_NOP: "No-Operation",
@@ -72,22 +72,27 @@ class TCPOption:
 
     @property
     def kind_name(self) -> str:
-        """Display name of the option kind, e.g. ``"Timestamps"``; falls
-        back to ``"unknown (n)"`` for kinds this library does not name."""
+        """Display name of the option kind, e.g. ``"Timestamps"``.
+
+        ``"unknown (n)"`` for kinds this library does not name (degrades,
+        never raises).
+        """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
     @property
     def value(
         self,
     ) -> int | tuple[int, int] | tuple[tuple[int, int], ...] | None:
-        """The decoded value, for the kinds this library understands:
-        the segment size for MSS, the shift count for Window Scale, a
+        """The decoded value, for the kinds this library understands.
+
+        The segment size for MSS, the shift count for Window Scale, a
         ``(tsval, tsecr)`` pair for Timestamps, and a tuple of
         ``(left_edge, right_edge)`` pairs for SACK. ``None`` — read
         :attr:`data` raw instead — for the single-byte kinds,
         SACK-Permitted (its presence is its meaning), kinds this
         library does not decode, and data whose length does not match
-        its kind (degrades, never raises)."""
+        its kind (degrades, never raises).
+        """
         if self.kind == _OPT_MSS and len(self.data) == 2:
             return int.from_bytes(self.data, "big")
         if self.kind == _OPT_WINDOW_SCALE and len(self.data) == 1:
@@ -121,8 +126,8 @@ class TCP(Protocol):
     :param reserved: Reserved field (3 bits).
     :param flags: Flag bits, NS through FIN (9 bits).
     :param window: Window size.
-    :param checksum: Checksum, carried verbatim (this library neither
-        computes nor verifies checksums).
+    :param checksum: Checksum, carried verbatim (compute/verify via
+        :mod:`netprotocols.checksum`).
     :param urgent_pointer: Urgent pointer.
     :param options: Raw options bytes; length must be a multiple of 4
         consistent with ``data_offset``. Parsed on demand via
@@ -141,11 +146,10 @@ class TCP(Protocol):
     urgent_pointer: int
     options: bytes = b""
 
-    #: Curated positional form for `match`/`case` (#94): declared by
-    #: hand because the auto-generated tuple would list all 11 fields,
-    #: unusable positionally. ``src_port``/``dst_port`` identify the
-    #: connection, ``flags`` says what kind of segment this is (SYN,
-    #: SYN-ACK, ...) — mirrors :attr:`~netprotocols.IPv4.__match_args__`.
+    #: Positional form for ``match``/``case``: ``src_port``/``dst_port``
+    #: identify the connection, ``flags`` says what kind of segment this
+    #: is (SYN, SYN-ACK, ...). Same shape as
+    #: :attr:`~netprotocols.IPv4.__match_args__`.
     __match_args__ = ("src_port", "dst_port", "flags")
 
     _struct: ClassVar[Struct] = Struct("!HHIIHHHH")
@@ -188,6 +192,14 @@ class TCP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the TCP header, options included, at the start of ``data``.
+
+        :param data: The buffer, starting at the source port.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            20-byte fixed header or than the length ``data_offset``
+            declares.
+        :raises InvalidFieldError: if ``data_offset`` is below 5.
+        """
         (
             src_port,
             dst_port,
@@ -249,22 +261,28 @@ class TCP(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The header's length in bytes: ``data_offset * 4``.
+
+        Options included.
+        """
         return self.data_offset * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The application protocol carried by this segment, chosen by
-        well-known port (best-effort — see
-        :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
-        recognized. DNS over TCP is length-prefixed, so it chains through
-        a :class:`~netprotocols.DNSOverTCP` shim."""
+        """Return the class for the application protocol, by port.
+
+        The protocol is chosen by well-known port (best-effort; see
+        :mod:`netprotocols.layer4._ports`) from ``registry``'s tables, or
+        the default ones when it is ``None``; ``None`` when neither port
+        is recognized. DNS over TCP is length-prefixed, so it chains
+        through a :class:`~netprotocols.DNSOverTCP` shim.
+        """
         return tcp_app_class(self.src_port, self.dst_port, registry)
 
     @property
     def flags_str(self) -> str:
-        """Space-separated names of the flags set on the segment, e.g.
-        ``"SYN ACK"``."""
+        """Space-separated names of the flags set, e.g. ``"SYN ACK"``."""
         return " ".join(
             name
             for shift, name in enumerate(self.flag_names)
@@ -285,8 +303,9 @@ class TCP(Protocol):
 
     @property
     def parsed_options(self) -> tuple[TCPOption, ...]:
-        """The options as a tuple of :class:`TCPOption`, in wire order,
-        parsed on demand (RFC 9293 §3.1). The single-byte kinds (EOL,
+        """The options as :class:`TCPOption` objects, in wire order.
+
+        Parsed on demand (RFC 9293 §3.1). The single-byte kinds (EOL,
         NOP) carry no data; an End of Option List option ends the parse,
         so whatever follows it is padding and is not returned. Empty for
         a header without options.

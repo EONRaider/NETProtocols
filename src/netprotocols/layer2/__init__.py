@@ -1,3 +1,5 @@
+"""Link-layer headers and the protocols carried directly over them."""
+
 from netprotocols.layer2.arp import ARP
 from netprotocols.layer2.cdp import CDP, CDPTLV, CDPAddress
 from netprotocols.layer2.ethernet import Ethernet

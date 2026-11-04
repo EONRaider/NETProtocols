@@ -1,8 +1,8 @@
 """Protocol number registries.
 
-This module is intentionally dependency-free: it must never import from
-the layer modules, so that any protocol class can import an enum from
-here without creating an import cycle.
+This module is dependency-free: it never imports from the layer
+modules, so any protocol class can import an enum from here without
+creating an import cycle.
 """
 
 from enum import IntEnum

@@ -248,8 +248,8 @@ class TestTypeOrLength:
 
 
 class TestALowEthertypeKey:
-    """An ``ethertype`` key below 0x0600 is reached as in 2.5.0, except
-    from Ethernet and VLAN.
+    """An ``ethertype`` key below 0x0600 is reached through GRE and
+    SNAP, never from Ethernet or VLAN.
 
     RFC 1701's "Current List of Protocol Types" assigns GRE OSI network
     layer 0x00FE. A class registered there decodes GRE Protocol Type

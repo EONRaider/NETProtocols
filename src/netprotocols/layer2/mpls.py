@@ -185,7 +185,7 @@ class MPLSLabel:
     :param bottom_of_stack: The S bit, ``1`` on the last entry of a
         stack and ``0`` on every other.
     :param ttl: Time to Live (RFC 3032 §2.4).
-    :raises InvalidFieldError: a field does not fit its width.
+    :raises InvalidFieldError: if a field does not fit its width.
 
     ``bytes(entry)`` is the 4-byte on-wire entry.
     """
@@ -245,10 +245,10 @@ class MPLSLabel:
 
         For example ``"IPv4 Explicit NULL Label"`` for label 0;
         ``None`` for an ordinary label and for the unassigned values 5-6
-        and 8-12. This reads the entry alone, so the entry after an
-        Extension Label (15), an Extended Special-Purpose Label (RFC
-        7274 §3.1), is named from the base registry, not the extended
-        one, or ``None``.
+        and 8-12 (degrades, never raises). This reads the entry alone,
+        so the entry after an Extension Label (15), an Extended
+        Special-Purpose Label (RFC 7274 §3.1), is named from the base
+        registry, not the extended one, or ``None``.
         """
         return _SPECIAL_PURPOSE_NAMES.get(self.label)
 
@@ -264,7 +264,7 @@ class MPLS(Protocol):
 
     :param labels: The label stack entries, top of the stack first; any
         iterable of them, kept as a tuple.
-    :raises InvalidFieldError: the stack is empty or its S bits are not
+    :raises InvalidFieldError: if the stack is empty or its S bits are not
         set on the last entry alone (``field`` ``"labels"``).
     """
 
@@ -282,7 +282,8 @@ class MPLS(Protocol):
     def __post_init__(self) -> None:
         """Check the stack is non-empty and ends, alone, at its S bit.
 
-        :raises InvalidFieldError: it is empty, or an S bit is misplaced.
+        :raises InvalidFieldError: if it is empty, or an S bit is
+            misplaced.
         """
         # Any iterable of entries is accepted and kept as a tuple, so a
         # stack built from a list still compares equal to its decode and
@@ -316,7 +317,8 @@ class MPLS(Protocol):
         after it, if any, is where the labelled packet starts (see the
         module docstring's *What the stack carries*).
 
-        :raises TruncatedHeaderError: ``data`` ends before an entry with
+        :param data: The buffer, starting at the top label stack entry.
+        :raises TruncatedHeaderError: if ``data`` ends before an entry with
             the S bit set (``field`` ``"labels"``, ``offset`` where the
             missing entry would start).
         """
@@ -355,7 +357,7 @@ class MPLS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole stack: 4 bytes an entry."""
+        """The header's length in bytes: the whole stack, 4 bytes an entry."""
         return _ENTRY_LEN * len(self.labels)
 
     @property
@@ -380,7 +382,7 @@ class MPLS(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Name the class for the labelled packet, by convention.
+        """Return the class for the labelled packet, by convention.
 
         The class the ``ethertype`` table holds at
         :attr:`payload_ethertype`, so ``registry`` selects it as it does

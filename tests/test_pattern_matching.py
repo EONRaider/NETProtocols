@@ -1,8 +1,8 @@
-"""Structural pattern matching on decoded headers (#93).
+"""Structural pattern matching on decoded headers.
 
-`match`/`case` dissection needs no code in `src/` to work — it falls
-out of two facts pinned here as regression tests, since ARCHITECTURE.md
-promises contributors both: `@dataclass` auto-generates
+`match`/`case` dissection needs no code in `src/` to work — it follows
+from two facts ARCHITECTURE.md states and these tests pin:
+`@dataclass` auto-generates
 `__match_args__` from field declaration order, and every field with a
 fixed wire vocabulary is an `IntEnum`, which subclasses `int`.
 """
@@ -30,18 +30,17 @@ class TestMatchArgsFollowsDeclarationOrderByDefault:
     """The mechanism ARCHITECTURE.md attributes to `@dataclass`: field
     declaration order becomes `__match_args__` unless a class
     overrides it, pinned directly so a change to how headers are
-    declared (a non-dataclass base, an *accidental* override) is
-    caught rather than silently degrading positional matching. The
-    *deliberate* overrides on IPv4/TCP/DHCP are pinned separately below
-    (#94)."""
+    declared (a non-dataclass base, an unintended override) is caught
+    rather than silently degrading positional matching. The overrides
+    on IPv4/TCP/DHCP are pinned separately below."""
 
     def test_match_args_follows_field_declaration_order(self):
         assert Ethernet.__match_args__ == ("dst", "src", "ethertype")
 
     def test_a_wide_header_with_no_curated_override_gets_the_full_tuple(self):
-        # IPv6 is wide (8 fields) but is not one of #94's curated
-        # three, so its match_args is still the plain auto-generated
-        # one -- the exception (IPv4/TCP/DHCP) is pinned separately.
+        # IPv6 is wide (8 fields) but is not one of the three curated
+        # headers, so its match_args is the plain auto-generated one --
+        # the exception (IPv4/TCP/DHCP) is pinned separately.
         assert IPv6.__match_args__[:3] == (
             "version",
             "traffic_class",
@@ -61,12 +60,10 @@ class TestMatchArgsFollowsDeclarationOrderByDefault:
 
 
 class TestCuratedMatchArgsOnTheWideHeaders:
-    """#94: IPv4, TCP and DHCP hand-declare a short __match_args__
-    instead of the 11-15 slot tuple `@dataclass` would otherwise
-    generate, which nobody would write out positionally. Pinned so the
-    curated order cannot drift silently, and so a regression back to
-    full auto-generation -- which would silently change what existing
-    positional patterns bind to -- is caught."""
+    """IPv4, TCP and DHCP hand-declare a short __match_args__ in place
+    of the 11-15 slot tuple `@dataclass` would generate. Pinned so the
+    curated order cannot drift silently: a change to it, or full
+    auto-generation, changes what positional patterns bind to."""
 
     def test_ipv4_curated_order(self):
         assert IPv4.__match_args__ == ("src", "dst", "protocol")

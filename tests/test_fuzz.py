@@ -13,14 +13,12 @@ Two Hypothesis profiles are registered:
   never trip a freshly discovered counterexample.
 - ``"nightly"``: 10,000 examples, a real random seed each run
   (``derandomize=False``) — the profile ``.github/workflows/fuzz.yml``
-  runs on a schedule, deliberately trading determinism for a moving
-  seed that explores new ground on every run instead of replaying the
-  same 200 inputs forever (#98).
+  runs on a schedule, so each run draws new inputs.
 
 Select a profile with ``HYPOTHESIS_PROFILE`` (read once, at import
 time) — e.g. ``HYPOTHESIS_PROFILE=nightly pytest tests/test_fuzz.py``
 reproduces a nightly run locally. The profiles are registered and
-loaded in conftest.py rather than here, so every property test in the
+loaded in conftest.py, so every property test in the
 suite gets them, including under a test selection that never imports
 this file (mutmut's, for one).
 """
@@ -179,8 +177,8 @@ ALL_PROTOCOLS = (
 
 def _shipped_protocol_classes() -> set[type[Protocol]]:
     """Every concrete protocol class netprotocols ships, discovered by
-    walking Protocol.__subclasses__() to every depth rather than a second
-    hand list that could drift the same way ALL_PROTOCOLS can.
+    walking Protocol.__subclasses__() to every depth, independently of
+    the ALL_PROTOCOLS list.
 
     Two artifacts of live-class introspection need filtering:
     * @dataclass(slots=True) rebuilds a class after `class Foo(Protocol):`
@@ -364,7 +362,7 @@ class TestConstrainedRoundTrips:
 # MANIFEST.md). So unlike NOP/Timestamps (kinds 1, 8) and MSS (2),
 # window-scale/SACK are otherwise fuzzed only as arbitrary bytes
 # inside ``fuzz_input`` above, which essentially never lands on a
-# well-formed TLV by chance. This strategy builds one on purpose.
+# well-formed TLV by chance. This strategy builds well-formed ones.
 _KIND_NOP = 1
 _KIND_MSS = 2
 _KIND_WINDOW_SCALE = 3
@@ -456,12 +454,10 @@ class TestTCPSynOptionsRoundTrip:
 class TestGeneralizedRoundTrips:
     """``bytes(decode(x)) == x`` for every protocol, not just the four
     above — one property, parametrized over the strategies in
-    strategies.py (#97). The 14 single-example assertions living in
-    each protocol's own test file (``test_arp.py::test_round_trip`` and
-    similarly for the others) are kept as regression anchors pinned to
-    a real captured header, which this property does not replace: a
-    fixed example catches a specific regression fast and readably, a
-    generated one explores the space the fixed example cannot."""
+    strategies.py. Each protocol's own test file also round-trips a
+    real captured header (``test_arp.py::test_round_trip`` and similarly
+    for the others): a fixed example, beside the space this property
+    explores."""
 
     @pytest.mark.parametrize("name", sorted(ROUND_TRIP_STRATEGIES))
     @given(data=st.data())
@@ -1333,7 +1329,7 @@ class TestNTPAccessorSafety:
         event(f"NTP remainder: {bool(ntp.remainder)}")
 
 
-#: Constructed HSRP messages, packed by hand rather than cut from
+#: Constructed HSRP messages, packed by hand, not cut from
 #: tests/fixtures/hsrp.pcap: every Op Code in every one of RFC 2281's
 #: States, under the default Authentication Data, a configured password
 #: and an empty one, with the recommended timers.
