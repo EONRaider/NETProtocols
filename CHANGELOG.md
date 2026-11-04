@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - codeql.yml uses CodeQL's advanced setup, a checked-in workflow, rather than GitHub's default setup, so that the analysis and its action pins live in version control and are reviewed like the other workflows.
     - `.github/ISSUE_TEMPLATE/config.yml` keeps blank issues enabled because roadmap and design discussions do not fit a form; the templates give the common cases a structure.
     - ci.yml's pyodide job runs the real Pyodide under Node because that is the same WebAssembly build a browser runs, so the README's browser claim is checked against the real runtime with no browser needed.
+- **`MaxDepthExceededError`'s docstring covers valid deep segments (#295).** It gave only the hostile-input reason, a crafted frame nested deep, though BGP, STUN over TCP and TLS chain one layer per message or record, so a valid TCP segment of many of them exceeds the default `max_depth` too. It now says so, names the remedies, a larger `max_depth` or a lax walk continued from `packet.consumed` with `start=` as many times as it takes, and points to `netprotocols.walk` for the figures rather than repeating them. Docstring only; no behaviour change.
 
 ## [2.8.0] - 2026-11-04
 

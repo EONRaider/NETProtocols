@@ -138,4 +138,14 @@ class MaxDepthExceededError(ProtocolError):
     allows. Every chain terminates, since every header validates its
     own length; the bound limits how many headers a crafted, deeply
     nested frame makes the walk decode.
+
+    Valid traffic can exceed the bound too. BGP, STUN over TCP and TLS
+    chain one layer per message or record, so a valid TCP segment that
+    holds many of them chains more headers than the default
+    ``max_depth`` allows. A larger ``max_depth`` decodes the rest, and
+    so does a lax walk continued from its ``packet.consumed`` with
+    ``start=BGP`` (or ``start=STUN``, ``start=TLS``) as many times as it
+    takes. See :mod:`netprotocols.walk` for how many messages or records
+    each walk has room for, and :func:`~netprotocols.decode_frame` for
+    ``lax`` and ``start``.
     """
