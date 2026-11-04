@@ -286,8 +286,8 @@ FCS = b"\xde\xad\xbe\xef"
 class TestTrailersAndTruncation:
     """Read a message whose buffer ends somewhere other than its end.
 
-    RIP has no length field and the walk does not trim to UDP's (#235),
-    so whatever follows the datagram reaches the decoder.
+    RIP has no length field and the walk does not trim to UDP's, so
+    whatever follows the datagram reaches the decoder.
     """
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])

@@ -278,8 +278,8 @@ FCS = b"\xde\xad\xbe\xef"
 class TestExtent:
     """Read a message whose buffer runs on past its datagram.
 
-    TFTP has no length field and the walk does not trim to UDP's
-    (#235), so Ethernet padding and an FCS reach the decoder. veth does
+    TFTP has no length field and the walk does not trim to UDP's, so
+    Ethernet padding and an FCS reach the decoder. veth does
     not pad, so the captured frames carry neither: they are added here.
     """
 
@@ -348,8 +348,7 @@ class TestExtent:
         """With an odd number of option strings, the last a name with no
         value, the first padding byte ends an empty value: the pair
         decodes and takes that byte. Without the padding the name is
-        left undecoded; only the UDP length tells the two apart
-        (#235)."""
+        left undecoded; only the UDP length tells the two apart."""
         raw = b"\x00\x01f\x00octet\x00blksize\x00512\x00tsize\x00"
         alone = TFTP.decode(raw)
         assert alone.options == (("blksize", "512"),)
@@ -363,7 +362,7 @@ class TestExtent:
     def test_an_fcs_holding_an_option_reads_as_one(self, index):
         """An FCS that holds a name, a zero byte, a value and a zero
         byte is one more option pair to the decoder; only the UDP
-        length could tell it from one (#235)."""
+        length could tell it from one."""
         raw = message_bytes(index)
         tftp = TFTP.decode(raw + b"\x12\x00\x34\x00")
         assert tftp.options == (*tftp_of(index).options, ("\x12", "4"))
@@ -388,8 +387,8 @@ class TestExtent:
     )
     def test_an_fcs_ends_a_name_left_without_a_value(self, fcs, value, taken):
         """After a name with no value, an FCS's first zero byte ends
-        that value, so any trailer holding a zero byte can be read in
-        (#235)."""
+        that value, so any trailer holding a zero byte can be read
+        in."""
         raw = b"\x00\x01f\x00octet\x00blksize\x00512\x00tsize\x00"
         tftp = TFTP.decode(raw + fcs)
         assert tftp.options == (("blksize", "512"), ("tsize", value))

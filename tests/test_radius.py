@@ -61,7 +61,7 @@ WRONG_PASSWORD = b"np193-wrong"
 #: Every attribute type named, written from FreeRADIUS 3.2.5's
 #: dictionary.rfc2865 (RFC 2865 §5), dictionary.rfc2866 (RFC 2866 §5)
 #: and dictionary.rfc2869 (RFC 2869 §5: 55, 77, 85 and 87; 79 and 80,
-#: first defined there, are RFC 3579 §3's now).
+#: first defined there, are defined by RFC 3579 §3).
 NAMED_TYPES = {
     1: "User-Name",
     2: "User-Password",
@@ -337,8 +337,8 @@ class TestCapturedPackets:
 class TestAuthenticators:
     """Verify what the shared secret protects, outside the library.
 
-    Computing or verifying these is out of scope for :class:`RADIUS`
-    (#193); verifying them here shows the published secret is the one
+    Computing or verifying these is out of scope for :class:`RADIUS`;
+    verifying them here shows the published secret is the one
     the capture used, and that the bytes kept raw are the bytes sent.
     """
 
@@ -465,15 +465,16 @@ class TestExtent:
         assert packet.consumed == len(FRAMES[index])
         assert packet[RADIUS] == radius_of(index)
 
+    # TODO(#235): once the walk bounds RADIUS by the UDP length, this
+    # decode raises; rewrite the test to expect that.
     def test_a_length_into_trailing_bytes_reads_them_pending_235(self):
-        """Documents current behaviour, pending #235; update it with #235.
+        """A Length past the datagram takes trailing bytes as attributes.
 
         The walk does not end the buffer at UDP's length, so a Length
         that overstates the datagram takes trailing bytes, here an FCS
         reading ``12 04 be ef``, as attributes instead of raising: the
         example in the module docstring, ARCHITECTURE.md and the
-        CHANGELOG. When #235 bounds RADIUS by the UDP length, this
-        decode raises instead and this test fails.
+        CHANGELOG.
         """
         index = ACCT_START + 1
         assert index == 7
@@ -673,7 +674,8 @@ class TestConstruction:
         assert radius.nas_ip_address == IPv4Address("192.0.2.1")
 
     def test_an_access_request_without_message_authenticator(self):
-        """The plain RFC 2865 form radclient 3.2.5 no longer sends."""
+        """The plain RFC 2865 form, without the Message-Authenticator
+        radclient 3.2.5 adds."""
         raw = packet_bytes(PAP_ACCEPT)
         radius = RADIUS.decode(raw)
         rest = tuple(a for a in radius.parsed_attributes if a.type != 80)
