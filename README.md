@@ -65,26 +65,28 @@ reproduction command, and its caveats):
   corpus held at 2.4.0 dpkt is ahead by a median 1.12× across runs. On
   the MPLS and LLC/SNAP captures 2.6.0 added they are level; dpkt
   leaves LLDP undecoded, so it is about 5× faster on those six frames,
-  and it stops at UDP on the TFTP, RADIUS, STUN, NTP and HSRP captures
-  2.7.0 added, where it is about 1.5× faster. Narrowing
-  the gap is
+  and it stops at UDP (at TCP for STUN's two TCP segments) on the TFTP,
+  RADIUS, STUN, NTP and HSRP captures 2.7.0 added, where it is about
+  1.5× faster. Narrowing the gap is
   [#250](https://github.com/EONRaider/NETProtocols/issues/250). The gap
   moves both ways as this library and dpkt each change, and this file's
   job is to say so honestly rather than only when it's flattering.
 - **Decodes further into the stack than dpkt on 153 of those 379
   frames** — BGP, RIP, LLDP, DNS, DHCP, NTP, RADIUS, STUN, HSRP, TFTP
   and VXLAN-tunnelled payloads that dpkt leaves as raw bytes (dpkt
-  ships decoders for several of them, but its UDP never dispatches on
-  a port), and 802.1Q tags, MPLS label stacks and
+  ships decoders for several of them, but its UDP and TCP never dispatch
+  on a port), and 802.1Q tags, MPLS label stacks and
   SNAP headers it folds into the Ethernet and LLC headers, netprotocols
   decodes as layers of their own. A throughput number means little
   without knowing how much work it bought.
 - **4.1× faster than dpkt at re-encoding** (`bytes(header)`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
-- **Imports in 99 ms; `scapy.all` takes 552+ ms** (`scripts/benchmark_import.py`),
-  and never touches the host doing it — importing scapy populates live
-  interface and routing tables as a side effect of the import
+- **Imports in 57 ms; `scapy.all` takes 242+ ms** (`scripts/benchmark_import.py`,
+  with cached bytecode, which an installed package has; the first import
+  after a source checkout compiles every module and takes longer, 99 ms
+  against 552 ms), and never touches the host doing it — importing scapy
+  populates live interface and routing tables as a side effect of the import
   statement.
 - **A 266.8 KiB wheel against scapy's 2.63 MiB** — 10.1× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
@@ -548,7 +550,7 @@ released as
 2.1.0's and 1.3.1/1.4.0's work shipped folded into 2.0.0 and 2.2.0
 rather than as their own versions, but the roadmap's original "only at
 a major version bump" release policy wasn't actually held to: 2.0.0,
-2.2.0, 2.2.1, 2.3.0, 2.4.0, 2.5.0 and now 2.6.0 are all on PyPI, and the comparative claims above
+2.2.0, 2.2.1, 2.3.0, 2.4.0, 2.5.0, 2.6.0 and now 2.7.0 are all on PyPI, and the comparative claims above
 draw on the finished tree. The wave before that one — TCP
 and IPv4 option parsing, ICMP message bodies, NDP, IPv6
 extension-header TLV options, the GRE checksum arm, a DNS-over-TCP
