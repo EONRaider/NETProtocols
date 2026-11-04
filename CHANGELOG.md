@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - codeql.yml uses CodeQL's advanced setup, a checked-in workflow, rather than GitHub's default setup, so that the analysis and its action pins live in version control and are reviewed like the other workflows.
     - `.github/ISSUE_TEMPLATE/config.yml` keeps blank issues enabled because roadmap and design discussions do not fit a form; the templates give the common cases a structure.
     - ci.yml's pyodide job runs the real Pyodide under Node because that is the same WebAssembly build a browser runs, so the README's browser claim is checked against the real runtime with no browser needed.
+- **`docs/CLAIMS.md`'s current-tree line citations re-derived after the docstring standard (#309).** #241's docstring and comment rewrite moved code in `src/` and `tests/`, so two citations named the wrong lines: §3.2's `inet_pton`/`inet_ntop` calls are now `_base.py:196-201` (from 202-207) and §5.1's round-trip assertion is `tests/test_corpus.py:135-140` (from 137-142). Release-pinned citations stay as recorded: the 2026-11-01 status audit's `_base.py:202-207`, checked against `8fe5076`, scapy 2.8.0's sources and the `v2.4.0` `git grep` output. No passage in CLAIMS quotes docstring or comment text that #241 removed, and the test, coverage and raise-site counts it cites are unchanged.
 
 ## [2.8.0] - 2026-11-04
 

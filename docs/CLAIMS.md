@@ -1435,7 +1435,7 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 
 15 stdlib modules imported (`__future__` and the type-checking-only
 `_typeshed` aside); `socket` used for exactly two
-`inet_pton`/`inet_ntop` calls (`_base.py:202-207`) and no socket ever
+`inet_pton`/`inet_ntop` calls (`_base.py:196-201`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
 
@@ -1508,7 +1508,7 @@ do differently.
 ### 5.1 "Byte-exact round-tripping, verified against real captured traffic"
 **Status: VERIFIED**
 
-`tests/test_corpus.py:137-142` asserts `bytes(layer) ==
+`tests/test_corpus.py:135-140` asserts `bytes(layer) ==
 frame[cursor:cursor+layer.header_len]` for **every layer of all 394
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
