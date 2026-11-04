@@ -903,7 +903,7 @@ class TestMutationWorkflow:
                     f"test map: {step!r}"
                 )
         assert ".mutmut-cache" not in block, (
-            "mutation.yml still names .mutmut-cache, a path mutmut "
+            "mutation.yml names .mutmut-cache, a path mutmut "
             "never reads or writes"
         )
 
