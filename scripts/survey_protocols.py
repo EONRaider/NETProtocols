@@ -48,7 +48,11 @@ missing or does not parse, or in which ``class Conf`` does not assign
 or which names ``load_layers`` anywhere else, except as an attribute
 that is an operand of a comparison (``m in Conf.load_layers``) or whose
 ``remove`` method is called (``Conf.load_layers.remove(m)``): the run
-then stops before printing either table.
+then stops before printing either table. That check is syntactic and
+reads only ``config.py``: it matches the identifier or string
+``load_layers`` as written, does not follow a name built at run time,
+and does not see a module elsewhere in the package that changes the
+list on import.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -641,7 +645,10 @@ def scapy_loaded_layers(root: Path) -> set[str]:
     annotation whose value is a list display of string literals.
     Elsewhere in the module, ``load_layers`` may appear only as an
     attribute that is an operand of a comparison or whose ``remove``
-    method is called, neither of which can add a name.
+    method is called. The check is syntactic and covers ``config.py``
+    alone: a name built at run time, a comparison method that mutates
+    its operand, and a module elsewhere in the package that changes
+    the list on import are not detected.
 
     :param root: the scapy package directory.
     :raises Unreadable: if ``config.py`` is missing or does not parse,
