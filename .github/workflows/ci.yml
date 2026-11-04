@@ -10,10 +10,9 @@ on:
   workflow_call:
 
 # A newer run for the same pull request (keyed on its number) or ref
-# cancels the older one. The group's prefix is the literal "ci": inside
-# a workflow_call, ${{ github.workflow }} is the CALLER's workflow name,
-# and a group built from it matches release.yml's own top-level group
-# on a tag push, which GitHub cancels as a self-deadlock.
+# cancels the older one. The group's prefix is the literal "ci", so it
+# never equals release.yml's own group when release.yml calls this
+# workflow.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -34,10 +33,9 @@ jobs:
       - run: uv run ruff format --check
       # pydoclint, run as a flake8 plugin with the settings in .flake8.
       - run: uv run flake8 src
-      # Fails on a marker comment that is not an issue-tracked one (see
-      # scripts/check_todos.py). Offline; todo-issues.yml checks that
-      # the issues are open.
-      - run: python3 scripts/check_todos.py
+      # Fails on any work-marker word in tracked text (see
+      # scripts/check_markers.py). Offline.
+      - run: python3 scripts/check_markers.py
 
   typecheck:
     runs-on: ubuntu-latest
