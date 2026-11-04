@@ -538,6 +538,56 @@ class TestCIWorkflow:
             "are not collected"
         )
 
+    TRACEMALLOC_STEP_NAME = "Allocation tests under PYTHONTRACEMALLOC=1"
+
+    def test_test_job_runs_the_allocation_tests_while_tracing(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The test job reruns every module that uses ``allocation_peak``
+        with ``PYTHONTRACEMALLOC=1``, and no other test module drives
+        tracemalloc itself.
+        """
+        block = ci_jobs.get("test")
+        assert block is not None, "ci.yml has no test job"
+        steps = [
+            step
+            for step in job_steps(block)
+            if step_key(step, "name") == self.TRACEMALLOC_STEP_NAME
+        ]
+        assert len(steps) == 1, (
+            f"test job has no single {self.TRACEMALLOC_STEP_NAME!r} step"
+        )
+        step = steps[0]
+        assert step_key(step, "PYTHONTRACEMALLOC") == '"1"', (
+            "the step no longer sets PYTHONTRACEMALLOC to 1"
+        )
+        assert "uv run --frozen pytest" in step, (
+            "the step no longer runs pytest"
+        )
+        listed = set(re.findall(r"tests/(test_\w+\.py)", step))
+        tests = ROOT / "tests"
+        users = {
+            path.name
+            for path in tests.glob("test_*.py")
+            if "allocation_peak" in path.read_text()
+            and path.name != Path(__file__).name
+        }
+        assert users, "no test module uses allocation_peak"
+        assert listed == users, (
+            f"the step runs {sorted(listed)}, but the modules that use "
+            f"allocation_peak are {sorted(users)}"
+        )
+        driving = re.compile(r"\btracemalloc\.(?:start|stop|reset_peak)\(")
+        own = {
+            path.name
+            for path in tests.glob("test_*.py")
+            if driving.search(path.read_text())
+        }
+        assert own <= {"test_conftest.py"}, (
+            f"{sorted(own)} drive tracemalloc themselves rather than "
+            "through conftest.allocation_peak"
+        )
+
     @classmethod
     def _reproducibility_step_script(cls, build_job: str) -> str:
         """The literal ``run:`` script of the build job's "Verify the

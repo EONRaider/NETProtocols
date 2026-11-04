@@ -19,13 +19,19 @@ test_fuzz.py:
   once per mutant; with every cache empty, no result the original code
   cached answers in the child and hides the mutant (a false survivor),
   and every test calls the cached functions its input reaches.
+
+:func:`allocation_peak`, the tracemalloc wrapper the allocation tests
+share, is imported from here by the test modules that use it.
 """
 
 import importlib
 import os
 import pkgutil
 import struct
+import tracemalloc
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -76,6 +82,45 @@ def _clear_package_caches() -> Iterator[None]:
     for clear in PACKAGE_CACHES:
         clear()
     yield
+
+
+@dataclass
+class AllocationPeak:
+    """The peak traced memory of one :func:`allocation_peak` block.
+
+    :ivar peak: bytes allocated at the block's peak above the traced
+        memory on entry, set when the block exits.
+    """
+
+    peak: int = 0
+
+
+@contextmanager
+def allocation_peak() -> Iterator[AllocationPeak]:
+    """Trace the block's allocations and record their peak above entry.
+
+    Start :mod:`tracemalloc` if it is not tracing and stop it on exit
+    only in that case, so tracing already on, as under
+    ``PYTHONTRACEMALLOC=1``, stays on. Reset the peak on entry and
+    measure it against the traced memory at that point, so memory
+    allocated before the block is not counted. ``peak`` is set even
+    when the block raises.
+    """
+    started = not tracemalloc.is_tracing()
+    if started:
+        tracemalloc.start()
+    result = AllocationPeak()
+    try:
+        tracemalloc.reset_peak()
+        base, _ = tracemalloc.get_traced_memory()
+        try:
+            yield result
+        finally:
+            _, peak = tracemalloc.get_traced_memory()
+            result.peak = peak - base
+    finally:
+        if started:
+            tracemalloc.stop()
 
 
 def pcap_frames(path: Path) -> list[bytes]:

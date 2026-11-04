@@ -59,6 +59,16 @@ jobs:
       # Also runs the doctests in src/: pyproject.toml's pytest
       # addopts and testpaths include --doctest-modules and src.
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
+      # Runs every module that measures allocations with
+      # tests/conftest.py's allocation_peak while tracemalloc is already
+      # tracing from interpreter start.
+      - name: Allocation tests under PYTHONTRACEMALLOC=1
+        env:
+          PYTHONTRACEMALLOC: "1"
+        run: >-
+          uv run --frozen pytest -o addopts="" -q
+          tests/test_conftest.py tests/test_cdp.py tests/test_lldp.py
+          tests/test_sctp.py tests/test_stp.py
 
   # Scans the dev dependency group (the only third-party code CI itself
   # installs) for known vulnerabilities. --no-emit-project leaves out
