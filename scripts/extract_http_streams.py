@@ -70,7 +70,9 @@ class _Direction:
         return bytes(out)
 
 
-def _tcp_segments(frame: bytes):
+def _tcp_segments(
+    frame: bytes,
+) -> tuple[bytes, int, bytes, int, int, int, bytes]:
     """``(src, sport, dst, dport, seq, flags, payload)`` of an
     Ethernet/IPv4/TCP frame."""
     (ethertype,) = struct.unpack_from("!H", frame, 12)

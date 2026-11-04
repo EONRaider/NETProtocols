@@ -81,7 +81,12 @@ convention = "pep257"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src", "tests/conftest.py", "tests/strategies.py"]
+files = ["src", "tests/conftest.py", "tests/strategies.py", "scripts"]
+exclude = ["^scripts/pyodide/node_modules/"]
+
+[[tool.mypy.overrides]]
+module = ["dpkt", "dpkt.*", "scapy", "scapy.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 # src/ is collected for the doctests in its docstrings.

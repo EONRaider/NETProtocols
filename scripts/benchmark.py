@@ -219,7 +219,7 @@ def _comparison_caveats() -> list[str]:
 
 
 def _netprotocols_chain(frame: bytes) -> list[str]:
-    return [type(layer).__name__ for layer in decode_frame(frame)]
+    return [type(layer).__name__ for layer in decode_frame(frame).layers]
 
 
 def _dpkt_chain(frame: bytes) -> list[str]:
