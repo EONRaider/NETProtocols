@@ -517,7 +517,11 @@ and the third — MPLS, LLDP, LLC/SNAP, STP and CDP
 [#255](https://github.com/EONRaider/NETProtocols/pull/255),
 [#256](https://github.com/EONRaider/NETProtocols/pull/256)) — as 2.6.0,
 and the fourth — TFTP, RADIUS, STUN, NTP and HSRP
-([#174](https://github.com/EONRaider/NETProtocols/issues/174)) — as
+([#266](https://github.com/EONRaider/NETProtocols/pull/266),
+[#265](https://github.com/EONRaider/NETProtocols/pull/265),
+[#267](https://github.com/EONRaider/NETProtocols/pull/267),
+[#269](https://github.com/EONRaider/NETProtocols/pull/269),
+[#279](https://github.com/EONRaider/NETProtocols/pull/279)) — as
 2.7.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 The roadmap before it, the post-1.3.0

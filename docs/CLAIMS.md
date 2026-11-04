@@ -616,7 +616,7 @@ decode rates here are not comparable with any earlier section's.
 | 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 157,088 / 152,832 / 150,029 f/s; dpkt 224,260 / 206,211 / 205,189; scapy 44,235 / 45,267 / 44,219. dpkt faster by 1.428×, 1.349×, 1.368×. Against scapy: 3.55×, 3.38×, 3.39×. Quoted: the run with the median dpkt ratio, 150,029 against 205,189 (**dpkt 1.37× faster**) and 44,219 (**3.4×**). The run with the median netprotocols rate is a different one this time and reads 1.35×; the README's claim is a ratio, so it quotes the median ratio, the less flattering of the two. dpkt decodes 378 of the 379 frames in every run (the STP TCN, as at 2.6.0) |
 | 1.3 encode | `benchmark_encode.py` | netprotocols 2,207,983 ops/s, dpkt 538,285 (**4.10×**), scapy 1,049,943. Five further runs on this tree read 4.15×, 4.16×, 4.33×, 4.42× and 3.97× |
 | 1.4 import | `benchmark_import.py`, best of three runs | netprotocols **99.1 ms** (116 modules), scapy.all **552.2 ms** (5.6×); dpkt 75.9 ms (117 modules) |
-| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.7.0-py3-none-any.whl` 273,200 bytes (266.8 KiB), **10.1×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 (2.63 MiB, unchanged on PyPI); `src/` 20,450 lines. The same method rebuilds 2.6.0's 225,832 bytes from `0566f88` exactly |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.7.0-py3-none-any.whl` 273,228 bytes (266.8 KiB), **10.1×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 (2.63 MiB, unchanged on PyPI); `src/` 20,450 lines. The same method rebuilds 2.6.0's 225,832 bytes from `0566f88` exactly |
 | 1.6 depth | `benchmark.py --depth` | deeper on **153 of 379** frames, "same layer" (not deeper) on 225, and the one frame dpkt cannot decode |
 
 What moved, and why:
@@ -917,7 +917,7 @@ never touch the host.
 **Status: VERIFIED** — re-measure at each release (Rule 4)
 
 *Re-measured for 2.7.0 (2026-11-04): `netprotocols-2.7.0-py3-none-any.whl`
-is 273,200 bytes (266.8 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+is 273,228 bytes (266.8 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
 2,762,122 (2.63 MiB), **10.1× smaller**. `src/` is 20,450 lines.*
 
 *Re-measured for 2.6.0 (2026-10-28): `netprotocols-2.6.0-py3-none-any.whl`
