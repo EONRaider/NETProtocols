@@ -80,7 +80,7 @@ def test_no_tracked_python_file_names_an_unknown_encoding() -> None:
     """No tracked Python file names an unknown encoding where CodeQL's
     Python extractor looks for one."""
     paths = tracked_python_files()
-    # Guards against passing vacuously on an empty listing.
+    # The listing includes this file, so it is not empty.
     assert "tests/test_encoding_cookies.py" in paths
     failures = [
         f"{path}:{number}: {name!r}"
