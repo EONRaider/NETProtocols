@@ -41,10 +41,14 @@ SEED_DIR = Path(tempfile.gettempdir()) / "netprotocols-fuzz-seeds"
 def seed_inputs() -> list[Path]:
     """Write every fixture frame to :data:`SEED_DIR`; return their paths.
 
-    Non-recursive on purpose: ``tests/fixtures/staging/`` holds copies
-    of the same captures. Identical frames collapse to one file. Exits
-    if no frame is found, so a moved fixture directory fails the run
-    instead of silently falling back to fuzzing from nothing.
+    Non-recursive on purpose: the subdirectories hold captures kept
+    outside the corpus (the BGP and TLS sessions, MPLS cut at a 20-byte
+    snap length, classic RFC 3489 STUN, and the HTTP session with its
+    byte streams), and a local, git-ignored ``tests/fixtures/staging/``
+    may hold copies of the corpus captures. Identical frames collapse to
+    one file. Exits if no frame is found, so a moved fixture directory
+    fails the run instead of silently falling back to fuzzing from
+    nothing.
     """
     SEED_DIR.mkdir(parents=True, exist_ok=True)
     seeds: dict[Path, None] = {}

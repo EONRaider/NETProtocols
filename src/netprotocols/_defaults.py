@@ -128,6 +128,7 @@ def install(registry: Registry) -> None:
     from netprotocols.layer7.rip import RIP
     from netprotocols.layer7.stun import STUN
     from netprotocols.layer7.tftp import TFTP
+    from netprotocols.layer7.tls import TLS
     from netprotocols.layer7.vxlan import VXLAN
 
     add = registry.register
@@ -259,3 +260,11 @@ def install(registry: Registry) -> None:
     # Length, so it is the same class as over UDP, and like BGP chains
     # to the next message in the segment.
     add(TABLE_TCP_PORT, 3478, STUN)
+
+    # TLS (RFC 9846 §5.1, RFC 5246 §6.2): HTTPS's port. A client
+    # connects from an ephemeral port, so the destination-first lookup
+    # finds both directions. Each record decodes as one layer and, like
+    # BGP's messages, chains to the next one in the segment. Only 443
+    # is registered: 853, 465, 993, 995 and 8443 need decode_as (see
+    # layer7/tls.py).
+    add(TABLE_TCP_PORT, 443, TLS)

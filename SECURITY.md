@@ -58,6 +58,13 @@ until request/response pairing exists.
 holds; reassembling the stream, and the segment-overlap tricks that
 come with it, are the caller's in the same way.
 
+`TLS` is port-dispatched the same way and decodes the records one
+segment holds; a ClientHello that spans segments is read only from a
+stream the caller reassembled. It decrypts and verifies nothing: the
+SNI it reports is what the client sent in the clear (under Encrypted
+Client Hello, the outer ClientHello's public name), which identifies
+nothing on its own.
+
 `MPLS` names the packet under its label stack by convention, since
 nothing in the stack names it: an Explicit NULL bottom label, or else
 the first nibble after the stack read as an IP version. A pseudowire

@@ -706,8 +706,8 @@ class TestDNSOverTCP:
         assert from_server.next_protocol() is DNSOverTCP
 
     def test_non_dns_tcp_port_ends_chain(self):
-        https = TCP.decode(tcp_segment(src_port=443, dst_port=443, payload=b""))
-        assert https.next_protocol() is None
+        ssh = TCP.decode(tcp_segment(src_port=22, dst_port=22, payload=b""))
+        assert ssh.next_protocol() is None
 
     def test_full_tcp_dns_walk_with_records(self):
         message = build_response(

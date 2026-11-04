@@ -747,6 +747,34 @@ class TestMaxDepth:
             f"10.0.{i}.0/24" for i in range(40)
         ]
 
+    def test_walking_on_through_a_full_segment_of_keepalives(self):
+        """The loop takes three walks over 76 KEEPALIVEs.
+
+        The first walk holds 29 messages after Ethernet, IPv4 and TCP,
+        a walk that starts at BGP holds MAX_DEPTH (32), and the third
+        takes the last 15.
+        """
+        segment = KEEPALIVE * 76
+        assert len(segment) <= 1448
+        raw = frame(segment)
+        packet = decode_frame(raw, lax=True)
+        messages = [layer for layer in packet if isinstance(layer, BGP)]
+        per_walk = [len(messages)]
+        rest = raw[packet.consumed :]
+        while (
+            isinstance(packet.stopped_by, MaxDepthExceededError)
+            and packet.stopped_by.protocol is BGP
+        ):
+            packet = decode_frame(rest, start=BGP, lax=True)
+            messages.extend(packet)
+            per_walk.append(len(bgp_layers(packet)))
+            rest = rest[packet.consumed :]
+        assert per_walk == [29, 32, 15]
+        assert len(messages) == 76
+        assert all(msg.type == 4 for msg in messages)
+        assert packet.stopped_by is None
+        assert rest == b""
+
     def test_walking_on_from_a_strict_error(self):
         """In strict mode the error's frame_offset is where to walk on."""
         raw = frame(b"".join(one_prefix_update(i) for i in range(40)))

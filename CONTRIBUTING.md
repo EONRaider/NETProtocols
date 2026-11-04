@@ -51,7 +51,7 @@ src/netprotocols/
                   GRE, IPsec ESP and AH, VRRP, OSPFv2, PIM
   layer4/         TCP, UDP, SCTP (+ port-based dispatch)
   layer7/         DNS, DHCP, HTTP, VXLAN, RIP, BGP, TFTP, RADIUS, STUN, NTP,
-                  HSRP
+                  HSRP, TLS
   utils/          exceptions, MAC/IPv4 helpers
 tests/            unit tests, corpus invariants, fuzzing, fixtures/
 scripts/          fixture capture + validation
@@ -122,6 +122,15 @@ Fixtures are captured and validated with the scripts under
   ```bash
   python3 scripts/check_fixtures.py tests/fixtures/staging
   ```
+
+`tests/fixtures/staging/` is an untracked, git-ignored workspace: capture
+there, validate with `check_fixtures.py`, then copy the validated pcap
+and any other files the capture script names into `tests/fixtures/` or
+the subdirectory it names, and commit only those:
+`capture_fixtures_http.sh`, for instance, has both `staging/http.pcap`
+and the per-connection stream files it writes under `staging/http/`
+folded into `tests/fixtures/http/`. Nothing under `staging/` is
+committed.
 
 Prefer a real capture, and build the conditions for one where a
 protocol won't appear in a normal environment. VLAN tags, for instance,

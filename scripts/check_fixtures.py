@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import struct
 import sys
 from collections import Counter
@@ -699,11 +700,177 @@ def _check_udp_payload(
 
 def _check_tcp_payload(segment: bytes, stats: Counter) -> list[str]:
     """Validate what a TCP segment carries past the TCP checksum: STUN
-    messages on port 3478 (see :func:`_check_stun`), the only TCP
-    payload this checker reads."""
-    if _STUN_PORT not in struct.unpack_from("!HH", segment):
-        return []
-    return _check_stun(segment[(segment[12] >> 4) * 4 :], stats, stream=True)
+    messages on port 3478 (see :func:`_check_stun`) and TLS records on
+    port 443 (see :func:`_check_tls`), the only TCP payloads this
+    checker reads."""
+    ports = struct.unpack_from("!HH", segment)
+    payload = segment[(segment[12] >> 4) * 4 :]
+    if _STUN_PORT in ports:
+        return _check_stun(payload, stats, stream=True)
+    if _TLS_PORT in ports and payload:
+        return _check_tls(payload, stats)
+    return []
+
+
+#: HTTPS's port, where the corpus carries TLS (RFC 9846, RFC 5246).
+_TLS_PORT = 443
+
+#: TLS ContentTypes (RFC 9846 §5.1; heartbeat, RFC 6520), by the
+#: counter name of each.
+_TLS_CONTENT_TYPES = {
+    20: "change-cipher-spec",
+    21: "alert",
+    22: "handshake",
+    23: "application-data",
+    24: "heartbeat",
+}
+
+#: The largest record length any TLS version allows (RFC 5246 §6.2.3).
+_TLS_MAX_LENGTH = 2**14 + 2048
+
+
+def _tls_record_header_ok(data: bytes) -> bool:
+    """Whether ``data`` begins with a plausible TLS record header: a
+    ContentType of 20-24 and a version of 0x0300-0x0304."""
+    return (
+        len(data) >= 5
+        and data[0] in _TLS_CONTENT_TYPES
+        and data[1] == 3
+        and data[2] <= 4
+    )
+
+
+def _check_tls(data: bytes, stats: Counter) -> list[str]:
+    """Validate the TLS records in a TCP segment on port 443.
+
+    TLS has no checksum of its own, and TCP's covers every byte, so
+    this checks the records' framing and what can be read in the clear:
+    each record's length is at most 2**14 + 2048 (``tls-length``); a
+    Handshake, Alert or ChangeCipherSpec record is not empty
+    (``tls-empty``, RFC 9846 §5.1, RFC 5246 §6.2.1); a ChangeCipherSpec
+    record is the single byte 1 (``tls-ccs``, RFC 5246 §7.1, RFC 9846
+    §5); and a ClientHello, a Handshake record starting with type 1,
+    is whole in its record and its fields, session ID (at most 32
+    bytes), cipher suites, compression methods and extensions, tile it
+    (``tls-hello``), with a server_name extension, if any, holding one
+    well-formed host_name: printable ASCII, not an IP address, no
+    trailing dot (``tls-sni``, RFC 6066 §3). Over TCP a segment can
+    begin or end inside a record, which only reassembly could check:
+    such a segment is counted ``tls-unchecked`` here and not failed,
+    and :func:`check_capture_frame` fails it (``tls-split``) unless it
+    comes from a session capture. The corpus has none;
+    tests/fixtures/tls/tls_session.pcap has Chromium's two-segment
+    ClientHellos.
+
+    A Handshake record after a ChangeCipherSpec in the same segment is
+    not read as a ClientHello: under TLS 1.2 every record after it is
+    protected under the new cipher spec (RFC 5246 §7.1), so the
+    Finished that follows, still Handshake on the wire, is ciphertext,
+    and one in 256 starts with the byte 1 (TLS 1.3 sends its encrypted
+    handshake as application_data, RFC 9846 §5.2). The check is per
+    segment and keeps no state, so a Finished carried alone in a later
+    segment than its ChangeCipherSpec is read as a ClientHello and, if
+    its ciphertext starts with 1, almost always fails ``tls-hello``: a
+    false failure, never a false pass. No capture here has one: in
+    tls.pcap (frames 10 and 11) and tls_session.pcap (99 and 100) the
+    TLS 1.2 client's and server's Finished each share a segment with
+    their ChangeCipherSpec, and scripts/capture_fixtures_tls.sh, which
+    runs this checker on each capture, exits before it unless they
+    do. Under TLS 1.3's middlebox compatibility mode a client's dummy
+    ChangeCipherSpec may instead come before its second ClientHello,
+    after a HelloRetryRequest (RFC 9846 §E.4), so a segment holding
+    both leaves that plaintext ClientHello unchecked: a skipped check,
+    a possible false pass, never a false failure. Neither capture has
+    a HelloRetryRequest or another Handshake record after a
+    ChangeCipherSpec, and the script pins each scenario's frame count
+    and its corpus frames' content types, so none could enter
+    unnoticed."""
+    after_ccs = False
+    while data:
+        if not _tls_record_header_ok(data):
+            stats["tls-unchecked"] += 1
+            return []
+        kind, length = data[0], struct.unpack_from("!H", data, 3)[0]
+        if length > _TLS_MAX_LENGTH:
+            return ["tls-length"]
+        if 5 + length > len(data):
+            stats["tls-unchecked"] += 1
+            return []
+        fragment, data = data[5 : 5 + length], data[5 + length :]
+        stats["tls"] += 1
+        stats[f"tls-{_TLS_CONTENT_TYPES[kind]}"] += 1
+        if kind in (20, 21, 22) and not fragment:
+            return ["tls-empty"]
+        if kind == 20 and fragment != b"\x01":
+            return ["tls-ccs"]
+        if kind == 22 and fragment[0] == 1 and not after_ccs:
+            stats["tls-client-hello"] += 1
+            failure = _check_tls_client_hello(fragment, stats)
+            if failure:
+                return [failure]
+        after_ccs = after_ccs or kind == 20
+    return []
+
+
+def _tls_vector(data: bytes, at: int, width: int) -> tuple[bytes, int] | None:
+    """The ``width``-byte length-prefixed vector at ``at`` in ``data``,
+    and where it ends; ``None`` if it runs past ``data``."""
+    end = at + width + int.from_bytes(data[at : at + width], "big")
+    if at + width > len(data) or end > len(data):
+        return None
+    return data[at + width : end], end
+
+
+def _check_tls_client_hello(fragment: bytes, stats: Counter) -> str | None:
+    """Check a ClientHello's framing and its server_name (RFC 9846
+    §4.2.2, RFC 5246 §7.4.1.2, RFC 6066 §3); the failure, or ``None``."""
+    length = int.from_bytes(fragment[1:4], "big")
+    if len(fragment) < 4 or 4 + length > len(fragment):
+        return "tls-hello"
+    body = fragment[4 : 4 + length]
+    session_id = _tls_vector(body, 34, 1)
+    if session_id is None or len(session_id[0]) > 32:
+        return "tls-hello"
+    suites = _tls_vector(body, session_id[1], 2)
+    methods = None if suites is None else _tls_vector(body, suites[1], 1)
+    if methods is None:
+        return "tls-hello"
+    if methods[1] == len(body):
+        return None  # no extensions block (RFC 5246 §7.4.1.2)
+    block = _tls_vector(body, methods[1], 2)
+    if block is None or block[1] != len(body):
+        return "tls-hello"
+    extensions, cursor = block[0], 0
+    while cursor < len(extensions):
+        found = _tls_vector(extensions, cursor + 2, 2)
+        if cursor + 4 > len(extensions) or found is None:
+            return "tls-hello"
+        if extensions[cursor : cursor + 2] == b"\x00\x00":
+            stats["tls-server-name"] += 1
+            if not _tls_host_name_ok(found[0]):
+                return "tls-sni"
+        cursor = found[1]
+    return None
+
+
+def _tls_host_name_ok(data: bytes) -> bool:
+    """Whether a server_name extension's data is a ServerNameList of one
+    host_name that RFC 6066 §3 allows: printable ASCII, no trailing dot,
+    and not a literal IPv4 or IPv6 address."""
+    names = _tls_vector(data, 0, 2)
+    if names is None or names[1] != len(data) or names[0][:1] != b"\x00":
+        return False
+    host = _tls_vector(names[0], 1, 2)
+    if host is None or host[1] != len(names[0]) or not host[0]:
+        return False
+    name = host[0]
+    if not all(0x21 <= byte < 0x7F for byte in name) or name.endswith(b"."):
+        return False
+    try:
+        ipaddress.ip_address(name.decode("ascii"))
+    except ValueError:
+        return True
+    return False
 
 
 #: The Magic Cookie that starts bytes 4-7 of every STUN message since
@@ -1691,6 +1858,31 @@ def check_frame(frame: bytes, stats: Counter) -> list[str]:
     return _check_ethernet(frame, stats, 0)
 
 
+#: The name a session capture ends with: every frame of a few
+#: connections, kept in a directory beside the corpus rather than in it
+#: (tests/fixtures/bgp/bgp_session.pcap, tests/fixtures/tls/
+#: tls_session.pcap; see MANIFEST.md), where TCP's segments begin and
+#: end wherever TCP cut the stream.
+SESSION_SUFFIX = "_session.pcap"
+
+
+def check_capture_frame(
+    frame: bytes, stats: Counter, *, session: bool
+) -> list[str]:
+    """Validate one frame of a capture, as :func:`check_frame` does, and
+    in a capture that is not a session one (``session``, see
+    :data:`SESSION_SUFFIX`) fail a TCP segment on port 443 that carries
+    data but not whole TLS records (``tls-split``), which
+    :func:`_check_tls` only counts as ``tls-unchecked``: every corpus
+    segment on 443 must be whole records, while a session capture keeps
+    the segments a record spans."""
+    before = stats["tls-unchecked"]
+    failures = check_frame(frame, stats)
+    if not session and stats["tls-unchecked"] > before:
+        failures.append("tls-split")
+    return failures
+
+
 def _check_ethernet(
     frame: bytes, stats: Counter, depth: int, *, strict: bool = False
 ) -> list[str]:
@@ -1938,10 +2130,13 @@ def main() -> int:
         stats: Counter = Counter()
         failures: Counter = Counter()
         frames = 0
+        session = pcap.name.endswith(SESSION_SUFFIX)
         try:
             for frame in read_pcap(pcap):
                 frames += 1
-                for failure in check_frame(frame, stats):
+                for failure in check_capture_frame(
+                    frame, stats, session=session
+                ):
                     failures[failure] += 1
         except ValueError as e:
             print(f"[FAIL] {pcap.name}: {e}")

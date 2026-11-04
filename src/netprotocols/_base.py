@@ -136,12 +136,13 @@ public form.
 
 Decode context in ``next_protocol``
 -----------------------------------
-Four headers answer ``next_protocol()`` from what ``decode()`` saw
+Five headers answer ``next_protocol()`` from what ``decode()`` saw
 rather than from a wire field alone, because no field says what follows
 them. ``BGP`` names the next message beside it rather than a class for
 its payload: whether the bytes after the message begin another one in
 the same TCP segment. ``STUN`` does the same over TCP, where its
-messages follow one another with no framing but their own length.
+messages follow one another with no framing but their own length, and
+``TLS`` does for its records.
 ``MPLS`` names its payload by convention: by its
 bottom label where RFC 3032 reserves that label for one, and otherwise
 by the first nibble after the stack, read as an IP version. ``LLC``
@@ -150,9 +151,10 @@ Identifier other than STP's 0x0000, such as GARP's, ends the walk. Each
 ``decode()`` records what only the bytes could tell it on the instance,
 in a ``compare=False`` field outside its comparison and hash, so two
 equal headers compare equal wherever they were found, and can still
-chain differently. Steps 1-3 above hold for all four unchanged. See
+chain differently. Steps 1-3 above hold for all five unchanged. See
 :mod:`netprotocols.layer7.bgp`, :mod:`netprotocols.layer7.stun`,
-:mod:`netprotocols.layer2.mpls` and :mod:`netprotocols.layer2.llc`.
+:mod:`netprotocols.layer7.tls`, :mod:`netprotocols.layer2.mpls` and
+:mod:`netprotocols.layer2.llc`.
 """
 
 from __future__ import annotations
