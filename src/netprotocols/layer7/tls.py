@@ -1073,9 +1073,6 @@ class TLS(Protocol):
             ``"length"``).
         """
         size = len(data)
-        # TODO(#235): end ``data`` at IPv4's Total Length in decode_frame,
-        # so Ethernet padding after a bare segment does not reach this
-        # guard.
         _judge_lead(cls, data)
         content_type, version, length = cls._unpack_fixed(data)
         _judge_length(cls, length)

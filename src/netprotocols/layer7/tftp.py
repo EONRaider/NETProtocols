@@ -277,9 +277,6 @@ class TFTP(Protocol):
             ``"opcode"``, ``offset`` ``0``).
         """
         (opcode,) = cls._unpack_fixed(data)
-        # TODO(#235): bound ``data`` by the UDP length in decode_frame, so
-        # a trailer after the datagram stays out of DATA's data and out
-        # of a request's or OACK's options.
         end = cls._message_end(opcode, data)
         return cls(opcode=opcode, body=bytes(data[cls._struct.size : end]))
 

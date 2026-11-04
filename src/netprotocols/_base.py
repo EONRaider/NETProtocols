@@ -306,8 +306,6 @@ class Protocol(ABC):
     #: Layout of the fixed portion of the header, network byte order.
     _struct: ClassVar[Struct]
 
-    # TODO(#235): bound the payload by IPv4's, IPv6's and UDP's lengths
-    # too, and settle a public form for this flag and _payload_extent().
     #: Whether :meth:`_payload_extent` can bound this header's payload.
     #: A class attribute, so the chain walk tests it per layer without a
     #: call (see "Payload extent" in this module's docstring).

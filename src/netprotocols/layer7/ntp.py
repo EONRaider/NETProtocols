@@ -278,10 +278,6 @@ def _check_first_byte(owner: type, flags: int) -> None:
             expected="1-4",
             actual=version,
         )
-    # TODO(#272): decode mode 6 control messages (RFC 9327) instead of
-    # rejecting them.
-    # TODO(#271): give a walk a typed way to take port 123 out of
-    # dispatch, so control traffic need not stop a strict walk.
     if mode in _CONTROL_MODES:
         raise InvalidFieldError(
             f"NTP mode {mode} is a control message, not decoded",
@@ -550,8 +546,6 @@ class NTP(Protocol):
         """
         if data:
             _check_first_byte(cls, data[0])
-        # TODO(#235): bound ``data`` by the UDP length in decode_frame, so
-        # a trailer such as an Ethernet FCS stays out of the body.
         (
             flags,
             stratum,

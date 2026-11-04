@@ -331,9 +331,6 @@ class SCTP(Protocol):
         except (TruncatedHeaderError, InvalidFieldError):
             # Unwalkable: keep the rest verbatim, for parsed_chunks to
             # report and verify() to reject.
-            # TODO(#235): bound ``data`` by the IP length in decode_frame,
-            # so a nonzero trailer such as an Ethernet FCS stays out of
-            # ``chunks``.
             end = len(data)
         return cls(
             src_port=src_port,
@@ -369,8 +366,6 @@ class SCTP(Protocol):
         """The verification tag as a hex string, e.g. ``"0x7324d044"``."""
         return hex_str(self.verification_tag, 10)
 
-    # TODO(#238): add typed DATA, INIT and SACK chunk accessors and
-    # payload-protocol (PPID) dispatch.
     @property
     def parsed_chunks(self) -> tuple[SCTPChunk, ...]:
         """The chunks as :class:`SCTPChunk` objects, in wire order.

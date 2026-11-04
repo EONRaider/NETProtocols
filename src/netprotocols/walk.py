@@ -211,8 +211,6 @@ def decode_frame(
             header = protocol.decode(data[cursor:end])
             layers.append(header)
             cursor += header.header_len
-            # TODO(#235): bound the buffers by IPv4's, IPv6's and UDP's
-            # lengths too, keeping what is left over as a trailer.
             if header._BOUNDS_PAYLOAD:
                 end = _bounded(header, cursor, end)
             protocol = header.next_protocol(registry)

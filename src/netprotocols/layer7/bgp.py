@@ -875,8 +875,6 @@ class BGP(Protocol):
         decoded. The answer is always this class, never a table lookup,
         so ``registry`` has nothing to select.
         """
-        # TODO(#244): decode a segment of more messages than max_depth
-        # allows in one walk.
         return BGP if self._followed else None
 
     @property

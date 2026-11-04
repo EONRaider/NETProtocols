@@ -465,9 +465,7 @@ class TestExtent:
         assert packet.consumed == len(FRAMES[index])
         assert packet[RADIUS] == radius_of(index)
 
-    # TODO(#235): once the walk bounds RADIUS by the UDP length, this
-    # decode raises; rewrite the test to expect that.
-    def test_a_length_into_trailing_bytes_reads_them_pending_235(self):
+    def test_a_length_into_trailing_bytes_reads_them(self):
         """A Length past the datagram takes trailing bytes as attributes.
 
         The walk does not end the buffer at UDP's length, so a Length

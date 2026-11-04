@@ -259,7 +259,6 @@ _READERS: dict[int, Callable[[bytes], _Value]] = {
     _NAS_IP_ADDRESS: _address,
     _NAS_PORT: _integer,
     _FRAMED_IP_ADDRESS: _address,
-    # TODO(#275): decode the vendor attributes inside Vendor-Specific.
     _VENDOR_SPECIFIC: _raw,
 }
 
@@ -443,9 +442,6 @@ class RADIUS(Protocol):
                 expected=f">={_HEADER_LEN}",
                 actual=length,
             )
-        # TODO(#235): bound ``data`` by the UDP length in decode_frame, so
-        # a Length that overstates the datagram cannot take in the frame's
-        # trailing bytes as attributes.
         if length > len(data):
             raise TruncatedHeaderError(
                 f"RADIUS packet of {length} bytes, buffer holds {len(data)}",

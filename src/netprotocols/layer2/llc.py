@@ -148,9 +148,6 @@ start of the buffer and leave the rest, padding included, to whoever
 called them, who can bound it with ``frame[14 : 14 + eth.length]``.
 """
 
-# TODO(#235): have the walk end the buffer after an IPv4, IPv6 or UDP
-# header at the length it declares, as it does after an 802.3 Length.
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
