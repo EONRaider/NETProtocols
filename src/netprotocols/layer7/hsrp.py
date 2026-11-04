@@ -176,11 +176,14 @@ def _reject(owner: type, field: str, offset: int, value: int) -> NoReturn:
     if field == "version":
         expected = str(_VERSION)
         message = f"HSRP version must be {_VERSION}, got {value}"
+        # TODO(#280): decode HSRPv2 (UDP 1985) and HSRP for IPv6
+        # (UDP 2029).
         if value == 1:
             message += " (HSRPv2's Group State TLV type; not decoded)"
     elif field == "opcode":
         expected = "0-2"
         message = f"HSRP opcode must be 0-2, got {value}"
+        # TODO(#281): decode Op Code 3 (Advertise) messages.
         if value == _ADVERTISE:
             message += " (Cisco's interface-state Advertise; not decoded)"
     else:
@@ -225,9 +228,9 @@ class HSRP(Protocol):
     :param auth_data: The 8 bytes of Authentication Data, kept raw: a
         clear-text password, NUL-padded (see :attr:`password`).
     :param virtual_ip: The group's virtual IP address, dotted-decimal.
-    :raises InvalidFieldError: an integer field does not fit its byte,
-        or ``auth_data`` is not 8 bytes long.
-    :raises InvalidIPv4AddressError: ``virtual_ip`` is not a
+    :raises InvalidFieldError: if an integer field does not fit its
+        byte, or ``auth_data`` is not 8 bytes long.
+    :raises InvalidIPv4AddressError: if ``virtual_ip`` is not a
         dotted-decimal IPv4 address.
     """
 
@@ -277,11 +280,12 @@ class HSRP(Protocol):
         guess" in the module docstring). Anything after the 20 bytes is
         left undecoded.
 
-        :raises InvalidFieldError: the Version is not 0 (``field``
+        :param data: The buffer holding the message and what follows it.
+        :raises InvalidFieldError: if the Version is not 0 (``field``
             ``"version"``, ``offset`` 0), else the Op Code is not 0-2
             (``"opcode"``, 1), else the State is not one RFC 2281
             lists (``"state"``, 2), at any length.
-        :raises TruncatedHeaderError: ``data`` is shorter than 20 bytes
+        :raises TruncatedHeaderError: if ``data`` is shorter than 20 bytes
             and every leading byte it holds passes.
         """
         if len(data) > 0 and data[0] != _VERSION:
@@ -302,6 +306,8 @@ class HSRP(Protocol):
             auth_data,
             virtual_ip,
         ) = cls._unpack_fixed(data)
+        # TODO(#282): decode the MD5 Authentication TLV that can follow
+        # the 20 bytes.
         return cls(
             version=version,
             opcode=opcode,

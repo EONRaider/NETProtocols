@@ -1,4 +1,4 @@
-"""TFTP — the Trivial File Transfer Protocol (RFC 1350), with options.
+r"""TFTP — the Trivial File Transfer Protocol (RFC 1350), with options.
 
 TFTP (RFC 1350) moves a file over UDP in lockstep: one block in flight,
 each acknowledged before the next is sent. Every message starts with a
@@ -80,7 +80,7 @@ The message's extent
 --------------------
 
 TFTP has no length field, and the chain walk does not trim a frame to
-UDP's declared length (#235), so anything after the datagram, an
+UDP's declared length, so anything after the datagram, an
 Ethernet frame's zero padding or an FCS a capture kept, reaches the
 decoder. Each opcode bounds itself as far as its structure allows, and
 leaves what follows undecoded, past :attr:`TFTP.header_len`, so
@@ -107,17 +107,17 @@ leaves what follows undecoded, past :attr:`TFTP.header_len`, so
 
 Structure bounds a request or an OACK only so far: a trailer holding a
 zero byte can be read in as option bytes, and only the UDP length could
-tell (#235).
+tell.
 
 - After whole option pairs, a trailer reads as one more option when it
   holds a name, a zero byte, a value and a zero byte: an FCS
-  ``12 00 34 00`` decodes as ``("\\x12", "4")``. One that starts with a
+  ``12 00 34 00`` decodes as ``("\x12", "4")``. One that starts with a
   zero byte, as padding does, or holds fewer than two is left
   undecoded.
 - After a name with no value (an odd number of option strings), the
-  trailer's first zero byte ends that value. ``...tsize\\x00`` plus zero
+  trailer's first zero byte ends that value. ``...tsize\x00`` plus zero
   padding decodes ``("tsize", "")`` and keeps one padding byte, and plus
-  an FCS ``12 34 56 00`` decodes ``("tsize", "\\x124V")`` and keeps all
+  an FCS ``12 34 56 00`` decodes ``("tsize", "\x124V")`` and keeps all
   four; with no trailer the name is left undecoded as an option cut
   short.
 
@@ -231,7 +231,7 @@ def _option_pairs(
 
 @dataclass(frozen=True, slots=True)
 class TFTP(Protocol):
-    """A TFTP message (RFC 1350 §5; RFC 2347 for OACK and options).
+    r"""A TFTP message (RFC 1350 §5; RFC 2347 for OACK and options).
 
     Construction accepts any opcode that fits 16 bits and any body;
     :meth:`decode` is stricter (see the module docstring).
@@ -239,8 +239,8 @@ class TFTP(Protocol):
     :param opcode: ``1`` RRQ, ``2`` WRQ, ``3`` DATA, ``4`` ACK, ``5``
         ERROR, ``6`` OACK (see :attr:`opcode_name`).
     :param body: Everything after the opcode up to the message's end,
-        kept raw, e.g. ``b"boot.bin\\x00octet\\x00"`` for an RRQ or
-        ``b"\\x00\\x01"`` for an ACK of block 1; read by the accessors.
+        kept raw, e.g. ``b"boot.bin\x00octet\x00"`` for an RRQ or
+        ``b"\x00\x01"`` for an ACK of block 1; read by the accessors.
     """
 
     opcode: int
@@ -266,16 +266,20 @@ class TFTP(Protocol):
         The body ends where the opcode's structure does (see the module
         docstring); the rest of ``data`` is left undecoded.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :param data: The buffer holding the message and what follows it.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             opcode, a DATA or ACK has no 2-byte block number (``field``
             ``"block"``), an ERROR no 2-byte error code
             (``"error_code"``), or a filename, mode or error message
             has no zero byte after it (``"filename"``, ``"mode"``,
             ``"error_message"``); ``offset`` is where the field starts.
-        :raises InvalidFieldError: the opcode is not 1-6 (``field``
+        :raises InvalidFieldError: if the opcode is not 1-6 (``field``
             ``"opcode"``, ``offset`` ``0``).
         """
         (opcode,) = cls._unpack_fixed(data)
+        # TODO(#235): bound ``data`` by the UDP length in decode_frame, so
+        # a trailer after the datagram stays out of DATA's data and out
+        # of a request's or OACK's options.
         end = cls._message_end(opcode, data)
         return cls(opcode=opcode, body=bytes(data[cls._struct.size : end]))
 
@@ -325,10 +329,12 @@ class TFTP(Protocol):
 
     @classmethod
     def _string_end(cls, raw: bytes, start: int, field: str) -> int:
-        """Return the offset past the zero byte ending the string at
-        ``start``.
+        """Return the offset past the zero byte ending a string.
 
-        :raises TruncatedHeaderError: no zero byte follows ``start``.
+        :param raw: The message.
+        :param start: Where the string starts in ``raw``.
+        :param field: The field the string is, named in a raised error.
+        :raises TruncatedHeaderError: if no zero byte follows ``start``.
         """
         nul = raw.find(_NUL, start)
         if nul < 0:
@@ -507,12 +513,12 @@ class TFTP(Protocol):
 
     @property
     def data(self) -> bytes | None:
-        """Return a DATA's data: up to 512 bytes, or the negotiated
-        ``blksize``.
+        """Return a DATA's data.
 
-        It runs to the end of the buffer decode was given, so bytes
-        after the datagram, such as Ethernet padding, are part of it
-        (see the module docstring). ``None`` for another opcode.
+        That is up to 512 bytes, or the negotiated ``blksize``. It runs to
+        the end of the buffer decode was given, so bytes after the
+        datagram, such as Ethernet padding, are part of it (see the
+        module docstring). ``None`` for another opcode.
         """
         if self.opcode != _DATA or len(self.body) < 2:
             return None

@@ -208,9 +208,9 @@ class RIPEntry:
         ``"0.0.0.0"`` means the sender itself.
     :param metric: Hop count, ``1``-``15``, or ``16`` for unreachable
         (infinity); carried as the 32-bit field it is on the wire.
-    :raises InvalidIPv4AddressError: an address is not dotted-decimal.
-    :raises InvalidFieldError: ``afi``, ``route_tag`` or ``metric`` does
-        not fit its field.
+    :raises InvalidIPv4AddressError: if an address is not dotted-decimal.
+    :raises InvalidFieldError: if ``afi``, ``route_tag`` or ``metric``
+        does not fit its field.
 
     ``bytes(entry)`` is the 20-byte on-wire entry, so ``RIP(...,
     body=b"".join(map(bytes, entries)))`` builds a message.
@@ -420,15 +420,16 @@ class RIP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the header and keep the rest of ``data`` as the body.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 4 bytes.
-        :raises InvalidFieldError: the version is not 1 or 2 (``field``
+        :param data: The buffer holding the message.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 4 bytes.
+        :raises InvalidFieldError: if the version is not 1 or 2 (``field``
             ``"version"``, ``offset`` ``1``), or the command is 0
             (``field`` ``"command"``, ``offset`` ``0``).
         """
         command, version, reserved = cls._unpack_fixed(data)
         if version not in (1, 2):
-            # Checked here and not in __post_init__, as VXLAN's I flag
-            # is: a decoded message without one is most likely not RIP.
+            # Decode-only, like VXLAN's I flag: construction accepts any
+            # version.
             raise InvalidFieldError(
                 f"RIP version must be 1 or 2, got {version}",
                 protocol=cls,
