@@ -31,7 +31,7 @@ class TestEthernet:
 
     def test_unknown_ethertype_ends_chain(self):
         # 0x88B5 is IEEE 802's Local Experimental EtherType 1, which no
-        # protocol will be assigned (0x88CC, used here before, is LLDP).
+        # protocol will be assigned.
         eth = Ethernet(
             dst="ff:ff:ff:ff:ff:ff", src="00:07:0d:af:f4:54", ethertype=0x88B5
         )

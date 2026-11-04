@@ -4,10 +4,9 @@ The filter sits between CodeQL's analysis and the code scanning upload,
 so a mistake in either direction is silent: drop too much and real
 alerts never reach the Security tab, drop too little (or nothing, on
 SARIF it misreads) and the RFC-mandated MD5 in tests/ and scripts/
-turns every pull request red again. Each half gets its own tests here.
+turns every pull request red. Each half gets its own tests here.
 
-tests/fixtures/codeql/python.sarif is CodeQL CLI 2.27.3 output
-(the version the pinned CodeQL Action ran when this was written),
+tests/fixtures/codeql/python.sarif is CodeQL CLI 2.27.3 output,
 produced the way the action runs it: ``database analyze`` with
 ``--format=sarif-latest --sarif-add-baseline-file-info
 --sarif-group-rules-by-pack --sarif-include-query-help=always
@@ -17,8 +16,8 @@ tests/, a CHAP vector under a directory with a space in its name, a
 checker in scripts/, password hashing in src/) and two queries:
 py/weak-sensitive-data-hashing and py/clear-text-logging-sensitive-data.
 Two host details are scrubbed and nothing else: the CLI's install
-directory in ``tool.extensions`` (now ``file:///path/to/codeql/``) and
-the kernel version in the ``cli/platform`` notification (now ``0.0.0``).
+directory in ``tool.extensions`` (``file:///path/to/codeql/``) and the
+kernel version in the ``cli/platform`` notification (``0.0.0``).
 """
 
 import copy
@@ -103,9 +102,9 @@ def drops(result: dict[str, Any], **kwargs: Any) -> bool:
 
 
 class TestTheFixture:
-    """Pins what the filter was written against, so a regenerated
-    fixture that no longer looks like CodeQL's output fails here rather
-    than quietly testing something else."""
+    """Pins the fixture's shape, so a regenerated fixture that does not
+    look like CodeQL's output fails here rather than quietly testing
+    something else."""
 
     def test_it_is_codeql_sarif_2_1_0(self) -> None:
         log = fixture()
@@ -124,8 +123,8 @@ class TestTheFixture:
     def test_without_a_category_the_cli_writes_no_automation_details(
         self,
     ) -> None:
-        """Why codeql.yml sets no ``category``: the CLI leaves the
-        automation id to the action, which derives the same one in
+        """Without a ``category`` (codeql.yml sets none) the CLI leaves
+        the automation id to the action, which derives the same one in
         analyze and in upload-sarif (see test_workflows.py)."""
         assert "automationDetails" not in fixture()["runs"][0]
 

@@ -1,15 +1,15 @@
-"""Structured parse diagnostics on ProtocolError (#91).
+"""Structured parse diagnostics on ProtocolError.
 
 Every raise site in ``src/`` attaches ``protocol`` and, where
 meaningful, ``offset``/``field``/``expected``/``actual`` — this file
-pins the contract itself (defaults, message text unchanged) and spot
-checks representative raise sites across the three shapes that exist:
-a ``decode()``-time raise (offset relative to the ``data`` argument), a
-``__post_init__`` raise (no buffer, so no offset), and an on-demand
-property parsing an already-materialized ``bytes`` attribute (offset
-relative to that attribute, named by ``field``). HTTP, the one
-text-framed protocol, is the exception pinned in
-``TestTextFramedOffsets``.
+pins the contract itself (defaults, message text the keywords leave
+alone) and spot checks representative raise sites across the three
+shapes that exist: a ``decode()``-time raise (offset relative to the
+``data`` argument), a ``__post_init__`` raise (no buffer, so no
+offset), and an on-demand property parsing an already-materialized
+``bytes`` attribute (offset relative to that attribute, named by
+``field``). HTTP, the one text-framed protocol, is the exception pinned
+in ``TestTextFramedOffsets``.
 """
 
 from dataclasses import replace
@@ -385,9 +385,9 @@ class TestPacketAndChecksumRaises:
         assert excinfo.value.protocol is ARP
 
 
-#: Exception class names this sweep checks. Kept separate from the
-#: library's own exception hierarchy so this test does not need to
-#: import every module to enumerate subclasses.
+#: Exception class names this sweep checks. Listed here, apart from the
+#: library's own exception hierarchy, so this test enumerates them
+#: without importing every module.
 _PROTOCOL_ERROR_NAMES = frozenset(
     {
         "TruncatedHeaderError",
@@ -459,9 +459,9 @@ class TestTextFramedOffsets:
 
 
 class TestEveryRaiseSiteIsInstrumented:
-    """The acceptance criterion, enforced structurally rather than by
-    eyeballing a diff: every ProtocolError subclass raised anywhere in
-    src/ sets protocol=, except the one documented exception."""
+    """Every ProtocolError subclass raised anywhere in src/ sets
+    protocol=, except the one documented exception, checked over the
+    source's AST."""
 
     def test_every_raise_site_sets_protocol(self):
         sites = _every_protocol_error_raise()
@@ -486,8 +486,7 @@ class TestEveryRaiseSiteIsInstrumented:
 
 class TestUtilityFunctionsWithoutAProtocol:
     """random_mac() validates a free-standing argument, not a header
-    field — the one raise site with no protocol= (verified by an AST
-    sweep during development; documented here as the reason)."""
+    field — the one raise site with no protocol=."""
 
     def test_manufacturer_code_has_no_protocol_but_has_a_field(self):
         with pytest.raises(InvalidManufacturerCodeError) as excinfo:
