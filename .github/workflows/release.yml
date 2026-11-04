@@ -99,7 +99,7 @@ jobs:
       # repository, this workflow file and the pypi environment, and
       # authenticated through `id-token: write` above. Scorecard's
       # Packaging check recognizes this action's `uses:` line.
-      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1 (v1.14.2)
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1 (v1.14.3)
 
   github-release:
     needs: publish
