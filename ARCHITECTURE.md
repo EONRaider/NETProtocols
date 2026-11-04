@@ -1015,8 +1015,8 @@ or enough of it is present to show it names no host) or *not reached*
 (not `complete`: the bytes ended first, which is not "no SNI").
 *Absent* speaks for the first record only: a ChangeCipherSpec and
 then a ClientHello with a name in one segment, as TLS 1.3's middlebox
-compatibility mode sends after a HelloRetryRequest (RFC 9846 Appendix
-E.4), is *absent*, as `TLS.server_name` is `None` for that first
+compatibility mode sends after a HelloRetryRequest (RFC 9846
+§E.4), is *absent*, as `TLS.server_name` is `None` for that first
 record; a caller who wants to look past whole records calls
 `TLS.decode()` on the first and peeks `data[tls.header_len:]`. Under
 ECH a *found* name is the outer ClientHello's, the client-facing
@@ -1035,7 +1035,11 @@ its orders (exact; 54.45% and 54.40% over 100,000 `random.Random(0)`
 permutations of each captured hello's 17 non-GREASE extensions, GREASE
 kept first and last), as it did for the first of its two captured
 connections, at byte 184, and not the second, at byte 1729, behind its
-1267-byte key share. The function's docstring gives the method.
+1267-byte key share. The exact figure counts the orders of those 17
+extensions, at their captured sizes, in which `server_name` ends inside
+the first 1448 bytes: every order that puts the key share after
+`server_name`, and of the others only those whose extensions before the
+name hold 40 bytes or fewer.
 `TLS.client_hello` and `TLS.server_name` parse the fragment on demand
 and never in `decode()`; there is no cryptography, and nothing past the
 ClientHello's fields and its server_name extension is decoded (the

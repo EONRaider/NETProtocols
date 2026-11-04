@@ -70,11 +70,8 @@ buffer whose leading bytes all pass. 1 Version, 3 Op Codes and 6 States
 pass of the 16,777,216 values the first three bytes can take, so a
 random datagram on port 1985 is rejected all but 18 times in that many
 (about 1 in 932,000), and always when it is shorter than 20 bytes.
-That is rare, not never: of the 90,000 random walks to port 1985
-ARCHITECTURE.md describes, about 0.1 are expected to decode an HSRP
-layer (90,000 x 18 / 2^24 = 0.097, a little less since a few payloads
-are too short to reach 20 bytes), and 2 did, one 46-byte payload walked
-both unpadded and padded. The other fields are not judged: any Hellotime,
+That is rare, not never: a random payload of 20 bytes or more decodes
+as HSRP about once in 932,000. The other fields are not judged: any Hellotime,
 Holdtime, Priority, Group, Reserved byte, Authentication Data and
 Virtual IP Address decodes.
 

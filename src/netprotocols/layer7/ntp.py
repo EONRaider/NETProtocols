@@ -70,7 +70,7 @@ keeps it as a float.
 A conversion is only as meaningful as the value: chrony's client fills
 its request's Transmit Timestamp with random bits, which the server
 returns as the Origin Timestamp, so that it can match the answer
-without telling the server its clock (the corpus holds such requests).
+without telling the server its clock.
 
 After the header
 ----------------

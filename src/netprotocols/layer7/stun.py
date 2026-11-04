@@ -140,8 +140,7 @@ lax one stops with ``packet.stopped_by`` set. A larger ``max_depth``
 decodes the rest, and so does walking on from ``packet.consumed`` with
 ``start=STUN`` as many times as it takes, as
 :mod:`netprotocols.layer7.bgp` describes: a walk that starts there has
-room for 32 messages, so the 72 take three walks. The corpus's TCP
-segments carry 2 messages each.
+room for 32 messages, so the 72 take three walks.
 
 Decoding a guess
 ----------------

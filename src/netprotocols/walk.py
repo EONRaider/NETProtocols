@@ -52,11 +52,11 @@ chain always terminates; but a crafted frame can nest far enough to
 waste real time. ``max_depth`` bounds it, and
 exceeding it raises :class:`~netprotocols.MaxDepthExceededError` (or,
 in lax mode, ends the walk and is reported). The default of
-:data:`MAX_DEPTH` is generous for nested headers: the deepest such
-chain in the project's corpus is 7 layers (an ICMP echo tunnelled
-through VXLAN: Ethernet, IPv4, UDP, VXLAN, then the inner Ethernet,
-IPv4 and ICMPv4), and even a doubly-tagged QinQ frame carrying IPv6
-with three extension headers and DNS over TCP reaches 11. A tunnel
+:data:`MAX_DEPTH` is generous for nested headers: an ICMP echo
+tunnelled through VXLAN is 7 layers (Ethernet, IPv4, UDP, VXLAN, then
+the inner Ethernet, IPv4 and ICMPv4), and even a doubly-tagged QinQ
+frame carrying IPv6 with three extension headers and DNS over TCP
+reaches 11. A tunnel
 nested inside a tunnel is what the ceiling is for: each level of VXLAN
 adds four layers, so the default stops a frame nested eight levels
 deep. BGP, STUN over TCP and TLS are the exceptions that nest nothing,
@@ -71,12 +71,10 @@ smallest protected records, 22 bytes with a 16-byte AEAD tag, or 103
 of the 14-byte ones TLS_AES_128_CCM_8_SHA256 allows
 (:mod:`netprotocols.layer7.tls`), where 30 of 22 bytes already exceed
 the 29; one captured with GRO or TSO on, over loopback or on a
-jumbo-frame link is larger still. The corpus's deepest chain, a segment
-of 7 BGP UPDATEs captured with offload off and well inside the limit,
-is 10 layers, and TLS's busiest segment carries 6 records, 9 layers. A
-strict walk of a segment past the limit raises
-:class:`~netprotocols.MaxDepthExceededError` and a lax one stops short
-with ``stopped_by`` set. A larger ``max_depth`` decodes the rest, and
+jumbo-frame link is larger still. A strict walk of a segment past the
+limit raises :class:`~netprotocols.MaxDepthExceededError` and a lax
+one stops short with ``stopped_by`` set. A larger ``max_depth``
+decodes the rest, and
 so does walking on from ``packet.consumed`` with ``start=BGP`` (or
 ``start=STUN``, ``start=TLS``) as many times as it takes: a walk that
 starts there has room for 32 messages or records, so the 76 KEEPALIVEs,
@@ -103,10 +101,9 @@ On ``memoryview``
 
 The walk slices whatever it is given and does not convert: each
 decoder receives a slice of the caller's own ``bytes`` or
-``memoryview``. For a single small frame, ``bytes`` is the faster
-input, since a ``memoryview`` slice costs more to build than the copy
-it saves; a ``memoryview`` over a large contiguous buffer keeps the
-slices zero-copy.
+``memoryview``. A ``memoryview`` over a large contiguous buffer keeps
+the slices zero-copy; for a small frame, ``bytes`` slices are copies
+of a few bytes.
 """
 
 from __future__ import annotations
@@ -125,19 +122,18 @@ from netprotocols.utils.exceptions import (
 __all__ = ["MAX_DEPTH", "decode_frame"]
 
 #: Default ceiling on how many headers one frame may chain. Generous
-#: against nested headers (the corpus peaks at 7, a VXLAN-tunnelled
-#: echo) and small enough that a hostile frame cannot turn one walk into
-#: thousands of decodes. Not generous for BGP, STUN over TCP or TLS,
-#: one layer per message or record: a valid TCP segment of more than 29
-#: exceeds it. A 1448-byte segment holds 76 BGP KEEPALIVEs or 30
-#: one-prefix UPDATEs, 72 bare 20-byte STUN headers, or 65 of TLS 1.3's
-#: 22-byte protected records (103 of 14 bytes); the corpus peaks at 7
-#: BGP UPDATEs, a 10-layer chain, and TLS at 6 records, 9 layers. Walk
-#: on from ``packet.consumed`` with ``start=BGP``, ``start=STUN`` or
-#: ``start=TLS`` as many times as it takes (each such walk takes up to
-#: 32 more, so 76 KEEPALIVEs need three walks), or pass a larger
-#: ``max_depth``; see :mod:`netprotocols.layer7.bgp`,
-#: :mod:`netprotocols.layer7.stun` and :mod:`netprotocols.layer7.tls`.
+#: against nested headers (a VXLAN-tunnelled echo is 7) and small
+#: enough that a hostile frame cannot turn one walk into thousands of
+#: decodes. Not generous for BGP, STUN over TCP or TLS, one layer per
+#: message or record: a valid TCP segment of more than 29 exceeds it. A
+#: 1448-byte segment holds 76 BGP KEEPALIVEs or 30 one-prefix UPDATEs,
+#: 72 bare 20-byte STUN headers, or 65 of TLS 1.3's 22-byte protected
+#: records (103 of 14 bytes). Walk on from ``packet.consumed`` with
+#: ``start=BGP``, ``start=STUN`` or ``start=TLS`` as many times as it
+#: takes (each such walk takes up to 32 more, so 76 KEEPALIVEs need
+#: three walks), or pass a larger ``max_depth``; see
+#: :mod:`netprotocols.layer7.bgp`, :mod:`netprotocols.layer7.stun` and
+#: :mod:`netprotocols.layer7.tls`.
 MAX_DEPTH = 32
 
 

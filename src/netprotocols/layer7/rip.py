@@ -62,10 +62,9 @@ then split that body without raising:
   which nothing in the message bounds reliably.
   It is not sized by Auth Data Len, which senders fill in two
   ways: the digest's own length, as RFC 4822 says, or that plus the
-  trailer's 4-byte header. BIRD 2.14 does each: the corpus's keyed-MD5
-  messages declare 20 for a 16-byte digest, its HMAC-SHA-256 ones 32
-  for a 32-byte digest. FRR's ripd has a switch between two keyed-MD5
-  lengths for the same reason (``auth-length rfc|old-ripd``).
+  trailer's 4-byte header. Implementations differ, and FRR's ripd has
+  a switch between the two keyed-MD5 lengths
+  (``auth-length rfc|old-ripd``).
 - :attr:`RIP.remainder` is what is left after the last whole entry
   when the message has no trailer: fewer than 20 bytes, which cannot be
   an entry.

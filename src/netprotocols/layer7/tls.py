@@ -58,19 +58,10 @@ byte can bring that length within the bound.
 
 Random bytes pass the first three checks 25 times in 2**24 (5 types, 1
 major and 5 minor version bytes), about once in 671,000, and then the
-length has to fit the buffer. Measured as ARCHITECTURE.md's *Port-based
-dispatch is best-effort* describes (``random.Random`` seeds 0-2, each
-10,000 random 300-byte TCP payloads to port 443 and 10,000 of uniformly
-random length 0-600, the latter walked unpadded and padded: 90,000
-walks), every walk ended with ``stopped_by`` set and none decoded a TLS
-layer: about 0.13 of them are expected to pass the first three checks
-(90,000 x 25 / 2**24) and about 0.0006 to hold a whole record as well.
-With the first three bytes forced to a valid header (a ContentType of
-20-24, ``0x03`` and 0-4), :meth:`TLS.decode` accepted 449 of 100,000
-random 300-byte payloads (``random.Random(0)``), near the 452 expected:
-a length of 0-295 is 296 of the 65,536 values. The fragment is not
-judged: a zero-length Handshake record, which RFC 9846 §5.1 forbids,
-decodes, and so does Heartbeat.
+length has to fit the buffer: after a valid first three bytes, a
+300-byte buffer holds a whole record for 296 of the 65,536 lengths
+(0-295). The fragment is not judged: a zero-length Handshake record,
+which RFC 9846 §5.1 forbids, decodes, and so does Heartbeat.
 
 The guard is what turns away an SSL 2.0-compatible ClientHello, whose
 first byte has its top bit set (RFC 5246 §E.2), at
@@ -92,7 +83,7 @@ what it can without reassembly:
   so the answer is recorded on the instance, outside the comparison and
   hash, and two equal records compare equal wherever they were found.
   A server's TLS 1.3 flight (ServerHello, ChangeCipherSpec and four
-  encrypted records) is one segment of six records in the corpus.
+  encrypted records) can arrive as one segment of six records.
 - A segment whose last record is cut by the segment boundary decodes
   the complete ones and then raises
   :class:`~netprotocols.TruncatedHeaderError` at the cut one, since its
@@ -118,9 +109,8 @@ what it can without reassembly:
 
 A ClientHello larger than one segment is the case that matters most. A
 post-quantum key share makes one: Chromium's X25519MLKEM768 share is
-1,216 bytes, and its ClientHello in ``tests/fixtures/tls/tls_session.pcap``
-is a 1,738-byte record that TCP carries in a 1,448-byte segment and a
-290-byte one. A strict walk of the first raises
+1,216 bytes, which puts its ClientHello past one 1,448-byte segment.
+A strict walk of the first segment raises
 :class:`~netprotocols.TruncatedHeaderError` (the lax one keeps TCP and
 stops), and of the second :class:`~netprotocols.InvalidFieldError`.
 There is no lenient mode of :meth:`TLS.decode` that reads a partial
@@ -131,10 +121,9 @@ Without reassembly, :func:`peek_server_name`, a separate function and
 opt-in, walks the ClientHello in the first segment as far as its bytes
 go and answers whether the name was *found*, is *absent*, or was *not
 reached*, which is not "no SNI" (see :class:`TLSServerNamePeek`).
-Chromium shuffles its extensions, so its name lies in the first
-segment about 54% of the time, and it did for one of its two captured
-hellos; the other clients' hellos fit one segment, so their answer is
-always complete. Its function docstring gives the measurements.
+Chromium shuffles its extensions per connection, so whether its name
+lies in the first segment varies by connection; a ClientHello that
+fits one segment always gets a complete answer.
 
 Each record being a layer, a segment of many is a deep chain: Ethernet,
 IPv4 and TCP are three layers, and the walk's default ``max_depth`` of
@@ -157,7 +146,7 @@ one stops with ``packet.stopped_by`` set. A larger ``max_depth``
 decodes the rest, and so does walking on from ``packet.consumed`` with
 ``start=TLS`` as many times as it takes, as for BGP: a walk that starts
 there has room for 32 records, so the 65 take three walks and the 103
-four. The corpus's busiest segment carries 6.
+four.
 
 The handshake and the ClientHello
 ---------------------------------
@@ -1269,9 +1258,9 @@ def _peek_host_name(fragment: bytes) -> str | None:
 def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     """Read the SNI host name from the start of a ClientHello's record.
 
-    Opt-in, for a ClientHello larger than one segment, such as the
-    1,738-byte one Chromium sends with its X25519MLKEM768 key share,
-    whose first segment :meth:`TLS.decode` rejects as a record cut
+    Opt-in, for a ClientHello larger than one segment, such as the one
+    Chromium sends with its 1,216-byte X25519MLKEM768 key share, whose
+    first segment :meth:`TLS.decode` rejects as a record cut
     short. ``data`` starts at a record header, as a TCP segment's
     payload does, and may end anywhere: the ClientHello is walked as far
     as the bytes go, and the answer, a :class:`TLSServerNamePeek`, is
@@ -1317,25 +1306,11 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     malformed after its ``server_name`` extension is *found*, and
     :attr:`TLS.server_name` raises for its whole record.
 
-    Measured over the captures in ``tests/fixtures``: curl (OpenSSL
-    3.0), gnutls-cli, ``openssl s_client`` and curl capped at TLS 1.2
-    send ClientHellos of 517, 392, 293 and 225 bytes, inside one
-    1,448-byte segment, so their answer is always complete, *found* at
-    byte 167, 206 and 129 of the record and *absent* at byte 255 for
-    ``s_client -noservername``. Chromium's two are 1,738 bytes, cut
-    after 1,448: the first connection's ``server_name`` ends at byte
-    184, *found*, and the second's at byte 1,729, *not reached*.
-    Chromium shuffles its extensions per connection, GREASE kept first
-    and last, so its hit rate is a probability: permuting the 17
-    others of each captured hello 100,000 times (``random.Random(0)``,
-    sizes as captured, no ``pre_shared_key`` to keep last), the
-    ``server_name`` extension ended inside the first 1,448 bytes 54.45%
-    and 54.40% of the time, against an exact 54.42%
-    (3,333,817 / 6,126,120). The key share, 1,267 bytes with its
-    header, decides it: when it follows ``server_name``, half the
-    orders, the name always ends inside the segment, and when it comes
-    first, only if the other extensions before the name hold 40 bytes
-    or fewer.
+    A record that fits in ``data`` always gets a complete answer. When
+    a ClientHello whose extensions are shuffled is cut at a segment
+    boundary, the name ends before the cut when the key share follows
+    ``server_name``, and otherwise only if the extensions before the
+    name are short.
 
     :param data: Bytes starting at a record header, cut anywhere.
     :returns: *found*, *absent* or *not reached*.

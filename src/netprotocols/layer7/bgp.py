@@ -56,11 +56,8 @@ body the decoder can only interpret with session state it may not have
 (see *Out of scope* below).
 
 The Marker alone is a strong guard against a wrong port guess: random
-bytes pass it once in 2**128 tries. Over 10,000 random 300-byte TCP
-payloads sent to port 179 and walked with
-``decode_frame(..., lax=True)``, every walk ended with ``stopped_by``
-set, as it did for 10,000 payloads of uniformly random length 0-600;
-see ARCHITECTURE.md's *Port-based dispatch is best-effort*.
+bytes pass it once in 2**128 tries (see ARCHITECTURE.md's *Port-based
+dispatch is best-effort*).
 
 Messages and segments
 ---------------------
@@ -117,8 +114,7 @@ payload an IPv4 packet can carry (3,447 KEEPALIVEs), so no fixed depth
 covers every segment. Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic, and a
 lax one stops with ``packet.stopped_by`` set to that error and
-``packet.consumed`` short of the frame. The corpus, captured with
-offload off, never reaches it: its busiest segment carries 7 messages.
+``packet.consumed`` short of the frame.
 
 There are two ways past the limit. One is a larger ``max_depth``: three
 more than the segment's whole messages decodes them all in an untagged
@@ -155,7 +151,7 @@ MULTI_EXIT_DISC and LOCAL_PREF) is kept as raw ``bytes``. Its segments
 carry 2-byte AS numbers or, between speakers that both advertised the
 RFC 6793 capability in their OPENs, 4-byte ones, and the segment format
 has no field saying which; BIRD and FRR negotiate 4-byte AS numbers by
-default, so real captures, the corpus's included, carry 4-byte ones.
+default, so their sessions carry 4-byte ones.
 Three other negotiated features change the body in ways the decoder
 cannot see either: capability values
 (RFC 5492) stay raw inside the Capabilities optional parameter;
