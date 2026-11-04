@@ -506,7 +506,7 @@ class CDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the CDP PDU at the start of ``data``; see the module.
 
-        :param data: The buffer, starting at the Version byte and ending
+        :param data: The buffer, starting at the Version byte. It ends
             where the PDU ends.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             4-byte header (no ``field``); a TLV whose Length is 4 or
@@ -554,7 +554,7 @@ class CDP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the PDU's length: the header and every TLV."""
+        """The whole message: the 4-byte header and every TLV."""
         return self._struct.size + sum(tlv.length for tlv in self.tlvs)
 
     @property
@@ -603,7 +603,7 @@ class CDP(Protocol):
 
         The value's first 4 bytes, big-endian, as packet-cdp.c reads
         them; ``None`` when there is no such TLV or its value is
-        shorter (see :attr:`capability_names`).
+        shorter (degrades, never raises; see :attr:`capability_names`).
         """
         tlv = self.tlv(_CAPABILITIES)
         if tlv is None or len(tlv.value) < 4:

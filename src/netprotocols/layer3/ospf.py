@@ -490,7 +490,7 @@ class OSPF(Protocol):
     :param instance_id: The OSPFv2 instance the packet belongs to (RFC
         6549 §2), header byte 14: ``0`` is the base IPv4 unicast
         instance, and the only one before RFC 6549.
-    :param au_type: The authentication type (RFC 2328 Appendix D),
+    :param au_type: The authentication type (RFC 2328 §D),
         header byte 15: ``0`` none, ``1`` simple password, ``2``
         cryptographic, ``3`` cryptographic with extended sequence
         numbers (RFC 7474) (see :attr:`au_type_name`).
@@ -749,8 +749,10 @@ class OSPF(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Packet Length plus the authentication trailer, if any."""
-        # The whole packet, and the trailer after it: OSPF is terminal.
+        """The whole message: Packet Length plus the authentication trailer.
+
+        The trailer is empty when the packet has none. OSPF is terminal.
+        """
         return self.packet_length + len(self.auth_trailer)
 
     @property

@@ -21,8 +21,8 @@ Where an LLDPDU ends
 --------------------
 There is no length for the whole LLDPDU, and Ethernet's zero padding or
 a captured FCS can follow it in the buffer :meth:`LLDP.decode` is handed
-(an EtherType bounds nothing, so the walk hands it the rest of the
-frame). An LLDPDU's own End of LLDPDU TLV
+(after an EtherType the walk hands it the rest of the frame; behind
+SNAP an 802.3 Length ends it). An LLDPDU's own End of LLDPDU TLV
 (type 0, length 0) marks its end, and is what bounds it here:
 
 * ``decode`` walks the TLVs from the start of the buffer and stops after
@@ -394,7 +394,7 @@ class LLDP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the length of the LLDPDU: every TLV, End included."""
+        """The whole message: every TLV, End included."""
         return sum(2 + len(tlv.value) for tlv in self.tlvs)
 
     def _at(self, index: int) -> LLDPTLV | None:
@@ -406,7 +406,8 @@ class LLDP(Protocol):
         """Return the Chassis ID, read from the first TLV.
 
         ``None`` when the first TLV is not a Chassis ID TLV, or its
-        value cannot hold a subtype and an identifier of 1 to 255 bytes.
+        value cannot hold a subtype and an identifier of 1 to 255 bytes
+        (degrades, never raises).
         """
         return LLDPChassisID._from_tlv(self.tlvs[0])
 
@@ -415,7 +416,8 @@ class LLDP(Protocol):
         """Return the Port ID, read from the second TLV.
 
         ``None`` when there is none, it is not a Port ID TLV, or its
-        value cannot hold a subtype and an identifier of 1 to 255 bytes.
+        value cannot hold a subtype and an identifier of 1 to 255 bytes
+        (degrades, never raises).
         """
         tlv = self._at(1)
         return None if tlv is None else LLDPPortID._from_tlv(tlv)
@@ -428,8 +430,9 @@ class LLDP(Protocol):
         Wireshark's dissector cites it): forget this sender's
         information now (see :attr:`is_shutdown`). ``None`` when there
         is no third TLV, it is not a Time To Live TLV, or its value is
-        shorter than 2 bytes. Bytes past the first two are ignored, as
-        lldpd's receiver ignores them; they stay in the TLV's value.
+        shorter than 2 bytes (degrades, never raises). Bytes past the
+        first two are ignored, as lldpd's receiver ignores them; they
+        stay in the TLV's value.
         """
         tlv = self._at(2)
         if tlv is None or tlv.type != _TIME_TO_LIVE or len(tlv.value) < 2:

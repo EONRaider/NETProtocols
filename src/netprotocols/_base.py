@@ -344,7 +344,7 @@ class Protocol(ABC):
 
     @property
     def header_len(self) -> int:
-        """Length of this header in bytes.
+        """The header's length in bytes: the fixed struct's size.
 
         Fixed-size protocols inherit this default; variable-length
         headers (IPv4, TCP) override it to account for options.
@@ -364,7 +364,7 @@ class Protocol(ABC):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the class that decodes this header's payload, if known.
+        """Return the class for this header's payload, if known.
 
         ``None`` means the chain ends here: the protocol never
         encapsulates another (ARP, UDP), the encapsulated protocol is

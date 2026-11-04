@@ -179,7 +179,8 @@ class SCTPChunk:
     def type_name(self) -> str:
         """Display name of the chunk type, e.g. ``"INIT ACK"``.
 
-        ``"unknown (n)"`` for types this library does not name.
+        ``"unknown (n)"`` for types this library does not name (degrades,
+        never raises).
         """
         return _CHUNK_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
@@ -255,7 +256,9 @@ def _walk_chunks(
             )
         type_, flags, length = _CHUNK_HEADER.unpack_from(raw, cursor)
         if length < _CHUNK_HEADER.size:
-            # The zero-tail scan runs only for a length below 4.
+            # The zero-tail scan runs on two paths only: fewer than 4
+            # bytes remain for a chunk header, or a chunk's length is
+            # below 4. A walk of valid chunks never scans.
             if not any(memoryview(raw)[cursor:]):
                 return
             raise InvalidFieldError(
@@ -316,7 +319,7 @@ class SCTP(Protocol):
         parse is kept in :attr:`chunks` as is, so past the common header
         this never raises (see the module docstring).
 
-        :param data: The buffer holding the packet and what follows it.
+        :param data: The buffer, starting at the common header.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             12-byte common header.
         """
@@ -353,7 +356,7 @@ class SCTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Length of the whole packet: the common header and the chunks."""
+        """The whole message: the 12-byte common header and the chunks."""
         return self._struct.size + len(self.chunks)
 
     @property

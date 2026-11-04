@@ -6,10 +6,12 @@ since the Unix epoch, and the frame's raw bytes, ready for
 :func:`~netprotocols.decode_frame`. ``read_pcap``/``read_pcapng`` read
 one known format.
 
-Each reader copies its input once (``bytes(buffer)``) before reading
-any frame and slices every frame from that copy, so
-``CapturedFrame.data`` is always plain ``bytes``, whether the input was
-``bytes`` or a ``memoryview``.
+Each reader copies its input once (``bytes(buffer)``) and slices every
+frame from that copy, so ``CapturedFrame.data`` is always plain
+``bytes``, whether the input was ``bytes`` or a ``memoryview``. The
+copy is taken when iteration starts, not on the call: a ``memoryview``
+over a ``bytearray`` that is mutated between the call and the first
+``next()`` is read as mutated.
 
 ``read_captures`` checks the magic number on the call itself: a buffer
 too short to hold one, or one matching neither format, raises
@@ -103,9 +105,11 @@ def read_pcap(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
     docstring).
 
     :param buffer: The whole capture, starting at its magic number.
-    :raises MalformedCaptureError: if the magic number is unrecognized,
-        the global header does not fit, or a record's header or
-        declared captured length runs past the buffer.
+    :raises MalformedCaptureError: if the buffer is too short for the
+        4-byte magic number; the magic number is not a classic-pcap one;
+        the buffer is too short for the 24-byte global header; a
+        16-byte record header runs past the buffer; or a record's
+        ``incl_len`` runs past the buffer.
     """
     data = bytes(buffer)
     if len(data) < 4:
@@ -218,12 +222,16 @@ def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
 
     :param buffer: The whole capture, starting at its first Section
         Header Block.
-    :raises MalformedCaptureError: if a block header, its byte-order
-        magic, or a declared length runs past the buffer; a block's
-        leading and trailing length fields disagree; a block appears
-        before any Section Header Block; or an Enhanced Packet Block
-        references an interface no Interface Description Block in its
-        section has declared yet.
+    :raises MalformedCaptureError: if the buffer does not start with a
+        Section Header Block's type; an 8-byte block header runs past
+        the buffer; a Section Header Block is too short for its
+        byte-order magic, or that magic is unrecognized; a block's total
+        length is below 12 or not a multiple of 4, runs past the buffer,
+        or disagrees with its trailing copy; an Enhanced Packet Block is
+        shorter than 32 bytes, declares more captured bytes than it
+        holds, or references an interface no Interface Description Block
+        in its section has declared yet; or a Simple Packet Block is
+        shorter than 16 bytes.
     """
     data = bytes(buffer)
     if len(data) < 4 or data[:4] != _SHB_TYPE:
@@ -345,7 +353,7 @@ def _idb_tsresol(
     """Return the raw ``if_tsresol`` byte of an Interface Description Block.
 
     It is read from the block's options list; the format default is
-    returned if the option is absent (RFC-draft §4.2).
+    returned if the option is absent (draft-ietf-opsawg-pcapng §4.2).
     """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
@@ -367,7 +375,8 @@ def _timestamp_ns(raw: int, if_tsresol: int) -> int:
     """Convert an ``if_tsresol``-scaled integer timestamp to nanoseconds.
 
     High bit set: resolution is a negative power of 2 (the low 7 bits
-    are the exponent); clear: a negative power of 10 (RFC-draft §4.2).
+    are the exponent); clear: a negative power of 10
+    (draft-ietf-opsawg-pcapng §4.2).
     Integer floor division truncates any resolution finer than a
     nanosecond; no float arithmetic is involved.
     """
@@ -436,8 +445,8 @@ def _spb_frame(
     data: bytes, block_start: int, block_len: int, endian: _Endian
 ) -> CapturedFrame:
     # Simple Packet Block carries no timestamp and no interface
-    # reference at all (RFC-draft §4.4) — CapturedFrame.timestamp is 0
-    # for these, documented on the class itself.
+    # reference at all (draft-ietf-opsawg-pcapng §4.4), so
+    # CapturedFrame.timestamp is 0 for these, documented on the class.
     if block_len < 16:
         raise MalformedCaptureError(
             "pcapng Simple Packet Block is too short for its fixed "

@@ -158,7 +158,7 @@ from netprotocols.utils.exceptions import (
 
 __all__ = ["TFTP"]
 
-#: Opcodes (RFC 1350 §5; RFC 2347 for OACK).
+#: Opcodes (RFC 1350 §5, RFC 2347 for OACK).
 _RRQ = 1
 _WRQ = 2
 _DATA = 3
@@ -231,7 +231,7 @@ def _option_pairs(
 
 @dataclass(frozen=True, slots=True)
 class TFTP(Protocol):
-    r"""A TFTP message (RFC 1350 §5; RFC 2347 for OACK and options).
+    r"""A TFTP message (RFC 1350 §5, RFC 2347 for OACK and options).
 
     Construction accepts any opcode that fits 16 bits and any body;
     :meth:`decode` is stricter (see the module docstring).
@@ -266,7 +266,7 @@ class TFTP(Protocol):
         The body ends where the opcode's structure does (see the module
         docstring); the rest of ``data`` is left undecoded.
 
-        :param data: The buffer holding the message and what follows it.
+        :param data: The buffer, starting at the opcode.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             opcode, a DATA or ACK has no 2-byte block number (``field``
             ``"block"``), an ERROR no 2-byte error code
@@ -355,9 +355,9 @@ class TFTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the opcode's 2 bytes plus the body.
+        """The whole message: the 2-byte opcode and the body.
 
-        The body is the whole message: TFTP is terminal.
+        TFTP is terminal.
         """
         return self._struct.size + len(self.body)
 
@@ -365,7 +365,8 @@ class TFTP(Protocol):
     def opcode_name(self) -> str:
         """Name the opcode, e.g. ``"RRQ"``.
 
-        Falls back to ``"unknown (n)"`` for an opcode not named here.
+        Falls back to ``"unknown (n)"`` for an opcode not named here
+        (degrades, never raises).
         """
         return _OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
 
@@ -458,7 +459,7 @@ class TFTP(Protocol):
 
         A client asks for 8-65464; an OACK gives the size the server
         chose. ``None`` when absent, not a decimal number, or over 20
-        digits (leading zeros aside).
+        digits (leading zeros aside) (degrades, never raises).
         """
         return self._int_option("blksize")
 
@@ -467,7 +468,7 @@ class TFTP(Protocol):
         """Return the ``timeout`` option, in seconds (RFC 2349).
 
         ``None`` when absent, not a decimal number, or over 20 digits
-        (leading zeros aside).
+        (leading zeros aside) (degrades, never raises).
         """
         return self._int_option("timeout")
 
@@ -477,7 +478,7 @@ class TFTP(Protocol):
 
         An RRQ sends 0 and the server's OACK the size; a WRQ sends the
         size. ``None`` when absent, not a decimal number, or over 20
-        digits (leading zeros aside).
+        digits (leading zeros aside) (degrades, never raises).
         """
         return self._int_option("tsize")
 
@@ -486,7 +487,7 @@ class TFTP(Protocol):
         """Return the ``windowsize`` option, in blocks (RFC 7440).
 
         ``None`` when absent, not a decimal number, or over 20 digits
-        (leading zeros aside).
+        (leading zeros aside) (degrades, never raises).
         """
         return self._int_option("windowsize")
 
@@ -537,7 +538,7 @@ class TFTP(Protocol):
         """Name an ERROR's error code, e.g. ``"File not found"``.
 
         Falls back to ``"unknown (n)"`` for a code not named here.
-        ``None`` for another opcode.
+        ``None`` for another opcode (degrades, never raises).
         """
         code = self.error_code
         if code is None:

@@ -280,7 +280,7 @@ than raise when the order is broken, since that is not framing. See
 docstring.
 
 **802.3 framing.** Bytes 12-13 of an Ethernet header are a type or a
-length (IEEE 802.3 Clause 3.2.6): from 0x0600 an EtherType, up to 1500
+length (IEEE 802.3 §3.2.6): from 0x0600 an EtherType, up to 1500
 the length of an IEEE 802.2 LLC PDU, and undefined between, where the
 walk ends. `Ethernet.ethertype` holds the raw value either way, and
 `VLAN` reads the 2 bytes after a tag the same way. Neither `LLC` nor

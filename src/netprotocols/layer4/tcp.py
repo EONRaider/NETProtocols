@@ -41,9 +41,9 @@ _OPT_SACK_PERMITTED = 4
 _OPT_SACK = 5
 _OPT_TIMESTAMPS = 8
 
-#: TCP option kinds this library names (RFC 9293 §3.2; RFC 7323 for
-#: Window Scale and Timestamps; RFC 2018 for SACK); unknown kinds fall
-#: back to their numeric value.
+#: TCP option kinds this library names (RFC 9293 §3.2, RFC 7323 for
+#: Window Scale and Timestamps, RFC 2018 for SACK); unknown kinds read
+#: ``"unknown (n)"``.
 _OPTION_KIND_NAMES: dict[int, str] = {
     _OPT_EOL: "End of Option List",
     _OPT_NOP: "No-Operation",
@@ -74,7 +74,8 @@ class TCPOption:
     def kind_name(self) -> str:
         """Display name of the option kind, e.g. ``"Timestamps"``.
 
-        ``"unknown (n)"`` for kinds this library does not name.
+        ``"unknown (n)"`` for kinds this library does not name (degrades,
+        never raises).
         """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
@@ -125,8 +126,8 @@ class TCP(Protocol):
     :param reserved: Reserved field (3 bits).
     :param flags: Flag bits, NS through FIN (9 bits).
     :param window: Window size.
-    :param checksum: Checksum, carried verbatim (this library neither
-        computes nor verifies checksums).
+    :param checksum: Checksum, carried verbatim (compute/verify via
+        :mod:`netprotocols.checksum`).
     :param urgent_pointer: Urgent pointer.
     :param options: Raw options bytes; length must be a multiple of 4
         consistent with ``data_offset``. Parsed on demand via
@@ -193,7 +194,7 @@ class TCP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the TCP header, options included, at the start of ``data``.
 
-        :param data: The buffer holding the header and what follows it.
+        :param data: The buffer, starting at the source port.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             20-byte fixed header or than the length ``data_offset``
             declares.
@@ -260,21 +261,22 @@ class TCP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Header length in bytes, options included: ``data_offset * 4``."""
+        """The header's length in bytes: ``data_offset * 4``.
+
+        Options included.
+        """
         return self.data_offset * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the application protocol carried by this segment.
+        """Return the class for the application protocol, by port.
 
         The protocol is chosen by well-known port (best-effort; see
-        :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
-        recognized. DNS over TCP is length-prefixed, so it chains through
-        a :class:`~netprotocols.DNSOverTCP` shim.
-
-        :param registry: The registry to consult; ``None`` for the
-            default one.
+        :mod:`netprotocols.layer4._ports`) from ``registry``'s tables, or
+        the default ones when it is ``None``; ``None`` when neither port
+        is recognized. DNS over TCP is length-prefixed, so it chains
+        through a :class:`~netprotocols.DNSOverTCP` shim.
         """
         return tcp_app_class(self.src_port, self.dst_port, registry)
 

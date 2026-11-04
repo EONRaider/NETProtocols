@@ -154,7 +154,11 @@ class VLAN(Protocol):
 
     @property
     def ethertype_name(self) -> str:
-        """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``."""
+        """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``.
+
+        The hexadecimal value, e.g. ``"0x1234"``, for a type this
+        library does not name (degrades, never raises).
+        """
         return _ethertype_name(self.ethertype)
 
     @property

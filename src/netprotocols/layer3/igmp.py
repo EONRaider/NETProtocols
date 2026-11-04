@@ -25,7 +25,7 @@ from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["IGMP", "IGMPv3GroupRecord"]
 
-#: Message types whose bytes 4-7 hold a group address (RFC 2236 §2;
+#: Message types whose bytes 4-7 hold a group address (RFC 2236 §2,
 #: RFC 3376 §4.1 for the v3 query). The v3 report (0x22) does not.
 _GROUP_ADDRESS_TYPES = frozenset({0x11, 0x12, 0x16, 0x17})
 

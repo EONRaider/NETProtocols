@@ -112,13 +112,13 @@ _OPT_NOP = 1
 _LONE_BYTE_KINDS = frozenset({_OPT_EOL, _OPT_NOP})
 
 #: Option kinds this library decodes a typed :attr:`IPv4Option.value`
-#: for, beyond naming (RFC 791 §3.1; RFC 2113 for Router Alert).
+#: for, beyond naming (RFC 791 §3.1, RFC 2113 for Router Alert).
 _OPT_RECORD_ROUTE = 7
 _OPT_TIMESTAMP = 68
 _OPT_ROUTER_ALERT = 148
 
-#: IPv4 option kinds this library names (RFC 791 §3.1; RFC 2113 for
-#: Router Alert); unknown kinds fall back to their numeric value.
+#: IPv4 option kinds this library names (RFC 791 §3.1, RFC 2113 for
+#: Router Alert); unknown kinds read ``"unknown (n)"``.
 _OPTION_KIND_NAMES: dict[int, str] = {
     _OPT_EOL: "End of Option List",
     _OPT_NOP: "No-Operation",
@@ -397,13 +397,13 @@ class IPv4(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The header's length in bytes, options included: ``ihl * 4``."""
+        """The header's length in bytes: ``ihl * 4``, options included."""
         return self.ihl * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """See :meth:`Protocol.next_protocol`.
+        """Return the class for the payload, from the ``ip.proto`` table.
 
         A non-first fragment (``fragment_offset > 0``) carries a slice
         from the middle of the original payload — no upper-layer header

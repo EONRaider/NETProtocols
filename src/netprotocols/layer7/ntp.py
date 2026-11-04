@@ -98,7 +98,7 @@ without raising:
   last extension field of a message without a MAC: the walk stops when
   what is left is exactly 4, 20 or 24 bytes, and reads that as the
   MAC. NTPv1-3 have no extension fields, and NTPv3's 12-byte DES
-  authenticator (RFC 1305 Appendix C) is read as a MAC too. No digest
+  authenticator (RFC 1305 §C) is read as a MAC too. No digest
   is verified: that needs the key.
 - :attr:`NTP.remainder`: anything else, which neither walks as
   extension fields nor has a MAC's length.
@@ -195,7 +195,7 @@ _MIN_FIELD_LEN = 16
 #: AES-128-CMAC, RFC 8573) or a 20-byte one (SHA-1).
 _MAC_LENGTHS_V4 = frozenset({4, 20, 24})
 
-#: NTPv1-3 add RFC 1305 Appendix C's 12-byte DES authenticator.
+#: NTPv1-3 add RFC 1305 §C's 12-byte DES authenticator.
 _MAC_LENGTHS_V3 = _MAC_LENGTHS_V4 | {12}
 
 #: Leap Indicator meanings (RFC 5905 §7.3, Figure 9).
@@ -371,7 +371,7 @@ class NTPExtensionField:
         Private or Experimental Use, says so, such as chrony's
         ``"Private or Experimental Use (0xf323)"``; any other type not
         named here falls back to ``"unknown (0x0002)"``, in hex as the
-        registry writes types.
+        registry writes types (degrades, never raises).
         """
         name = _FIELD_TYPE_NAMES.get(self.type)
         if name is not None:
@@ -540,7 +540,7 @@ class NTP(Protocol):
         The first byte is judged before the length (see "Control
         messages are not decoded" in the module docstring).
 
-        :param data: The buffer holding the message.
+        :param data: The buffer, starting at the LI/VN/Mode byte.
         :raises InvalidFieldError: if the version is outside 1-4 (``field``
             ``"version"``), or else the mode is 6 or 7, a control
             message (``field`` ``"mode"``), at any length; ``offset``
@@ -603,7 +603,7 @@ class NTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the header's 48 bytes plus the whole body.
+        """The whole message: the 48-byte header and the whole body.
 
         The body is the rest of the datagram: NTP is terminal.
         """
@@ -611,12 +611,20 @@ class NTP(Protocol):
 
     @property
     def leap_name(self) -> str:
-        """Describe the Leap Indicator, e.g. ``"no warning"``."""
+        """Describe the Leap Indicator, e.g. ``"no warning"``.
+
+        Every value construction accepts (0-3) has a name, so this never
+        raises.
+        """
         return _LEAP_NAMES[self.leap]
 
     @property
     def mode_name(self) -> str:
-        """Name the mode, e.g. ``"client"``."""
+        """Name the mode, e.g. ``"client"``.
+
+        Every value construction accepts (0-7) has a name, so this never
+        raises.
+        """
         return _MODE_NAMES[self.mode]
 
     @property
@@ -625,7 +633,8 @@ class NTP(Protocol):
 
         ``"unspecified or invalid"`` (0), ``"primary server"`` (1),
         ``"secondary server"`` (2-15), ``"unsynchronized"`` (16) or
-        ``"reserved"`` (17-255).
+        ``"reserved"`` (17-255); every stratum has a description, so
+        this never raises.
         """
         stratum = self.stratum
         if stratum == 0:

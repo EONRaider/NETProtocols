@@ -52,7 +52,7 @@ Two tables reject a key their wire field cannot carry, raising
 
 The other tables accept any key, ``ethertype`` among them. An Ethernet
 or VLAN header never consults ``ethertype`` for a type/length value of
-1500 or less, which IEEE 802.3 Clause 3.2.6 makes a frame Length
+1500 or less, which IEEE 802.3 §3.2.6 makes a frame Length
 followed by an 802.2 LLC header, nor for the undefined 1501-1535.
 But a GRE Protocol Type, and a SNAP PID under OUI 00-00-00 or
 00-00-F8, are looked up there whatever their value, and GRE has low

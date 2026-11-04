@@ -1,7 +1,7 @@
 """Checksum computation and verification.
 
 The checksums are the internet checksum (RFC 1071), SCTP's CRC32c
-(RFC 9260 Appendix A), and the Fletcher checksum OSPF's LSAs carry
+(RFC 9260 §A), and the Fletcher checksum OSPF's LSAs carry
 (RFC 2328 §12.1.7).
 
 The primitive, :func:`internet_checksum`, returns the raw ones'-
@@ -122,7 +122,7 @@ def internet_checksum(data: bytes | memoryview) -> int:
 
 
 #: The Castagnoli polynomial 0x1EDC6F41, bit-reflected (RFC 3720 §12.1,
-#: RFC 9260 Appendix A).
+#: RFC 9260 §A).
 _CRC32C_POLY = 0x82F63B78
 
 #: The CRC of each byte value, for the byte-at-a-time loop in
@@ -145,7 +145,7 @@ def crc32c(data: bytes | memoryview) -> int:
     """Return the CRC32c (Castagnoli) of ``data``.
 
     The CRC is reflected, with initial value and final xor
-    ``0xFFFFFFFF`` (RFC 3720 §12.1, RFC 9260 Appendix A), e.g.
+    ``0xFFFFFFFF`` (RFC 3720 §12.1, RFC 9260 §A), e.g.
     ``crc32c(b"123456789") == 0xE3069283``.
 
     Not :func:`zlib.crc32`, which is the IEEE 802.3 CRC-32 — a
@@ -341,7 +341,7 @@ def _gre_checksum(layer: GRE, payload: bytes) -> int:
 
     :param layer: The GRE header.
     :param payload: The bytes following the header on the wire.
-    :raises InvalidFieldError: if the Checksum-Present bit is clear.
+    :raises InvalidFieldError: if :attr:`GRE.checksum` is ``None``.
     """
     if layer.checksum is None:
         raise InvalidFieldError(
@@ -503,8 +503,9 @@ def _stun_fingerprint(layer: STUN) -> int:
     message up to it is all but its last 8 bytes.
 
     :param layer: The STUN message.
-    :raises InvalidFieldError: if the message's last attribute is not a
-        FINGERPRINT.
+    :raises InvalidFieldError: if :attr:`STUN.fingerprint` is ``None``:
+        no 4-byte FINGERPRINT is the last attribute of a list that walks
+        to its end.
     """
     if layer.fingerprint is None:
         raise InvalidFieldError(
@@ -606,7 +607,7 @@ def compute(
         built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
         its chunks included, with no pseudo-header (``ip`` ignored),
         returned as the field's big-endian reading of the CRC's
-        little-endian wire bytes (RFC 9260 Appendix A); ``VRRP`` covers
+        little-endian wire bytes (RFC 9260 §A); ``VRRP`` covers
         the message alone in VRRPv2 and prepends the pseudo-header in
         VRRPv3, over IPv4 too as keepalived does by default, though RFC
         9568 §5.2.8 leaves it out there (see the module docstring),

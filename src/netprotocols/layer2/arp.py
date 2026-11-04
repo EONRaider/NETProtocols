@@ -134,7 +134,11 @@ class ARP(Protocol):
 
     @property
     def ptype_name(self) -> str:
-        """Display name of the protocol type, e.g. ``"IPv4"``."""
+        """Display name of the protocol type, e.g. ``"IPv4"``.
+
+        The hexadecimal value, e.g. ``"0x1234"``, for a type this
+        library does not name (degrades, never raises).
+        """
         return _ethertype_name(self.ptype)
 
     @property

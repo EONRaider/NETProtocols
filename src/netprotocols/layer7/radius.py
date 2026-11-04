@@ -85,7 +85,7 @@ Out of scope
 Everything that needs the shared secret between client and server: the
 Request Authenticator of an Accounting-Request (RFC 2866 §3), and of a
 Disconnect-Request or CoA-Request, keyed the same way (RFC 5176 §2.3), and
-the Response Authenticator of every reply (RFC 2865 §3; RFC 2866 §3
+the Response Authenticator of every reply (RFC 2865 §3, RFC 2866 §3
 for an Accounting-Response), which are MD5 hashes keyed with it; the
 Message-Authenticator attribute (RFC 3579 §3.2), an HMAC-MD5 under it;
 and the hiding of User-Password (RFC 2865 §5.2) and Tunnel-Password
@@ -318,7 +318,8 @@ class RADIUSAttribute:
     def type_name(self) -> str:
         """Name the attribute type, e.g. ``"User-Name"``.
 
-        Falls back to ``"unknown (n)"`` for a type not named here.
+        Falls back to ``"unknown (n)"`` for a type not named here
+        (degrades, never raises).
         """
         return _TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
@@ -360,7 +361,7 @@ class RADIUS(Protocol):
         an Access-Request or a Status-Server; an MD5 hash keyed with
         the shared secret in an Accounting-Request (RFC 2866 §3), in a
         Disconnect-Request or CoA-Request, keyed like an
-        Accounting-Request (RFC 5176 §2.3), and in every reply (RFC 2865 §3;
+        Accounting-Request (RFC 5176 §2.3), and in every reply (RFC 2865 §3,
         RFC 2866 §3 for an Accounting-Response), which this library
         does not verify.
     :param attributes: The attribute list, kept raw; read via
@@ -425,7 +426,7 @@ class RADIUS(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the packet at the start of ``data``.
 
-        :param data: The buffer holding the packet and what follows it.
+        :param data: The buffer, starting at the Code byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             20-byte header, or than the packet's Length (``field``
             ``"length"``).
@@ -473,7 +474,7 @@ class RADIUS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole packet: the 20-byte header and the attributes.
+        """The whole message: the 20-byte header and the attributes.
 
         RADIUS is terminal; bytes past it are padding (RFC 2865 §3).
         """
@@ -483,7 +484,8 @@ class RADIUS(Protocol):
     def code_name(self) -> str:
         """Name the packet type, e.g. ``"Access-Request"``.
 
-        Falls back to ``"unknown (n)"`` for a code not named here.
+        Falls back to ``"unknown (n)"`` for a code not named here
+        (degrades, never raises).
         """
         return _CODE_NAMES.get(self.code, f"unknown ({self.code})")
 

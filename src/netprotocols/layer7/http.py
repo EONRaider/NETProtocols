@@ -1363,7 +1363,7 @@ class HTTP(Protocol):
         Trailing bytes (a pipelined next message) are left alone; the
         message ends at :attr:`header_len`.
 
-        :param data: The buffer holding the message and what follows it.
+        :param data: The buffer, starting at the request or status line.
         :param request_method: For a response, the method of the request
             it answers (see the class docstring).
         :param closed: ``True`` when ``data`` ends where the connection
@@ -1396,7 +1396,7 @@ class HTTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Length of the whole message, head and body."""
+        """The whole message: the head and the body."""
         return len(self.head) + len(self.raw_body)
 
     @property

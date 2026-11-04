@@ -214,7 +214,7 @@ class AH(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the class that decodes what AH protects.
+        """Return the class for what AH protects.
 
         Chosen by ``next_header`` from the dispatch table of this
         header's IP family — ``ip.proto`` for :class:`AH`,
@@ -228,7 +228,11 @@ class AH(Protocol):
 
     @property
     def next_header_name(self) -> str:
-        """Display name of what follows, e.g. ``"TCP"``."""
+        """Display name of what follows, e.g. ``"TCP"``.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _ip_protocol_name(self.next_header)
 
     @property

@@ -25,7 +25,7 @@ def validate_mac_addr(
     protocol: type[object] | None = None,
     field: str | None = None,
 ) -> str:
-    """Evaluate a string representing an IEEE 802 compliant MAC address.
+    """Validate a string as an IEEE 802 MAC address.
 
     :param mac: The string to validate.
     :param protocol: The class this address belongs to, attached to a

@@ -280,7 +280,7 @@ class HSRP(Protocol):
         guess" in the module docstring). Anything after the 20 bytes is
         left undecoded.
 
-        :param data: The buffer holding the message and what follows it.
+        :param data: The buffer, starting at the Version byte.
         :raises InvalidFieldError: if the Version is not 0 (``field``
             ``"version"``, ``offset`` 0), else the Op Code is not 0-2
             (``"opcode"``, 1), else the State is not one RFC 2281
@@ -341,8 +341,8 @@ class HSRP(Protocol):
         """Name the Op Code, e.g. ``"Coup"``.
 
         Falls back to ``"unknown (n)"`` for a value RFC 2281 does not
-        list, which only construction can give (Op Code 3, an
-        Advertise, among them).
+        list (degrades, never raises); only construction can give one,
+        Op Code 3, an Advertise, among them.
         """
         return _OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
 
@@ -351,7 +351,7 @@ class HSRP(Protocol):
         """Name the sender's state, e.g. ``"Standby"``.
 
         Falls back to ``"unknown (n)"`` for a value RFC 2281 does not
-        list, which only construction can give.
+        list, which only construction can give (degrades, never raises).
         """
         return _STATE_NAMES.get(self.state, f"unknown ({self.state})")
 

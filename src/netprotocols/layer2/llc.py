@@ -1,7 +1,7 @@
 """IEEE 802.2 LLC and SNAP headers, after an IEEE 802.3 Length.
 
 Bytes 12-13 of an Ethernet header are a type or a length (IEEE 802.3
-Clause 3.2.6). A value of 0x0600 or more is an EtherType, which
+§3.2.6). A value of 0x0600 or more is an EtherType, which
 :class:`~netprotocols.Ethernet` dispatches through the ``ethertype``
 table. A value of 1500 or
 less is the length of the MAC client data that follows, which begins
@@ -319,7 +319,7 @@ class LLC(Protocol):
 
     @property
     def header_len(self) -> int:
-        """3 bytes for a U-format PDU, 4 for an I- or S-format one."""
+        """The header's length in bytes: 3 for a U-format PDU, 4 for I or S."""
         return 3 if self.control & 0x03 == 0x03 else 4
 
     @property
@@ -361,7 +361,11 @@ class LLC(Protocol):
 
     @property
     def ssap_name(self) -> str:
-        """Display name of the SSAP, its command/response bit cleared."""
+        """Display name of the SSAP, its command/response bit cleared.
+
+        The hexadecimal value, e.g. ``"0x20"``, for an LSAP this library
+        does not name (degrades, never raises).
+        """
         return _sap_name(self.ssap & 0xFE)
 
     @property
@@ -379,7 +383,7 @@ class LLC(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the class registered in ``llc.dsap`` for the DSAP.
+        """Return the class for the DSAP, from the ``llc.dsap`` table.
 
         ``None`` for a PDU that carries no upper-layer data (anything
         but I-format and UI), for Novell raw 802.3, for DSAP 0xAA

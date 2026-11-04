@@ -168,8 +168,7 @@ class Packet:
         first layer of that type in wire order.
 
         :param key: A position on the wire, or a protocol class.
-        :raises IndexError: if ``key`` is a position past the last
-            layer.
+        :raises IndexError: if ``key`` is a position outside the layers.
         :raises KeyError: if ``key`` is a type that matches no layer
             (dict-like convention: ``[key]`` raises, :meth:`get` returns
             ``None``).
@@ -248,7 +247,13 @@ class Packet:
         return sum(layer.header_len for layer in self.layers)
 
     def with_checksums(self, payload: bytes = b"") -> Self:
-        """Return a copy of this packet with every checksum field computed.
+        """Return a copy of this packet with its checksum fields recomputed.
+
+        The recomputed fields are TCP's, UDP's, SCTP's, ICMPv4's,
+        ICMPv6's, VRRP's and PIM's checksums, the IPv4 header checksum,
+        CDP's checksum, and OSPF's checksum unless the packet uses
+        cryptographic authentication. IGMP's and GRE's checksums are
+        carried over unchanged.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``

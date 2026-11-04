@@ -57,8 +57,8 @@ draft's §14.2.9 NOTE).
 The bit positions, the role values and the field layout are from the
 BPDU encoding text of the IEEE 802.1 working group's public document
 ``aq-seaman-merged-bpdu-encoding-0509.pdf``, "P802.1aq/D1.5++suggested
-changes, May 16, 2009": an unapproved draft whose Clause 14 merges
-802.1D Clause 9 with 802.1Q-2005 Clause 14 (fetched from ieee802.org
+changes, May 16, 2009": an unapproved draft whose §14 merges
+802.1D §9 with 802.1Q-2005 §14 (fetched from ieee802.org
 2026-10-25), called "the draft" here. They agree with Wireshark's
 ``epan/dissectors/packet-bpdu.c`` (master, fetched 2026-10-25), whose
 names for the BPDU types, the protocol versions and port roles 1-3
@@ -475,12 +475,16 @@ class STP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """4 octets for a TCN, 35 for a Configuration BPDU, 36 for RST."""
+        """The header's length in bytes: 4 for TCN, 35 Configuration, 36 RST."""
         return _LENGTHS[self.bpdu_type]
 
     @property
     def bpdu_type_name(self) -> str:
-        """Display name of the BPDU Type, e.g. ``"Configuration"``."""
+        """Display name of the BPDU Type, e.g. ``"Configuration"``.
+
+        Construction and decoding accept only the three named types, so
+        this never raises.
+        """
         return _TYPE_NAMES[self.bpdu_type]
 
     @property
@@ -549,7 +553,11 @@ class STP(Protocol):
 
     @property
     def port_role_name(self) -> str | None:
-        """Display name of :attr:`port_role`, e.g. ``"Designated"``."""
+        """Display name of :attr:`port_role`, e.g. ``"Designated"``.
+
+        Every two-bit role has a name; ``None`` when :attr:`port_role`
+        is (degrades, never raises).
+        """
         role = self.port_role
         return None if role is None else _ROLE_NAMES[role]
 

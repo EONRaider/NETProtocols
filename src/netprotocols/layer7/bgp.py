@@ -319,7 +319,7 @@ _ERROR_CODE_NAMES: dict[int, str] = {
 #: Finite State Machine Error; RFC 4486 for Cease, with 9 from RFC 8538
 #: and 10 from RFC 9384; RFC 7313 for ROUTE-REFRESH. OPEN's 5 and
 #: UPDATE's 7, which the registry lists only as "[Deprecated]", keep
-#: the names RFC 4271 Appendix A gives them, with "(deprecated)". A
+#: the names RFC 4271 §A gives them, with "(deprecated)". A
 #: code without a registry (4, 8, 9) names only subcode 0,
 #: "Unspecific" (RFC 4271 §4.5; RFC 9687 §6 sets it to 0 for code 8),
 #: and so does an unknown code.
@@ -533,7 +533,11 @@ class BGPPathAttribute:
 
     @property
     def type_name(self) -> str:
-        """Display name of the type code, e.g. ``"AS_PATH"``."""
+        """Display name of the type code, e.g. ``"AS_PATH"``.
+
+        ``"unknown (n)"`` for a type code this library does not name
+        (degrades, never raises).
+        """
         return _ATTRIBUTE_NAMES.get(
             self.type_code, f"unknown ({self.type_code})"
         )
@@ -639,7 +643,11 @@ class BGPOptionalParameter:
 
     @property
     def type_name(self) -> str:
-        """Display name of the parameter type, e.g. ``"Capabilities"``."""
+        """Display name of the parameter type, e.g. ``"Capabilities"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return _OPTIONAL_PARAMETER_NAMES.get(
             self.type, f"unknown ({self.type})"
         )
@@ -815,7 +823,7 @@ class BGP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the message at the start of ``data``.
 
-        :param data: The buffer holding the message and what follows it.
+        :param data: The buffer, starting at the Marker.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             19-byte header, or than the message's Length.
         :raises InvalidFieldError: if the Marker is not all ones
@@ -859,7 +867,7 @@ class BGP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> builtins.type[Protocol] | None:
-        """Name the next message in the same segment, if one begins there.
+        """Return the class for the next message in the segment, if one begins.
 
         :class:`BGP` when the bytes after this message began with a
         Marker, or as much of one as the buffer held, when it was
@@ -873,7 +881,11 @@ class BGP(Protocol):
 
     @property
     def type_name(self) -> str:
-        """Display name of the message type, e.g. ``"UPDATE"``."""
+        """Display name of the message type, e.g. ``"UPDATE"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return _TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     # OPEN (RFC 4271 §4.2)
@@ -1070,7 +1082,8 @@ class BGP(Protocol):
     def error_code_name(self) -> str | None:
         """Display name of a NOTIFICATION's Error Code, e.g. ``"Cease"``.
 
-        ``None`` for other messages.
+        ``"unknown (n)"`` for a code this library does not name;
+        ``None`` for other messages (degrades, never raises).
         """
         code = self.error_code
         if code is None:
@@ -1084,7 +1097,8 @@ class BGP(Protocol):
         Named in the context of its Error Code, e.g. ``"Administrative
         Shutdown"`` for Cease, as the IANA registry names it; subcode 0
         is ``"Unspecific"`` under a code with no subcode registry.
-        ``None`` for other messages.
+        ``"unknown (n)"`` for a subcode this library does not name;
+        ``None`` for other messages (degrades, never raises).
         """
         code, subcode = self.error_code, self.error_subcode
         if code is None or subcode is None:

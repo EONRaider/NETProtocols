@@ -1,6 +1,6 @@
 """Ethernet frame header (IEEE 802.3): Ethernet II and 802.3 framing.
 
-Bytes 12-13 are a type or a length (IEEE 802.3 Clause 3.2.6), and
+Bytes 12-13 are a type or a length (IEEE 802.3 §3.2.6), and
 :attr:`Ethernet.ethertype` holds them raw either way. A value of 0x0600
 or more is an EtherType and dispatches through the ``ethertype`` table;
 one of 1500 or less is the length of an 802.2 LLC PDU, and
@@ -48,7 +48,7 @@ def _ethertype_class(
     return registry.get(TABLE_ETHERTYPE, ethertype)
 
 
-#: The type/length boundaries of IEEE 802.3 Clause 3.2.6: a value up to
+#: The type/length boundaries of IEEE 802.3 §3.2.6: a value up to
 #: ``_MAX_LENGTH`` is a length, one from ``_MIN_ETHERTYPE`` a type.
 _MAX_LENGTH = 1500
 _MIN_ETHERTYPE = 0x0600
@@ -136,7 +136,7 @@ class Ethernet(Protocol):
 
         Past the 14-byte header, this never raises.
 
-        :param data: The frame, starting at the destination address.
+        :param data: The buffer, starting at the destination address.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             14-byte header.
         """

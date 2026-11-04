@@ -98,7 +98,7 @@ class ESP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole packet: the 8 fixed bytes and :attr:`ciphertext`.
+        """The whole message: the 8 fixed bytes and :attr:`ciphertext`.
 
         The protected remainder is part of this layer, as an ICMP
         message's body is: the chain ends here with nothing left over.
@@ -108,7 +108,9 @@ class ESP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return ``None``: ESP ends the decode chain.
+        """Return the class for the protected payload: always ``None``.
+
+        ESP ends the decode chain.
 
         The protocol of the protected payload is the trailer's Next
         Header field, which is encrypted unless the SA uses a

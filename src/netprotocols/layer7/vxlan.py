@@ -18,8 +18,8 @@ unconditionally and the walk re-enters the ``ethertype`` table from the
 top: inner VLAN tags, ARP, IPv4 and IPv6 need no dispatch of their own.
 
 Only port 4789 is registered. Linux gives a vxlan device ``dstport``
-8472 when ``ip link add`` names none, so a capture from such a device needs the
-port named for the walk:
+8472 when ``ip link add`` names none, so a capture from such a device
+needs the port named for the walk:
 ``decode_frame(frame, decode_as={"udp.port": {8472: VXLAN}})``.
 
 Only the I flag (``0x08``) is defined; RFC 7348 requires it set for a
@@ -141,7 +141,7 @@ class VXLAN(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte header at the start of ``data``.
 
-        :param data: The buffer holding the header and the inner frame.
+        :param data: The buffer, starting at the flags byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than 8 bytes.
         :raises InvalidFieldError: if the I flag is clear (``field`` is
             ``"flags"``, ``offset`` ``0``).
@@ -175,7 +175,7 @@ class VXLAN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return :class:`~netprotocols.Ethernet`, the inner frame's class.
+        """Return the class for the inner frame, always an Ethernet frame.
 
         VXLAN has no field naming its payload — it is always an Ethernet
         frame — so there is nothing for ``registry`` to select here. The

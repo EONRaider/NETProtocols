@@ -126,7 +126,7 @@ __all__ = [
 #: PIMv1 rode inside IGMP instead.
 _VERSION = 2
 
-#: Address widths by PIM address family (RFC 7761 §4.9.1; IANA Address
+#: Address widths by PIM address family (RFC 7761 §4.9.1, IANA Address
 #: Family Numbers): 1 IPv4, 2 IPv6, both in native encoding (type 0).
 _ADDRESS_LENGTHS = {1: 4, 2: 16}
 _NATIVE_ENCODING = 0
@@ -975,7 +975,10 @@ class PIM(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Count the header and the body: PIM is terminal."""
+        """The whole message: the 4-byte header and the body.
+
+        PIM is terminal.
+        """
         return self._struct.size + len(self.body)
 
     @property

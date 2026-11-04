@@ -73,7 +73,7 @@ judged: a zero-length Handshake record, which RFC 9846 §5.1 forbids,
 decodes, and so does Heartbeat.
 
 The guard is what turns away an SSL 2.0-compatible ClientHello, whose
-first byte has its top bit set (RFC 5246 Appendix E.2), at
+first byte has its top bit set (RFC 5246 §E.2), at
 ``content_type``: such hellos are not decoded.
 
 Records and segments
@@ -300,7 +300,7 @@ _VERSION_NAMES: dict[int, str] = {
     0x0304: "TLS 1.3",
 }
 
-#: HandshakeType values, named as RFC 9846 Appendix B.3's HandshakeType
+#: HandshakeType values, named as RFC 9846 §B.3's HandshakeType
 #: enum names them, except that the ones it marks ``_RESERVED``, which
 #: TLS 1.3 does not send, are named without the suffix: TLS 1.2 still
 #: sends hello_request, server_key_exchange, server_hello_done and
@@ -464,7 +464,8 @@ class TLSExtension:
 
         ``"GREASE"`` for one of RFC 8701's sixteen reserved values,
         which a client sends to keep servers tolerant of unknown ones,
-        and ``"unknown (n)"`` for a type not named here.
+        and ``"unknown (n)"`` for a type not named here (degrades, never
+        raises).
         """
         if _grease(self.type):
             return "GREASE"
@@ -578,7 +579,8 @@ class TLSClientHello:
     def legacy_version_name(self) -> str:
         """Display name of :attr:`legacy_version`, e.g. ``"TLS 1.2"``.
 
-        ``"unknown (0x....)"`` for a value no version used.
+        ``"unknown (0x....)"`` for a value no version used (degrades,
+        never raises).
         """
         return _version_name(self.legacy_version)
 
@@ -604,7 +606,7 @@ class TLSServerNamePeek:
     *Absent* says nothing of the records after the first: a segment
     holding a ChangeCipherSpec and then a ClientHello with a name, as
     TLS 1.3's middlebox compatibility mode sends after a
-    HelloRetryRequest (RFC 9846 Appendix E.4), is *absent*, as
+    HelloRetryRequest (RFC 9846 §E.4), is *absent*, as
     :attr:`TLS.server_name` is ``None`` for its first record. To look
     past whole records, :meth:`TLS.decode` the first and peek
     ``data[tls.header_len:]``. *Not reached* is not "no SNI": the name
@@ -1056,7 +1058,7 @@ class TLS(Protocol):
         the length against the buffer (see the module docstring's
         *Validation*).
 
-        :param data: The buffer holding the record and what follows it.
+        :param data: The buffer, starting at the record header.
         :raises InvalidFieldError: if the ContentType is not 20-24
             (``field`` ``"content_type"``, ``offset`` 0), else the
             version's first byte is not 3 (``"legacy_version"``, 1) or
@@ -1108,13 +1110,13 @@ class TLS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole record: the 5-byte header and the fragment."""
+        """The whole message: the 5-byte record header and the fragment."""
         return _HEADER_LEN + len(self.fragment)
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> builtins.type[Protocol] | None:
-        """Name the next record in the same buffer, if one begins there.
+        """Return the class for the next record in the buffer, if one begins.
 
         :class:`TLS` when, at decode, the bytes after this record began
         like a record header, as much of its first 3 bytes as the
@@ -1129,7 +1131,8 @@ class TLS(Protocol):
     def content_type_name(self) -> str:
         """Display name of the ContentType, e.g. ``"handshake"``.
 
-        ``"unknown (n)"`` for a value only construction can give.
+        ``"unknown (n)"`` for a value only construction can give
+        (degrades, never raises).
         """
         return _CONTENT_TYPE_NAMES.get(
             self.content_type, f"unknown ({self.content_type})"
@@ -1141,7 +1144,8 @@ class TLS(Protocol):
 
         The version a record says is not the one negotiated: TLS 1.3
         records say TLS 1.2, and a first ClientHello often TLS 1.0.
-        ``"unknown (0x....)"`` for a value no version used.
+        ``"unknown (0x....)"`` for a value no version used (degrades,
+        never raises).
         """
         return _version_name(self.legacy_version)
 
@@ -1165,7 +1169,7 @@ class TLS(Protocol):
 
         ``"unknown (n)"`` for a value no registry assigns, an encrypted
         Finished's first byte among them; ``None`` when
-        :attr:`handshake_type` is.
+        :attr:`handshake_type` is (degrades, never raises).
         """
         kind = self.handshake_type
         if kind is None:
@@ -1291,7 +1295,7 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     ClientHello with a name: ``data`` holding a ChangeCipherSpec
     record, ``14 03 03 00 01 01``, and then the second ClientHello, as
     TLS 1.3's middlebox compatibility mode sends after a
-    HelloRetryRequest (RFC 9846 Appendix E.4), is *absent*. A caller
+    HelloRetryRequest (RFC 9846 §E.4), is *absent*. A caller
     who wants to look past whole records decodes the first, which must
     then be whole, and peeks after it::
 

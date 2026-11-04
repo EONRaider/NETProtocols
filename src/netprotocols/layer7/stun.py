@@ -344,7 +344,7 @@ class STUNAddress:
         """Name the family: ``"IPv4"`` or ``"IPv6"``.
 
         Falls back to ``"unknown (n)"`` for a family built here that no
-        address attribute carries.
+        address attribute carries (degrades, never raises).
         """
         known = _FAMILIES.get(self.family)
         return f"unknown ({self.family})" if known is None else known[0]
@@ -400,7 +400,8 @@ class STUNAttribute:
     def type_name(self) -> str:
         """Name the type, e.g. ``"XOR-MAPPED-ADDRESS"``.
 
-        Falls back to ``"unknown (0x7ff0)"`` for a type not named here.
+        Falls back to ``"unknown (0x7ff0)"`` for a type not named here
+        (degrades, never raises).
         """
         return _ATTRIBUTE_NAMES.get(self.type, f"unknown ({self.type:#06x})")
 
@@ -421,7 +422,7 @@ class STUNAttribute:
         RFC 5780's RESPONSE-ORIGIN and OTHER-ADDRESS, and RFC 3489's
         SOURCE-ADDRESS and CHANGED-ADDRESS share. ``None`` for a value
         that is not one: an unknown family, or a length other than 8
-        for IPv4 or 20 for IPv6.
+        for IPv4 or 20 for IPv6 (degrades, never raises).
         """
         return _parse_address(self.value, bytes(18))
 
@@ -491,7 +492,7 @@ class STUN(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the message at the start of ``data``.
 
-        :param data: The buffer holding the message and what follows it.
+        :param data: The buffer, starting at the message type.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             20-byte header, or than the Message Length says
             (``field`` ``"length"``).
@@ -543,7 +544,7 @@ class STUN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Name the next message in the same buffer, if one begins there.
+        """Return the class for the next message in the buffer, if one begins.
 
         :class:`STUN` when the 8 bytes after this message began like a
         message, the cookie in place, when it was decoded; ``None``
@@ -579,20 +580,28 @@ class STUN(Protocol):
 
     @property
     def class_name(self) -> str:
-        """Name the class, e.g. ``"Success Response"``."""
+        """Name the class, e.g. ``"Success Response"``.
+
+        All four two-bit classes have a name, so this never raises.
+        """
         return _CLASS_NAMES[self.message_class]
 
     @property
     def method_name(self) -> str:
         """Name the method, e.g. ``"Binding"``.
 
-        Falls back to ``"unknown (0x5)"`` for a method not named here.
+        Falls back to ``"unknown (0x5)"`` for a method not named here
+        (degrades, never raises).
         """
         return _METHOD_NAMES.get(self.method, f"unknown ({self.method:#x})")
 
     @property
     def message_type_name(self) -> str:
-        """Name the method and class, e.g. ``"Binding Request"``."""
+        """Name the method and class, e.g. ``"Binding Request"``.
+
+        The method part falls back as :attr:`method_name` does (degrades,
+        never raises).
+        """
         return f"{self.method_name} {self.class_name}"
 
     def _walk(self) -> Iterator[STUNAttribute]:
@@ -695,7 +704,7 @@ class STUN(Protocol):
         That is the Class times 100 plus the Number. ``None`` without
         the attribute, with one shorter than 4 bytes, or with one whose
         Class is not 3-6 or whose Number is above 99, both of which
-        RFC 8489 §14.8 rules out.
+        RFC 8489 §14.8 rules out (degrades, never raises).
         :attr:`error_reason` reads the reason phrase all the same.
         """
         found = self._error
@@ -747,7 +756,8 @@ class STUN(Protocol):
         Only a FINGERPRINT that is the last attribute, of 4 bytes, in a
         list that walks to its end, counts; one anywhere else is not
         a fingerprint RFC 8489 §14.7 defines, and
-        :func:`~netprotocols.checksum.verify` fails it.
+        :func:`~netprotocols.checksum.verify` fails it. ``None`` when no
+        attribute counts (degrades, never raises).
         """
         found, whole = self._readable
         if not whole or not found:

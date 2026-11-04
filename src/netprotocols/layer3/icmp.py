@@ -39,7 +39,7 @@ from netprotocols.walk import decode_frame
 __all__ = ["ICMPv4", "ICMPv6", "NDPOption"]
 
 #: Neighbor Discovery option types this library names (RFC 4861 §4.6);
-#: unknown types fall back to their numeric value.
+#: unknown types read ``"unknown (n)"``.
 _NDP_OPTION_TYPE_NAMES: dict[int, str] = {
     1: "Source Link-Layer Address",
     2: "Target Link-Layer Address",

@@ -59,9 +59,9 @@ _LONE_BYTE_KINDS = frozenset({_OPT_PAD1})
 _OPT_ROUTER_ALERT = 5
 _OPT_JUMBO_PAYLOAD = 194
 
-#: Option types this library names (RFC 8200 §4.2; RFC 2711 for Router
-#: Alert; RFC 2675 for Jumbo Payload); unknown types fall back to their
-#: numeric value.
+#: Option types this library names (RFC 8200 §4.2, RFC 2711 for Router
+#: Alert, RFC 2675 for Jumbo Payload); unknown types read
+#: ``"unknown (n)"``.
 _OPTION_TYPE_NAMES: dict[int, str] = {
     _OPT_PAD1: "Pad1",
     1: "PadN",
@@ -226,7 +226,11 @@ class _IPv6OptionsHeader(Protocol):
 
     @property
     def next_header_name(self) -> str:
-        """Display name of what follows, e.g. ``"IPv6-ICMP"``."""
+        """Display name of what follows, e.g. ``"IPv6-ICMP"``.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _next_header_name(self.next_header)
 
     @property
@@ -401,7 +405,11 @@ class IPv6Routing(Protocol):
 
     @property
     def next_header_name(self) -> str:
-        """Display name of what follows, e.g. ``"TCP"``."""
+        """Display name of what follows, e.g. ``"TCP"``.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _next_header_name(self.next_header)
 
     @property
@@ -583,7 +591,7 @@ class IPv6Fragment(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """See :meth:`Protocol.next_protocol`.
+        """Return the class for the reassembled payload, from ``ip.proto.v6``.
 
         Only the first fragment (``fragment_offset == 0``) starts with
         the upper-layer header; the chain ends here for all others.
@@ -594,7 +602,11 @@ class IPv6Fragment(Protocol):
 
     @property
     def next_header_name(self) -> str:
-        """Display name of the reassembled payload's protocol."""
+        """Display name of the reassembled payload's protocol.
+
+        ``"unknown (n)"`` for a number this library does not enumerate
+        (degrades, never raises).
+        """
         return _next_header_name(self.next_header)
 
     @property

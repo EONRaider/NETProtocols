@@ -282,10 +282,9 @@ class VRRP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the length of the whole message.
+        """The whole message: the fixed header, addresses and auth data.
 
-        That is the fixed header, the addresses and any authentication
-        data, never what follows them in the buffer.
+        Never what follows them in the buffer.
         """
         width = 16 if self._ipv6 else 4
         return (

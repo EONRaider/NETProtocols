@@ -192,7 +192,7 @@ def _check_width(owner: type, name: str, value: int, bits: int) -> None:
 
 @dataclass(frozen=True, slots=True)
 class RIPEntry:
-    """One route entry (RFC 2453 §4; RFC 1058 §3.1 for RIPv1).
+    """One route entry (RFC 2453 §4, RFC 1058 §3.1 for RIPv1).
 
     In a RIPv1 message the route tag, subnet mask and next hop must be
     zero; they are carried verbatim either way.
@@ -248,7 +248,8 @@ class RIPEntry:
     def afi_name(self) -> str:
         """Name the address family, e.g. ``"IP"``.
 
-        Falls back to ``"unknown (n)"`` for a family not named here.
+        Falls back to ``"unknown (n)"`` for a family not named here
+        (degrades, never raises).
         """
         return _AFI_NAMES.get(self.afi, f"unknown ({self.afi})")
 
@@ -303,7 +304,8 @@ class RIPAuthentication:
     def auth_type_name(self) -> str:
         """Name the authentication type, e.g. ``"Plain-text password"``.
 
-        Falls back to ``"unknown (n)"`` for a type not named here.
+        Falls back to ``"unknown (n)"`` for a type not named here
+        (degrades, never raises).
         """
         return _AUTH_TYPE_NAMES.get(
             self.auth_type, f"unknown ({self.auth_type})"
@@ -420,7 +422,7 @@ class RIP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the header and keep the rest of ``data`` as the body.
 
-        :param data: The buffer holding the message.
+        :param data: The buffer, starting at the Command byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than 4 bytes.
         :raises InvalidFieldError: if the version is not 1 or 2 (``field``
             ``"version"``, ``offset`` ``1``), or the command is 0
@@ -463,7 +465,7 @@ class RIP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the header's 4 bytes plus the whole body.
+        """The whole message: the 4-byte header and the whole body.
 
         The body is the rest of the datagram: RIP is terminal.
         """
@@ -473,7 +475,8 @@ class RIP(Protocol):
     def command_name(self) -> str:
         """Name the command, e.g. ``"Response"``.
 
-        Falls back to ``"unknown (n)"`` for a command not named here.
+        Falls back to ``"unknown (n)"`` for a command not named here
+        (degrades, never raises).
         """
         return _COMMAND_NAMES.get(self.command, f"unknown ({self.command})")
 

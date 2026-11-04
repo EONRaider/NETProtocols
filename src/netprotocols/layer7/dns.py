@@ -172,7 +172,7 @@ class DNSResourceRecord:
         """Display name of the record type, e.g. ``"AAAA"``.
 
         The numeric type, as a string, for records unknown to this
-        library.
+        library (degrades, never raises).
         """
         return _RR_TYPE_NAMES.get(self.rtype, str(self.rtype))
 
@@ -572,7 +572,7 @@ class DNS(Protocol):
         Past the header this never raises: the sections are parsed on
         demand by the accessors.
 
-        :param data: The buffer holding the message.
+        :param data: The buffer, starting at the ID.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             12-byte header.
         """
@@ -604,7 +604,7 @@ class DNS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Length of the whole message: the header and the sections.
+        """The whole message: the 12-byte header and the sections.
 
         A DNS message is the whole UDP payload, so the chain ends here.
         """
@@ -797,7 +797,7 @@ class DNSOverTCP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 2-byte length prefix at the start of ``data``.
 
-        :param data: The buffer holding the prefix and the DNS message.
+        :param data: The buffer, starting at the 2-byte length prefix.
         :raises TruncatedHeaderError: if ``data`` is shorter than 2
             bytes.
         """
@@ -810,7 +810,7 @@ class DNSOverTCP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return :class:`DNS`, the message this length prefix frames.
+        """Return the class for the framed message: :class:`DNS`.
 
         A length shim has no wire field to dispatch on — it always
         frames a DNS message — so ``registry`` has nothing to select.

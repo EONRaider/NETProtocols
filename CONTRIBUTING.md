@@ -165,11 +165,13 @@ one it is:
   enum-or-`None`, a decoded option value) never raise. On a value they
   cannot interpret they return `"unknown (n)"` or `None`, and the
   docstring says so, in the form "``None`` for ... (degrades, never
-  raises)".
-- Accessors that parse a raw `bytes` attribute on demand
-  (`parsed_options`, `parsed_chunks`, `parsed_attributes`, ...) can
-  raise a `ProtocolError`. They list it with `:raises:`, and the
-  error's `offset` counts from the start of that attribute.
+  raises)". One that names every value it can be given says it never
+  raises.
+- Any accessor that parses a raw `bytes` attribute on demand, a
+  `*_name` among them (`parsed_options`, `parsed_chunks`,
+  `parsed_attributes`, `DHCP.message_type_name`, ...), can raise a
+  `ProtocolError`. It lists it with `:raises:`, and the error's
+  `offset` counts from the start of that attribute.
 
 **Spec citations.** Cite the section that defines the behaviour, with
 the section sign: `RFC 791 §3.1`, `RFC 2328 §A.3.1`,

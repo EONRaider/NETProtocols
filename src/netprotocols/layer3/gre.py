@@ -75,8 +75,9 @@ class GRE(Protocol):
 
         :param data: The buffer, starting at the flags/version word.
         :raises TruncatedHeaderError: if ``data`` is shorter than the 4
-            fixed bytes, or than the optional fields the flags announce
-            (``field="fields"``).
+            fixed bytes plus the optional fields the flags announce
+            (``field="fields"`` when only the optional fields are cut
+            short).
         """
         flags, protocol_type = cls._unpack_fixed(data)
         optional_len = cls._optional_len(flags)
@@ -101,13 +102,13 @@ class GRE(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The 4 fixed bytes plus the optional fields present."""
+        """The header's length in bytes: 4 fixed, plus the optional fields."""
         return self._struct.size + len(self.fields)
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the class that decodes the encapsulated payload.
+        """Return the class for the encapsulated payload.
 
         Chosen by ``protocol_type`` (an EtherType); ``None`` when it is
         not one this library decodes.

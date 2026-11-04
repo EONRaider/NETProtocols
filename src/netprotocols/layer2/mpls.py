@@ -245,10 +245,10 @@ class MPLSLabel:
 
         For example ``"IPv4 Explicit NULL Label"`` for label 0;
         ``None`` for an ordinary label and for the unassigned values 5-6
-        and 8-12. This reads the entry alone, so the entry after an
-        Extension Label (15), an Extended Special-Purpose Label (RFC
-        7274 §3.1), is named from the base registry, not the extended
-        one, or ``None``.
+        and 8-12 (degrades, never raises). This reads the entry alone,
+        so the entry after an Extension Label (15), an Extended
+        Special-Purpose Label (RFC 7274 §3.1), is named from the base
+        registry, not the extended one, or ``None``.
         """
         return _SPECIAL_PURPOSE_NAMES.get(self.label)
 
@@ -357,7 +357,7 @@ class MPLS(Protocol):
 
     @property
     def header_len(self) -> int:
-        """The whole stack: 4 bytes an entry."""
+        """The header's length in bytes: the whole stack, 4 bytes an entry."""
         return _ENTRY_LEN * len(self.labels)
 
     @property
@@ -382,7 +382,7 @@ class MPLS(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Name the class for the labelled packet, by convention.
+        """Return the class for the labelled packet, by convention.
 
         The class the ``ethertype`` table holds at
         :attr:`payload_ethertype`, so ``registry`` selects it as it does

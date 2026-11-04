@@ -69,8 +69,8 @@ _MESSAGE_TYPE_NAMES: dict[int, str] = {
     8: "INFORM",
 }
 
-#: DHCP option codes this library names (RFC 2132); unknown codes fall
-#: back to their numeric value.
+#: DHCP option codes this library names (RFC 2132); unknown codes read
+#: ``"unknown (n)"``.
 _OPTION_CODE_NAMES: dict[int, str] = {
     1: "Subnet Mask",
     3: "Router",
@@ -104,7 +104,8 @@ class DHCPOption:
     def code_name(self) -> str:
         """Display name of the option code, e.g. ``"Subnet Mask"``.
 
-        ``"unknown (n)"`` for codes this library does not name.
+        ``"unknown (n)"`` for codes this library does not name (degrades,
+        never raises).
         """
         return _OPTION_CODE_NAMES.get(self.code, f"unknown ({self.code})")
 
@@ -204,7 +205,7 @@ class DHCP(Protocol):
         The fixed 236-byte header is decoded; everything after it is
         kept as :attr:`options`, so past the header this never raises.
 
-        :param data: The buffer holding the message.
+        :param data: The buffer, starting at the op byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             236-byte fixed header.
         """
@@ -265,7 +266,7 @@ class DHCP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Length of the whole message: the fixed header and the options.
+        """The whole message: the fixed header and the options.
 
         A DHCP message is the whole UDP payload, so the chain ends here.
         """
@@ -273,14 +274,19 @@ class DHCP(Protocol):
 
     @property
     def op_name(self) -> str:
-        """Display name of the op code, e.g. ``"BOOTREQUEST"``."""
+        """Display name of the op code, e.g. ``"BOOTREQUEST"``.
+
+        ``"unknown (0x..)"`` for an op code RFC 2131 does not define
+        (degrades, never raises).
+        """
         return _OP_NAMES.get(self.op, f"unknown ({self.op:#04x})")
 
     @property
     def htype_name(self) -> str:
         """Display name of the hardware type, e.g. ``"Ethernet"``.
 
-        ``"unknown (n)"`` for types this library does not name.
+        ``"unknown (n)"`` for types this library does not name (degrades,
+        never raises).
         """
         try:
             return ARPHardwareType(self.htype).display_name
@@ -291,9 +297,9 @@ class DHCP(Protocol):
     def htype_enum(self) -> ARPHardwareType | None:
         """The hardware type as an :class:`~netprotocols.ARPHardwareType`.
 
-        ``None`` for a value this library does not enumerate; :attr:`htype`
-        stays the canonical ``int`` (see :attr:`htype_name` for the display
-        form).
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`htype` stays the canonical ``int`` (see
+        :attr:`htype_name` for the display form).
         """
         try:
             return ARPHardwareType(self.htype)
