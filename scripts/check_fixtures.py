@@ -341,18 +341,34 @@ def _check_gre(
     *,
     strict: bool = False,
 ) -> list[str]:
-    # GRE: a 4-byte header (flags word + inner EtherType) plus the
-    # optional checksum/key/sequence words the flag bits announce
-    # (RFC 2890), then the tunnelled packet — validated in turn.
+    """Validate a GRE packet, the whole IP payload ``upper``.
+
+    A 4-byte header (flags word and inner EtherType) is followed by the
+    optional Checksum, Key and Sequence Number words its C, K and S
+    bits announce (RFC 2784 §2, RFC 2890 §2), then the tunnelled
+    packet, validated in turn. With the C bit set, the Checksum is the
+    internet checksum of the GRE header and payload, Checksum field
+    zeroed (RFC 2784 §2.5). A packet shorter than the words its flags
+    announce cannot be checked: it passes unread, or fails under
+    ``strict``.
+    """
     stats["gre"] += 1
-    gre_flags = struct.unpack_from("!H", upper, 0)[0]
-    inner_ethertype = struct.unpack_from("!H", upper, 2)[0]
+    gre_flags, inner_ethertype = struct.unpack_from("!HH", upper, 0)
     optional = (
         (4 if gre_flags & 0x8000 else 0)
         + (4 if gre_flags & 0x2000 else 0)
         + (4 if gre_flags & 0x1000 else 0)
     )
-    return _check_l3(
+    if len(upper) < 4 + optional:
+        stats["gre-truncated"] += 1
+        return ["unchecked-gre-truncated"] if strict else []
+    failures: list[str] = []
+    if gre_flags & 0x8000:
+        stats["gre-checksum"] += 1
+        covered = upper[:4] + b"\x00\x00" + upper[6:]
+        if internet_checksum(covered) != struct.unpack_from("!H", upper, 4)[0]:
+            failures.append("gre-checksum")
+    return failures + _check_l3(
         inner_ethertype, upper[4 + optional :], stats, depth + 1, strict=strict
     )
 

@@ -7,9 +7,11 @@
 # actual tunnel. This builds a kernel GRE tunnel over a veth pair (two
 # netns), pings across the overlay, and captures the underlay — so each
 # frame is Ethernet -> IPv4 (proto 47) -> GRE -> IPv4 -> ICMPv4. It
-# captures a plain tunnel (GRE flags all clear) and then a keyed tunnel
-# (the RFC 2890 key field), and validates with check_fixtures.py, which
-# peels the GRE header and verifies the inner IPv4/ICMP checksums.
+# captures a plain tunnel (GRE flags all clear), a keyed tunnel (the
+# RFC 2890 key field) and a checksummed tunnel (the RFC 2784 checksum
+# field), and validates with check_fixtures.py, which verifies the GRE
+# checksum, peels the GRE header and verifies the inner IPv4/ICMP
+# checksums.
 #
 # veth is a purely local link, so tx/rx offload is disabled first
 # (ethtool -K): otherwise the outer IPv4 checksum is left to "offload"
@@ -70,7 +72,7 @@ address_overlay() {  # netns cidr
     ip -n "$1" addr add "$2" dev npgre0
 }
 
-echo "[>] gre (ICMPv4 echo over a plain and a keyed GRE tunnel)"
+echo "[>] gre (ICMPv4 echo over a plain, a keyed and a checksummed GRE tunnel)"
 ip netns exec "$NSA" tcpdump -i "$A" -w "$OUT/gre.pcap" --immediate-mode -U -q \
     ip proto 47 >/dev/null 2>&1 &
 pid=$!
@@ -93,6 +95,16 @@ address_overlay "$NSB" 10.9.5.2/24
 ip -n "$NSA" neigh flush dev "$A" 2>/dev/null || true
 ip netns exec "$NSA" ping -c 2 -i 0.3 -I 10.9.5.1 10.9.5.2 >/dev/null || true
 
+# Checksummed tunnel (exercises the RFC 2784 checksum field).
+ip -n "$NSA" tunnel del npgre0 2>/dev/null || true
+ip -n "$NSB" tunnel del npgre0 2>/dev/null || true
+mk_tunnel "$NSA" 10.9.4.1 10.9.4.2 csum
+mk_tunnel "$NSB" 10.9.4.2 10.9.4.1 csum
+address_overlay "$NSA" 10.9.5.1/24
+address_overlay "$NSB" 10.9.5.2/24
+ip -n "$NSA" neigh flush dev "$A" 2>/dev/null || true
+ip netns exec "$NSA" ping -c 2 -i 0.3 -I 10.9.5.1 10.9.5.2 >/dev/null || true
+
 sleep 1
 kill -INT "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
@@ -108,5 +120,6 @@ else
 fi
 
 echo
-echo "[i] Expect gre + inner ipv4/icmpv4 counts and zero checksum failures."
+echo "[i] Expect gre, gre-checksum and inner ipv4/icmpv4 counts and zero"
+echo "    checksum failures."
 echo "    Fold tests/fixtures/staging/gre.pcap into tests/fixtures/."
