@@ -1,4 +1,4 @@
-"""VLAN tag decoding: fields, single tag, QinQ stacking, round-trip,
+"""VLAN tag decoding, covering fields, single tag, QinQ stacking, round-trip,
 and the decode contract (short buffers raise, never escape)."""
 
 import struct
