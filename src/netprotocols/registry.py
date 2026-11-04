@@ -1,5 +1,7 @@
-"""The dispatch registry: how a header names the class that decodes
-what it carries, and how third parties add their own.
+"""The dispatch registry: the tables that map a wire value to a decoder.
+
+A header names the class that decodes what it carries through these
+tables, and third parties add their own decoders to them.
 
 A ``next_protocol()`` that dispatches on a wire field is a lookup in
 one of seven tables, each named after that field. A few return a fixed
@@ -48,13 +50,13 @@ Two tables reject a key their wire field cannot carry, raising
 * ``llc.dsap`` takes 0-0xFF, the width of the DSAP octet.
 * ``llc.snap`` takes 0 to 2**40 - 1: a 24-bit OUI and a 16-bit PID.
 
-The other tables accept any key, as they always have, ``ethertype``
-among them. An Ethernet or VLAN header never consults ``ethertype``
-for a type/length value of 1500 or less, which IEEE 802.3 Clause 3.2.6
-makes a frame Length followed by an 802.2 LLC header, nor for the
-undefined 1501-1535. But a GRE Protocol Type, and a SNAP PID under OUI
-00-00-00 or 00-00-F8, are looked up there whatever their value, and
-GRE has low values assigned: RFC 1701's "Current List of Protocol Types"
+The other tables accept any key, ``ethertype`` among them. An Ethernet
+or VLAN header never consults ``ethertype`` for a type/length value of
+1500 or less, which IEEE 802.3 Clause 3.2.6 makes a frame Length
+followed by an 802.2 LLC header, nor for the undefined 1501-1535.
+But a GRE Protocol Type, and a SNAP PID under OUI 00-00-00 or
+00-00-F8, are looked up there whatever their value, and GRE has low
+values assigned: RFC 1701's "Current List of Protocol Types"
 assigns SNA 0x0004, OSI network layer 0x00FE and PUP 0x0200 ("The
 following table of values MUST be used to identify the following
 protocols"). A decoder registered at ``ethertype`` 0x00FE is reached
@@ -86,16 +88,16 @@ registration made directly in the child fills it as usual.
 
 Inheritance is resolved **when you register, not when you look up**: a
 write to a parent table is copied into every child that has not
-overridden the key. Dispatch therefore stays a single ``dict.get`` on a
-flat table, which is what keeps it cheap enough for the hot path.
+overridden the key. Dispatch is therefore a single ``dict.get`` on a
+flat table.
 
 Global and isolated registries
 ------------------------------
 
 :data:`DEFAULT` is the process-wide registry, and it is what
-``next_protocol()`` reads — that method takes no arguments and is called
-once per layer per frame, so there is nowhere to thread a registry
-through it and no budget for indirection if there were.
+``next_protocol()`` reads when it is given no registry, as in a
+:func:`~netprotocols.decode_frame` call without ``registry=`` or
+``decode_as=``.
 
 When you need registrations that do *not* leak into the rest of the
 process — you are embedding this library, or you are testing a decoder —
@@ -197,9 +199,8 @@ _C = TypeVar("_C", bound="type[Protocol]")
 class UnknownTableError(ProtocolError):
     """A registration or lookup named a table that does not exist.
 
-    Raised eagerly, with the valid names listed, because a typo in a
-    table name would otherwise register a decoder that nothing ever
-    consults.
+    Raised at once, with the valid names listed, so a typo in a table
+    name never registers a decoder that nothing consults.
     """
 
 
@@ -219,8 +220,8 @@ class RegistryConflictError(ProtocolError):
     Registering over an existing entry requires ``override=True``, so
     that two packages claiming the same port cannot silently resolve by
     import order. Re-registering the *same* class to the same key is a
-    no-op rather than an error — a decorator re-runs whenever its module
-    is re-executed.
+    no-op, not an error, so a decorator that re-runs when its module is
+    re-executed does not raise.
     """
 
 
@@ -245,8 +246,8 @@ class Registry:
             name: {} for name in TABLES
         }
         #: Registrations made *directly* on each table, as opposed to
-        #: inherited into it. Kept so that a later write to a parent
-        #: cannot clobber a deliberate override in a child.
+        #: inherited into it, so that a later write to a parent
+        #: cannot clobber an override in a child.
         self._own: dict[str, dict[int, type[Protocol]]] = {
             name: {} for name in TABLES
         }
@@ -256,7 +257,7 @@ class Registry:
 
     @classmethod
     def from_defaults(cls) -> Registry:
-        """A registry seeded with this library's built-in decoders.
+        """Return a registry seeded with this library's built-in decoders.
 
         The copy is independent: registering on it leaves :data:`DEFAULT`
         — and therefore ``next_protocol()`` — untouched.
@@ -264,13 +265,12 @@ class Registry:
         return DEFAULT.derive()
 
     def table(self, name: str) -> dict[int, type[Protocol]]:
-        """The flattened lookup table ``name``, inherited entries
-        included.
+        """Return the flattened lookup table ``name``.
 
-        This is the live dict the registry dispatches through, not a
-        copy: the layer modules bind it once at import so that a lookup
-        is a bare ``dict.get``. Treat it as read-only and go through
-        :meth:`register` to change it.
+        Inherited entries are included. This is the live dict the
+        registry dispatches through, not a copy: the layer modules bind
+        it once at import so that a lookup is a bare ``dict.get``. Treat
+        it as read-only and go through :meth:`register` to change it.
         """
         try:
             return self._tables[name]
@@ -278,7 +278,7 @@ class Registry:
             raise _unknown_table(name) from None
 
     def get(self, table: str, key: int) -> type[Protocol] | None:
-        """The class registered for ``key`` in ``table``, or ``None``.
+        """Return the class registered for ``key`` in ``table``, or ``None``.
 
         ``None`` is an ordinary answer rather than an error: the chain
         ends here, either because nothing is encapsulated or because
@@ -289,7 +289,7 @@ class Registry:
     def get_port(
         self, table: str, src_port: int, dst_port: int
     ) -> type[Protocol] | None:
-        """The class for a port pair, destination tried first.
+        """Return the class for a port pair, destination tried first.
 
         A request targets the server's well-known port and a response
         comes from it, so the destination is the better guess of the two
@@ -308,11 +308,17 @@ class Registry:
     ) -> None:
         """Register ``protocol`` as the decoder for ``key`` in ``table``.
 
-        :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
-        :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+        :param table: The dispatch table's name, one of :data:`TABLES`.
+        :param key: The wire value to dispatch on.
+        :param protocol: The class that decodes what that value names.
+        :param override: Replace a different class already holding
+            ``key``, instead of raising.
+        :raises UnknownTableError: if ``table`` is not one of
+            :data:`TABLES`.
+        :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
             ``llc.snap`` and ``key`` is outside the range it accepts (see
             "Key ranges" in the module docstring).
-        :raises RegistryConflictError: ``key`` is held by a different
+        :raises RegistryConflictError: if ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
             class to the same key succeeds and changes nothing.
         """
@@ -329,8 +335,9 @@ class Registry:
         self._publish(table, key, protocol)
 
     def _publish(self, table: str, key: int, protocol: type[Protocol]) -> None:
-        """Write an entry into ``table`` and into every child that has
-        not overridden the key.
+        """Write an entry into ``table`` and every child not overriding it.
+
+        A child that holds ``key`` itself, or withholds it, is skipped.
 
         Entries are written in place rather than rebuilt, so the flat
         dicts the layer modules hold stay valid and are never observed
@@ -348,13 +355,15 @@ class Registry:
         is for a protocol number that one IP family must not inherit
         from the other: the defaults withhold OSPF's 89 from
         ``ip.proto.v6``, where it means OSPFv3. A registration made
-        directly in ``table`` still fills the key, since that is a
-        deliberate choice for this table.
+        directly in ``table`` still fills the key.
         A class already registered directly in ``table`` stands, so
-        withholding is idempotent and never undoes a deliberate entry.
+        withholding is idempotent and never undoes a direct entry.
         Private: the defaults are its only caller.
 
-        :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
+        :param table: The dispatch table's name, one of :data:`TABLES`.
+        :param key: The wire value to withhold.
+        :raises UnknownTableError: if ``table`` is not one of
+            :data:`TABLES`.
         """
         entries = self.table(table)
         if key in self._own[table]:
@@ -366,7 +375,7 @@ class Registry:
         self,
         overrides: Mapping[str, Mapping[int, type[Protocol]]] | None = None,
     ) -> Registry:
-        """A child registry: this one's entries, plus ``overrides``.
+        """Return a child registry: this one's entries, plus ``overrides``.
 
         Copy-on-write and independent in both directions — later changes
         to either registry do not reach the other. This is the primitive
@@ -376,11 +385,14 @@ class Registry:
 
             reg = DEFAULT.derive({"udp.port": {6969: DNS}})
 
-        Overrides replace whatever they land on, so nothing here can
-        raise a conflict: naming a key that is already taken is the
-        point.
+        Overrides replace whatever they land on, so no conflict is
+        raised.
 
-        :raises InvalidRegistryKeyError: an override names an
+        :param overrides: Entries to register on the child with
+            ``override=True``, keyed by table name and then by key.
+        :raises UnknownTableError: if an override names a table that is
+            not one of :data:`TABLES`.
+        :raises InvalidRegistryKeyError: if an override names an
             ``llc.dsap`` or ``llc.snap`` key outside the range that table
             accepts (see "Key ranges" in the module docstring).
         """
@@ -404,7 +416,9 @@ class Registry:
 def _check_key(table: str, key: int) -> None:
     """Refuse a key outside the range ``table`` accepts.
 
-    :raises InvalidRegistryKeyError: ``key`` is outside that range.
+    :param table: The dispatch table's name.
+    :param key: The key to check.
+    :raises InvalidRegistryKeyError: if ``key`` is outside that range.
     """
     accepted = _KEY_RANGES.get(table)
     if accepted is not None and key not in accepted:
@@ -506,12 +520,20 @@ def register_all(
     when one raises, as :meth:`Registry.register` describes, the keys
     before it stay registered and the ones after it are not tried.
 
-    :raises UnknownTableError: ``table`` is not one of :data:`TABLES`.
-    :raises InvalidRegistryKeyError: ``table`` is ``llc.dsap`` or
+    :param table: The dispatch table's name, one of :data:`TABLES`.
+    :param keys: The wire values to register ``protocol`` against.
+    :param protocol: The class that decodes what those values name.
+    :param override: Replace a different class already holding a key,
+        instead of raising.
+    :param registry: The registry to register on; :data:`DEFAULT` when
+        ``None``.
+    :raises UnknownTableError: if ``table`` is not one of
+        :data:`TABLES`.
+    :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
         ``llc.snap`` and a key is outside the range it accepts (see "Key
         ranges" in the module docstring).
-    :raises RegistryConflictError: a key is held by a different class
-        and ``override`` is false.
+    :raises RegistryConflictError: if a key is held by a different
+        class and ``override`` is false.
     """
     target = DEFAULT if registry is None else registry
     for key in keys:

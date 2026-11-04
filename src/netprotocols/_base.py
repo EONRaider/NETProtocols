@@ -26,24 +26,21 @@ Decode-path construction
 ------------------------
 Constructing a header from field values validates them: an address that
 is not a valid MAC or IPv4 string raises, and that strictness is part
-of the public contract. It is pure overhead on the decode path, though,
-because ``decode()`` *generates* those strings itself, from raw bytes,
-via ``bytes_to_mac()`` / ``bytes_to_ipv4()`` — a regex can only confirm
-what the conversion already guarantees.
+of the public contract. ``decode()`` generates those strings itself,
+from raw bytes, via ``bytes_to_mac()`` / ``bytes_to_ipv4()``, so they
+are valid by construction.
 
 The three headers that carry addresses (``Ethernet``, ``ARP``,
-``IPv4``) therefore build their decoded instance directly, with
+``IPv4``) build their decoded instance directly, with
 ``object.__new__`` plus ``object.__setattr__`` per field, skipping
-``__init__`` and ``__post_init__``. This is an internal shortcut on a
-path whose inputs are known-good, not a relaxation of the contract:
-every public constructor still validates, and any ``__post_init__``
-check bypassed this way is one ``decode()`` has already established
-itself (documented at each site).
+``__init__`` and ``__post_init__``. Every public constructor still
+validates, and every ``__post_init__`` check skipped this way holds for
+what ``decode()`` produces (documented at each site).
 
-``HTTP`` takes the same path for a different reason: its
-``__post_init__`` re-parses ``head + raw_body`` to check that the two
-are one complete, exactly framed message, which ``decode()`` has just
-established by parsing the buffer they were cut from.
+``HTTP`` takes the same path: its ``__post_init__`` re-parses
+``head + raw_body`` to check that the two are one complete, exactly
+framed message, which ``decode()`` has established by parsing the
+buffer they were cut from.
 
 Text-framed protocols
 ---------------------
@@ -131,8 +128,7 @@ after a short LLC PDU reach no decoder. ``Ethernet`` and ``VLAN`` are
 the two such classes. A bound past the end of the frame bounds
 nothing, so a frame cut by a snap length decodes as it would unbounded;
 the tighter of two bounds wins. IPv4's, IPv6's and UDP's lengths are
-not honoured (#235). Both names are private while #235 settles the
-public form.
+not honoured. Both names are private.
 
 Decode context in ``next_protocol``
 -----------------------------------
@@ -190,10 +186,8 @@ def mac_to_bytes(mac: str) -> bytes:
 
 def bytes_to_mac(data: bytes) -> str:
     """Render 6 raw bytes as a colon-separated lowercase MAC address."""
-    # bytes.hex(sep) does this in one C call; the generator-plus-format
-    # equivalent it replaces ran seven generator steps and six format()
-    # calls per address, twice per Ethernet frame. memoryview.hex takes
-    # a separator too, so this still accepts a decode-time view.
+    # bytes.hex(sep) formats the address in one C call. memoryview.hex
+    # takes a separator too, so this also accepts a decode-time view.
     return data.hex(":")
 
 
@@ -210,16 +204,15 @@ def bytes_to_ipv4(data: bytes) -> str:
 def ipv6_to_bytes(addr: str) -> bytes:
     """Pack an IPv6 address string into 16 bytes.
 
-    Deliberately :mod:`ipaddress`, not ``socket.inet_pton`` — the
-    latter needs the platform's C library to support ``AF_INET6``
-    sockets, which Pyodide's WebAssembly build of CPython does not
+    Uses :mod:`ipaddress`, which is pure Python, and not
+    ``socket.inet_pton``, which needs a C library with ``AF_INET6``
+    support. Pyodide's WebAssembly build of CPython has none
     (``OSError: can't use AF_INET6, IPv6 is disabled``; see
-    ``docs/CLAIMS.md`` 3.1). :mod:`ipaddress` is pure Python and has
-    no such dependency, so this keeps IPv6 decoding working under
-    Pyodide, not just the modules that never happened to be built on
-    ``AF_INET6``. The exception is translated to match what
-    ``inet_pton`` used to raise, so this stays a pure implementation
-    swap and not a public contract change.
+    ``docs/CLAIMS.md`` 3.1), and this function works there.
+
+    :param addr: The address, in any form :mod:`ipaddress` accepts.
+    :raises OSError: if ``addr`` is not a valid IPv6 address, with the
+        message ``inet_pton`` gives.
     """
     try:
         return IPv6Address(addr).packed
@@ -231,36 +224,22 @@ _IPV6_WORDS = Struct("!8H")
 
 
 def bytes_to_ipv6(data: bytes) -> str:
-    """Render 16 raw bytes as an RFC 5952 IPv6 address string, matching
-    glibc's ``inet_ntop`` byte-for-byte (verified by differential
-    testing against it across 500,000+ random addresses plus an
-    exhaustive sweep of both dotted-quad special cases below — see
-    the PR that introduced this function for the harness).
+    """Render 16 raw bytes as an RFC 5952 IPv6 address string.
 
-    Not :func:`str` on an :class:`ipaddress.IPv6Address`: that class's
-    formatting is not the fixed point it looks like — CPython 3.12
-    changed it to stop rendering ``::ffff:a.b.c.d``-form addresses in
-    dotted-quad, while 3.11 (and glibc, and this project's own
-    supported 3.12/3.13/3.14 matrix's *history* of output) all agree
-    it should. Reimplementing the compression here, once, keeps the
-    string form stable across Python versions instead of inheriting
-    whatever :mod:`ipaddress` decides this release. See
-    :func:`ipv6_to_bytes` for why sidestepping ``socket`` entirely
-    also matters — Pyodide's CPython build has ``AF_INET6`` disabled.
+    The output matches glibc's ``inet_ntop`` byte for byte, including
+    its two dotted-quad forms, ``::a.b.c.d`` and ``::ffff:a.b.c.d``. It
+    is the same on every supported Python version: it depends neither
+    on ``socket`` (see :func:`ipv6_to_bytes`) nor on :func:`str` of an
+    :class:`ipaddress.IPv6Address`, whose rendering of
+    ``::ffff:a.b.c.d`` addresses differs between CPython versions.
 
-    The eight words are rendered with one ``%``-format call rather
-    than a per-word f-string through a generator: profiling the
-    decode corpus (see the PR that made this change) showed the
-    generator/join form costing ~18% of total decode time, almost
-    entirely interpreter overhead of formatting one word at a time
-    rather than the algorithm itself. ``%`` formats all eight in a
-    single C call; the compressed forms then slice the pre-split
-    result instead of re-formatting a subset of the words.
+    The eight words are formatted by one ``%``-format call, a single C
+    call; the compressed forms slice its result.
     """
     words = _IPV6_WORDS.unpack(data)
 
     # Longest run of consecutive zero words, leftmost on a tie (RFC
-    # 5952 4.2.3); single zero words are not worth compressing (4.2.2).
+    # 5952 §4.2.3); a single zero word is not compressed (§4.2.2).
     best_start = best_len = -1
     run_start = None
     for i, word in enumerate((*words, 1)):  # sentinel closes a trailing run
@@ -292,13 +271,7 @@ def bytes_to_ipv6(data: bytes) -> str:
         )
         return prefix + ".".join(str(octet) for octet in octets)
 
-    # %-formatting the whole tuple in one call, not f-string
-    # specifiers: measured faster here specifically (a single
-    # all-in-one f-string interpolating all eight words ran ~2.6x
-    # slower, str.format() ~1.7x slower — both still pay per-value
-    # interpreter overhead that % 's one-shot tuple formatting does
-    # not), so this one line keeps %, everywhere else in the codebase
-    # still prefers f-strings.
+    # One %-format call formats the whole tuple in a single C call.
     hexed = "%x:%x:%x:%x:%x:%x:%x:%x" % words  # noqa: UP031
     if best_start == -1:
         return hexed
@@ -310,8 +283,9 @@ def bytes_to_ipv6(data: bytes) -> str:
 
 
 def hex_str(value: int, width: int) -> str:
-    """Render `value` as a hexadecimal string zero-padded to `width`
-    total characters including the '0x' prefix, e.g.
+    """Render ``value`` as a hexadecimal string zero-padded to ``width``.
+
+    ``width`` counts every character, the ``0x`` prefix included:
     ``hex_str(0x1c2a, 6) == "0x1c2a"``.
     """
     return f"{value:#0{width}x}"
@@ -332,6 +306,8 @@ class Protocol(ABC):
     #: Layout of the fixed portion of the header, network byte order.
     _struct: ClassVar[Struct]
 
+    # TODO(#235): bound the payload by IPv4's, IPv6's and UDP's lengths
+    # too, and settle a public form for this flag and _payload_extent().
     #: Whether :meth:`_payload_extent` can bound this header's payload.
     #: A class attribute, so the chain walk tests it per layer without a
     #: call (see "Payload extent" in this module's docstring).
@@ -341,6 +317,7 @@ class Protocol(ABC):
     def _unpack_fixed(cls, data: bytes | memoryview) -> tuple[Any, ...]:
         """Unpack the fixed portion of the header from ``data``.
 
+        :param data: The buffer, starting at this header.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             fixed portion.
         """
@@ -377,8 +354,8 @@ class Protocol(ABC):
     def _payload_extent(self) -> int | None:
         """Return how many bytes after this header its payload occupies.
 
-        That is, by a length field the header carries, or ``None`` if it
-        carries none. Read by the chain walk only for a class that sets
+        The count comes from a length field the header carries; ``None``
+        if it carries none. Read by the chain walk only for a class that sets
         ``_BOUNDS_PAYLOAD`` (see "Payload extent" in this module's
         docstring).
         """
@@ -387,7 +364,7 @@ class Protocol(ABC):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class that decodes this header's payload, if known.
+        """Return the class that decodes this header's payload, if known.
 
         ``None`` means the chain ends here: the protocol never
         encapsulates another (ARP, UDP), the encapsulated protocol is
@@ -395,10 +372,9 @@ class Protocol(ABC):
         it (ESP, whose payload's protocol is in its protected trailer).
 
         ``registry`` selects the dispatch tables to resolve against.
-        Omitting it — the overwhelmingly common case — reads the
-        process-wide default directly, which is why this stays a single
+        Omitting it reads the process-wide default directly, in a single
         dict lookup. :func:`~netprotocols.decode_frame` passes an
         explicit registry when a caller asked for one, so a per-call
-        decoder override never has to mutate global state.
+        decoder override leaves global state untouched.
         """
         return None

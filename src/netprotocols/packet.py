@@ -253,10 +253,10 @@ class Packet:
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
         is whatever comes after the last layer on the wire. Instances
-        are frozen, so layers are rebuilt via :func:`dataclasses.replace`,
-        keeping the decode context a layer records outside its fields,
-        such as whether another STUN message follows it in a TCP
-        segment.
+        are frozen, so layers are rebuilt with
+        :func:`dataclasses.replace`, and the decode context a layer
+        records outside its ``__init__`` fields, such as whether another
+        STUN message follows it in a TCP segment, is copied across.
         A STUN message's FINGERPRINT attribute is recomputed when it
         has one, last; its MESSAGE-INTEGRITY, which needs a key, is
         left as it is.

@@ -1,14 +1,12 @@
 """The decoders this library ships, and the wire values that reach them.
 
-:func:`install` is the whole default dispatch map in one place — what
-used to be four dict literals scattered across the layer modules. It
+:func:`install` is the whole default dispatch map in one place. It
 runs once, from ``netprotocols/__init__.py``, after every protocol class
 has been imported.
 
-The imports are function-local for the reason they always were: layer
-modules name each other's classes, and importing them at module level
-here would put this module in the middle of that cycle (see
-ARCHITECTURE.md). Nothing is deferred for *speed* — by the time anything
+The imports are function-local: layer modules name each other's
+classes, and importing them at module level here would put this module
+in the middle of that cycle (see ARCHITECTURE.md). By the time anything
 dispatches, the package import has already pulled in every protocol
 module.
 """
@@ -64,7 +62,7 @@ IPV6_ONLY_NUMBERS = frozenset(
 )
 
 #: Protocol numbers both IP families reach, but through a different
-#: class in each: the ``ip.proto.v6`` entry deliberately overrides the
+#: class in each: the ``ip.proto.v6`` entry overrides the
 #: one ``ip.proto`` would pass down, because something the header does
 #: not say for itself depends on the family that carried it.
 #:

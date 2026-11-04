@@ -21,12 +21,10 @@ __all__ = [
 class ProtocolError(Exception):
     """Base class for all errors raised by netprotocols.
 
-    Strictness is the library's security story — it raises where scapy
-    silently fills in defaults — so what a raise *carries* matters as
-    much as the fact that it raised. Every raise site in ``src/``
-    attaches structured context alongside the message, so a fuzzing
-    harness, a conformance suite, or a protocol-validation tool can act
-    on *where* and *what* failed without regexing the prose.
+    Every raise site in ``src/`` attaches structured context alongside
+    the message, so a fuzzing harness, a conformance suite, or a
+    protocol-validation tool can act on *where* and *what* failed
+    without parsing the message text.
 
     Every field below is optional and defaults to ``None``: not every
     error has a buffer position (a :class:`~netprotocols.Packet` built
@@ -117,28 +115,27 @@ class InvalidManufacturerCodeError(InvalidFieldError):
 
 
 class MalformedCaptureError(ProtocolError):
-    """A byte buffer does not hold a well-formed classic-pcap or pcapng
-    capture — a bad magic number, a block/record header that runs past
-    the buffer, a length field that disagrees with the bytes actually
-    available, or a pcapng block that references an interface no
-    Interface Description Block has declared yet.
+    """A byte buffer does not hold a well-formed classic-pcap or pcapng capture.
 
-    Raised by :mod:`netprotocols.pcap`, never by a header decoder — a
-    corrupt or truncated *capture file* is a different failure shape
-    than a malformed header inside one already-extracted frame (a
-    :class:`TruncatedHeaderError`/:class:`InvalidFieldError` case), so
-    it gets its own type rather than reusing those. There is no
-    ``lax`` partial-success mode: a capture container is either well-
-    formed or it is not trustworthy enough to keep reading from.
+    The causes are a bad magic number, a block/record header that runs
+    past the buffer, a length field that disagrees with the bytes
+    actually available, or a pcapng block that references an interface
+    no Interface Description Block has declared yet.
+
+    Raised by :mod:`netprotocols.pcap`, never by a header decoder: a
+    malformed header inside one extracted frame raises
+    :class:`TruncatedHeaderError` or :class:`InvalidFieldError`
+    instead. There is no ``lax`` partial-success mode: a reader raises
+    at the first malformed part of the capture.
     """
 
 
 class MaxDepthExceededError(ProtocolError):
     """A frame's header chain is longer than the walker was allowed.
 
-    Raised by :func:`~netprotocols.decode_frame` rather than by any
-    single decoder: every header validates its own length, so a chain
-    always terminates, but a crafted frame can nest far enough to waste
-    a capture tool's time. The bound turns that from a long walk into an
-    immediate, named error.
+    Raised by :func:`~netprotocols.decode_frame`, never by a single
+    decoder, when a frame holds more headers than its ``max_depth``
+    allows. Every chain terminates, since every header validates its
+    own length; the bound limits how many headers a crafted, deeply
+    nested frame makes the walk decode.
     """
