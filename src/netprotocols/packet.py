@@ -74,6 +74,36 @@ def _enclosing_ip(
     return None, None
 
 
+def _ip_checksum_extent(
+    layers: tuple[Protocol, ...], index: int, minimum: int
+) -> int | None:
+    """Return a layer's available bytes within its nearest IP datagram.
+
+    Every intervening header counts in the offset. ``None`` leaves the
+    input unbounded when no IP header encloses the layer, its declared
+    end precedes the required header, or IPv6's payload length is zero.
+
+    :param layers: The packet's headers, outermost first.
+    :param index: The layer whose checksum input is bounded.
+    :param minimum: The required header bytes at that layer's start.
+    """
+    from netprotocols.layer3.ip import IPv4, IPv6
+
+    offset = 0
+    for header in reversed(layers[:index]):
+        offset += header.header_len
+        if isinstance(header, IPv4):
+            extent = header.total_length - offset
+        elif isinstance(header, IPv6):
+            if header.payload_length == 0:
+                return None
+            extent = header.header_len + header.payload_length - offset
+        else:
+            continue
+        return extent if extent >= minimum else None
+    return None
+
+
 class Packet:
     """An ordered stack of protocol headers, outermost first.
 
@@ -257,6 +287,11 @@ class Packet:
         cryptographic authentication. The LS checksums of the LSAs an
         OSPF packet carries are carried over unchanged.
 
+        IGMP and GRE checksum inputs end at the nearest IPv4 or IPv6
+        datagram's declared end. Message bodies and capture trailers
+        are retained. A zero IPv6 payload length or a declared end
+        before the layer's required header leaves its input unbounded.
+
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
         is whatever comes after the last layer on the wire. Instances
@@ -295,9 +330,29 @@ class Packet:
                     ),
                 )
             elif isinstance(layer, GRE) and layer.checksum_present:
-                checksum = compute(layer, payload=trailing).to_bytes(2, "big")
+                extent = _ip_checksum_extent(
+                    self.layers, index, layer.header_len
+                )
+                checksum_payload = (
+                    trailing
+                    if extent is None
+                    else trailing[: extent - layer.header_len]
+                )
+                checksum = compute(layer, payload=checksum_payload).to_bytes(
+                    2, "big"
+                )
                 layer = _refilled(layer, fields=checksum + layer.fields[2:])
-            elif isinstance(layer, (IPv4, IGMP, CDP)) or (
+            elif isinstance(layer, IGMP):
+                extent = _ip_checksum_extent(
+                    self.layers, index, IGMP._struct.size
+                )
+                checksum_message = layer
+                if extent is not None and extent < layer.header_len:
+                    checksum_message = _refilled(
+                        layer, body=layer.body[: extent - IGMP._struct.size]
+                    )
+                layer = _refilled(layer, checksum=compute(checksum_message))
+            elif isinstance(layer, (IPv4, CDP)) or (
                 isinstance(layer, OSPF)
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):

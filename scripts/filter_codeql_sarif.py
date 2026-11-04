@@ -311,17 +311,29 @@ def filter_file(path: Path, root: str, name: str) -> str:
     return summary + (f": {', '.join(dropped)}" if dropped else "")
 
 
+def nonempty_path(value: str) -> Path:
+    """Return ``value`` as a ``Path``, for an argparse ``type``.
+
+    :param value: the command-line argument.
+    :raises argparse.ArgumentTypeError: if ``value`` is empty or only
+        whitespace.
+    """
+    if not value.strip():
+        raise argparse.ArgumentTypeError(f"empty path: {value!r}")
+    return Path(value)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "sarif",
-        type=Path,
+        type=nonempty_path,
         nargs="+",
         help="a SARIF file, or a directory of *.sarif files",
     )
     parser.add_argument(
         "--source-root",
-        type=Path,
+        type=nonempty_path,
         default=Path.cwd(),
         help="the checkout that absolute file: URIs are matched against "
         "(default: the working directory)",

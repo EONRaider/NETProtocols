@@ -168,25 +168,36 @@ def test_with_checksums_leaves_gre_without_checksum_unchanged(flags):
 
 
 def test_with_checksums_fills_gre_after_its_inner_packet():
-    # Reuse real encapsulated IPv4/UDP bytes, then wrap a checksummed GRE.
+    # Reuse captured encapsulated IPv4 bytes under a checksummed GRE header.
     frame = pcap_frames(FIXTURES / "gre.pcap")[0]
     packet = decode_frame(frame)
     gre_index = next(
         i for i, layer in enumerate(packet.layers) if isinstance(layer, GRE)
     )
-    stale = Packet(
-        *(
-            GRE(
-                flags=0x8000, protocol_type=layer.protocol_type, fields=bytes(4)
-            )
-            if isinstance(layer, GRE)
-            else replace(layer, checksum=layer.checksum ^ 1)
-            if isinstance(layer, (IPv4, UDP, ICMPv4))
-            else layer
-            for layer in packet.layers
-        )
+    layers = list(packet.layers)
+    layers[gre_index] = GRE(
+        flags=0x8000,
+        protocol_type=packet.layers[gre_index].protocol_type,
+        fields=bytes(4),
     )
+    growth = layers[gre_index].header_len - packet.layers[gre_index].header_len
+    for index, layer in enumerate(layers):
+        if isinstance(layer, IPv4):
+            layers[index] = replace(
+                layer,
+                checksum=layer.checksum ^ 1,
+                total_length=layer.total_length
+                + (growth if index < gre_index else 0),
+            )
+        elif isinstance(layer, (UDP, ICMPv4)):
+            layers[index] = replace(layer, checksum=layer.checksum ^ 1)
+    stale = Packet(*layers)
     tail = frame[packet.consumed :]
+    for index, layer in enumerate(stale.layers[:gre_index]):
+        if isinstance(layer, IPv4):
+            assert layer.total_length == sum(
+                item.header_len for item in stale.layers[index:]
+            ) + len(tail)
     filled = stale.with_checksums(tail)
     inner = b"".join(bytes(layer) for layer in filled.layers[gre_index + 1 :])
     assert ones_complement(bytes(filled.layers[gre_index]) + inner + tail) == 0
