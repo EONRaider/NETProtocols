@@ -62,9 +62,10 @@ CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 #: The surrogate escapes ``errors="surrogateescape"`` decodes bytes to.
 SURROGATE = re.compile("[\udc80-\udcff]")
 
-#: Suffixes and basenames of the files whose ``#`` comment text is
-#: matched with :data:`IN_COMMENT`, besides Python's comment tokens.
+#: Suffixes of the files whose ``#`` comment text is matched with
+#: :data:`IN_COMMENT`, besides Python's comment tokens.
 HASH_COMMENT_SUFFIXES = (".sh", ".yml", ".yaml", ".toml", ".cfg", ".flake8")
+#: Basenames of the files whose ``#`` comment text is matched.
 HASH_COMMENT_NAMES = frozenset(
     {".gitignore", ".gitattributes", "CODEOWNERS", "Dockerfile"}
 )

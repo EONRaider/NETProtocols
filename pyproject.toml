@@ -138,8 +138,9 @@ also_copy = ["scripts"]
 #       'netprotocols.layer7.dns.x__read_name*' \
 #       'netprotocols.layer7.dns.x__labels*' \
 #       'netprotocols.layer7.http.x__*'
-# http.py (the HTTP/1.1 grammar) is audited whole: every rule is a
-# private module-level function, matched by 'x__*'.
+# In http.py (the HTTP/1.1 grammar) the private module-level
+# functions are audited, matched by 'x__*'; the HTTP class's methods
+# are not mutated.
 # Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
 # the DNS/DNSOverTCP dataclass methods, ...) are out of scope and not
 # triaged. mutmut (3.8.1) generates none at all for

@@ -478,9 +478,12 @@ class TestCIWorkflow:
         found = re.search(r"(?ms)^on:\n(.*?)^(?=[^\s#])", CI.read_text())
         assert found, "ci.yml has no block-style on: mapping"
         on = found.group(1)
-        assert re.search(r"(?m)^  push:", on), "ci.yml lost its push trigger"
         assert not re.search(r"(?m)^  schedule:", on), (
             "ci.yml has a schedule trigger"
+        )
+        triggers = set(re.findall(r"(?m)^  ([\w-]+):", on))
+        assert triggers == {"push", "pull_request", "workflow_call"}, (
+            f"ci.yml's triggers are {sorted(triggers)}"
         )
 
     def test_lint_runs_pydoclint(self, ci_jobs: dict[str, str]) -> None:
