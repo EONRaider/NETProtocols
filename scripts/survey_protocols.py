@@ -41,7 +41,9 @@ evidence too, not an empty cell: a check
 that a class or handler pattern matches none of the package's source
 files, reported as "no match in N files". A check whose file is
 missing fails rather than passing, and any failed check makes the cell
-FAILED and the script exit 1.
+FAILED and the script exit 1. So does a scapy ``config.py`` that is
+missing, or whose ``load_layers`` declaration names no module the
+survey can read: the run then stops before printing either table.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -621,11 +623,35 @@ def evaluate(root: Path, checks: tuple[Check, ...]) -> Cell:
     return Cell(verdict, text)
 
 
+class Unreadable(Exception):
+    """A competitor source file the survey reads is missing or unrecognised."""
+
+
+#: scapy's ``Conf.load_layers`` declaration in ``config.py``; group 1 is
+#: the body of the list.
+LOAD_LAYERS = r"load_layers: List\[str\] = \[(.*?)\]"
+
+
 def scapy_loaded_layers(root: Path) -> set[str]:
-    """``conf.load_layers``, the ``layers/`` modules ``scapy.all`` loads."""
-    text = read(root, "config.py") or ""
-    match = re.search(r"load_layers: List\[str\] = \[(.*?)\]", text, re.DOTALL)
-    return set(re.findall(r"'([\w.]+)'", match.group(1))) if match else set()
+    """``conf.load_layers``, the ``layers/`` modules ``scapy.all`` loads.
+
+    :raises Unreadable: if ``config.py`` is missing, or no declaration
+        in it matches :data:`LOAD_LAYERS` with at least one quoted
+        module name.
+    """
+    text = read(root, "config.py")
+    if text is None:
+        raise Unreadable("FAILED config.py: no such file")
+    match = re.search(LOAD_LAYERS, text, re.DOTALL)
+    if match is None:
+        raise Unreadable(f"FAILED config.py: /{LOAD_LAYERS}/ matches nothing")
+    names = set(re.findall(r"'([\w.]+)'", match.group(1)))
+    if not names:
+        raise Unreadable(
+            f"FAILED config.py: /{LOAD_LAYERS}/ matches a list with no "
+            "quoted module names"
+        )
+    return names
 
 
 def scapy_note(checks: tuple[Check, ...], loaded: set[str]) -> str:
@@ -743,7 +769,15 @@ def main() -> int:
     for library, root in roots.items():
         if not (root / "__init__.py").is_file():
             parser.error(f"{library}: {root} is not a package directory")
-    loaded = scapy_loaded_layers(args.scapy)
+    try:
+        loaded = scapy_loaded_layers(args.scapy)
+    except Unreadable as error:
+        print(
+            f"scapy: {error}; cannot tell which layers/ modules "
+            "`import scapy.all` loads.",
+            file=sys.stderr,
+        )
+        return 1
 
     print(
         f"netprotocols source tree (__version__ {our_version()}), "
