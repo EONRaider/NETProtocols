@@ -34,7 +34,7 @@ capture tool would rather keep the layers it got than lose frame
 Lax mode never invents a layer and never guesses: it returns what
 decoded cleanly, and the exception that ended the walk. It is not a
 lenient *parser* — each individual header is decoded as strictly as
-ever — it only declines to throw away the work that succeeded.
+in strict mode — it only declines to throw away the work that succeeded.
 
 Starting somewhere other than Ethernet
 --------------------------------------
@@ -48,8 +48,8 @@ Bounded depth
 -------------
 
 Every header validates its own declared length against the buffer, so a
-chain always terminates; but nothing stopped a crafted frame from
-nesting far enough to waste real time. ``max_depth`` bounds it, and
+chain always terminates; but a crafted frame can nest far enough to
+waste real time. ``max_depth`` bounds it, and
 exceeding it raises :class:`~netprotocols.MaxDepthExceededError` (or,
 in lax mode, ends the walk and is reported). The default of
 :data:`MAX_DEPTH` is generous for nested headers: the deepest such
@@ -91,7 +91,7 @@ Length (1500 or less) says where the LLC PDU after it ends, and the
 walk ends the buffer it hands every later layer there: Ethernet's zero
 padding after a short PDU, and a captured FCS, reach no decoder and
 are left past ``packet.consumed``. It is the one enclosing length the
-walk honours; IPv4's, IPv6's and UDP's are not (#235). A Length beyond
+walk honours; IPv4's, IPv6's and UDP's are not. A Length beyond
 the end of the frame bounds nothing, so a frame cut by a snap length
 decodes what was captured, and a Length shorter than the 3-byte LLC
 header makes the LLC decode raise
@@ -101,14 +101,12 @@ header makes the LLC decode raise
 On ``memoryview``
 -----------------
 
-The walk slices whatever it is given and does not convert. Handing it
-``bytes`` keeps the common single-frame case fastest; handing it a
-``memoryview`` over a large contiguous buffer keeps the slices
-zero-copy, which is what pays when frames are being cut out of a whole
-capture file. Converting internally would be worse than either:
-measured on the corpus, wrapping each frame in a ``memoryview`` runs at
-0.95x the plain-``bytes`` walk, because for a single small frame the
-view costs more to build than the copy it saves.
+The walk slices whatever it is given and does not convert: each
+decoder receives a slice of the caller's own ``bytes`` or
+``memoryview``. For a single small frame, ``bytes`` is the faster
+input, since a ``memoryview`` slice costs more to build than the copy
+it saves; a ``memoryview`` over a large contiguous buffer keeps the
+slices zero-copy.
 """
 
 from __future__ import annotations
@@ -154,6 +152,10 @@ def decode_frame(
 ) -> Packet:
     """Decode a frame's whole header chain into a :class:`Packet`.
 
+    Each call with ``decode_as`` builds an override registry, a small
+    copy; a caller walking many frames with the same overrides can
+    derive one registry once and pass it as ``registry=`` instead.
+
     :param data: The frame, from the first byte of ``start``'s header.
         Trailing bytes the chain does not decode are fine and are left
         alone; ``packet.consumed`` says where the walk stopped.
@@ -175,23 +177,18 @@ def decode_frame(
         wire value — ``{"udp.port": {6969: DNS}}`` reads DNS on port
         6969 for this call alone. Applied on top of ``registry``.
 
-    :raises MaxDepthExceededError: the chain is longer than
+    :raises MaxDepthExceededError: if the chain is longer than
         ``max_depth`` (strict mode only).
-    :raises ProtocolError: any header failed to decode (strict mode
+    :raises ProtocolError: if any header failed to decode (strict mode
         only).
-    :raises UnknownTableError: ``decode_as`` names a table that is not
+    :raises UnknownTableError: if ``decode_as`` names a table that is not
         one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
         says.
-    :raises InvalidRegistryKeyError: ``decode_as`` names an
+    :raises InvalidRegistryKeyError: if ``decode_as`` names an
         ``llc.dsap`` or ``llc.snap`` key outside the range that table
         accepts, such as a DSAP above 0xFF (see "Key ranges" in
         :mod:`netprotocols.registry`), whatever ``lax`` says.
-    :raises ValueError: ``max_depth`` is below 1.
-
-    Building the override registry costs a small copy, so a caller
-    walking many frames with the same overrides should derive one
-    registry and pass it as ``registry=`` rather than repeating
-    ``decode_as`` per frame.
+    :raises ValueError: if ``max_depth`` is below 1.
     """
     if max_depth < 1:
         raise ValueError(f"max_depth must be at least 1, got {max_depth}")
@@ -214,6 +211,8 @@ def decode_frame(
             header = protocol.decode(data[cursor:end])
             layers.append(header)
             cursor += header.header_len
+            # TODO(#235): bound the buffers by IPv4's, IPv6's and UDP's
+            # lengths too, keeping what is left over as a trailer.
             if header._BOUNDS_PAYLOAD:
                 end = _bounded(header, cursor, end)
             protocol = header.next_protocol(registry)

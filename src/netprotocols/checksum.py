@@ -1,12 +1,14 @@
-"""Checksum computation and verification: the internet checksum (RFC
-1071), SCTP's CRC32c (RFC 9260 Appendix A), and the Fletcher checksum
-OSPF's LSAs carry (RFC 2328 §12.1.7).
+"""Checksum computation and verification.
+
+The checksums are the internet checksum (RFC 1071), SCTP's CRC32c
+(RFC 9260 Appendix A), and the Fletcher checksum OSPF's LSAs carry
+(RFC 2328 §12.1.7).
 
 The primitive, :func:`internet_checksum`, returns the raw ones'-
 complement result — ``0x0000`` is a legal return value, and TCP, ICMP,
 and the IPv4 header checksum legitimately transmit it. The famous
 ``0x0000 → 0xFFFF`` substitution is a **UDP-only transmit rule**
-(RFC 768; RFC 8200 §8.1) and lives solely in the UDP arm of
+(RFC 768, RFC 8200 §8.1) and lives solely in the UDP arm of
 :func:`compute`.
 
 SCTP alone does not use the internet checksum: its packets carry a
@@ -102,9 +104,10 @@ __all__ = [
 
 
 def internet_checksum(data: bytes | memoryview) -> int:
-    """The RFC 1071 checksum of ``data``: the ones' complement of the
-    ones'-complement sum of its 16-bit words (odd lengths are padded
-    with a zero byte).
+    """Return the RFC 1071 checksum of ``data``.
+
+    That is the ones' complement of the ones'-complement sum of its
+    16-bit words (odd lengths are padded with a zero byte).
 
     Returns the raw result: ``0x0000`` is a legal value here. Protocol
     rules such as UDP's zero substitution belong to :func:`compute`.
@@ -124,10 +127,10 @@ _CRC32C_POLY = 0x82F63B78
 
 #: The CRC of each byte value, for the byte-at-a-time loop in
 #: :func:`crc32c`: eight shift-and-conditionally-xor steps, one per bit.
-#: Built by a module-level expression rather than a helper function so
-#: the mutation audit (see pyproject.toml's [tool.mutmut]) never sees an
-#: import-time call it cannot attribute to a test; the table is pinned
-#: through :func:`crc32c`'s test vectors instead.
+#: A module-level expression with no helper function, so the mutation
+#: audit (see pyproject.toml's [tool.mutmut]) sees no import-time call it
+#: cannot attribute to a test; :func:`crc32c`'s test vectors pin the
+#: table.
 _CRC32C_TABLE: tuple[int, ...] = tuple(
     reduce(
         lambda crc, _: (crc >> 1) ^ (_CRC32C_POLY if crc & 1 else 0),
@@ -139,8 +142,10 @@ _CRC32C_TABLE: tuple[int, ...] = tuple(
 
 
 def crc32c(data: bytes | memoryview) -> int:
-    """The CRC32c (Castagnoli) of ``data``: reflected, initial value and
-    final xor ``0xFFFFFFFF`` (RFC 3720 §12.1, RFC 9260 Appendix A), e.g.
+    """Return the CRC32c (Castagnoli) of ``data``.
+
+    The CRC is reflected, with initial value and final xor
+    ``0xFFFFFFFF`` (RFC 3720 §12.1, RFC 9260 Appendix A), e.g.
     ``crc32c(b"123456789") == 0xE3069283``.
 
     Not :func:`zlib.crc32`, which is the IEEE 802.3 CRC-32 — a
@@ -161,7 +166,7 @@ def _fletcher_sums(data: bytes) -> tuple[int, int]:
     """Return the ISO 8473 running sums ``C0`` and ``C1`` of ``data``.
 
     Each octet is added to ``C0``, then ``C0`` to ``C1`` (RFC 905
-    B.3.3, B.4.2), both modulo 255, the arithmetic RFC 905 B.2(a)
+    §B.3.3, §B.4.2), both modulo 255, the arithmetic RFC 905 §B.2(a)
     defines.
     """
     c0 = c1 = 0
@@ -175,16 +180,19 @@ def fletcher_checksum(data: bytes | memoryview, offset: int) -> int:
     """Compute the ISO 8473 Fletcher checksum field for ``data``.
 
     The field's two bytes sit at ``offset`` and are read as zero (RFC
-    905 B.3.1; RFC 1008 §7.2.1). The result is the 16-bit value
+    905 §B.3.1, RFC 1008 §7.2.1). The result is the 16-bit value
     ``X << 8 | Y`` that makes both running sums of ``data``, with it in
     place, ``0`` modulo 255.
 
     Each of ``X`` and ``Y`` is reported in ``1``-``255``, ``255``
     standing for zero, so the result never has a zero byte: RFC 905
-    B.2(b) regards ``255`` as zero, and RFC 1008 §7.2.1's reference
+    §B.2(b) regards ``255`` as zero, and RFC 1008 §7.2.1's reference
     code writes ``255``. OSPF's LS Checksum is this over an LSA from
     byte 2, its LS Age excluded (see :func:`lsa_checksum`).
 
+    :param data: The bytes the checksum covers, the field included.
+    :param offset: Where the checksum field's two bytes start in
+        ``data``.
     :raises ValueError: if the two-byte field at ``offset`` does not
         lie inside ``data``: ``offset`` must be ``0`` to
         ``len(data) - 2``.
@@ -218,7 +226,7 @@ def lsa_checksum(lsa: OSPFLSA) -> int:
 def verify_lsa(lsa: OSPFLSA) -> bool:
     """Return whether ``lsa``'s LS Checksum checks.
 
-    That is RFC 905 B.4's check over the LSA but its LS Age, the
+    That is RFC 905 §B.4's check over the LSA but its LS Age, the
     checksum in place: both running sums must be ``0`` modulo 255. It
     does not compare the field with :func:`lsa_checksum`, which reports
     a zero ``X`` or ``Y`` as ``255``: the check accepts either form of
@@ -226,7 +234,7 @@ def verify_lsa(lsa: OSPFLSA) -> bool:
 
     RFC 2328 §12.1.7 adds one rule: the LS Checksum cannot be zero, and
     a zero is a checksum failure. So a field of ``0x0000`` fails even
-    where B.4's sums come out zero, as they do for an LSA whose
+    where §B.4's sums come out zero, as they do for an LSA whose
     generated checksum is ``0xffff``.
     """
     sums = _fletcher_sums(bytes(lsa)[2:])
@@ -268,9 +276,9 @@ def _whole_message_checksum(layer: IGMP | CDP) -> int:
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
-    """The pseudo-header prepended to transport checksums.
+    """Build the pseudo-header prepended to transport checksums.
 
-    IPv4 (RFC 793/768): src, dst, zero byte, protocol, 16-bit length.
+    IPv4 (RFC 793, RFC 768): src, dst, zero byte, protocol, 16-bit length.
     IPv6 (RFC 8200 §8.1): src, dst, 32-bit length, three zero bytes,
     next-header.
     """
@@ -295,7 +303,7 @@ def _pseudo_ip(
     That is the final destination when ``routing`` puts it elsewhere
     (RFC 8200 §8.1), so that every pseudo-header built from the result
     uses the right address; ``ip`` itself when nothing changes. The
-    choice is
+    choice is made by
     :func:`~netprotocols.layer3.ipv6_ext._effective_destination`.
     """
     if routing is None or ip is None:
@@ -325,9 +333,15 @@ def _zeroed(layer_bytes: bytes, checksum_offset: int) -> bytes:
 
 
 def _gre_checksum(layer: GRE, payload: bytes) -> int:
-    """GRE header plus payload, checksum field (bytes 4-5) zeroed, no
-    pseudo-header (RFC 2784 §2.5). Only meaningful when the
+    """Return GRE's checksum over its header and ``payload``.
+
+    The checksum field (bytes 4-5) is zeroed, and there is no
+    pseudo-header (RFC 2784 §2.5). It exists only when the
     Checksum-Present bit announces the field.
+
+    :param layer: The GRE header.
+    :param payload: The bytes following the header on the wire.
+    :raises InvalidFieldError: if the Checksum-Present bit is clear.
     """
     if layer.checksum is None:
         raise InvalidFieldError(
@@ -340,7 +354,9 @@ def _gre_checksum(layer: GRE, payload: bytes) -> int:
 
 
 def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
-    """The whole packet, checksum field (bytes 8-11) zeroed, no
+    """Return SCTP's CRC32c over the whole packet, as the field reads it.
+
+    The checksum field (bytes 8-11) is zeroed, and there is no
     pseudo-header. The CRC goes on the wire least significant byte
     first, and the field reads its four bytes big-endian.
     """
@@ -357,10 +373,16 @@ _PIM_REGISTER_HEADER_LEN = 8
 
 
 def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
-    """The PIM message bytes the checksum covers, checksum field (bytes
-    2-3) zeroed: the whole message, or a Register's first 8 bytes (RFC
-    7761 §4.9.3). ``ip`` is required, since only the family says
-    whether a pseudo-header goes in front.
+    """Return the PIM message bytes the checksum covers.
+
+    The checksum field (bytes 2-3) is zeroed. The bytes are the whole
+    message, or a Register's first 8 bytes (RFC 7761 §4.9.3). ``ip`` is
+    required, since only the family says whether a pseudo-header goes
+    in front.
+
+    :param layer: The PIM message.
+    :param ip: The enclosing IP header.
+    :raises InvalidFieldError: if ``ip`` is ``None``.
     """
     if ip is None:
         raise InvalidFieldError(
@@ -376,9 +398,11 @@ def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
 
 
 def _pim_sum(covered: bytes, ip: IPv4 | IPv6 | None) -> int:
-    """The internet checksum over ``covered``, behind the IPv6
-    pseudo-header (next header 103, the covered length) when ``ip`` is
-    IPv6, alone over IPv4 (RFC 7761 §4.9).
+    """Return the internet checksum over ``covered`` for PIM.
+
+    The IPv6 pseudo-header (next header 103, the covered length) goes
+    in front when ``ip`` is IPv6; over IPv4 ``covered`` is summed alone
+    (RFC 7761 §4.9).
     """
     if isinstance(ip, IPv6):
         covered = _pseudo_header(ip, IPProtocol.PIM, len(covered)) + covered
@@ -386,18 +410,21 @@ def _pim_sum(covered: bytes, ip: IPv4 | IPv6 | None) -> int:
 
 
 def _pim_checksum(layer: PIM, ip: IPv4 | IPv6 | None) -> int:
-    """The PIM checksum: the internet checksum over the message, or over
-    a Register's first 8 bytes, with the IPv6 pseudo-header in front
-    over IPv6, whose length is then the covered length (RFC 7761
-    §4.9).
+    """Return the PIM checksum.
+
+    That is the internet checksum over the message, or over a
+    Register's first 8 bytes, with the IPv6 pseudo-header in front over
+    IPv6, whose length is then the covered length (RFC 7761 §4.9).
     """
     return _pim_sum(_pim_covered(layer, ip), ip)
 
 
 def _verify_pim(layer: PIM, ip: IPv4 | IPv6 | None) -> bool:
-    """Verify a PIM checksum. A Register's is also accepted computed
-    over the whole message, encapsulated packet included, as RFC 7761
-    §4.9.3 asks for interoperability with senders that sum it all.
+    """Verify a PIM checksum.
+
+    A Register's is also accepted computed over the whole message,
+    encapsulated packet included, as RFC 7761 §4.9.3 asks for
+    interoperability with senders that sum it all.
     """
     if layer.checksum == _pim_checksum(layer, ip):
         return True
@@ -432,8 +459,10 @@ def _ospf_checksum(layer: OSPF) -> int:
 
 
 def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
-    """UDP header plus payload behind the pseudo-header, whose length is
-    ``layer.length`` (RFC 768).
+    """Return UDP's checksum over its header and ``payload``.
+
+    The pseudo-header goes in front, with ``layer.length`` as its
+    length (RFC 768).
     """
     enclosing = _require_ip(layer, ip)
     datagram = _zeroed(bytes(layer), 6) + payload
@@ -441,7 +470,7 @@ def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
         _pseudo_header(enclosing, IPProtocol.UDP, layer.length) + datagram
     )
     # UDP-only transmit rule: 0 means "no checksum", so a computed
-    # 0x0000 is sent as 0xFFFF (RFC 768; mandatory path RFC 8200).
+    # 0x0000 is sent as 0xFFFF (RFC 768, RFC 8200 §8.1).
     return raw or 0xFFFF
 
 
@@ -466,11 +495,16 @@ def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
 
 
 def _stun_fingerprint(layer: STUN) -> int:
-    """Return STUN's FINGERPRINT: the CRC-32 of the message up to the
-    attribute, its header's Length already counting it, XORed with
-    ``0x5354554E`` (RFC 8489 §14.7). The attribute must be the last,
-    with a 4-byte value, so the message up to it is all but its last 8
-    bytes.
+    """Return STUN's FINGERPRINT value for ``layer``.
+
+    That is the CRC-32 of the message up to the attribute, its header's
+    Length already counting it, XORed with ``0x5354554E`` (RFC 8489
+    §14.7). The attribute must be the last, with a 4-byte value, so the
+    message up to it is all but its last 8 bytes.
+
+    :param layer: The STUN message.
+    :raises InvalidFieldError: if the message's last attribute is not a
+        FINGERPRINT.
     """
     if layer.fingerprint is None:
         raise InvalidFieldError(
@@ -561,7 +595,7 @@ def compute(
     routing: IPv6Routing | None = None,
     payload: bytes = b"",
 ) -> int:
-    """The correct checksum field value for ``layer``.
+    """Return the correct checksum field value for ``layer``.
 
     :param layer: The header to checksum. ``IPv4`` covers its own
         header only (options included; ``ip``/``payload`` ignored);
@@ -604,7 +638,7 @@ def compute(
         pseudo-header uses
         :meth:`~netprotocols.IPv6Routing.final_destination`; otherwise
         (no segments left, IPv4, a routing type or data that method
-        cannot resolve) it uses ``ip.dst`` as before. Used only by the
+        cannot resolve) it uses ``ip.dst``. Used only by the
         layers whose checksum has a pseudo-header
         (see ``ip``). If several Routing headers precede the layer,
         pass the last one with segments left, as
@@ -621,8 +655,8 @@ def compute(
         object does not itself hold. ``IGMP``, ``VRRP``, ``PIM``,
         ``CDP`` and ``STUN`` ignore it: nothing after the message is
         part of it.
-    :raises InvalidFieldError: For layers without a checksum field, or
-        a missing ``ip`` where the pseudo-header needs one.
+    :raises InvalidFieldError: if ``layer`` has no checksum field to
+        compute, or ``ip`` is missing where the checksum needs it.
     """
     ip = _pseudo_ip(ip, routing)
     standalone = _standalone_checksum(layer)
@@ -676,7 +710,7 @@ def verify(
     routing: IPv6Routing | None = None,
     payload: bytes = b"",
 ) -> bool:
-    """Whether ``layer``'s checksum field matches a recomputation.
+    """Return whether ``layer``'s checksum field matches a recomputation.
 
     It accepts what the governing RFC tells a receiver to accept, which
     can be more than :func:`compute` produces: a UDP-over-IPv4 checksum

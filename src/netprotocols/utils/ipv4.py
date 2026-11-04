@@ -16,9 +16,9 @@ def validate_ipv4_addr(
     protocol: type[object] | None = None,
     field: str | None = None,
 ) -> str:
-    """Evaluate a string representing an IPv4 address in dotted-decimal
-    notation.
+    """Validate a string as an IPv4 address in dotted-decimal notation.
 
+    :param addr: The string to validate.
     :param protocol: The class this address belongs to, attached to a
         raised error for diagnostics; the header ``__post_init__``
         methods that call this pass their own class.
@@ -26,7 +26,7 @@ def validate_ipv4_addr(
         for diagnostics.
     :returns: The supplied string, unchanged, if it is a valid IPv4
         address.
-    :raises InvalidIPv4AddressError: If the supplied value is not a
+    :raises InvalidIPv4AddressError: if the supplied value is not a
         string or does not represent a valid IPv4 address.
     """
     try:

@@ -138,7 +138,7 @@ from netprotocols.utils.ipv4 import validate_ipv4_addr
 from netprotocols.utils.mac import random_mac, validate_mac_addr
 from netprotocols.walk import MAX_DEPTH, decode_frame
 
-# Populate the default dispatch registry now that every protocol class
+# Populate the default dispatch registry after every protocol class
 # above has been imported. This must stay after those imports: the
 # registrations name the classes. See netprotocols/_defaults.py.
 _defaults.install(DEFAULT)

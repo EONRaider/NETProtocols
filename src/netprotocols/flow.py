@@ -26,7 +26,7 @@ instance) has no flow to key, so both :func:`flow_key` and
 :meth:`Packet.flow_key <netprotocols.packet.Packet.flow_key>` return
 ``None`` for it rather than raising or stuffing type/code into a port
 field — the same "``None``, not an exception" contract this library
-already uses for an accessor that doesn't apply (the NDP accessors in
+uses for an accessor that doesn't apply (the NDP accessors in
 :mod:`netprotocols.layer3.icmp`, ``Packet.get``).
 """
 
@@ -74,12 +74,9 @@ _TRANSPORTS = tuple(_TRANSPORT_PROTOCOLS)
 class FlowKey(NamedTuple):
     """A hashable, direction-independent identifier for one flow.
 
-    Comparing the two ``(address, port)`` endpoints needs ordinary
-    ``<=`` — which a plain tuple already gives for free — so this is a
-    :class:`typing.NamedTuple` rather than a frozen dataclass; every
-    other frozen dataclass in this codebase models a wire format
-    (``decode()`` / ``__bytes__`` / ``_struct``), and a derived key
-    isn't one.
+    A :class:`typing.NamedTuple`: a value derived from headers, with no
+    ``decode()`` or ``__bytes__`` of its own. :func:`flow_key` orders
+    the two ``(address, port)`` endpoints with ordinary tuple ``<=``.
 
     :param addr_a: The lexicographically smaller of the two endpoint
         addresses.
@@ -90,9 +87,8 @@ class FlowKey(NamedTuple):
         ``6`` for TCP, ``17`` for UDP, ``132`` for SCTP. It names the
         transport itself, so it is the same whether the segment follows
         its IP header directly or behind IPv6 extension headers or
-        IPsec AH, where
-        the IP header's own ``protocol`` / ``next_header`` names the
-        first of those instead.
+        IPsec AH, where the IP header's own ``protocol`` /
+        ``next_header`` names the first of those instead.
     """
 
     addr_a: str
@@ -137,7 +133,7 @@ def flow_key(
         headers precede ``layer``, pass the last one with segments left,
         as :meth:`Packet.flow_key <netprotocols.packet.Packet.flow_key>`
         does.
-    :raises InvalidFieldError: ``layer`` is TCP/UDP/SCTP but ``ip`` is
+    :raises InvalidFieldError: if ``layer`` is TCP/UDP/SCTP but ``ip`` is
         ``None``.
     """
     if not isinstance(layer, _TRANSPORTS):

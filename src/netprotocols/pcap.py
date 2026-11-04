@@ -3,30 +3,21 @@
 ``read_captures`` auto-detects the format from its magic bytes and
 yields :class:`CapturedFrame` — a timestamp normalized to nanoseconds
 since the Unix epoch, and the frame's raw bytes, ready for
-:func:`~netprotocols.decode_frame`. ``read_pcap``/``read_pcapng`` are
-the same thing for a caller who already knows the format.
+:func:`~netprotocols.decode_frame`. ``read_pcap``/``read_pcapng`` read
+one known format.
 
-Each of these copies its input once, up front (``bytes(buffer)``), so
-``CapturedFrame.data`` is always plain ``bytes`` regardless of whether
-you passed ``bytes`` or a ``memoryview`` in. A live memoryview
-passthrough — slicing each frame lazily out of the original buffer,
-never copying — was tried and measured slower for a realistic
-capture: real frames are small (tens to low thousands of bytes), and
-across the many small slices one capture contains, a ``memoryview``
-slice's own object overhead outweighs the copy it avoids. This is the
-same finding #88 already made for :func:`~netprotocols.decode_frame`
-walking a single frame (see ``docs/CLAIMS.md`` 5.8) generalized to
-many — one upfront copy plus cheap ``bytes`` slicing beats copy-free
-``memoryview`` slicing repeated per frame.
+Each reader copies its input once (``bytes(buffer)``) before reading
+any frame and slices every frame from that copy, so
+``CapturedFrame.data`` is always plain ``bytes``, whether the input was
+``bytes`` or a ``memoryview``.
 
-Format detection is eager: an unrecognized or too-short buffer raises
-immediately, on the call itself. Producing frames is not: the actual
-frame-by-frame reading is a generator, so a malformed record or block
-raises only once iteration reaches it — the rest of a capture already
-consumed stays valid, and a huge capture is never loaded into a list
-of frames the caller didn't ask for. This is a deliberate difference
-from ``decode_frame``, which raises immediately because it decodes one
-frame already fully in hand; a capture is a stream of them.
+``read_captures`` checks the magic number on the call itself: a buffer
+too short to hold one, or one matching neither format, raises
+immediately. ``read_pcap`` and ``read_pcapng`` are generators: they
+check the magic number and the header after it, and read each record
+or block, only as iteration reaches it. A malformed record or block
+raises at that point, the frames already yielded stay valid, and the
+frames are never collected into a list.
 
 Supported pcapng block types are exactly the ones frames can come
 from: Section Header (SHB), Interface Description (IDB, read only for
@@ -37,8 +28,7 @@ specific block carry nothing :class:`CapturedFrame` can represent.
 
 No ``lax`` mode: a corrupt or truncated capture raises
 :class:`~netprotocols.MalformedCaptureError` rather than silently
-skipping the bad part. See that exception's docstring for why this
-differs from ``decode_frame(lax=True)``.
+skipping the bad part.
 """
 
 from __future__ import annotations
@@ -61,10 +51,8 @@ class CapturedFrame(NamedTuple):
     """One captured frame.
 
     A :class:`typing.NamedTuple`, like :class:`~netprotocols.FlowKey`:
-    this is a derived value handed back from reading a capture, not a
-    wire format with its own ``decode()``/``__bytes__`` — the frozen-
-    dataclass convention the rest of this library uses is for the
-    latter.
+    a value read from a capture, with no ``decode()`` or ``__bytes__``
+    of its own.
 
     :param timestamp: Nanoseconds since the Unix epoch, normalized from
         whatever resolution the source recorded — classic pcap's
@@ -75,12 +63,11 @@ class CapturedFrame(NamedTuple):
         report ``0`` here, not a guess.
     :param data: The captured bytes, from the first byte of the
         captured frame. Shorter than the original frame on the wire
-        when the capture's snapshot length truncated it — nothing
-        here second-guesses that; feed ``len(data)`` to
-        :func:`~netprotocols.decode_frame` the same way you would for
-        any other possibly-truncated buffer. Always plain ``bytes``,
-        whether the source buffer was ``bytes`` or a ``memoryview``
-        (see the module docstring for why).
+        when the capture's snapshot length truncated it; pass it to
+        :func:`~netprotocols.decode_frame` as any other possibly
+        truncated buffer. Always plain ``bytes``, whether the source
+        buffer was ``bytes`` or a ``memoryview`` (see the module
+        docstring).
     """
 
     timestamp: int
@@ -109,11 +96,14 @@ _PCAP_RECORD_HEADER_SIZE = 16
 
 
 def read_pcap(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
-    """Read a classic-pcap capture (see the module docstring for the
-    eager-detection/lazy-frames contract, shared with
-    :func:`read_pcapng`).
+    """Read a classic-pcap capture.
 
-    :raises MalformedCaptureError: the magic number is unrecognized,
+    A generator: the magic number and global header are checked, and
+    each record read, only as iteration reaches them (see the module
+    docstring).
+
+    :param buffer: The whole capture, starting at its magic number.
+    :raises MalformedCaptureError: if the magic number is unrecognized,
         the global header does not fit, or a record's header or
         declared captured length runs past the buffer.
     """
@@ -215,16 +205,20 @@ _DEFAULT_TSRESOL = 6
 
 
 def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
-    """Read a pcapng capture (see the module docstring for the eager-
-    detection/lazy-frames contract, shared with :func:`read_pcap`, and
-    for exactly which block types are read).
+    """Read a pcapng capture.
+
+    A generator: the first Section Header Block is checked, and each
+    block read, only as iteration reaches it. The module docstring
+    lists the block types read.
 
     A buffer may hold multiple concatenated sections (each starting
     with its own Section Header Block); each section's byte order and
     interface list are independent of any that came before it, exactly
     as the format specifies.
 
-    :raises MalformedCaptureError: a block header, its byte-order
+    :param buffer: The whole capture, starting at its first Section
+        Header Block.
+    :raises MalformedCaptureError: if a block header, its byte-order
         magic, or a declared length runs past the buffer; a block's
         leading and trailing length fields disagree; a block appears
         before any Section Header Block; or an Enhanced Packet Block
@@ -247,12 +241,11 @@ def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
 
 
 def _read_pcapng_blocks(data: bytes) -> Iterator[CapturedFrame]:
-    # Both callers (read_pcapng, read_captures) already checked that
-    # data starts with a Section Header Block before reaching here, so
-    # the loop's first iteration always takes the `raw_type ==
-    # _SHB_TYPE` branch and sets `endian` before anything else reads
-    # it — the assert below documents that invariant for mypy rather
-    # than guarding a reachable failure mode.
+    # read_pcapng checks that data starts with a Section Header Block
+    # before calling this, so the loop's first iteration always takes
+    # the `raw_type == _SHB_TYPE` branch and sets `endian` before
+    # anything else reads it. The assert below states that invariant
+    # for mypy; it never fails.
     endian: _Endian | None = None
     tsresol_by_interface: list[int] = []
     cursor = 0
@@ -349,9 +342,10 @@ def _detect_shb_endian(data: bytes, block_start: int) -> _Endian:
 def _idb_tsresol(
     data: bytes, block_start: int, block_len: int, endian: _Endian
 ) -> int:
-    """The ``if_tsresol`` option's raw byte from an Interface
-    Description Block's options list, or the format default if the
-    option is absent (RFC-draft §4.2).
+    """Return the raw ``if_tsresol`` byte of an Interface Description Block.
+
+    It is read from the block's options list; the format default is
+    returned if the option is absent (RFC-draft §4.2).
     """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
@@ -370,11 +364,12 @@ def _idb_tsresol(
 
 
 def _timestamp_ns(raw: int, if_tsresol: int) -> int:
-    """Convert an ``if_tsresol``-scaled integer timestamp to
-    nanoseconds. High bit set: resolution is a negative power of 2
-    (the low 7 bits are the exponent); clear: a negative power of 10
-    (RFC-draft §4.2). Integer floor division truncates any resolution
-    finer than a nanosecond rather than losing it to float rounding.
+    """Convert an ``if_tsresol``-scaled integer timestamp to nanoseconds.
+
+    High bit set: resolution is a negative power of 2 (the low 7 bits
+    are the exponent); clear: a negative power of 10 (RFC-draft §4.2).
+    Integer floor division truncates any resolution finer than a
+    nanosecond; no float arithmetic is involved.
     """
     if if_tsresol & 0x80:
         return (raw * 1_000_000_000) // (1 << (if_tsresol & 0x7F))
@@ -468,15 +463,17 @@ def _spb_frame(
 
 
 def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
-    """Read a capture, auto-detecting classic pcap vs. pcapng from its
-    magic bytes. The one entry point most callers want — name
-    :func:`read_pcap`/:func:`read_pcapng` directly only when the
-    format is already known and skipping detection matters.
+    """Read a capture, detecting classic pcap or pcapng by its magic bytes.
 
-    :raises MalformedCaptureError: the buffer is too short to hold a
-        magic number, or its magic bytes match neither format. Raised
-        eagerly, unlike everything else this module raises — see the
-        module docstring.
+    :func:`read_pcap` and :func:`read_pcapng` read a known format
+    without this detection.
+
+    :param buffer: The whole capture, starting at its magic number.
+    :raises MalformedCaptureError: if the buffer is too short to hold a
+        magic number, or its magic bytes match neither format. These
+        two are raised on the call itself; every other error, raised by
+        :func:`read_pcap` or :func:`read_pcapng`, comes during
+        iteration (see the module docstring).
     """
     if len(buffer) < 4:
         raise MalformedCaptureError(
