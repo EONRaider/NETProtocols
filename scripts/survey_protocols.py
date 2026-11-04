@@ -10,10 +10,11 @@ Each ``--<library>`` names the package directory of a competitor
 release unpacked from PyPI (the commands that fetch, hash-check and
 unpack them are in docs/CLAIMS.md 7.1). Nothing under those directories
 is imported or executed: every check is a regular expression run over a
-source file read as text, so the survey runs on any Python 3.12+ with
-no third-party package installed, and ``-I`` keeps the interpreter from
-importing anything that sits beside the script or in the working
-directory.
+source file read as text, and scapy's ``config.py`` is parsed with
+:func:`ast.parse`, which builds a syntax tree without running any of
+it. So the survey runs on any Python 3.12+ with no third-party package
+installed, and ``-I`` keeps the interpreter from importing anything
+that sits beside the script or in the working directory.
 
 The survey cross-references the three libraries' modules against this
 one's, one row per item on the roadmap's gap list, and names the file
@@ -41,7 +42,17 @@ evidence too, not an empty cell: a check
 that a class or handler pattern matches none of the package's source
 files, reported as "no match in N files". A check whose file is
 missing fails rather than passing, and any failed check makes the cell
-FAILED and the script exit 1.
+FAILED and the script exit 1. So does a scapy ``config.py`` that is
+missing or does not parse, or in which ``class Conf`` does not assign
+``load_layers`` exactly once, as a non-empty list of string literals,
+or which names ``load_layers`` anywhere else, except as an attribute
+that is an operand of a comparison (``m in Conf.load_layers``) or whose
+``remove`` method is called (``Conf.load_layers.remove(m)``): the run
+then stops before printing either table. That check is syntactic and
+reads only ``config.py``: it matches the identifier or string
+``load_layers`` as written, does not follow a name built at run time,
+and does not see a module elsewhere in the package that changes the
+list on import.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -621,11 +632,169 @@ def evaluate(root: Path, checks: tuple[Check, ...]) -> Cell:
     return Cell(verdict, text)
 
 
+class Unreadable(Exception):
+    """A competitor source file the survey reads is missing or unrecognised."""
+
+
 def scapy_loaded_layers(root: Path) -> set[str]:
-    """``conf.load_layers``, the ``layers/`` modules ``scapy.all`` loads."""
-    text = read(root, "config.py") or ""
-    match = re.search(r"load_layers: List\[str\] = \[(.*?)\]", text, re.DOTALL)
-    return set(re.findall(r"'([\w.]+)'", match.group(1))) if match else set()
+    """Read ``conf.load_layers``, the ``layers/`` modules ``scapy.all`` loads.
+
+    ``config.py`` is parsed with :func:`ast.parse`, not executed. The
+    names are those of the one statement in the top-level ``class Conf``
+    that binds ``load_layers``, an assignment with or without an
+    annotation whose value is a list display of string literals.
+    Elsewhere in the module, ``load_layers`` may appear only as an
+    attribute that is an operand of a comparison or whose ``remove``
+    method is called. The check is syntactic and covers ``config.py``
+    alone: a name built at run time, a comparison method that mutates
+    its operand, and a module elsewhere in the package that changes
+    the list on import are not detected.
+
+    :param root: the scapy package directory.
+    :raises Unreadable: if ``config.py`` is missing or does not parse,
+        if it has no top-level ``class Conf`` or more than one, if
+        ``Conf`` binds ``load_layers`` in no statement or in more than
+        one, if that statement is not an assignment of a non-empty list
+        whose every element is a string literal, or if any other node
+        names ``load_layers`` (a name, an attribute, a function, class
+        or argument name, an import alias, a keyword argument or the
+        string constant ``"load_layers"``) other than such a comparison
+        operand or ``remove`` call.
+    """
+    text = read(root, "config.py")
+    if text is None:
+        raise Unreadable("FAILED config.py: no such file")
+    try:
+        tree = ast.parse(text, filename="config.py")
+    except SyntaxError as error:
+        raise Unreadable(
+            f"FAILED config.py: does not parse as Python "
+            f"(line {error.lineno}: {error.msg})"
+        ) from error
+    classes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "Conf"
+    ]
+    if len(classes) != 1:
+        raise Unreadable(
+            f"FAILED config.py: {len(classes)} top-level `class Conf` "
+            "definitions, not 1"
+        )
+    bindings = [
+        statement
+        for statement in classes[0].body
+        if any(
+            isinstance(target, ast.Name) and target.id == "load_layers"
+            for target in _targets(statement)
+        )
+    ]
+    if len(bindings) != 1:
+        raise Unreadable(
+            f"FAILED config.py: `Conf` binds `load_layers` in "
+            f"{len(bindings)} statements, not 1"
+        )
+    statement = bindings[0]
+    value = (
+        statement.value
+        if isinstance(statement, (ast.Assign, ast.AnnAssign))
+        else None
+    )
+    elements = value.elts if isinstance(value, ast.List) else []
+    names = [
+        element.value
+        for element in elements
+        if isinstance(element, ast.Constant) and isinstance(element.value, str)
+    ]
+    if not elements or len(names) != len(elements):
+        raise Unreadable(
+            f"FAILED config.py: line {statement.lineno}: `Conf.load_layers` "
+            "is not assigned a non-empty list of string literals"
+        )
+    _reject_other_references(tree, statement)
+    return set(names)
+
+
+def _reject_other_references(tree: ast.Module, declaration: ast.stmt) -> None:
+    """Raise if any node but the declaration's targets names ``load_layers``.
+
+    A node names it when one of its fields is the string
+    ``"load_layers"``: a name, an attribute, a function, class or
+    argument name, an import alias, a keyword argument or a string
+    constant. Two readers are let through, an attribute load that is
+    an operand of a comparison (``m in Conf.load_layers``) and one whose
+    ``remove`` method is called (``Conf.load_layers.remove(m)``).
+
+    :param tree: the parsed ``config.py``.
+    :param declaration: the statement in ``class Conf`` that binds
+        ``load_layers``.
+    :raises Unreadable: if any other node names ``load_layers``.
+    """
+    parents = {
+        child: node
+        for node in ast.walk(tree)
+        for child in ast.iter_child_nodes(node)
+    }
+    targets = set(map(id, _targets(declaration)))
+    for node in ast.walk(tree):
+        if id(node) in targets or not _names_load_layers(node):
+            continue
+        if _is_compare_or_remove(node, parents):
+            continue
+        raise Unreadable(
+            f"FAILED config.py: line {getattr(node, 'lineno', '?')}: "
+            "`load_layers` is named outside its declaration in `class Conf`"
+        )
+
+
+def _names_load_layers(node: ast.AST) -> bool:
+    """Return whether one of ``node``'s fields is the string ``"load_layers"``.
+
+    :param node: any node of the tree.
+    """
+    for _, value in ast.iter_fields(node):
+        values = value if isinstance(value, list) else [value]
+        if "load_layers" in values:
+            return True
+    return False
+
+
+def _is_compare_or_remove(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> bool:
+    """Return whether ``node`` is an attribute load only compared or shrunk.
+
+    That is an ``ast.Attribute`` in load context that is an operand of
+    an ``ast.Compare``, or the object of an ``X.load_layers.remove(...)``
+    call.
+
+    :param node: a node that names ``load_layers``.
+    :param parents: each node of the tree mapped to its parent.
+    """
+    if not (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)):
+        return False
+    parent = parents.get(node)
+    if isinstance(parent, ast.Compare):
+        return True
+    return (
+        isinstance(parent, ast.Attribute)
+        and parent.attr == "remove"
+        and parent.value is node
+        and isinstance(call := parents.get(parent), ast.Call)
+        and call.func is parent
+    )
+
+
+def _targets(statement: ast.stmt) -> list[ast.expr]:
+    """Return the targets of an assignment statement, or ``[]`` for any other.
+
+    :param statement: a statement from a class body.
+    """
+    if isinstance(statement, ast.Assign):
+        return statement.targets
+    if isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        return [statement.target]
+    return []
 
 
 def scapy_note(checks: tuple[Check, ...], loaded: set[str]) -> str:
@@ -743,7 +912,15 @@ def main() -> int:
     for library, root in roots.items():
         if not (root / "__init__.py").is_file():
             parser.error(f"{library}: {root} is not a package directory")
-    loaded = scapy_loaded_layers(args.scapy)
+    try:
+        loaded = scapy_loaded_layers(args.scapy)
+    except Unreadable as error:
+        print(
+            f"scapy: {error}; cannot tell which layers/ modules "
+            "`import scapy.all` loads.",
+            file=sys.stderr,
+        )
+        return 1
 
     print(
         f"netprotocols source tree (__version__ {our_version()}), "
