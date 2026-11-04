@@ -53,15 +53,16 @@ jobs:
         run: rm -f mutants/mutmut-stats.json
       - name: Install the project with dev dependencies
         run: uv sync --group dev --frozen
-      # File-level scope (src/netprotocols/checksum.py, _tlv.py,
-      # layer7/dns.py and layer7/http.py) comes from only_mutate in
-      # pyproject.toml's [tool.mutmut] table. dns.py's in-scope surface
-      # is narrower: only the name-compression byte walk, not the
-      # record/RDATA/dataclass code the rest of the file holds. mutmut
-      # has no config-level way to express that, so these positional
-      # filters narrow it; they are the ones documented next to
-      # only_mutate in pyproject.toml, and tests/test_workflows.py pins
-      # them.
+      # only_mutate in pyproject.toml's [tool.mutmut] table limits
+      # mutation to four files: src/netprotocols/checksum.py, _tlv.py,
+      # layer7/dns.py and layer7/http.py. These positional filters
+      # narrow that below a file, which mutmut's config cannot: in
+      # dns.py they keep only the name-compression byte walk,
+      # _read_name and _labels, and leave out the record, RDATA and
+      # dataclass code; in http.py they keep the private module-level
+      # functions, the HTTP/1.1 grammar; checksum.py and _tlv.py are
+      # mutated whole. A comment in the same [tool.mutmut] table gives
+      # this command, and tests/test_workflows.py pins the filter set.
       - name: Run mutmut against the scoped targets
         run: |
           uv run --frozen mutmut run \
