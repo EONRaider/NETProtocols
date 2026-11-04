@@ -589,37 +589,37 @@ What moved, and why:
 - **The wheel grew 44.0 KiB** with the five protocols, and
   the ratio fell from 15.3× to 12.2×.
 
-### Re-measured for 2.7.0 (2026-11-04)
+### Re-measured for 2.7.0 (2026-11-03/04)
 
 Every number the README quotes, re-measured before tagging 2.7.0 (Tier 4
 of #170: TFTP, RADIUS, STUN, NTP and HSRP, #191-#195), on 2026-11-03 and
 2026-11-04: the pinned decode, encode and cold import runs on the 3rd,
-and the A/B and subset runs, the warm import runs and
-the wheel build on the 4th. **The machine is
-not the one 2.6.0 was measured on**: a laptop, Intel Core i7-1355U
-(hybrid, 2 performance cores with 4 threads and 8 efficiency cores),
-`powersave` governor with turbo on, CPython 3.12.12, x86-64 Linux;
-`dpkt 1.9.8` and `scapy 2.8.0`, still the latest PyPI releases on
-2026-11-04. Every timed run was pinned to CPU 2, a performance core,
-with `taskset -c 2` and started only once the one-minute load average
-was under 1.5, so each command below is run as `taskset -c 2 uv run
---group bench python scripts/...`. A first unpinned pass, taken while
-another process compiled Rust on the same machine (load average about
-14), was discarded: its three decode runs read netprotocols at
-150,043, 39,214 and 71,520 f/s and the dpkt ratio at 1.08-1.56×. Since
-the machine changed, only the same-machine A/B runs against the 2.6.0
-tree (`0566f88`, extracted beside this one and run alternately with it)
-attribute a change to the code. **The corpus grew from 293 frames in 30
-scenarios to 379 in 35** with the tier's five captures (`tftp.pcap`,
-`radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`, 86 frames), so the
-decode rates here are not comparable with any earlier section's.
+and the A/B and subset runs, the warm import runs and the wheel build on
+the 4th. **The machine is not the one 2.6.0 was measured on**: a laptop,
+Intel Core i7-1355U (hybrid, 2 performance cores with 4 threads and 8
+efficiency cores), `powersave` governor with turbo on, CPython 3.12.12,
+x86-64 Linux; `dpkt 1.9.8` and `scapy 2.8.0`, still the latest PyPI
+releases on 2026-11-04. Every timed run was pinned to CPU 2, a
+performance core, with `taskset -c 2` and started only once the
+one-minute load average was under 1.5, so each command below is run as
+`taskset -c 2 uv run --frozen --group bench python scripts/...`. A first
+unpinned pass, taken while another process compiled Rust on the same
+machine (load average about 14), was discarded: its three decode runs
+read netprotocols at 150,043, 39,214 and 71,520 f/s and the dpkt ratio
+at 1.08-1.56×. Since the machine changed, only the same-machine A/B runs
+against the 2.6.0 tree (`0566f88`, extracted beside this one and run
+alternately with it) attribute a change to the code. **The corpus grew
+from 293 frames in 30 scenarios to 379 in 35** with the tier's five
+captures (`tftp.pcap`, `radius.pcap`, `stun.pcap`, `ntp.pcap`,
+`hsrp.pcap`, 86 frames), so the decode rates here are not comparable
+with any earlier section's.
 
 | Claim | Command | Result |
 |---|---|---|
 | 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 157,088 / 152,832 / 150,029 f/s; dpkt 224,260 / 206,211 / 205,189; scapy 44,235 / 45,267 / 44,219. dpkt faster by 1.428×, 1.349×, 1.368×. Against scapy: 3.55×, 3.38×, 3.39×. Quoted: the run with the median dpkt ratio, 150,029 against 205,189 (**dpkt 1.37× faster**) and 44,219 (**3.4×**). The run with the median netprotocols rate is a different one this time and reads 1.35×; the README's claim is a ratio, so it quotes the median ratio, the less flattering of the two. dpkt decodes 378 of the 379 frames in every run (the STP TCN, as at 2.6.0) |
 | 1.3 encode | `benchmark_encode.py` | netprotocols 2,207,983 ops/s, dpkt 538,285 (**4.10×**), scapy 1,049,943. Five further runs on this tree read 4.15×, 4.16×, 4.33×, 4.42× and 3.97× |
 | 1.4 import, warm (quoted) | `PYTHONPATH=<git-archive extract>/src env -u PYTHONDONTWRITEBYTECODE taskset -c 2 uv run --frozen --group bench python scripts/benchmark_import.py`, best of three runs, bytecode already compiled | netprotocols **56.7 ms** (116 modules), scapy.all **241.7 ms** (**4.3×**); dpkt 21.8 ms (117 modules). The three runs read netprotocols 57.9 / 56.7 / 59.6 ms and scapy.all 255.4 / 241.7 / 245.1 ms |
-| 1.4 import, cold | `PYTHONDONTWRITEBYTECODE=1 taskset -c 2 uv run --frozen --group bench python scripts/benchmark_import.py`, best of three runs, no `.pyc` for netprotocols or the installed packages (the stdlib ships precompiled; this environment's default) | netprotocols 99.1 ms (116 modules), scapy.all 552.2 ms (5.6×); dpkt 75.9 ms (117 modules) |
+| 1.4 import, cold | `PYTHONDONTWRITEBYTECODE=1 taskset -c 2 uv run --frozen --group bench python scripts/benchmark_import.py`, best of three runs, no `.pyc` for netprotocols or the installed packages (stdlib modules used the interpreter's existing `.pyc` where it had them; a few that scapy imports, such as `getopt`, had none and were compiled too; this environment's default) | netprotocols 99.1 ms (116 modules), scapy.all 552.2 ms (5.6×); dpkt 75.9 ms (117 modules) |
 | 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.7.0-py3-none-any.whl` 273,334 bytes (266.9 KiB), **10.1×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 (2.63 MiB, unchanged on PyPI); `src/` 20,450 lines. The same method rebuilds 2.6.0's 225,832 bytes from `0566f88` exactly |
 | 1.6 depth | `benchmark.py --depth` | deeper on **153 of 379** frames, "same layer" (not deeper) on 225, and the one frame dpkt cannot decode |
 
@@ -643,15 +643,15 @@ What moved, and why:
   `tftp`, `radius`, `stun`, `ntp` and `hsrp` modules, but its `UDP` and
   `TCP` never dispatch on a port, so on every one of these frames it
   stops at UDP with the payload as raw bytes (at TCP for STUN's two TCP
-  segments, `stun.pcap` frames 6 and 7, counting from 0 as MANIFEST does; the depth bullet below). That
-  is not a like-for-like comparison, any more than LLDP's is.
-  **Tier 4 did not measurably slow the frames 2.6.0 already had.** Over
-  those 293 frames, in six alternating pairs of the harness, this
-  tree's netprotocols median was 161,490 f/s against the 2.6.0 tree's
-  162,538 (0.6% lower, lower in 4 of 6 pairs), and dpkt's lead
-  1.36× against 1.35×, inside this machine's spread. The Tier 2
-  routing captures' 1.63× and the 140 frames' 1.12× read the same on
-  the 2.6.0 tree here, so their moves from 2.6.0's 1.50-1.52× and
+  segments, `stun.pcap` frames 6 and 7, counting from 0 as MANIFEST
+  does; the depth bullet below). That is not a like-for-like comparison,
+  any more than LLDP's is. **Tier 4 did not measurably slow the frames
+  2.6.0 already had.** Over those 293 frames, in six alternating pairs
+  of the harness, this tree's netprotocols median was 161,490 f/s
+  against the 2.6.0 tree's 162,538 (0.6% lower, lower in 4 of 6 pairs),
+  and dpkt's lead 1.36× against 1.35×, inside this machine's spread. The
+  Tier 2 routing captures' 1.63× and the 140 frames' 1.12× read the same
+  on the 2.6.0 tree here, so their moves from 2.6.0's 1.50-1.52× and
   1.14× are the machine's. The README's "about two thirds" for the
   routing captures becomes "about three fifths" (1/1.63 is 61%).
 - **The gate's baseline was left at 2.5.0's recording**, 5.4344
@@ -661,16 +661,17 @@ What moved, and why:
   on this machine, at −1.6% against it.
 - **The depth lead grew by 59 frames, all from Tier 4's captures, and
   none is a protocol dpkt has no decoder for.** Checked file by file
-  with `benchmark.py`'s own `_netprotocols_chain` and `_dpkt_chain`:
-  all 12 HSRP, 17 NTP, 12 RADIUS and 12 STUN frames, and the 6 TFTP
-  frames sent to port 69 (five RRQs and a WRQ), where dpkt stops at
-  UDP with the payload raw (at TCP for the two STUN frames that are TCP
-  segments, 6 and 7 counting from 0 as MANIFEST does, where netprotocols reads Ethernet, IPv4, TCP and
-  STUN twice). The other 27 TFTP frames, the transfers
-  between two ephemeral ports, count the same: netprotocols dispatches
-  TFTP on port 69 only, so both stop at UDP. As with DNS and DHCP, which this claim has always counted on
-  the same terms, dpkt has the decoders and does not reach them. The
-  frame dpkt cannot decode is still the STP TCN, so 153 + 225 is 378.
+  with `benchmark.py`'s own `_netprotocols_chain` and `_dpkt_chain`: all
+  12 HSRP, 17 NTP, 12 RADIUS and 12 STUN frames, and the 6 TFTP frames
+  sent to port 69 (five RRQs and a WRQ), where dpkt stops at UDP with
+  the payload raw (at TCP for the two STUN frames that are TCP segments,
+  6 and 7 counting from 0 as MANIFEST does, where netprotocols reads
+  Ethernet, IPv4, TCP and STUN twice). The other 27 TFTP frames, the
+  transfers between two ephemeral ports, count the same: netprotocols
+  dispatches TFTP on port 69 only, so both stop at UDP. As with DNS and
+  DHCP, which this claim has always counted on the same terms, dpkt has
+  the decoders and does not reach them. The frame dpkt cannot decode is
+  still the STP TCN, so 153 + 225 is 378.
 - **Import grew about 5 ms warm, about 12-15 ms cold, with eight more
   modules** (116, from 108): the five Tier 4 modules and `datetime`,
   `_datetime` and `binascii`, which NTP's timestamps and STUN's
@@ -680,31 +681,34 @@ What moved, and why:
   environment exports `PYTHONDONTWRITEBYTECODE=1` and the virtual
   environment held no `.pyc`, so the first pass over this section
   measured every import cold, compiling netprotocols' and the installed
-  packages' modules from source (the stdlib ships precompiled): those are
-  the 99.1 ms and 552.2 ms above. The warm runs unset the variable,
-  import netprotocols, dpkt and `scapy.all` once untimed so that every
-  module is compiled, and time from a fresh `git archive` extract of the
-  release commit (the worktree's own `src/` held a stray `__pycache__`).
-  Alternating warm runs with the 2.6.0 tree (put first on `PYTHONPATH`,
-  its bytecode compiled the same way) read 55.8 / 53.7 / 53.6 ms against
-  49.9 / 47.8 / 49.4 ms: pair by pair 5.9, 5.9 and 4.2 ms, best against
-  best 5.8 ms, **about 5 ms**. Cold alternating runs read 98.4 / 98.5 /
-  100.2 ms against 87.6 / 90.1 / 86.7 ms, best against best 11.7 ms, and
-  a re-run of the cold pair 14.5 ms, hence **about 12-15 ms cold**. The
-  cold figures are kept as the cost of a first import. Earlier sections
-  do not record the condition, but their ratios match the warm one: the
+  packages' modules from source (stdlib modules used the interpreter's
+  existing `.pyc` where it had them; a few that scapy imports, such as
+  `getopt`, had none and were compiled too): those are the 99.1 ms and
+  552.2 ms above. The warm runs unset the variable, import netprotocols,
+  dpkt and `scapy.all` once untimed so that every module is compiled,
+  and time from a fresh `git archive` extract of the release commit (the
+  worktree's own `src/` held a stray `__pycache__`). Alternating warm
+  runs with the 2.6.0 tree (put first on `PYTHONPATH`, its bytecode
+  compiled the same way) read 55.8 / 53.7 / 53.6 ms against 49.9 / 47.8
+  / 49.4 ms: pair by pair 5.9, 5.9 and 4.2 ms, best against best 5.8 ms,
+  **about 5 ms**. Cold alternating runs read 98.4 / 98.5 / 100.2 ms
+  against 87.6 / 90.1 / 86.7 ms, best against best 11.7 ms, and a re-run
+  of the cold pair 14.5 ms, hence **about 12-15 ms cold**. The cold
+  figures are kept as the cost of a first import. Earlier sections do
+  not record the condition, but 2.6.0's ratios match the warm one: the
   2.6.0 tree on this machine reads scapy.all/netprotocols 4.8× and
   netprotocols/dpkt 2.4× warm (6.4× and 1.1× cold), against 4.9× and
   2.5× in its release record. So compare earlier sections with the warm
-  figures. Warm to warm, the scapy ratio fell from 4.9× to 4.3× as
-  netprotocols gained Tier 4's modules. This interpreter loads 108 modules for the 2.6.0 tree,
-  against the 97 recorded at its release on CPython 3.12.3, so the
+  figures. On this machine, warm to warm, the ratio fell from 4.8× (the
+  2.6.0 tree) to 4.3× as netprotocols gained Tier 4's modules (4.9× in
+  2.6.0's record). This interpreter loads 108 modules for the 2.6.0
+  tree, against the 97 recorded at its release on CPython 3.12.3, so the
   module counts compare only within this section. `scapy.all` reads
   241.7 ms warm and 552.2 ms cold here, against 436.2 ms at 2.6.0's
   release; the 2.6.0 tree on this machine reads 241.3 ms warm, so warm,
-  scapy imports faster here. dpkt imports in 21.8 ms warm and 75.9 ms cold,
-  so netprotocols' import is about 2.6× slower than dpkt's warm; the
-  README makes no import claim against it.
+  scapy imports faster here. dpkt imports in 21.8 ms warm and 75.9 ms
+  cold, so netprotocols' import is about 2.6× slower than dpkt's warm;
+  the README makes no import claim against it.
 - **Encode moved with the machine.** Tier 4 left `Ethernet`, `IPv4` and
   `UDP`, the encode benchmark's path, untouched (its `_base.py` change
   is docstrings). Three alternating runs with the 2.6.0 tree read 4.33×,
@@ -754,7 +758,7 @@ median of three runs 107,199 against scapy 2.8.0's 31,814, **3.4×**
 median of three runs 87,744 against scapy 2.8.0's 25,978, **3.4×**
 (3.21-3.61× across the runs).*
 
-*Re-measured for 2.7.0 (2026-11-04, another machine and the 379-frame
+*Re-measured for 2.7.0 (2026-11-03, another machine and the 379-frame
 corpus; see above): the median-ratio run of three, 150,029 against
 scapy 2.8.0's 44,219, **3.4×** (3.38-3.55× across the runs).*
 
@@ -766,7 +770,7 @@ else's.
 ### 1.2 "dpkt decodes 1.4× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
 **Status: VERIFIED for 2.7.0 — the 15% claim no longer holds, on the 265-, 293- or 379-frame corpus**
 
-*Re-measured for 2.7.0 (2026-11-04, another machine and the 379-frame
+*Re-measured for 2.7.0 (2026-11-03, another machine and the 379-frame
 corpus; see above): **dpkt 1.37× faster** on the median-ratio run
 (150,029 against 205,189; 1.35-1.43× across three runs), so the
 heading moves from 1.3× to 1.4×. The rise comes from Tier 4's 86 new
@@ -862,7 +866,7 @@ along with the re-measurement).
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
 
-*Re-measured for 2.7.0 (2026-11-04, another machine; see above):
+*Re-measured for 2.7.0 (2026-11-03, another machine; see above):
 netprotocols 2,207,983 ops/s, dpkt 538,285, **4.10×**; scapy 2.8.0
 1,049,943. Tier 4 did not touch the encode path; five more runs read
 3.97-4.42×, and the 2.6.0 tree 4.27-4.69× on the same machine.*
@@ -893,23 +897,27 @@ wide, clean win.
 ### 1.4 "Imports in 57 ms; scapy takes about 240 ms"
 **Status: VERIFIED**
 
-*Re-measured for 2.7.0 (cold on 2026-11-03, warm on 2026-11-04,
-another machine; see above). **Warm**, with bytecode cached (what an installed package
-gives; `PYTHONPATH=<git-archive extract>/src env -u PYTHONDONTWRITEBYTECODE
-taskset -c 2 uv run --frozen --group bench python
-scripts/benchmark_import.py`, after one untimed import of each
-library): best of three `benchmark_import.py` runs,
-netprotocols **56.7 ms** (116 modules on CPython 3.12.12), `scapy.all`
-2.8.0 **241.7 ms**, **4.3×**; the heading quotes these. **Cold**, every
-module of netprotocols and the installed packages compiled from source
-(`PYTHONDONTWRITEBYTECODE=1`, no `.pyc` for them; the stdlib ships
-precompiled; `taskset -c 2 uv run --frozen --group bench python scripts/benchmark_import.py`):
-netprotocols **99.1 ms**, `scapy.all` **552.2 ms**, **5.6×**. Earlier
-sections below record no condition; their ratios match warm runs, so
-compare them with the warm figures. The five Tier 4 modules
-and the `datetime` and `binascii` imports they bring cost about 5 ms
-warm and 12-15 ms cold against the 2.6.0 tree run alternately on the
-same machine; the warm ratio fell from 4.9× to 4.3× with Tier 4's cost.*
+*Re-measured for 2.7.0 (cold on 2026-11-03, warm on 2026-11-04, another
+machine; see above). **Warm**, with bytecode cached (what an installed
+package gives; `PYTHONPATH=<git-archive extract>/src env -u
+PYTHONDONTWRITEBYTECODE taskset -c 2 uv run --frozen --group bench
+python scripts/benchmark_import.py`, after one untimed import of each
+library): best of three `benchmark_import.py` runs, netprotocols **56.7
+ms** (116 modules on CPython 3.12.12), `scapy.all` 2.8.0 **241.7 ms**,
+**4.3×**; the heading quotes these. **Cold**, every module of
+netprotocols and the installed packages compiled from source
+(`PYTHONDONTWRITEBYTECODE=1`, no `.pyc` for them; stdlib modules used
+the interpreter's existing `.pyc` where it had them, and a few that
+scapy imports, such as `getopt`, had none and were compiled too;
+`taskset -c 2 uv run --frozen --group bench python
+scripts/benchmark_import.py`): netprotocols **99.1 ms**, `scapy.all`
+**552.2 ms**, **5.6×**. Earlier sections below record no condition;
+2.6.0's ratios match warm runs of its tree on this machine, so compare
+them with the warm figures. The five Tier 4 modules and the `datetime`
+and `binascii` imports they bring cost about 5 ms warm and 12-15 ms cold
+against the 2.6.0 tree run alternately on the same machine; on this
+machine the warm ratio fell from 4.8× (the 2.6.0 tree) to 4.3× with Tier
+4's cost (4.9× in 2.6.0's record).*
 
 *Re-measured for 2.6.0 (2026-10-28; see above): best of three
 `benchmark_import.py` runs, netprotocols **89.8 ms** (97 modules),
@@ -1016,12 +1024,13 @@ every frame that is not deeper, including two that dpkt decodes
 further (see the 2.6.0 re-measurement above); depth
 comes from the decoders' own strictness, untouched by anything the
 throughput fix or the benchmark-methodology change did. Re-measured
-for 2.7.0 (2026-11-04) on the 379-frame corpus: **153 deeper, 225 the
+for 2.7.0 (2026-11-03) on the 379-frame corpus: **153 deeper, 225 the
 same**, and the STP TCN skipped. All 59 new are Tier 4 frames on which
 dpkt stops at UDP (at TCP for STUN's two TCP segments) with the
 payload raw: every HSRP, NTP, RADIUS and STUN frame, and the six TFTP
 requests to port 69. dpkt 1.9.8 has a module for each of the five
-protocols, but its UDP and TCP never dispatch on a port, as with DNS and DHCP (see the 2.7.0 re-measurement above).*
+protocols, but its UDP and TCP never dispatch on a port, as with DNS and
+DHCP (see the 2.7.0 re-measurement above).*
 
 On the 97-frame corpus, netprotocols reaches a deeper layer than dpkt
 on **27 frames** and stops at the same layer on the other 70. dpkt
