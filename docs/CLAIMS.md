@@ -1781,7 +1781,8 @@ on a raised `TruncatedHeaderError` was `args`, `add_note`,
 protocol-validation tool that wanted to know *where* a parse failed
 had to regex the message.
 
-Every raise site in `src/` now attaches structured context:
+Every site in `src/` that raises a decode or validation error now
+attaches structured context:
 
 ```python
 try:
@@ -1791,9 +1792,43 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 230 raise sites in the library
-but `random_mac`'s (`utils/mac.py`), which belongs to no protocol
-(verified by an AST sweep, not just by eye); `field`
+`protocol` is set at every one of the 230 sites in `src/` that raise a
+decode or validation error but `random_mac`'s (`utils/mac.py`), which
+belongs to no protocol (verified by an AST sweep, not just by eye). A
+site here is a `raise` statement that builds `InvalidFieldError`,
+`TruncatedHeaderError`, `InvalidMACAddressError`,
+`InvalidIPv4AddressError`, `InvalidManufacturerCodeError` or
+`MaxDepthExceededError`, directly or through the `_malformed` helpers of
+`layer7/bgp.py` and `layer7/tls.py` and `walk.py`'s `_too_deep`; every
+direct constructor call among them passes `protocol=`, except
+`random_mac`'s. The claim covers only those. `src/` holds 260 `raise`
+statements in all, and the other 30 fall outside it: `pcap.py`'s 18
+`MalformedCaptureError` raises, which describe the capture file rather
+than a protocol and set no `protocol`; the three registry errors in
+`registry.py`; the private `_Unreached` control-flow signal in
+`layer7/tls.py`, raised three times and caught within the module; and
+stdlib `ValueError`, `OSError` and `KeyError` raises and two bare
+re-raises. Reproduce the count from the repository root with
+`python3`; it prints `230 of 260`:
+
+```python
+import ast, pathlib
+NAMES = {"InvalidFieldError", "TruncatedHeaderError", "InvalidMACAddressError",
+         "InvalidIPv4AddressError", "InvalidManufacturerCodeError",
+         "MaxDepthExceededError", "_malformed", "_too_deep"}
+def name(e):
+    e = e.func if isinstance(e, ast.Call) else e
+    return e.attr if isinstance(e, ast.Attribute) else getattr(e, "id", None)
+raises = [n for p in pathlib.Path("src/netprotocols").rglob("*.py")
+          for n in ast.walk(ast.parse(p.read_text())) if isinstance(n, ast.Raise)]
+print(sum(n.exc is not None and name(n.exc) in NAMES for n in raises),
+      "of", len(raises))
+```
+
+The same rule gives 60 at `534f889`, 203 at `824893d`, 206 at
+`343427b`, 228 at `f12daf0` and 230 at `2705353`.
+
+`field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
 a single attribute to name. `offset` is honestly scoped: relative to
 the `decode()` buffer for a fixed-header error, relative to the
