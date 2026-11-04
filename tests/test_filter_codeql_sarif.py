@@ -20,6 +20,7 @@ directory in ``tool.extensions`` (``file:///path/to/codeql/``) and the
 kernel version in the ``cli/platform`` notification (``0.0.0``).
 """
 
+import argparse
 import copy
 import importlib.util
 import json
@@ -682,3 +683,56 @@ class TestMain:
         (tmp_path / "a.sarif").write_bytes(FIXTURE.read_bytes())
         (tmp_path / "b.sarif").write_text("{}")
         assert sarif_filter.main([str(tmp_path)]) == 1
+
+    @pytest.mark.parametrize(
+        "argv",
+        [[""], ["  "], ["\t"], ["\n"], ["python.sarif", ""]],
+        ids=["empty", "spaces", "tab", "newline", "after-a-valid-path"],
+    )
+    def test_an_empty_path_is_rejected_and_nothing_is_touched(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        argv: list[str],
+    ) -> None:
+        """``Path("")`` is the working directory, which holds the copy."""
+        sarif = tmp_path / "python.sarif"
+        sarif.write_bytes(FIXTURE.read_bytes())
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit) as exit_info:
+            sarif_filter.main(argv)
+        assert exit_info.value.code == 2
+        assert sarif.read_bytes() == FIXTURE.read_bytes()
+        assert "empty path" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("value", ["", " ", "\t"])
+    def test_an_empty_source_root_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        sarif = tmp_path / "python.sarif"
+        sarif.write_bytes(FIXTURE.read_bytes())
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(SystemExit) as exit_info:
+            sarif_filter.main(["python.sarif", "--source-root", value])
+        assert exit_info.value.code == 2
+        assert sarif.read_bytes() == FIXTURE.read_bytes()
+
+    def test_a_relative_path_is_read_from_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sarif = tmp_path / "python.sarif"
+        sarif.write_bytes(FIXTURE.read_bytes())
+        monkeypatch.chdir(tmp_path)
+        assert sarif_filter.main(["python.sarif"]) == 0
+        expected = fixture()
+        sarif_filter.filter_log(expected, CHECKOUT)
+        assert json.loads(sarif.read_text()) == expected
+
+    @pytest.mark.parametrize("value", ["", "  ", "\t", "\n"])
+    def test_nonempty_path_rejects_a_blank_value(self, value: str) -> None:
+        with pytest.raises(argparse.ArgumentTypeError):
+            sarif_filter.nonempty_path(value)
+
+    def test_nonempty_path_keeps_a_valid_value_as_given(self) -> None:
+        assert sarif_filter.nonempty_path(" a.sarif") == Path(" a.sarif")
