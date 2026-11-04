@@ -238,13 +238,15 @@ except ProtocolError:          # catches every library error
     ...
 ```
 
-Every exception carries structured context alongside its message —
-`err.protocol` names the class that raised, `err.field` names the
-attribute at fault where one field is at fault, and `err.offset` /
+Every decode and validation error carries structured context
+alongside its message — `err.protocol` names the class that raised,
+`err.field` names the attribute at fault where one field is at fault,
+and `err.offset` /
 `err.frame_offset` locate the problem in bytes (in the header's own
 buffer, and rebased to the whole frame when the error came through
 `decode_frame`) — so a fuzzer, conformance suite, or validation tool
-can act on *where* and *what* failed without parsing the message:
+can act on *where* and *what* failed without parsing the message
+(capture-file and registry errors leave `protocol` unset):
 
 ```python
 try:

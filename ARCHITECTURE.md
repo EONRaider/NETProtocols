@@ -359,15 +359,21 @@ ProtocolError
 │   ├── InvalidMACAddressError
 │   ├── InvalidIPv4AddressError
 │   └── InvalidManufacturerCodeError
-└── MaxDepthExceededError    a frame's chain exceeded decode_frame's max_depth
+├── MalformedCaptureError    buffer is not a well-formed pcap or pcapng capture
+├── MaxDepthExceededError    a frame's chain exceeded decode_frame's max_depth
+├── UnknownTableError        registration or lookup named no such table
+├── InvalidRegistryKeyError  key outside what its table's wire field can carry
+└── RegistryConflictError    key already held by another class, no override=True
 ```
 
-**Every raise carries structured context, not just a message.** A
-formatted string is easy for a human to read and impossible for a
-fuzzer, conformance suite, or validation tool to act on without
-regexing it — so every raise site in `src/` attaches `protocol` (the
-class that raised) and, where meaningful, `field` (the attribute at
-fault), `offset`, and `expected`/`actual`:
+**Every decode or validation error carries structured context, not
+just a message.** A formatted string is easy for a human to read and
+impossible for a fuzzer, conformance suite, or validation tool to act
+on without regexing it — so every site in `src/` that raises a decode
+or validation error attaches `protocol` (the class that raised) and,
+where meaningful, `field` (the attribute at fault), `offset`, and
+`expected`/`actual` (`docs/CLAIMS.md` §5.9 gives the exact
+population):
 
 ```python
 try:
@@ -375,6 +381,9 @@ try:
 except ProtocolError as e:
     print(e.protocol, e.field, e.offset, e.frame_offset, e.expected, e.actual)
 ```
+
+`MalformedCaptureError` and the registry errors describe a capture
+file or a registration, not a protocol, and leave `protocol` unset.
 
 `offset` is relative to whatever buffer the error was found in. An
 error raised by `decode()` is relative to that call's `data` argument,
