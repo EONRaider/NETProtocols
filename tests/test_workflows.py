@@ -553,6 +553,9 @@ class TestCIWorkflow:
         assert "scripts" in mypy_config["files"], (
             "[tool.mypy] files no longer include scripts"
         )
+        assert mypy_config.get("exclude", []) == [
+            "^scripts/pyodide/node_modules/"
+        ], "[tool.mypy] exclude reaches beyond scripts/pyodide/node_modules"
 
     TRACEMALLOC_STEP_NAME = "Allocation tests under PYTHONTRACEMALLOC=1"
 
