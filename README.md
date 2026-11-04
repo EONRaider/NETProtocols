@@ -53,7 +53,7 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 379 frames of
 real captured traffic the corpus held at 2.7.0 (CPython 3.12.12, x86-64
-Linux; re-measured for 2.7.0 on 2026-11-04 — see
+Linux; re-measured for 2.7.0 on 2026-11-03/04 — see
 [docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
 reproduction command, and its caveats):
 
@@ -82,9 +82,9 @@ reproduction command, and its caveats):
 - **4.1× faster than dpkt at re-encoding** (`bytes(header)`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
-- **Imports in 57 ms; `scapy.all` takes 242+ ms** (`scripts/benchmark_import.py`,
-  with cached bytecode, which an installed package has; the first import
-  after a source checkout compiles every module and takes longer, 99 ms
+- **Imports in 57 ms; `scapy.all` takes about 240 ms** (`scripts/benchmark_import.py`,
+  with cached bytecode, as after `pip install` or after the first import;
+  the first import after a source checkout compiles its modules and takes longer, 99 ms
   against 552 ms), and never touches the host doing it — importing scapy
   populates live interface and routing tables as a side effect of the import
   statement.
