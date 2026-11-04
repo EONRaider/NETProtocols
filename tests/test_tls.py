@@ -7,7 +7,7 @@ rejection and its ``field``), records chaining within a segment and
 inside it, the server_name extension (RFC 6066 §3), the display
 helpers, construction, dispatch from TCP port 443,
 scripts/check_fixtures.py's TLS checks, and ``peek_server_name``, which
-reads the server name from a ClientHello's prefix (#285): every prefix
+reads the server name from a ClientHello's prefix: every prefix
 of every captured ClientHello, Chromium's first segments, and its
 errors held against the strict path's.
 
@@ -524,7 +524,7 @@ class TestSession:
 
 
 class TestHTTPSCapture:
-    """tests/fixtures/tcp_https.pcap: captured before TLS was decoded."""
+    """tests/fixtures/tcp_https.pcap: inbound HTTPS segments."""
 
     FRAMES = pcap_frames(FIXTURES / "tcp_https.pcap")
 
@@ -809,7 +809,7 @@ class TestChaining:
         """Over IPv4 a bare segment with no TCP options is a 54-byte
         frame. Padded to Ethernet's 60-byte minimum, the 6 zero bytes
         reach TLS, since the walk does not end its buffer at IPv4's
-        Total Length (#235): a ContentType of 0. Unpadded, the buffer is
+        Total Length: a ContentType of 0. Unpadded, the buffer is
         empty. On BGP's port the padding is still too short to judge."""
         bare = frame(b"")
         assert len(bare) == 54
@@ -1898,7 +1898,7 @@ class TestChecker:
         assert "tls-unchecked=4" in out
 
 
-# --- peek_server_name: the server name from a prefix (#285) ----------
+# --- peek_server_name: the server name from a prefix -----------------
 
 #: Each captured ClientHello: its record's length, the smallest prefix
 #: of the record that peek_server_name answers, and the answer, the

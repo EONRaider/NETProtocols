@@ -43,25 +43,21 @@ against the buffer, so a message the buffer cuts short raises
 :class:`~netprotocols.TruncatedHeaderError` rather than an invalid-field
 error. The upper bound is 65535 for the other types: RFC 8654 lets
 UPDATE, NOTIFICATION and ROUTE-REFRESH grow past RFC 4271's 4096 bytes
-once both speakers advertise the Extended Message capability, and the
-OPEN that negotiates it may be in another capture or another segment,
-so the decoder accepts the larger messages rather than reject a
-session it cannot see the start of. RFC 8654 §4 keeps OPEN and
+once both speakers advertise the Extended Message capability. The
+decoder accepts the larger messages without that OPEN, which may be in
+another capture or another segment. RFC 8654 §4 keeps OPEN and
 KEEPALIVE at 4096 or less, and so does the decoder.
 
 The body is not validated on decode: an UPDATE whose path attributes
 overrun still decodes, and :attr:`BGP.path_attributes` raises
-:class:`~netprotocols.InvalidFieldError` when asked for them. That
-keeps the message's framing — which the header alone decides —
-independent of the parts of the body the decoder can only interpret
-with session state it may not have (see *Out of scope* below).
+:class:`~netprotocols.InvalidFieldError` when asked for them. The
+message's framing depends on the header alone, not on the parts of the
+body the decoder can only interpret with session state it may not have
+(see *Out of scope* below).
 
 The Marker alone is a strong guard against a wrong port guess: random
-bytes pass it once in 2**128 tries. Over 10,000 random 300-byte TCP
-payloads sent to port 179 and walked with
-``decode_frame(..., lax=True)``, every walk ended with ``stopped_by``
-set, as it did for 10,000 payloads of uniformly random length 0-600;
-see ARCHITECTURE.md's *Port-based dispatch is best-effort*.
+bytes pass it once in 2**128 tries (see ARCHITECTURE.md's *Port-based
+dispatch is best-effort*).
 
 Messages and segments
 ---------------------
@@ -118,8 +114,7 @@ payload an IPv4 packet can carry (3,447 KEEPALIVEs), so no fixed depth
 covers every segment. Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic, and a
 lax one stops with ``packet.stopped_by`` set to that error and
-``packet.consumed`` short of the frame. The corpus, captured with
-offload off, never reaches it: its busiest segment carries 7 messages.
+``packet.consumed`` short of the frame.
 
 There are two ways past the limit. One is a larger ``max_depth``: three
 more than the segment's whole messages decodes them all in an untagged
@@ -156,9 +151,9 @@ MULTI_EXIT_DISC and LOCAL_PREF) is kept as raw ``bytes``. Its segments
 carry 2-byte AS numbers or, between speakers that both advertised the
 RFC 6793 capability in their OPENs, 4-byte ones, and the segment format
 has no field saying which; BIRD and FRR negotiate 4-byte AS numbers by
-default, so real captures, the corpus's included, carry 4-byte ones.
+default, so their sessions carry 4-byte ones.
 Three other negotiated features change the body in ways the decoder
-cannot see either, and are natural follow-ups: capability values
+cannot see either: capability values
 (RFC 5492) stay raw inside the Capabilities optional parameter;
 ADD-PATH (RFC 7911) prefixes each NLRI and withdrawn route with a
 4-byte path identifier, which :attr:`BGP.nlri` would misread as
@@ -320,7 +315,7 @@ _ERROR_CODE_NAMES: dict[int, str] = {
 #: Finite State Machine Error; RFC 4486 for Cease, with 9 from RFC 8538
 #: and 10 from RFC 9384; RFC 7313 for ROUTE-REFRESH. OPEN's 5 and
 #: UPDATE's 7, which the registry lists only as "[Deprecated]", keep
-#: the names RFC 4271 Appendix A gives them, with "(deprecated)". A
+#: the names RFC 4271 §A gives them, with "(deprecated)". A
 #: code without a registry (4, 8, 9) names only subcode 0,
 #: "Unspecific" (RFC 4271 §4.5; RFC 9687 §6 sets it to 0 for code 8),
 #: and so does an unknown code.
@@ -411,7 +406,7 @@ class BGPPrefix:
     def __post_init__(self) -> None:
         """Check the length is 0-32 and the prefix bytes match it.
 
-        :raises InvalidFieldError: either does not hold.
+        :raises InvalidFieldError: if either does not hold.
         """
         if not 0 <= self.length <= 32:
             raise InvalidFieldError(
@@ -475,7 +470,8 @@ class BGPPathAttribute:
     def __post_init__(self) -> None:
         """Check each field fits and the value fits its length's width.
 
-        :raises InvalidFieldError: a field does not fit.
+        :raises InvalidFieldError: if a field does not fit, or the value
+            is longer than its Attribute Length can say.
         """
         for name in ("flags", "type_code"):
             value = getattr(self, name)
@@ -533,7 +529,11 @@ class BGPPathAttribute:
 
     @property
     def type_name(self) -> str:
-        """Display name of the type code, e.g. ``"AS_PATH"``."""
+        """Display name of the type code, e.g. ``"AS_PATH"``.
+
+        ``"unknown (n)"`` for a type code this library does not name
+        (degrades, never raises).
+        """
         return _ATTRIBUTE_NAMES.get(
             self.type_code, f"unknown ({self.type_code})"
         )
@@ -605,7 +605,7 @@ class BGPOptionalParameter:
     def __post_init__(self) -> None:
         """Check the type fits and the value fits its length's width.
 
-        :raises InvalidFieldError: either does not.
+        :raises InvalidFieldError: if either does not.
         """
         if not 0 <= self.type <= 0xFF:
             raise InvalidFieldError(
@@ -639,7 +639,11 @@ class BGPOptionalParameter:
 
     @property
     def type_name(self) -> str:
-        """Display name of the parameter type, e.g. ``"Capabilities"``."""
+        """Display name of the parameter type, e.g. ``"Capabilities"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return _OPTIONAL_PARAMETER_NAMES.get(
             self.type, f"unknown ({self.type})"
         )
@@ -656,7 +660,7 @@ def _walk_prefixes(raw: bytes, base: int) -> Iterator[BGPPrefix]:
     :param raw: The field's bytes.
     :param base: Where ``raw`` starts in the message body, for the
         offset of a raised error.
-    :raises InvalidFieldError: on a prefix length over 32 bits, or a
+    :raises InvalidFieldError: if a prefix length is over 32 bits, or a
         prefix that runs past ``raw``.
     """
     cursor = 0
@@ -679,8 +683,8 @@ def _walk_attributes(raw: bytes, base: int) -> Iterator[BGPPathAttribute]:
 
     :param raw: The field's bytes.
     :param base: Where ``raw`` starts in the message body.
-    :raises InvalidFieldError: on an attribute header or value that
-        runs past ``raw``.
+    :raises InvalidFieldError: if an attribute header or value runs
+        past ``raw``.
     """
     cursor = 0
     while cursor < len(raw):
@@ -715,7 +719,7 @@ def _walk_parameters(
     :param base: Where ``raw`` starts in the message body.
     :param width: Bytes in each Parameter Length: 1, or 2 under RFC
         9072's extended encoding.
-    :raises InvalidFieldError: on a parameter that runs past ``raw``.
+    :raises InvalidFieldError: if a parameter runs past ``raw``.
     """
     cursor = 0
     while cursor < len(raw):
@@ -783,7 +787,7 @@ class BGP(Protocol):
     def __post_init__(self) -> None:
         """Check each header field fits and the Length matches the body.
 
-        :raises InvalidFieldError: a field does not.
+        :raises InvalidFieldError: if a field does not.
         """
         if len(self.marker) != 16:
             raise InvalidFieldError(
@@ -815,9 +819,10 @@ class BGP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the message at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :param data: The buffer, starting at the Marker.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             19-byte header, or than the message's Length.
-        :raises InvalidFieldError: the Marker is not all ones
+        :raises InvalidFieldError: if the Marker is not all ones
             (``field`` ``"marker"``), the Type is not 1-5 (``"type"``),
             or the Length is outside that type's bounds (``"length"``);
             see the module docstring.
@@ -858,7 +863,7 @@ class BGP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> builtins.type[Protocol] | None:
-        """Name the next message in the same segment, if one begins there.
+        """Return the class for the next message in the segment, if one begins.
 
         :class:`BGP` when the bytes after this message began with a
         Marker, or as much of one as the buffer held, when it was
@@ -870,7 +875,11 @@ class BGP(Protocol):
 
     @property
     def type_name(self) -> str:
-        """Display name of the message type, e.g. ``"UPDATE"``."""
+        """Display name of the message type, e.g. ``"UPDATE"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         return _TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     # OPEN (RFC 4271 §4.2)
@@ -936,7 +945,7 @@ class BGP(Protocol):
         Parsed on demand from either encoding; ``None`` for other
         messages.
 
-        :raises InvalidFieldError: the Optional Parameters Length (or
+        :raises InvalidFieldError: if the Optional Parameters Length (or
             RFC 9072's Extended Optional Parameters Length) disagrees
             with the message's length, RFC 9072's marker leaves no room
             for its 2-byte length (``offset`` at the marker), or a
@@ -970,7 +979,7 @@ class BGP(Protocol):
         The Withdrawn Routes Length, and where the Path Attributes and
         the NLRI start in the body; ``None`` for other messages.
 
-        :raises InvalidFieldError: a length runs past the message.
+        :raises InvalidFieldError: if a length runs past the message.
         """
         body = self.body
         if self.type != _UPDATE:
@@ -1000,7 +1009,7 @@ class BGP(Protocol):
 
         ``None`` for other messages.
 
-        :raises InvalidFieldError: a length runs past the message, a
+        :raises InvalidFieldError: if a length runs past the message, a
             prefix length exceeds 32, or a prefix runs past the field.
         """
         fields = self._update_fields()
@@ -1015,7 +1024,7 @@ class BGP(Protocol):
 
         ``None`` for other messages.
 
-        :raises InvalidFieldError: a length runs past the message, or an
+        :raises InvalidFieldError: if a length runs past the message, or an
             attribute runs past the Path Attributes field.
         """
         fields = self._update_fields()
@@ -1031,7 +1040,7 @@ class BGP(Protocol):
         The IPv4 prefixes it announces, which run to the end of the
         message; ``None`` for other messages.
 
-        :raises InvalidFieldError: a length runs past the message, a
+        :raises InvalidFieldError: if a length runs past the message, a
             prefix length exceeds 32, or a prefix runs past the message.
         """
         fields = self._update_fields()
@@ -1067,7 +1076,8 @@ class BGP(Protocol):
     def error_code_name(self) -> str | None:
         """Display name of a NOTIFICATION's Error Code, e.g. ``"Cease"``.
 
-        ``None`` for other messages.
+        ``"unknown (n)"`` for a code this library does not name;
+        ``None`` for other messages (degrades, never raises).
         """
         code = self.error_code
         if code is None:
@@ -1081,7 +1091,8 @@ class BGP(Protocol):
         Named in the context of its Error Code, e.g. ``"Administrative
         Shutdown"`` for Cease, as the IANA registry names it; subcode 0
         is ``"Unspecific"`` under a code with no subcode registry.
-        ``None`` for other messages.
+        ``"unknown (n)"`` for a subcode this library does not name;
+        ``None`` for other messages (degrades, never raises).
         """
         code, subcode = self.error_code, self.error_subcode
         if code is None or subcode is None:
@@ -1120,7 +1131,12 @@ class BGP(Protocol):
 def _check_header(marker: bytes, length: int, type_: int) -> None:
     """Apply RFC 4271 §6.1's header checks to a decoded header.
 
-    :raises InvalidFieldError: see :meth:`BGP.decode`.
+    :param marker: The 16-byte Marker.
+    :param length: The Length field.
+    :param type_: The Type field.
+    :raises InvalidFieldError: if the Marker is not all ones, the Length
+        is below 19, the Type is not 1-5, or the Length is outside that
+        type's bounds.
     """
     if marker != _MARKER:
         raise InvalidFieldError(

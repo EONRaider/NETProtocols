@@ -25,10 +25,8 @@ epan/dissectors/packet-cdp.c, and the frames lldpd 1.0.18 sends with
 Version and TTL are one byte each (TTL in seconds); the Checksum covers
 the whole PDU (see :func:`~netprotocols.checksum.compute`). CDP version
 1 and version 2 share this format, version 2 adding TLV types, so
-:meth:`CDP.decode` reads any Version the same way and rejects none:
-the SNAP header says outright that a CDP PDU follows, so there is no
-wrong guess to guard against, and a Version of 0 or 3 is kept for the
-caller to see.
+:meth:`CDP.decode` reads any Version the same way and rejects none: a
+Version of 0 or 3 is kept for the caller to see.
 
 Every TLV is kept raw, in wire order, as a :class:`CDPTLV`, its
 :attr:`~CDPTLV.type_name` naming the types Wireshark names. Typed
@@ -110,25 +108,13 @@ zero (the TLV loop of ``dissect_cdp``, commit 31bf0857).
 A header shorter than its fixed 4 bytes raises
 :class:`~netprotocols.TruncatedHeaderError` (offset 0, no ``field``).
 
-The walk is local to this module rather than
-:func:`~netprotocols._tlv.walk_kind_length_value`, the TLV walker
-TCP, IPv4, IPv6 and PIM share. Its 2-byte Type and Length, with
-``length_includes_header=True``, are CDP's TLV header, floor of 4
-included, but it raises :class:`~netprotocols.InvalidFieldError` for
-a header cut short and for a Length that runs past the bytes, where
-the decode contract asks for :class:`~netprotocols.TruncatedHeaderError`,
-and it knows no zero tail: ending there would take a wrapper that
-catches its errors and translates them. The LLDP decoder keeps its own
-walk too.
-
 ``bytes(CDP.decode(x)) == x[:header_len]`` holds by construction: the
 header is packed back from its three fields and each TLV from its type
 and its value, carried verbatim.
 
-Wireshark's Port ID heuristic is not reproduced: its dissector widens a
-Port ID TLV by 3 bytes when the byte after it is neither 0x00 nor 0x10
-("because that's what makes one capture work"). Here every TLV is
-exactly as long as its Length says.
+Every TLV, Port ID included, is exactly as long as its Length says.
+Wireshark's dissector differs here too: it widens a Port ID TLV by 3
+bytes when the byte after it is neither 0x00 nor 0x10.
 """
 
 from __future__ import annotations
@@ -246,7 +232,13 @@ def _check_range(
 ) -> None:
     """Reject ``value`` outside ``low``-``high``.
 
-    :raises InvalidFieldError: naming ``owner`` and ``field``.
+    :param owner: The class to attach to a raised error.
+    :param field: The field name to attach to a raised error.
+    :param value: The value to check.
+    :param low: The smallest value allowed.
+    :param high: The largest value allowed.
+    :raises InvalidFieldError: if ``value`` is outside ``low``-``high``,
+        naming ``owner`` and ``field``.
     """
     if not low <= value <= high:
         raise InvalidFieldError(
@@ -276,8 +268,8 @@ class CDPTLV:
     def __post_init__(self) -> None:
         """Validate the fields (see the class docstring).
 
-        :raises InvalidFieldError: a type that overflows 16 bits, or a
-            value too long for the Length.
+        :raises InvalidFieldError: if the type overflows 16 bits, or the
+            value is too long for the Length.
         """
         _check_range(type(self), "type", self.type, 0, 0xFFFF)
         _check_range(type(self), "value", len(self.value), 0, _MAX_VALUE_LENGTH)
@@ -295,7 +287,8 @@ class CDPTLV:
     def type_name(self) -> str:
         """Name the TLV type, e.g. ``"Platform"``.
 
-        A type Wireshark does not name reads ``"unknown (0x....)"``.
+        A type Wireshark does not name reads ``"unknown (0x....)"``
+        (degrades, never raises).
         """
         name = _TLV_TYPE_NAMES.get(self.type)
         return f"unknown ({self.type:#06x})" if name is None else name
@@ -323,8 +316,8 @@ class CDPAddress:
     def __post_init__(self) -> None:
         """Validate the fields (see the class docstring).
 
-        :raises InvalidFieldError: a protocol type that overflows its
-            byte, or a protocol or address too long for its length.
+        :raises InvalidFieldError: if the protocol type overflows its
+            byte, or the protocol or address is too long for its length.
         """
         _check_range(type(self), "protocol_type", self.protocol_type, 0, 0xFF)
         _check_range(type(self), "protocol", len(self.protocol), 0, 0xFF)
@@ -343,7 +336,7 @@ class CDPAddress:
     def protocol_type_name(self) -> str:
         """Name the protocol type: ``"NLPID"`` or ``"802.2"``.
 
-        Any other value reads ``"unknown (n)"``.
+        Any other value reads ``"unknown (n)"`` (degrades, never raises).
         """
         name = _PROTOCOL_TYPE_NAMES.get(self.protocol_type)
         return f"unknown ({self.protocol_type})" if name is None else name
@@ -354,7 +347,8 @@ class CDPAddress:
 
         IPv4 for NLPID ``0xCC`` and a 4-byte address, IPv6 for the
         802.2 header of EtherType 0x86DD and a 16-byte address, the two
-        forms packet-cdp.c reads; ``None`` for any other.
+        forms packet-cdp.c reads; ``None`` for any other (degrades,
+        never raises).
         """
         if (
             self.protocol_type == _PROTOCOL_TYPE_NLPID
@@ -374,6 +368,8 @@ class CDPAddress:
 def _read_address(value: bytes, cursor: int) -> tuple[CDPAddress, int] | None:
     """Read the address at ``cursor``, or ``None`` if it runs past.
 
+    :param value: The Addresses or Management Address TLV's value.
+    :param cursor: Where in ``value`` the address starts.
     :returns: The address, and the offset just past it.
     """
     size = len(value)
@@ -436,9 +432,9 @@ def _end_tlvs(
     :param cursor: Where the next TLV would start.
     :param length: That TLV's Length, below 4, or ``None`` when fewer
         than 4 bytes are left to hold its header.
-    :raises TruncatedHeaderError: ``length`` is ``None`` and the bytes
-        left are not all zero.
-    :raises InvalidFieldError: ``length`` is below 4 and the bytes
+    :raises TruncatedHeaderError: if ``length`` is ``None`` and the
+        bytes left are not all zero.
+    :raises InvalidFieldError: if ``length`` is below 4 and the bytes
         left are not all zero.
     """
     # Through a view, so a long tail is scanned without being copied.
@@ -489,8 +485,8 @@ class CDP(Protocol):
     def __post_init__(self) -> None:
         """Validate the fields (see the class docstring).
 
-        :raises InvalidFieldError: a version, TTL or checksum that
-            overflows its field, or a TLV that is not a :class:`CDPTLV`.
+        :raises InvalidFieldError: if the version, TTL or checksum
+            overflows its field, or a TLV is not a :class:`CDPTLV`.
         """
         _check_range(type(self), "version", self.version, 0, 0xFF)
         _check_range(type(self), "ttl", self.ttl, 0, 0xFF)
@@ -510,12 +506,14 @@ class CDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the CDP PDU at the start of ``data``; see the module.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :param data: The buffer, starting at the Version byte. It ends
+            where the PDU ends.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             4-byte header (no ``field``); a TLV whose Length is 4 or
             more runs past it, or 1-3 bytes are left after the last TLV
             and not all are zero (``field="tlvs"``, the offset of that
             TLV, or of those bytes).
-        :raises InvalidFieldError: a TLV's Length is below 4 and the
+        :raises InvalidFieldError: if a TLV's Length is below 4 and the
             bytes from its header to the end of ``data`` are not all
             zero (``field="tlvs"``, the offset of that TLV).
         """
@@ -556,7 +554,7 @@ class CDP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the PDU's length: the header and every TLV."""
+        """The whole message: the 4-byte header and every TLV."""
         return self._struct.size + sum(tlv.length for tlv in self.tlvs)
 
     @property
@@ -605,7 +603,7 @@ class CDP(Protocol):
 
         The value's first 4 bytes, big-endian, as packet-cdp.c reads
         them; ``None`` when there is no such TLV or its value is
-        shorter (see :attr:`capability_names`).
+        shorter (degrades, never raises; see :attr:`capability_names`).
         """
         tlv = self.tlv(_CAPABILITIES)
         if tlv is None or len(tlv.value) < 4:

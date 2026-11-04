@@ -1,8 +1,9 @@
 """IEEE 802.2 LLC and SNAP headers, after an IEEE 802.3 Length.
 
 Bytes 12-13 of an Ethernet header are a type or a length (IEEE 802.3
-Clause 3.2.6). A value of 0x0600 or more is an EtherType, which is how
-:class:`~netprotocols.Ethernet` has always read it. A value of 1500 or
+§3.2.6). A value of 0x0600 or more is an EtherType, which
+:class:`~netprotocols.Ethernet` dispatches through the ``ethertype``
+table. A value of 1500 or
 less is the length of the MAC client data that follows, which begins
 with an IEEE 802.2 Logical Link Control header; :meth:`Ethernet.next_protocol
 <netprotocols.Ethernet.next_protocol>` answers :class:`LLC` for it, and
@@ -60,7 +61,8 @@ It is decode context
 kept on the instance outside its comparison and hash, so equal headers
 compare equal wherever they were found. A header built with the
 constructor, or copied with :func:`dataclasses.replace`, has seen no
-bytes and dispatches as before; :func:`copy.copy` and
+bytes, so at DSAP 0x42 it dispatches whatever follows it;
+:func:`copy.copy` and
 :func:`copy.deepcopy` keep what :meth:`LLC.decode` recorded.
 :meth:`STP.decode <netprotocols.STP.decode>` called directly still
 rejects a Protocol Identifier other than 0.
@@ -73,8 +75,8 @@ DSAP and SSAP 0xAA are the Subnetwork Access Protocol's SAP (IEEE Std
 identifier (PID), follows the LLC header. The default registry puts
 :class:`SNAP` at DSAP 0xAA in ``llc.dsap``, and
 :meth:`LLC.next_protocol` reaches that entry only for a frame whose
-SSAP is 0xAA too and whose Control is UI. That is this library's
-choice, not a rule that other Controls carry no SNAP header: it decodes
+SSAP is 0xAA too and whose Control is UI. Other Controls can carry a
+SNAP header too, and this library decodes none after them: it decodes
 a SNAP header only after a UI PDU, the format RFC 1042 sends IP and
 ARP in ("standard 802.2 LLC Type 1 Unnumbered Information format,
 control code 3"). Wireshark's ``packet-llc.c`` (master, read
@@ -102,11 +104,6 @@ is a protocol number, under that OUI, assigned by the OUI owner"), so
   up in the ``llc.snap`` table under ``(oui << 16) | pid``. Cisco's CDP
   is OUI 00-00-0C PID 0x2000, which is not EtherType 0x2000.
 
-Issue #188 recommended reading every PID in the ``ethertype`` table.
-That is right for the two OUIs above only, and this module departs
-from it for the rest: read there, a protocol under another OUI would
-dispatch to whatever holds the EtherType of the same number.
-
 Novell "raw 802.3"
 ------------------
 Novell NetWare's original framing puts an IPX packet straight after
@@ -121,8 +118,9 @@ other fields and accessors are then meaningless: ``control`` and
 ``0x00 0x1E``, reads as the I-format Control ``0x1E00``), so
 ``header_len`` covers the checksum and one or both length bytes, and
 the SAP names, :attr:`LLC.dsap_enum`, :attr:`LLC.is_group` and
-:attr:`LLC.is_response` describe the checksum's 0xFF 0xFF. Wireshark makes
-the same call, from the same two bytes; a real LLC PDU from SSAP 0xFF
+:attr:`LLC.is_response` describe the checksum's 0xFF 0xFF. Wireshark
+reads such a frame as raw IPX too, from the same two bytes; a real LLC
+PDU from SSAP 0xFF
 (a response from SAP 0xFE) to the global DSAP is not distinguishable
 from it.
 
@@ -137,7 +135,8 @@ layer's buffer after an :class:`~netprotocols.Ethernet` or
 that Length gives (``Ethernet.length``), so padding and an FCS stay
 outside every layer and ``packet.consumed`` stops short of them. It is
 the one enclosing length the walk honours; IPv4's, IPv6's and UDP's
-are not (#235). A Length larger than the bytes captured bounds nothing
+are not, so a trailer after an IP packet reaches the layers inside it.
+A Length larger than the bytes captured bounds nothing
 and the layers decode what is there, as for a snap-length cut; a
 Length smaller than the LLC header leaves :meth:`LLC.decode` too few
 bytes, so the walk raises :class:`~netprotocols.TruncatedHeaderError`
@@ -173,9 +172,8 @@ __all__ = ["LLC", "SNAP"]
 
 #: The flat dispatch tables of the default registry, bound once at
 #: import and mutated in place by registration (see
-#: :mod:`netprotocols.registry`). The ``ethertype`` table is bound here
-#: rather than imported from :mod:`netprotocols.layer2.ethernet`, which
-#: imports this module.
+#: :mod:`netprotocols.registry`). :mod:`netprotocols.layer2.ethernet`
+#: imports this module, so the ``ethertype`` table is bound here too.
 _DSAP_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_LLC_DSAP)
 _SNAP_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_LLC_SNAP)
 _ETHERTYPE_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_ETHERTYPE)
@@ -193,7 +191,10 @@ _ETHERTYPE_OUIS = frozenset({0x000000, 0x0000F8})
 def _check_octet(value: int, protocol: type[Protocol], field: str) -> None:
     """Refuse a value that does not fit in one octet.
 
-    :raises InvalidFieldError: ``value`` is outside 0-255.
+    :param value: The value to check.
+    :param protocol: The class to attach to a raised error.
+    :param field: The field name to attach to a raised error.
+    :raises InvalidFieldError: if ``value`` is outside 0-255.
     """
     if not 0 <= value <= 0xFF:
         raise InvalidFieldError(
@@ -256,7 +257,7 @@ class LLC(Protocol):
     def __post_init__(self) -> None:
         """Check that each field fits its octets.
 
-        :raises InvalidFieldError: the DSAP or SSAP is outside 0-255, or
+        :raises InvalidFieldError: if the DSAP or SSAP is outside 0-255, or
             the Control is negative or wider than its format allows (one
             octet when its two low bits are ``11``, else two).
         """
@@ -277,8 +278,12 @@ class LLC(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the LLC header at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 3 bytes,
-            or than 4 for an I- or S-format PDU.
+        Every field read fits its range, so past the 3- or 4-byte
+        header this never raises.
+
+        :param data: The buffer, starting at the DSAP octet.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 3
+            bytes, or than 4 for an I- or S-format PDU.
         """
         dsap, ssap, control = cls._unpack_fixed(data)
         if control & 0x03 != 0x03:
@@ -311,7 +316,7 @@ class LLC(Protocol):
 
     @property
     def header_len(self) -> int:
-        """3 bytes for a U-format PDU, 4 for an I- or S-format one."""
+        """The header's length in bytes: 3 for a U-format PDU, 4 for I or S."""
         return 3 if self.control & 0x03 == 0x03 else 4
 
     @property
@@ -346,20 +351,26 @@ class LLC(Protocol):
     def dsap_name(self) -> str:
         """Display name of the DSAP, e.g. ``"Bridge Spanning Tree"``.
 
-        Falls back to the hexadecimal value for an unlisted one.
+        The hexadecimal value for an unlisted one (degrades, never
+        raises).
         """
         return _sap_name(self.dsap)
 
     @property
     def ssap_name(self) -> str:
-        """Display name of the SSAP, its command/response bit cleared."""
+        """Display name of the SSAP, its command/response bit cleared.
+
+        The hexadecimal value, e.g. ``"0x20"``, for an LSAP this library
+        does not name (degrades, never raises).
+        """
         return _sap_name(self.ssap & 0xFE)
 
     @property
     def dsap_enum(self) -> LLCSAP | None:
         """The DSAP as an :class:`~netprotocols.LLCSAP`, or ``None``.
 
-        ``None`` for a value the IEEE does not list as assigned.
+        ``None`` for a value the IEEE does not list as assigned
+        (degrades, never raises).
         """
         try:
             return LLCSAP(self.dsap)
@@ -369,7 +380,7 @@ class LLC(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Return the class registered in ``llc.dsap`` for the DSAP.
+        """Return the class for the DSAP, from the ``llc.dsap`` table.
 
         ``None`` for a PDU that carries no upper-layer data (anything
         but I-format and UI), for Novell raw 802.3, for DSAP 0xAA
@@ -414,7 +425,7 @@ class SNAP(Protocol):
     def __post_init__(self) -> None:
         """Check that the OUI fits 24 bits and the PID 16.
 
-        :raises InvalidFieldError: either is out of range.
+        :raises InvalidFieldError: if either is out of range.
         """
         if not 0 <= self.oui <= 0xFFFFFF:
             raise InvalidFieldError(
@@ -437,7 +448,9 @@ class SNAP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the SNAP header at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 5 bytes.
+        :param data: The buffer, starting at the OUI.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 5
+            bytes.
         """
         oui_high, oui_low, pid = cls._unpack_fixed(data)
         return cls(oui=oui_high << 16 | oui_low, pid=pid)

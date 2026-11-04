@@ -20,8 +20,8 @@ class UDP(Protocol):
     :param src_port: Source port.
     :param dst_port: Destination port.
     :param length: Length in bytes of header plus payload.
-    :param checksum: Checksum, carried verbatim (this library neither
-        computes nor verifies checksums).
+    :param checksum: Checksum, carried verbatim (compute/verify via
+        :mod:`netprotocols.checksum`).
     """
 
     src_port: int
@@ -33,6 +33,12 @@ class UDP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 8-byte UDP header at the start of ``data``.
+
+        :param data: The buffer, starting at the source port.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            8-byte header.
+        """
         src_port, dst_port, length, checksum = cls._unpack_fixed(data)
         return cls(
             src_port=src_port,
@@ -49,10 +55,13 @@ class UDP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The application protocol carried by this datagram, chosen by
-        well-known port (best-effort — see
-        :mod:`netprotocols.layer4._ports`); ``None`` when neither port
-        is recognized."""
+        """Return the class for the application protocol, by port.
+
+        The protocol is chosen by well-known port (best-effort; see
+        :mod:`netprotocols.layer4._ports`) from ``registry``'s tables, or
+        the default ones when it is ``None``; ``None`` when neither port
+        is recognized.
+        """
         return udp_app_class(self.src_port, self.dst_port, registry)
 
     @property

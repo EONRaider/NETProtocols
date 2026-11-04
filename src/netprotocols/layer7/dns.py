@@ -1,14 +1,12 @@
-"""DNS message header (RFC 1035), the first application-layer protocol.
+"""DNS message header (RFC 1035).
 
 The 12-byte header is decoded in full; the four message sections
 (question, answer, authority, additional) are kept as raw ``bytes``.
-This is deliberate: DNS names use *compression* — a name may end in a
-pointer to an earlier offset in the message — so re-encoding parsed
-records cannot reproduce the original byte stream, and the library's
-byte-exact round-trip guarantee is load-bearing. Keeping the sections
-raw makes ``bytes(DNS.decode(x)) == x`` hold by construction; the
-question and resource-record accessors below parse on demand and never
-re-encode.
+DNS names use *compression* — a name may end in a pointer to an
+earlier offset in the message — so parsed records do not determine the
+original bytes. Keeping the sections raw makes
+``bytes(DNS.decode(x)) == x`` hold by construction; the question and
+resource-record accessors below parse on demand and never re-encode.
 """
 
 from __future__ import annotations
@@ -143,16 +141,14 @@ class DNSResourceRecord:
     :param rdata_value: A *typed* decoding of ``rdata`` — an
         :class:`~ipaddress.IPv4Address`/:class:`~ipaddress.IPv6Address`
         for A/AAAA, the decompressed target ``str`` for CNAME/NS/PTR,
-        :class:`list`\\ [:class:`str`] of character-strings for TXT,
+        a ``list`` of ``str`` character-strings for TXT,
         :class:`MXRecord` for MX, :class:`SOARecord` for SOA; ``None``
         for types this library does not decode (read :attr:`rdata_text`
-        or :attr:`rdata` raw instead). Computed eagerly at parse time,
-        like :attr:`rdata_text` — a name inside RDATA (CNAME's target,
-        MX's exchange, SOA's mname/rname) can use DNS compression
-        against the *whole* message, not just the bytes of this one
-        record, so decoding it needs the same message-wide context
-        :attr:`rdata_text` already required; a value computed lazily
-        from ``rdata`` alone could not resolve such a pointer.
+        or :attr:`rdata` raw instead). Computed at parse time, like
+        :attr:`rdata_text`: a name inside RDATA (CNAME's target, MX's
+        exchange, SOA's mname/rname) can use DNS compression against
+        the *whole* message, so it cannot be decoded from ``rdata``
+        alone.
     """
 
     name: str
@@ -173,19 +169,26 @@ class DNSResourceRecord:
 
     @property
     def rtype_name(self) -> str:
-        """Display name of the record type, e.g. ``"AAAA"``; falls back
-        to the numeric type for records unknown to this library."""
+        """Display name of the record type, e.g. ``"AAAA"``.
+
+        The numeric type, as a string, for records unknown to this
+        library (degrades, never raises).
+        """
         return _RR_TYPE_NAMES.get(self.rtype, str(self.rtype))
 
 
 def _read_name(sections: bytes, at: int) -> int:
-    """The offset just past the name's in-line bytes at ``at``.
+    """Return the offset just past the name's in-line bytes at ``at``.
 
     A compression pointer ends the in-line name (this does not follow
     it — :func:`_labels` does), so the result advances the cursor to the
     field after the name.
 
-    :raises InvalidFieldError: on a malformed name.
+    :param sections: The message bytes after the 12-byte header.
+    :param at: Offset of the name in ``sections``.
+    :raises InvalidFieldError: if the name runs past the message, ends
+        in a truncated compression pointer, or has a reserved length
+        prefix.
     """
     cursor = at
     while True:
@@ -221,6 +224,8 @@ def _read_name(sections: bytes, at: int) -> int:
 def _labels(sections: bytes, at: int) -> str:
     """Decode the dotted name beginning at ``at``.
 
+    :param sections: The message bytes after the 12-byte header.
+    :param at: Offset of the name in ``sections``.
     :raises InvalidFieldError: on a label that overruns the message, a
         reserved length prefix, a pointer into the header, or looping
         compression pointers (bounded — never hangs).
@@ -284,7 +289,12 @@ def _labels(sections: bytes, at: int) -> str:
 
 
 def _decode_txt_strings(rdata: bytes) -> list[str]:
-    """The character-strings of a TXT record, in wire order (§3.3.14)."""
+    """Return the character-strings of a TXT record (RFC 1035 §3.3.14).
+
+    :param rdata: The record's RDATA.
+    :raises InvalidFieldError: if a character-string's length runs past
+        ``rdata``.
+    """
     parts: list[str] = []
     cursor = 0
     while cursor < len(rdata):
@@ -305,12 +315,20 @@ def _decode_txt_strings(rdata: bytes) -> list[str]:
 def _decode_rdata_value(
     sections: bytes, rtype: int, at: int, rdlength: int
 ) -> IPv4Address | IPv6Address | list[str] | MXRecord | SOARecord | str | None:
-    """A *typed* decoding of the RDATA at ``at``, for the record types
-    this library understands; ``None`` for the rest — read
-    :func:`_decode_rdata_text`/the raw bytes instead. Names follow
-    compression against the whole message, which is why this takes
-    ``sections`` and an absolute offset rather than the RDATA bytes
-    alone (RFC 1035 §4.1.4)."""
+    """Return a *typed* decoding of the RDATA at ``at``.
+
+    Only for the record types this library understands; ``None`` for
+    the rest — read :func:`_decode_rdata_text`/the raw bytes instead.
+    Names follow compression against the whole message (RFC 1035
+    §4.1.4), so this reads them from ``sections`` at absolute offsets.
+
+    :param sections: The message bytes after the 12-byte header.
+    :param rtype: The record type.
+    :param at: Offset of the RDATA in ``sections``.
+    :param rdlength: Length of the RDATA.
+    :raises InvalidFieldError: if a name in the RDATA is malformed, a
+        TXT character-string overruns, or an SOA record is truncated.
+    """
     rdata = sections[at : at + rdlength]
     if rtype == 1 and rdlength == 4:  # A
         return IPv4Address(bytes_to_ipv4(rdata))
@@ -365,9 +383,12 @@ def _decode_rdata_text(
         | None
     ),
 ) -> str:
-    """The human-readable rendering of RDATA, formatted from its
-    already-decoded ``value`` where there is one; the hexadecimal RDATA
-    for the types :func:`_decode_rdata_value` returns ``None`` for."""
+    """Return the human-readable rendering of RDATA.
+
+    It is formatted from the already-decoded ``value`` where there is
+    one; the hexadecimal RDATA for the types :func:`_decode_rdata_value`
+    returns ``None`` for.
+    """
     if isinstance(value, MXRecord):
         return f"{value.preference} {value.exchange}"
     if isinstance(value, SOARecord):
@@ -385,8 +406,15 @@ def _decode_rdata_text(
 
 
 def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
-    """Parse the resource record at ``at``; return it and the offset of
-    the next record."""
+    """Parse the resource record at ``at``.
+
+    Returns the record and the offset of the next record.
+
+    :param sections: The message bytes after the 12-byte header.
+    :param at: Offset of the record in ``sections``.
+    :raises InvalidFieldError: if the record, its RDATA, or a name runs
+        past the message or is malformed.
+    """
     name = _labels(sections, at)
     cursor = _read_name(sections, at)
     if cursor + 10 > len(sections):
@@ -425,8 +453,10 @@ def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
 
 
 def _first_record(sections: bytes, qdcount: int) -> int:
-    """Offset of the first resource record: past the questions.
+    """Return the offset of the first resource record, past the questions.
 
+    :param sections: The message bytes after the 12-byte header.
+    :param qdcount: The number of questions.
     :raises InvalidFieldError: if the question section is truncated.
     """
     cursor = 0
@@ -447,13 +477,14 @@ def _first_record(sections: bytes, qdcount: int) -> int:
 def _parse_questions(sections: bytes, qdcount: int) -> tuple[DNSQuestion, ...]:
     """Parse every entry of the question section (RFC 1035 §4.1.2).
 
-    Cached on the (immutable) section bytes and count, mirroring
-    :func:`_parse_records` — reading :attr:`DNS.questions` more than
-    once for equal messages parses it once. Independent of
-    :func:`_first_record`, which only needs the *offset* past the
-    questions and so does the cheaper :func:`_read_name` walk rather
-    than decoding every name with :func:`_labels`.
+    Cached on the (immutable) section bytes and count, as
+    :func:`_parse_records` is, so reading :attr:`DNS.questions` more
+    than once for equal messages parses it once. :func:`_first_record`
+    finds the offset past the questions with :func:`_read_name` alone,
+    without decoding names.
 
+    :param sections: The message bytes after the 12-byte header.
+    :param qdcount: The number of questions.
     :raises InvalidFieldError: if a question's name or its QTYPE/QCLASS
         run past the message (bounded — never hangs or over-reads).
     """
@@ -490,6 +521,11 @@ def _parse_records(
     three accessors of a message parses it once. Records are frozen
     dataclasses, so sharing them between callers is safe.
 
+    :param sections: The message bytes after the 12-byte header.
+    :param qdcount: The number of questions.
+    :param ancount: The number of answer records.
+    :param nscount: The number of authority records.
+    :param arcount: The number of additional records.
     :raises InvalidFieldError: if a record, its RDATA, or a name runs
         past the message (bounded — never hangs or over-reads).
     """
@@ -531,6 +567,15 @@ class DNS(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 12-byte header and keep the rest as the sections.
+
+        Past the header this never raises: the sections are parsed on
+        demand by the accessors.
+
+        :param data: The buffer, starting at the ID.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            12-byte header.
+        """
         transaction_id, flags, qdcount, ancount, nscount, arcount = (
             cls._unpack_fixed(data)
         )
@@ -559,8 +604,10 @@ class DNS(Protocol):
 
     @property
     def header_len(self) -> int:
-        # A DNS message is the whole UDP payload: consume it all so the
-        # chain ends here with no stray payload.
+        """The whole message: the 12-byte header and the sections.
+
+        A DNS message is the whole UDP payload, so the chain ends here.
+        """
         return self._struct.size + len(self.sections)
 
     # -- flags word (RFC 1035 §4.1.1) --
@@ -609,8 +656,9 @@ class DNS(Protocol):
 
     @property
     def question_name(self) -> str | None:
-        """The QNAME of the first question, decompressed, or ``None``
-        when the message carries no question.
+        """The QNAME of the first question, decompressed.
+
+        ``None`` when the message carries no question.
 
         :raises InvalidFieldError: if the name is malformed or its
             compression pointers loop (bounded — never hangs).
@@ -636,25 +684,36 @@ class DNS(Protocol):
 
     @property
     def question_type(self) -> int | None:
-        """QTYPE of the first question (1 = A, 28 = AAAA, ...), or
-        ``None`` when there is no question."""
+        """QTYPE of the first question (1 = A, 28 = AAAA, ...).
+
+        ``None`` when there is no question.
+
+        :raises InvalidFieldError: if the first question is malformed or
+            truncated.
+        """
         fixed = self._question_fixed()
         return None if fixed is None else fixed[0]
 
     @property
     def question_class(self) -> int | None:
-        """QCLASS of the first question (1 = IN), or ``None`` when there
-        is no question."""
+        """QCLASS of the first question (1 = IN).
+
+        ``None`` when there is no question.
+
+        :raises InvalidFieldError: if the first question is malformed or
+            truncated.
+        """
         fixed = self._question_fixed()
         return None if fixed is None else fixed[1]
 
     @property
     def questions(self) -> tuple[DNSQuestion, ...]:
-        """Every question in the question section, parsed on demand
-        (RFC 1035 §4.1.2) — :attr:`question_name` and its two siblings
-        above expose only the first, kept for backward compatibility;
-        a message with more than one question (rare, but legal) needs
-        this instead. Empty when :attr:`qdcount` is ``0``.
+        """Every question in the question section, parsed on demand.
+
+        RFC 1035 §4.1.2. :attr:`question_name` and its two siblings
+        above expose only the first question; a message with more than
+        one (rare, but legal) needs this instead. Empty when
+        :attr:`qdcount` is ``0``.
 
         :raises InvalidFieldError: if a question is malformed (see
             :func:`_parse_questions`).
@@ -670,8 +729,13 @@ class DNS(Protocol):
         tuple[DNSResourceRecord, ...],
         tuple[DNSResourceRecord, ...],
     ]:
-        """The three record sections, parsed once (see
-        :func:`_parse_records`) and shared by the accessors below."""
+        """Return the three record sections, parsed once.
+
+        See :func:`_parse_records`; the accessors below share the result.
+
+        :raises InvalidFieldError: if a record is malformed (see
+            :func:`_parse_records`).
+        """
         return _parse_records(
             self.sections,
             self.qdcount,
@@ -682,24 +746,37 @@ class DNS(Protocol):
 
     @property
     def answers(self) -> tuple[DNSResourceRecord, ...]:
-        """The answer-section resource records, parsed on demand."""
+        """The answer-section resource records, parsed on demand.
+
+        :raises InvalidFieldError: if a question or record is malformed
+            (see :func:`_parse_records`).
+        """
         return self._resource_records()[0]
 
     @property
     def authorities(self) -> tuple[DNSResourceRecord, ...]:
-        """The authority-section resource records, parsed on demand."""
+        """The authority-section resource records, parsed on demand.
+
+        :raises InvalidFieldError: if a question or record is malformed
+            (see :func:`_parse_records`).
+        """
         return self._resource_records()[1]
 
     @property
     def additionals(self) -> tuple[DNSResourceRecord, ...]:
-        """The additional-section resource records, parsed on demand."""
+        """The additional-section resource records, parsed on demand.
+
+        :raises InvalidFieldError: if a question or record is malformed
+            (see :func:`_parse_records`).
+        """
         return self._resource_records()[2]
 
 
 @dataclass(frozen=True, slots=True)
 class DNSOverTCP(Protocol):
-    """The two-octet length prefix that frames a DNS message over TCP
-    (RFC 1035 §4.2.2).
+    """The two-octet length prefix of a DNS message over TCP.
+
+    RFC 1035 §4.2.2.
 
     Over TCP a DNS message is preceded by its length as a 16-bit field.
     This models that prefix as a 2-byte shim between :class:`~netprotocols.TCP`
@@ -718,6 +795,12 @@ class DNSOverTCP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 2-byte length prefix at the start of ``data``.
+
+        :param data: The buffer, starting at the 2-byte length prefix.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 2
+            bytes.
+        """
         (message_length,) = cls._unpack_fixed(data)
         return cls(message_length=message_length)
 
@@ -727,10 +810,9 @@ class DNSOverTCP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The DNS message this length prefix frames.
+        """Return the class for the framed message: :class:`DNS`.
 
         A length shim has no wire field to dispatch on — it always
-        frames a DNS message — so ``registry`` is accepted for
-        signature compatibility and has nothing to select.
+        frames a DNS message — so ``registry`` has nothing to select.
         """
         return DNS

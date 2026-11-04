@@ -25,16 +25,16 @@ def validate_mac_addr(
     protocol: type[object] | None = None,
     field: str | None = None,
 ) -> str:
-    """Evaluate a string representing an IEEE 802 compliant MAC address.
+    """Validate a string as an IEEE 802 MAC address.
 
+    :param mac: The string to validate.
     :param protocol: The class this address belongs to, attached to a
         raised error for diagnostics; the header ``__post_init__``
         methods that call this pass their own class.
     :param field: Name of the field being validated, likewise attached
         for diagnostics.
-    :returns: The supplied string, unchanged, if it is a valid MAC
-        address.
-    :raises InvalidMACAddressError: If the supplied value is not a
+    :returns: The supplied string, unchanged, if it is a valid address.
+    :raises InvalidMACAddressError: if the supplied value is not a
         string or does not represent a valid MAC address.
     """
     try:
@@ -62,7 +62,7 @@ def random_mac(manufacturer: str | None = None) -> str:
     :param manufacturer: Optional OUI (Organizationally Unique
         Identifier) to fix as the address prefix, given as three
         colon-separated octets in hexadecimal, e.g. ``"AA:BB:CC"``.
-    :raises InvalidManufacturerCodeError: If ``manufacturer`` is not a
+    :raises InvalidManufacturerCodeError: if ``manufacturer`` is not a
         valid OUI prefix.
     """
     if manufacturer is not None and not mac_regex.match(

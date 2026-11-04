@@ -221,8 +221,8 @@ stop_capture() {
 in_client() {
     ip netns exec "$NSC" env -i PATH="$PATH" HOME="$WORK" "$@"
 }
-# A function, not a variable: $(...) would strip the request's final
-# line feed.
+# A function, so the request keeps its final line feed, which $(...)
+# would strip.
 request() {
     printf 'GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n' "$HOST"
 }

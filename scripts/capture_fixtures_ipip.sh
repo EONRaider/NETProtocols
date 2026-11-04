@@ -136,7 +136,7 @@ ip netns exec "$NSB" tcpdump -i "$B" -w "$OUT/ipip.pcap" --immediate-mode -U -q 
 pid=$!
 sleep 1
 
-# shellcheck disable=SC2086 # OUTER is a deliberate word list
+# shellcheck disable=SC2086 # OUTER is a word list, split into words
 ip netns exec "$NSA" python3 -c "$SEND_PY" $OUTER
 sleep 1
 

@@ -62,7 +62,7 @@ def is_bare_segment(packet: Packet) -> bool:
     ``TruncatedHeaderError``, as on BGP's port 179 and TLS's 443. An
     IPv4 bare ACK without TCP options that carries Ethernet's padding
     to the 60-byte minimum is not one: the walk hands TLS the 6 zero
-    bytes (#235), which it rejects with ``InvalidFieldError`` at
+    bytes, which it rejects with ``InvalidFieldError`` at
     ``content_type``. The corpus holds none.
     """
     return (
@@ -76,10 +76,8 @@ def is_bare_segment(packet: Packet) -> bool:
 def walk(frame: bytes) -> tuple[list[Protocol], int]:
     """The shipped chain walk; returns (layers, bytes consumed).
 
-    A thin adapter over :func:`~netprotocols.decode_frame` so the
-    assertions below keep their shape. The suite no longer carries its
-    own copy of the loop (#88) — if the walker regresses, these tests
-    are what notices.
+    A thin adapter over :func:`~netprotocols.decode_frame`, so these
+    tests exercise the shipped walker.
 
     One kind of frame raises by design: a bare TCP segment to port 443,
     where ``TLS`` is handed an empty payload (``tcp_https.pcap``'s five
@@ -103,7 +101,7 @@ def corpus_ids() -> list[str]:
 #: The corpus frames a strict walk raises on: bare TCP segments to a
 #: port-dispatched decoder (see :func:`walk`). ``tcp_https.pcap``'s
 #: IPv6 frames are ACKs with no payload, sent to the client from 443,
-#: so since TLS was registered there a strict walk raises
+#: where TLS is registered, so a strict walk raises
 #: ``TruncatedHeaderError`` at each, as at a bare ACK on BGP's port 179.
 BARE_SEGMENTS = {("tcp_https.pcap", index) for index in range(5, 10)}
 
@@ -235,9 +233,9 @@ class TestCorpusCoverage:
 
 
 class TestFragmentHandling:
-    """Regression: real fragmented traffic exposed that IPv4 chained
-    non-first fragments into garbage upper-layer decodes (mid-payload
-    bytes decoded as 'ICMPv4 type 192')."""
+    """IPv4 chains a first fragment to its upper layer, and a non-first
+    fragment to nothing: its payload starts mid-datagram, so decoding
+    it as ICMPv4 would read mid-payload bytes as a type."""
 
     def fragments(self) -> list[IPv4]:
         frames = pcap_frames(FIXTURES / "ipv4_fragments.pcap")

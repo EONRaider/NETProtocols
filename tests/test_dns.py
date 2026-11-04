@@ -208,9 +208,9 @@ def build_questions(entries: list[tuple[str, int, int]]) -> bytes:
 
 
 class TestDNSQuestions:
-    """#96: `questions` exposes every entry of the question section;
-    `question_name`/`question_type`/`question_class` above still expose
-    only the first, kept for backward compatibility."""
+    """`questions` exposes every entry of the question section;
+    `question_name`/`question_type`/`question_class` above expose only
+    the first."""
 
     def test_single_question_matches_the_first_question_accessors(self):
         raw = build_query(["example", "com"], qtype=1)
@@ -231,7 +231,7 @@ class TestDNSQuestions:
             DNSQuestion(name="a.example.com", qtype=1, qclass=1),
             DNSQuestion(name="b.example.com", qtype=28, qclass=1),
         )
-        # The single-question accessors still see only the first.
+        # The single-question accessors see only the first.
         assert dns.question_name == "a.example.com"
 
     def test_no_questions_is_empty(self):
@@ -402,7 +402,7 @@ class TestDNSResourceRecords:
             answers=(rr("example.com", 1, socket.inet_aton("192.0.2.1")),),
         )
         with pytest.raises(InvalidFieldError):
-            _ = DNS.decode(raw[:-2]).answers  # RDATA now overruns the buffer
+            _ = DNS.decode(raw[:-2]).answers  # RDATA overruns the buffer
 
     def test_lying_answer_count_raises(self):
         header = struct.pack("!HHHHHH", 1, 0x8180, 1, 2, 0, 0)  # ancount=2
@@ -567,10 +567,9 @@ class TestReadNameAndLabelsDirectly:
 
     def test_read_name_treats_reaching_the_end_as_truncated(self):
         """A label that exactly consumes the buffer, with no
-        terminating zero byte and no room for one, is still truncated
-        — regression against loosening the upper bound on the loop's
-        bounds check from ``<`` to ``<=``, which would let the cursor
-        land one past the last valid index and read out of range."""
+        terminating zero byte and no room for one, is still truncated:
+        the loop's bounds check keeps the cursor below the buffer's
+        length, never one past the last valid index."""
         with pytest.raises(InvalidFieldError) as excinfo:
             _read_name(b"\x03abc", 0)
         assert excinfo.value.offset == 4
@@ -644,10 +643,8 @@ class TestReadNameAndLabelsDirectly:
 
     def test_labels_decodes_non_ascii_bytes_with_replacement_char(self):
         """A label byte outside ASCII decodes via the ``replace``
-        error handler rather than raising — regression against
-        dropping or misspelling that handler, which is invisible on a
-        plain-ASCII label because the error-handling path is never
-        reached at all without a genuine decode error."""
+        error handler rather than raising; a plain-ASCII label never
+        reaches the handler, so only a non-ASCII byte tests it."""
         assert _labels(bytes([1, 0xFF]) + b"\x00", 0) == "�"
 
     def test_labels_of_an_empty_name_is_the_root_dot(self):
@@ -748,7 +745,7 @@ class TestCachesStartEmpty:
 
 
 class TestSectionParsingIsShared:
-    """#85: the three section accessors share one parse, and nothing
+    """The three section accessors share one parse, and nothing
     round-trips through `bytes(self)` to get at the message."""
 
     def response_with_all_three_sections(self) -> bytes:
@@ -798,7 +795,7 @@ class TestSectionParsingIsShared:
             first.answers[0].name = "mutated"  # type: ignore[misc]
 
     def test_pointer_into_the_header_is_rejected(self):
-        """Offsets are section-relative now; a pointer below the header
+        """Offsets are section-relative; a pointer below the header
         length cannot address anything real."""
         raw = struct.pack("!HHHHHH", 1, 0x8180, 1, 0, 0, 0) + b"\xc0\x02"
         with pytest.raises(InvalidFieldError) as excinfo:

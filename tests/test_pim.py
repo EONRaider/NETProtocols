@@ -927,11 +927,10 @@ class TestHelloCost:
 
     Each such option is where padding could start, so the parser must
     know whether only zero bytes follow it; rescanning the rest of the
-    body for that at every option made decode and :attr:`PIM.message`
-    quadratic (a 64 KB Hello took seconds). A wall-clock bound would be
-    flaky under coverage tracing and on slow runners, so the cost is
-    counted instead: the bytes the parser reads out of the body by
-    slicing and indexing must stay linear in its length.
+    body for that at every option would make decode and
+    :attr:`PIM.message` quadratic. The bytes the parser reads out of the
+    body by slicing and indexing are counted, and must stay linear in
+    its length.
     """
 
     COUNT = 16000

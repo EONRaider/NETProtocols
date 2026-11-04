@@ -2,12 +2,8 @@
 scripts under ``scripts/`` (``benchmark.py``, ``pyodide/check_in_pyodide.py``,
 ``extract_http_streams.py``).
 
-Stdlib only, and never imports netprotocols — each caller's own
-docstring explains why *that* independence matters (a benchmark or a
-Pyodide-import proof must not depend on the code it is measuring or
-proving works). Sharing this module between those callers does not
-compromise it: this file is standalone from netprotocols exactly like
-they are, it just isn't reimplemented three times over.
+Stdlib only, and never imports netprotocols, so the scripts that use
+it stay independent of the package they measure or check.
 """
 
 from __future__ import annotations

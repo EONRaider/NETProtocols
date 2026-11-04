@@ -62,10 +62,9 @@ then split that body without raising:
   which nothing in the message bounds reliably.
   It is not sized by Auth Data Len, which senders fill in two
   ways: the digest's own length, as RFC 4822 says, or that plus the
-  trailer's 4-byte header. BIRD 2.14 does each: the corpus's keyed-MD5
-  messages declare 20 for a 16-byte digest, its HMAC-SHA-256 ones 32
-  for a 32-byte digest. FRR's ripd has a switch between two keyed-MD5
-  lengths for the same reason (``auth-length rfc|old-ripd``).
+  trailer's 4-byte header. Implementations differ, and FRR's ripd has
+  a switch between the two keyed-MD5 lengths
+  (``auth-length rfc|old-ripd``).
 - :attr:`RIP.remainder` is what is left after the last whole entry
   when the message has no trailer: fewer than 20 bytes, which cannot be
   an entry.
@@ -192,7 +191,7 @@ def _check_width(owner: type, name: str, value: int, bits: int) -> None:
 
 @dataclass(frozen=True, slots=True)
 class RIPEntry:
-    """One route entry (RFC 2453 §4; RFC 1058 §3.1 for RIPv1).
+    """One route entry (RFC 2453 §4, RFC 1058 §3.1 for RIPv1).
 
     In a RIPv1 message the route tag, subnet mask and next hop must be
     zero; they are carried verbatim either way.
@@ -208,9 +207,9 @@ class RIPEntry:
         ``"0.0.0.0"`` means the sender itself.
     :param metric: Hop count, ``1``-``15``, or ``16`` for unreachable
         (infinity); carried as the 32-bit field it is on the wire.
-    :raises InvalidIPv4AddressError: an address is not dotted-decimal.
-    :raises InvalidFieldError: ``afi``, ``route_tag`` or ``metric`` does
-        not fit its field.
+    :raises InvalidIPv4AddressError: if an address is not dotted-decimal.
+    :raises InvalidFieldError: if ``afi``, ``route_tag`` or ``metric``
+        does not fit its field.
 
     ``bytes(entry)`` is the 20-byte on-wire entry, so ``RIP(...,
     body=b"".join(map(bytes, entries)))`` builds a message.
@@ -248,7 +247,8 @@ class RIPEntry:
     def afi_name(self) -> str:
         """Name the address family, e.g. ``"IP"``.
 
-        Falls back to ``"unknown (n)"`` for a family not named here.
+        Falls back to ``"unknown (n)"`` for a family not named here
+        (degrades, never raises).
         """
         return _AFI_NAMES.get(self.afi, f"unknown ({self.afi})")
 
@@ -303,7 +303,8 @@ class RIPAuthentication:
     def auth_type_name(self) -> str:
         """Name the authentication type, e.g. ``"Plain-text password"``.
 
-        Falls back to ``"unknown (n)"`` for a type not named here.
+        Falls back to ``"unknown (n)"`` for a type not named here
+        (degrades, never raises).
         """
         return _AUTH_TYPE_NAMES.get(
             self.auth_type, f"unknown ({self.auth_type})"
@@ -420,15 +421,16 @@ class RIP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the header and keep the rest of ``data`` as the body.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 4 bytes.
-        :raises InvalidFieldError: the version is not 1 or 2 (``field``
+        :param data: The buffer, starting at the Command byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 4 bytes.
+        :raises InvalidFieldError: if the version is not 1 or 2 (``field``
             ``"version"``, ``offset`` ``1``), or the command is 0
             (``field`` ``"command"``, ``offset`` ``0``).
         """
         command, version, reserved = cls._unpack_fixed(data)
         if version not in (1, 2):
-            # Checked here and not in __post_init__, as VXLAN's I flag
-            # is: a decoded message without one is most likely not RIP.
+            # Decode-only, like VXLAN's I flag: construction accepts any
+            # version.
             raise InvalidFieldError(
                 f"RIP version must be 1 or 2, got {version}",
                 protocol=cls,
@@ -462,7 +464,7 @@ class RIP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the header's 4 bytes plus the whole body.
+        """The whole message: the 4-byte header and the whole body.
 
         The body is the rest of the datagram: RIP is terminal.
         """
@@ -472,7 +474,8 @@ class RIP(Protocol):
     def command_name(self) -> str:
         """Name the command, e.g. ``"Response"``.
 
-        Falls back to ``"unknown (n)"`` for a command not named here.
+        Falls back to ``"unknown (n)"`` for a command not named here
+        (degrades, never raises).
         """
         return _COMMAND_NAMES.get(self.command, f"unknown ({self.command})")
 

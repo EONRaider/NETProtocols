@@ -33,7 +33,7 @@ from test_vrrp import ones_complement
 def checksum_cases():
     """Discover supported layers from real traffic, including new types.
 
-    No captured GRE header has its C bit set, so add that form explicitly.
+    The checksummed GRE form is added explicitly as well.
     Each case uses a fresh packet and payload, not the captured checksum.
     """
     seen = set()

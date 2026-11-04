@@ -10,14 +10,14 @@ Check Value — is protected by the SA's keys and algorithms, none of
 which is visible from the packet, so the remainder is kept as one
 opaque ``ciphertext`` field.
 
-This library has no cryptography and will not gain any, so it does not
-decrypt, verify, or even locate the trailer: where the ICV starts
+This library does not decrypt, verify, or even locate the trailer:
+where the ICV starts
 depends on the SA's algorithms, and the Pad Length and Next Header
 bytes are encrypted along with the payload unless the SA uses a
 confidentiality-free transform (e.g. NULL, RFC 2410; AES-GMAC, RFC 4543).
 Without the SA there is no way to tell where the ciphertext ends and
-the trailer begins, so the chain ends here —
-:meth:`ESP.next_protocol` returns ``None`` by design.
+the trailer begins, so the chain ends here:
+:meth:`ESP.next_protocol` returns ``None``.
 
 ``bytes(ESP.decode(x)) == x`` holds by construction: the two fixed
 fields are packed back and ``ciphertext`` is carried verbatim.
@@ -37,11 +37,11 @@ __all__ = ["ESP"]
 
 @dataclass(frozen=True, slots=True)
 class ESP(Protocol):
-    """An ESP packet (RFC 4303 §2): the cleartext SPI and sequence
-    number, then everything else as opaque bytes.
+    """An ESP packet (RFC 4303 §2).
 
-    ESP is a **dead end for the decode chain**, and that is correct
-    rather than a gap: :meth:`next_protocol` always returns ``None``.
+    The cleartext SPI and sequence number, then everything else as
+    opaque bytes. ESP ends the decode chain: :meth:`next_protocol`
+    always returns ``None``.
     The payload's protocol is named by the Next Header byte of the ESP
     trailer, which sits inside the protected region: encrypted unless
     the SA uses a confidentiality-free transform (e.g. NULL, RFC 2410;
@@ -75,6 +75,15 @@ class ESP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the ESP packet at the start of ``data``.
+
+        Past the 8-byte SPI and Sequence Number, this never raises: the
+        rest of ``data`` becomes :attr:`ciphertext`.
+
+        :param data: The buffer, starting at the SPI.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 8
+            bytes.
+        """
         spi, sequence_number = cls._unpack_fixed(data)
         return cls(
             spi=spi,
@@ -89,28 +98,35 @@ class ESP(Protocol):
 
     @property
     def header_len(self) -> int:
-        # The protected remainder is part of this layer, as an ICMP
-        # message's body is: the chain ends here with nothing left over.
+        """The whole message: the 8 fixed bytes and :attr:`ciphertext`.
+
+        The protected remainder is part of this layer, as an ICMP
+        message's body is: the chain ends here with nothing left over.
+        """
         return self._struct.size + len(self.ciphertext)
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """Always ``None``: ESP ends the decode chain by design.
+        """Return the class for the protected payload: always ``None``.
+
+        ESP ends the decode chain.
 
         The protocol of the protected payload is the trailer's Next
         Header field, which is encrypted unless the SA uses a
         confidentiality-free transform (e.g. NULL, AES-GMAC) and sits at an
         offset that only the SA's algorithms determine (RFC
-        4303 §2.4-2.8). Without the SA there is nothing to dispatch on,
-        so stopping here is the correct answer, not an unimplemented
-        one. ``registry`` is accepted for the uniform signature and
+        4303 §2.4-2.8). Without the SA there is nothing to dispatch on.
+        ``registry`` is accepted for the uniform signature and
         never consulted.
         """
         return None
 
     @property
     def spi_hex_str(self) -> str:
-        """The SPI as a hexadecimal string, e.g. ``"0x10000001"`` — the
-        form IPsec tooling (``ip xfrm``, tcpdump) prints it in."""
+        """The SPI as a hexadecimal string, e.g. ``"0x10000001"``.
+
+        That is the form IPsec tooling (``ip xfrm``, tcpdump) prints it
+        in.
+        """
         return hex_str(self.spi, 10)

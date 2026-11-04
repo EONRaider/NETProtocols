@@ -247,7 +247,7 @@ class TestOptionTLVs:
 
 
 class TestIPv6OptionValue:
-    """#96: `.value` decodes Router Alert and Jumbo Payload (RFC 2711
+    """`.value` decodes Router Alert and Jumbo Payload (RFC 2711
     §2.1, RFC 2675 §2); every other type, and malformed data on one of
     these two, degrades to `None` rather than raising."""
 
@@ -272,10 +272,10 @@ class TestIPv6OptionValue:
 
 
 class TestIPv6RoutingSegments:
-    """#96: `segments` decodes RH0 and Mobile IPv6's address list (RFC
-    2460 §4.4, RFC 6275 §6.4); RPL (routing_type 3) is deliberately
-    left undecoded (its addresses are compressed relative to the
-    enclosing packet's destination, context this accessor lacks)."""
+    """`segments` decodes RH0 and Mobile IPv6's address list (RFC
+    2460 §4.4, RFC 6275 §6.4); RPL (routing_type 3) is left undecoded
+    (its addresses are compressed relative to the enclosing packet's
+    destination, context this accessor lacks)."""
 
     def test_rh0_two_segments(self):
         reserved = b"\x00\x00\x00\x00"
@@ -387,10 +387,9 @@ class TestRegistryGating:
         hold but through a class of each family's own, and the IPv4-only
         numbers (OSPF), which the v6 table withholds.
 
-        Stated over the *built-in* registrations on a clean registry —
-        once third parties can register into ``ip.proto.v6`` directly
-        (#87) the live tables may legitimately differ by more, so the
-        invariant that matters is the one this library ships.
+        Stated over the *built-in* registrations on a clean registry:
+        a registration made directly into ``ip.proto.v6`` makes the live
+        tables differ by more.
         """
         from netprotocols._defaults import (
             FAMILY_SPECIFIC_NUMBERS,

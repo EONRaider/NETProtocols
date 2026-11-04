@@ -8,17 +8,16 @@ an inner tag whose EtherType is again a tag type, so
 ``next_protocol`` dispatches recursively and the chain walker sees one
 ``VLAN`` layer per tag.
 
-Following the house pattern (``IPv6`` stores ``version`` /
-``traffic_class`` / ``flow_label``, not the raw first word), the TCI
-bitfields are materialized as dataclass fields — ``pcp``, ``dei``,
-``vid`` — so serialization surfaces the semantic parts instead of an
-opaque integer. The packed 16-bit view remains available as the
-``tci`` property.
+The TCI bitfields are dataclass fields, ``pcp``, ``dei`` and ``vid``,
+as ``IPv6`` stores ``version`` / ``traffic_class`` / ``flow_label``
+rather than its raw first word, so serialization shows the parts. The
+packed 16-bit view is the ``tci`` property.
 
 The 2 bytes after the TCI are a Length/Type field like Ethernet's (a
 tagged IEEE 802.3 frame keeps its Length/Type field after the tag, so
 an LLC-encapsulated frame can be tagged too): an
-EtherType of 0x0600 or more dispatches as before, a value of 1500 or
+EtherType of 0x0600 or more dispatches through the ``ethertype`` table,
+a value of 1500 or
 less is an 802.3 Length followed by an 802.2 LLC header, and the
 undefined 1501-1535 end the walk. :attr:`VLAN.ethertype` holds the raw
 value either way. See :mod:`netprotocols.layer2.llc`.
@@ -97,6 +96,15 @@ class VLAN(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 4-byte VLAN tag at the start of ``data``.
+
+        Every TCI value splits into valid ``pcp``, ``dei`` and ``vid``
+        fields, so past the 4-byte tag this never raises.
+
+        :param data: The buffer, starting at the TCI.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            4-byte tag.
+        """
         tci, ethertype = cls._unpack_fixed(data)
         return cls(
             pcp=tci >> 13,
@@ -146,13 +154,18 @@ class VLAN(Protocol):
 
     @property
     def ethertype_name(self) -> str:
-        """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``."""
+        """Display name of the tagged payload's EtherType, e.g. ``"IPv4"``.
+
+        The hexadecimal value, e.g. ``"0x1234"``, for a type this
+        library does not name (degrades, never raises).
+        """
         return _ethertype_name(self.ethertype)
 
     @property
     def ethertype_enum(self) -> EtherType | None:
-        """The tagged payload's EtherType as an
-        :class:`~netprotocols.EtherType` (see
-        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate."""
+        """The payload's EtherType as an :class:`~netprotocols.EtherType`.
+
+        See :attr:`~netprotocols.Ethernet.ethertype_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
+        """
         return _ethertype_enum(self.ethertype)

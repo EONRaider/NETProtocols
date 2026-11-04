@@ -37,8 +37,8 @@ _METHODS = (None, "HEAD", "CONNECT", "GET")
 
 HTTP_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "http"
 
-#: Fixed rather than per-run, for the reasons fuzz_decode_frame.py gives:
-#: libFuzzer exits from C, so no Python cleanup would remove a fresh one.
+#: One fixed directory for every run, as in fuzz_decode_frame.py:
+#: libFuzzer exits from C, so no Python cleanup runs.
 SEED_DIR = Path(tempfile.gettempdir()) / "netprotocols-http-fuzz-seeds"
 
 

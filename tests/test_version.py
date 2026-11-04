@@ -2,9 +2,8 @@
 
 The version is written in three places: ``pyproject.toml`` (what PyPI
 publishes as), ``netprotocols.__version__`` (what a user reads at
-runtime), and the ``v*`` release tag. Nothing kept any pair of them in
-step, so a bump that missed one would ship a package whose metadata and
-``__version__`` disagree.
+runtime), and the ``v*`` release tag. A bump that misses one ships a
+package whose metadata and ``__version__`` disagree.
 
 The two in-tree copies are checked here, on every pull request. The tag
 cannot be checked here because it does not exist until release time —

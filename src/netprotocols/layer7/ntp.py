@@ -70,14 +70,14 @@ keeps it as a float.
 A conversion is only as meaningful as the value: chrony's client fills
 its request's Transmit Timestamp with random bits, which the server
 returns as the Origin Timestamp, so that it can match the answer
-without telling the server its clock (the corpus holds such requests).
+without telling the server its clock.
 
 After the header
 ----------------
 
 NTP has no length field: what follows the 48 bytes runs to the end of
 the UDP datagram, and the chain walk does not trim a frame to UDP's
-length (#235). So, like RIP, an NTP message keeps the whole buffer after
+length. So, like RIP, an NTP message keeps the whole buffer after
 its header as :attr:`NTP.body`, verbatim, ``bytes(NTP.decode(x)) == x``
 holds for every buffer decode accepts, and the accessors split the body
 without raising:
@@ -98,7 +98,7 @@ without raising:
   last extension field of a message without a MAC: the walk stops when
   what is left is exactly 4, 20 or 24 bytes, and reads that as the
   MAC. NTPv1-3 have no extension fields, and NTPv3's 12-byte DES
-  authenticator (RFC 1305 Appendix C) is read as a MAC too. No digest
+  authenticator (RFC 1305 §C) is read as a MAC too. No digest
   is verified: that needs the key.
 - :attr:`NTP.remainder`: anything else, which neither walks as
   extension fields nor has a MAC's length.
@@ -148,8 +148,7 @@ whatever its length. A strict ``decode_frame`` therefore raises on
 ``ntpq`` and ``ntpdc`` traffic to or from port 123. Walk it with
 ``decode_frame(frame, lax=True)``, which keeps Ethernet, IP and UDP and
 reports the rejection as ``stopped_by``, the UDP payload left
-undecoded. A typed way to take port 123 out of dispatch for one walk,
-and decoding mode 6, are planned follow-ups.
+undecoded.
 
 Construction checks only that each field fits its width, so a header
 with a version or mode decode rejects builds, and
@@ -196,7 +195,7 @@ _MIN_FIELD_LEN = 16
 #: AES-128-CMAC, RFC 8573) or a 20-byte one (SHA-1).
 _MAC_LENGTHS_V4 = frozenset({4, 20, 24})
 
-#: NTPv1-3 add RFC 1305 Appendix C's 12-byte DES authenticator.
+#: NTPv1-3 add RFC 1305 §C's 12-byte DES authenticator.
 _MAC_LENGTHS_V3 = _MAC_LENGTHS_V4 | {12}
 
 #: Leap Indicator meanings (RFC 5905 §7.3, Figure 9).
@@ -260,10 +259,14 @@ def _check_range(
 def _check_first_byte(owner: type, flags: int) -> None:
     """Raise :class:`InvalidFieldError` unless ``flags`` opens a time message.
 
-    The version must be 1-4, then the mode must not be 6 or 7. Checked
-    at decode and not in ``__post_init__``, as RIP's version is: a
-    message that fails either is most likely not NTP, or not a time
-    message.
+    The version must be 1-4, then the mode must not be 6 or 7. The
+    check is decode-only, like RIP's version check: construction accepts
+    any version and mode.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param flags: The message's first byte.
+    :raises InvalidFieldError: if the version is outside 1-4, or else
+        the mode is 6 or 7.
     """
     version, mode = (flags >> 3) & 0x07, flags & 0x07
     if not 1 <= version <= 4:
@@ -325,7 +328,7 @@ class NTPExtensionField:
     :param type: The 16-bit Field Type (see :attr:`type_name`).
     :param value: Everything after the 4-byte header that the Length
         covers, padding included, kept raw.
-    :raises InvalidFieldError: ``type`` does not fit 16 bits, or the
+    :raises InvalidFieldError: if ``type`` does not fit 16 bits, or the
         field would be longer than its 16-bit Length can say.
 
     ``bytes(field)`` writes the header, with a Length of
@@ -364,7 +367,7 @@ class NTPExtensionField:
         Private or Experimental Use, says so, such as chrony's
         ``"Private or Experimental Use (0xf323)"``; any other type not
         named here falls back to ``"unknown (0x0002)"``, in hex as the
-        registry writes types.
+        registry writes types (degrades, never raises).
         """
         name = _FIELD_TYPE_NAMES.get(self.type)
         if name is not None:
@@ -384,7 +387,7 @@ class NTPMAC:
     :param digest: The message digest, raw: 16 bytes for MD5 or
         AES-128-CMAC (RFC 8573), 20 for SHA-1, or none in a crypto-NAK.
         It is not verified.
-    :raises InvalidFieldError: ``key_id`` does not fit 32 bits.
+    :raises InvalidFieldError: if ``key_id`` does not fit 32 bits.
     """
 
     key_id: int
@@ -533,11 +536,12 @@ class NTP(Protocol):
         The first byte is judged before the length (see "Control
         messages are not decoded" in the module docstring).
 
-        :raises InvalidFieldError: the version is outside 1-4 (``field``
+        :param data: The buffer, starting at the LI/VN/Mode byte.
+        :raises InvalidFieldError: if the version is outside 1-4 (``field``
             ``"version"``), or else the mode is 6 or 7, a control
             message (``field`` ``"mode"``), at any length; ``offset``
             ``0`` for both.
-        :raises TruncatedHeaderError: ``data`` is empty, or its first
+        :raises TruncatedHeaderError: if ``data`` is empty, or its first
             byte passes and it is shorter than 48 bytes.
         """
         if data:
@@ -593,7 +597,7 @@ class NTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        """Return the header's 48 bytes plus the whole body.
+        """The whole message: the 48-byte header and the whole body.
 
         The body is the rest of the datagram: NTP is terminal.
         """
@@ -601,12 +605,20 @@ class NTP(Protocol):
 
     @property
     def leap_name(self) -> str:
-        """Describe the Leap Indicator, e.g. ``"no warning"``."""
+        """Describe the Leap Indicator, e.g. ``"no warning"``.
+
+        Every value construction accepts (0-3) has a name, so this never
+        raises.
+        """
         return _LEAP_NAMES[self.leap]
 
     @property
     def mode_name(self) -> str:
-        """Name the mode, e.g. ``"client"``."""
+        """Name the mode, e.g. ``"client"``.
+
+        Every value construction accepts (0-7) has a name, so this never
+        raises.
+        """
         return _MODE_NAMES[self.mode]
 
     @property
@@ -615,7 +627,8 @@ class NTP(Protocol):
 
         ``"unspecified or invalid"`` (0), ``"primary server"`` (1),
         ``"secondary server"`` (2-15), ``"unsynchronized"`` (16) or
-        ``"reserved"`` (17-255).
+        ``"reserved"`` (17-255); every stratum has a description, so
+        this never raises.
         """
         stratum = self.stratum
         if stratum == 0:

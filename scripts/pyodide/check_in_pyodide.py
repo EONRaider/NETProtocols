@@ -5,19 +5,13 @@ CPython — it assumes the WebAssembly build of CPython that Pyodide ships,
 mounted at ``/repo`` in Pyodide's virtual filesystem (see the ``.mjs``
 driver for how that mount happens).
 
-This is the real thing, not a simulation of it. ``scapy`` and ``dpkt``
-both fail to import under Pyodide because their POSIX-only stdlib
-imports (``fcntl``, pulled in unconditionally by scapy's Linux arch
-loader; see ``docs/CLAIMS.md`` 3.1 for the exact call sites) do not
-exist there — a fact that could quietly stop being true if a future
-Pyodide release starts shipping stub versions of them. So step one
-below re-asserts that the modules are still genuinely absent from
-*this* interpreter before trusting anything that follows; if that
-assertion ever fails, the job fails loudly instead of passing for the
-wrong reason. Step two then imports the built wheel (installed by the
-driver's Node-side setup) and decodes the entire real-capture corpus
-with it, proving the library does its actual job here, not just that
-``import netprotocols`` succeeds.
+``scapy`` and ``dpkt`` both fail to import under Pyodide because their
+POSIX-only stdlib imports (``fcntl``, pulled in unconditionally by
+scapy's Linux arch loader; see ``docs/CLAIMS.md`` 3.1 for the exact
+call sites) do not exist there. Step one asserts that those modules are
+absent from *this* interpreter, and fails the check if any is present.
+Step two imports the built wheel (installed by the driver's Node-side
+setup) and decodes the entire real-capture corpus with it.
 """
 
 from __future__ import annotations
@@ -91,7 +85,7 @@ def main() -> int:
             # Acceptable by contract (test_corpus.py's own rule for
             # the same corpus: ProtocolError does not count as a bug).
             protocol_errors += 1
-        except Exception as exc:  # the failure mode this job exists to catch
+        except Exception as exc:  # any other exception fails the check
             print(
                 "FAIL: a corpus frame raised something other than "
                 f"ProtocolError under Pyodide: {exc!r}"

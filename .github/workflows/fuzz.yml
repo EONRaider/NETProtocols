@@ -1,14 +1,8 @@
 name: Nightly fuzz
 
-# Separate from ci.yml on purpose: ci.yml is reused via workflow_call
-# by release.yml specifically so the release gate and the PR gate never
-# drift apart (see the comment at the top of ci.yml). Folding a
-# schedule trigger into it would fire that whole ladder on a cron too,
-# not just this exploratory job.
 on:
   schedule:
-    # Arbitrary; 03:00 UTC lands after most contributors' working day
-    # across common timezones, clear of any push/PR traffic.
+    # Daily at 03:00 UTC.
     - cron: "0 3 * * *"
   workflow_dispatch:
 
@@ -24,16 +18,10 @@ permissions:
   contents: read
 
 jobs:
-  # tests/test_fuzz.py's own "netprotocols" profile is deliberately
-  # derandomize=True at 200 examples, so CI has run the *same* 200
-  # inputs on every push since it was written. This job runs the whole
-  # suite under the "nightly" profile instead (10,000 examples, a real
-  # random seed each time — see tests/test_fuzz.py's module docstring),
-  # so it explores new ground every run rather than replaying the same
-  # counterexample search forever. Pinned to Python 3.12 only, unlike
-  # the "test" job's full matrix: this is an exploratory job, not a
-  # compatibility gate, and 3x the interpreters would 3x its cost for
-  # no extra coverage of what it is actually looking for.
+  # Runs the whole suite under tests/test_fuzz.py's "nightly" profile:
+  # 10,000 examples with a random seed each run (see tests/test_fuzz.py's
+  # module docstring), where the "netprotocols" profile CI uses runs
+  # the same 200 derandomized inputs every time. Python 3.12 only.
   fuzz:
     runs-on: ubuntu-latest
     steps:
@@ -41,12 +29,10 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version: "3.12"
-      # Keyed by run id with a prefix restore-key: a fixed key would
-      # restore forever but (actions/cache never overwrites an existing
-      # key) never actually save a new one, so nothing would
-      # accumulate. This restores the most recent run's cache and saves
-      # today's as a new entry, so Hypothesis's example database grows
-      # night over night instead of starting cold every time.
+      # Keyed by run id with a prefix restore-key: restores the most
+      # recent run's Hypothesis example database and saves this run's as
+      # a new entry (actions/cache never overwrites an existing key), so
+      # the database accumulates from run to run.
       - name: Restore accumulated Hypothesis examples
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -58,11 +44,8 @@ jobs:
         env:
           HYPOTHESIS_PROFILE: nightly
         run: uv run --frozen pytest
-      # A failed scheduled run already notifies repo watchers by
-      # default (GitHub's standard behavior) — that red run *is* the
-      # report; nothing here files an issue on top of it. This just
-      # makes the minimal counterexample recoverable without needing
-      # repo write access to re-run the job locally.
+      # On failure, uploads the example database, which holds the
+      # minimal counterexample.
       - name: Upload the failing example database
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -71,16 +54,10 @@ jobs:
           path: .hypothesis
           retention-days: 30
 
-  # Coverage-guided fuzzing of the same target, via Atheris rather than
-  # Hypothesis's example strategies above -- it drives decode_frame with
-  # libFuzzer's mutation engine instead of Hypothesis's, so it explores
-  # a different part of the input space. HTTP.decode gets a harness of
-  # its own because decode_frame never reaches it: HTTP is not
-  # port-dispatched. Pinned to Python 3.12 only,
-  # like the "fuzz" job above: Atheris hooks CPython internals directly
-  # and tends to lag new interpreter releases, so it isn't given the
-  # full 3.12/3.13/3.14 matrix the compatibility-gate "test" job in
-  # ci.yml runs.
+  # Coverage-guided fuzzing with Atheris: libFuzzer's mutation engine
+  # drives decode_frame, and HTTP.decode, which decode_frame never
+  # reaches (HTTP is not port-dispatched), through a harness of its
+  # own. Python 3.12 only.
   atheris:
     runs-on: ubuntu-latest
     steps:

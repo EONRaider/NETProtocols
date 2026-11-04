@@ -25,8 +25,10 @@ __all__ = ["ARP"]
 
 @dataclass(frozen=True, slots=True)
 class ARP(Protocol):
-    """An ARP packet for IPv4-over-Ethernet (the only binding this
-    library implements: 6-byte hardware, 4-byte protocol addresses).
+    """An ARP packet for IPv4-over-Ethernet.
+
+    That is the only binding this library implements: 6-byte hardware
+    and 4-byte protocol addresses.
 
     :param htype: Hardware type; ``1`` for Ethernet (see
         :class:`~netprotocols.ARPHardwareType`).
@@ -62,13 +64,23 @@ class ARP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the ARP packet at the start of ``data``.
+
+        No field is checked against the IPv4-over-Ethernet binding: the
+        fixed 28-byte layout is read whatever ``htype``, ``hlen`` and
+        ``plen`` hold.
+
+        :param data: The buffer, starting at the ARP header.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            28-byte packet.
+        """
         htype, ptype, hlen, plen, oper, sha, spa, tha, tpa = cls._unpack_fixed(
             data
         )
-        # The addresses below are generated here, from raw bytes, by
-        # bytes_to_mac()/bytes_to_ipv4() — they cannot fail the
-        # validators the constructor runs, so this builds the instance
-        # directly instead (see "Decode-path construction" in _base.py).
+        # bytes_to_mac()/bytes_to_ipv4() produce addresses that pass the
+        # constructor's validators, so the instance is built directly,
+        # without __post_init__ (see "Decode-path construction" in
+        # _base.py).
         header = object.__new__(cls)
         set_field = object.__setattr__
         set_field(header, "htype", htype)
@@ -97,7 +109,11 @@ class ARP(Protocol):
 
     @property
     def oper_name(self) -> str:
-        """Display name of the operation: ``"request"`` or ``"reply"``."""
+        """Display name of the operation: ``"request"`` or ``"reply"``.
+
+        ``"unknown (n)"`` for a value this library does not enumerate
+        (degrades, never raises).
+        """
         try:
             return ARPOperation(self.oper).display_name
         except ValueError:
@@ -105,10 +121,12 @@ class ARP(Protocol):
 
     @property
     def oper_enum(self) -> ARPOperation | None:
-        """The operation code as an :class:`~netprotocols.ARPOperation`,
-        or ``None`` for a value this library does not enumerate;
-        :attr:`oper` stays the canonical ``int`` (see :attr:`oper_name`
-        for the display form)."""
+        """The operation code as an :class:`~netprotocols.ARPOperation`.
+
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`oper` stays the canonical ``int`` (see
+        :attr:`oper_name` for the display form).
+        """
         try:
             return ARPOperation(self.oper)
         except ValueError:
@@ -116,14 +134,20 @@ class ARP(Protocol):
 
     @property
     def ptype_name(self) -> str:
-        """Display name of the protocol type, e.g. ``"IPv4"``."""
+        """Display name of the protocol type, e.g. ``"IPv4"``.
+
+        The hexadecimal value, e.g. ``"0x1234"``, for a type this
+        library does not name (degrades, never raises).
+        """
         return _ethertype_name(self.ptype)
 
     @property
     def ptype_enum(self) -> EtherType | None:
-        """The protocol type as an :class:`~netprotocols.EtherType` (see
-        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate."""
+        """The protocol type as an :class:`~netprotocols.EtherType`.
+
+        See :attr:`~netprotocols.Ethernet.ethertype_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
+        """
         return _ethertype_enum(self.ptype)
 
     @property
@@ -133,9 +157,11 @@ class ARP(Protocol):
 
     @property
     def htype_name(self) -> str:
-        """Display name of the hardware type, e.g. ``"Ethernet"``; falls
-        back to the numeric value for types this library does not
-        name."""
+        """Display name of the hardware type, e.g. ``"Ethernet"``.
+
+        ``"unknown (n)"`` for a type this library does not name
+        (degrades, never raises).
+        """
         try:
             return ARPHardwareType(self.htype).display_name
         except ValueError:
@@ -143,11 +169,12 @@ class ARP(Protocol):
 
     @property
     def htype_enum(self) -> ARPHardwareType | None:
-        """The hardware type as an
-        :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
-        this library does not enumerate; :attr:`htype` stays the
-        canonical ``int`` (see :attr:`htype_name` for the display
-        form)."""
+        """The hardware type as an :class:`~netprotocols.ARPHardwareType`.
+
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`htype` stays the canonical ``int`` (see
+        :attr:`htype_name` for the display form).
+        """
         try:
             return ARPHardwareType(self.htype)
         except ValueError:
@@ -155,14 +182,17 @@ class ARP(Protocol):
 
     @property
     def spa_address(self) -> IPv4Address:
-        """The sender protocol address as a stdlib
-        :class:`~ipaddress.IPv4Address`, for comparison, subnet
-        membership, and arithmetic; :attr:`spa` stays the canonical
-        string form."""
+        """The sender protocol address as an :class:`~ipaddress.IPv4Address`.
+
+        For comparison, subnet membership, and arithmetic; :attr:`spa`
+        stays the canonical string form.
+        """
         return IPv4Address(self.spa)
 
     @property
     def tpa_address(self) -> IPv4Address:
-        """The target protocol address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`spa_address`)."""
+        """The target protocol address as an :class:`~ipaddress.IPv4Address`.
+
+        See :attr:`spa_address`.
+        """
         return IPv4Address(self.tpa)

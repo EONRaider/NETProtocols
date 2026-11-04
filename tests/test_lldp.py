@@ -662,11 +662,9 @@ class TestDecodeCost:
     """LLDPDUs of thousands of 3-byte reserved TLVs.
 
     Small TLVs make the most of them per byte, the worst case for any
-    work the walk does per TLV over the rest of the buffer. A wall-clock
-    bound would be flaky on loaded, shared CI runners, so the cost is
-    measured instead, two ways, because of two such mistakes only one
-    can be counted: copying the whole buffer with ``bytes()`` calls the
-    ``__bytes__`` a :class:`bytes` subclass defines, but copying it
+    work the walk does per TLV over the rest of the buffer. The cost is
+    measured two ways: copying the whole buffer with ``bytes()`` calls
+    the ``__bytes__`` a :class:`bytes` subclass defines, but copying it
     through a :class:`memoryview` calls no Python code at all. So one
     test counts the bytes read, and the other traces with
     :mod:`tracemalloc` the peak memory decode allocates when a megabyte

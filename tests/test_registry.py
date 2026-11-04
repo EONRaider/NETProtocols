@@ -1,4 +1,4 @@
-"""The public dispatch registry (#87): registration, conflicts, table
+"""The public dispatch registry: registration, conflicts, table
 inheritance, and isolation from the process-wide default."""
 
 import pytest
@@ -168,7 +168,7 @@ class TestTableInheritance:
     def test_a_v6_override_is_not_clobbered_by_a_later_parent_write(
         self, registry
     ):
-        """Inheritance must not overwrite a deliberate child entry,
+        """Inheritance must not overwrite an explicit child entry,
         whichever order the two registrations arrive in."""
         registry.register(TABLE_IP_PROTO_V6, 253, OtherFake)
         registry.register(TABLE_IP_PROTO, 253, Fake)
@@ -230,8 +230,8 @@ class TestTableInheritance:
         the family-specific ones, whose v6 entry is the table's own."""
         # FAMILY_SPECIFIC_NUMBERS only describes the wiring, and the
         # comparison below trusts it: pinned literally, so widening it
-        # (and with it what this test allows) is a deliberate change
-        # here, not a side effect of editing _defaults.
+        # (and with it what this test allows) takes an edit here;
+        # editing _defaults alone does not.
         assert set(FAMILY_SPECIFIC_NUMBERS) == {51, 112}  # AH, VRRP
         registry = Registry()
         install(registry)
@@ -285,8 +285,8 @@ class TestIsolation:
         assert registry.get(TABLE_UDP_PORT, 53) is DNS
 
     def test_derive_is_the_decode_as_primitive(self):
-        """The shape #88 will spend: DNS read on a nonstandard port for
-        one caller, with the rest of the process unaffected."""
+        """DNS read on a nonstandard port for one caller, with the rest
+        of the process unaffected."""
         child = DEFAULT.derive({TABLE_UDP_PORT: {6969: DNS}})
         assert child.get_port(TABLE_UDP_PORT, 40000, 6969) is DNS
         assert DEFAULT.get_port(TABLE_UDP_PORT, 40000, 6969) is None
@@ -397,7 +397,7 @@ class TestRepr:
 
 class TestKeyRanges:
     """The LLC tables refuse a key their field cannot carry; the others
-    accept any key, ``ethertype`` included, as in 2.5.0."""
+    accept any key, ``ethertype`` included."""
 
     @pytest.mark.parametrize(
         "key",
@@ -406,8 +406,8 @@ class TestKeyRanges:
     def test_ethertype_accepts_any_key_as_2_5_0_did(self, registry, key):
         """GRE and SNAP read ``ethertype`` whatever the value, and RFC
         1701 assigns GRE Protocol Types 0x0004, 0x00FE and 0x0200; a
-        negative key or one past 0xFFFF is accepted, as it always was,
-        though no 16-bit field reaches it."""
+        negative key or one past 0xFFFF is accepted, though no 16-bit
+        field reaches it."""
         registry.register(TABLE_ETHERTYPE, key, Fake)
         assert registry.get(TABLE_ETHERTYPE, key) is Fake
 

@@ -1,14 +1,10 @@
 name: OSSF Scorecard
 
-# Separate from ci.yml, same reasoning as fuzz.yml and mutation.yml: ci.yml
-# is reused via workflow_call by release.yml, so folding a schedule trigger
-# into it would run this analysis on every release too, not just weekly.
 on:
   push:
     branches: [master]
   schedule:
-    # Arbitrary; weekly on Sundays, clear of fuzz.yml's and mutation.yml's
-    # daily 03:00/04:00 UTC slots.
+    # Weekly on Sundays at 05:00 UTC.
     - cron: "0 5 * * 0"
 
 concurrency:

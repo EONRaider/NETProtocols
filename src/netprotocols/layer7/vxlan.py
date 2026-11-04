@@ -17,10 +17,9 @@ FCS), so :meth:`VXLAN.next_protocol` names :class:`~netprotocols.Ethernet`
 unconditionally and the walk re-enters the ``ethertype`` table from the
 top: inner VLAN tags, ARP, IPv4 and IPv6 need no dispatch of their own.
 
-Only port 4789 is registered. Linux still gives a vxlan device
-``dstport`` 8472, the port it used before IANA assigned one, when
-``ip link add`` names none, so a capture from such a device needs the
-port named for the walk:
+Only port 4789 is registered. Linux gives a vxlan device ``dstport``
+8472 when ``ip link add`` names none, so a capture from such a device
+needs the port named for the walk:
 ``decode_frame(frame, decode_as={"udp.port": {8472: VXLAN}})``.
 
 Only the I flag (``0x08``) is defined; RFC 7348 requires it set for a
@@ -38,17 +37,15 @@ needs to send. The I-flag rule is decode-only, and
 without complaint, which ARCHITECTURE.md's round-trip guarantee
 allows for: it covers canonical headers, which this one is not.
 
-The rule is enforced on decode because the I flag is the decoder's one
-defence against a wrong guess. VXLAN is reached through ``udp.port``,
+The I-flag check is the only one that tells a VXLAN header from another
+datagram sent to port 4789. VXLAN is reached through ``udp.port``,
 which is best-effort (see :mod:`netprotocols.registry`), and an inner
-Ethernet header accepts any 14 bytes, so without the check every
-datagram that merely used port 4789 would decode as a tunnel holding a
-garbage frame. Requiring the flag diagnoses such a datagram about half
-the time; nothing in the header can do better without rejecting what
-the RFC says to ignore.
+Ethernet header accepts any 14 bytes. A datagram that is not VXLAN has
+the flag clear about half the time and raises; otherwise it decodes as
+a tunnel holding a garbage frame.
 
-The cost falls on a capture that really is VXLAN but has the flag
-clear. A strict :func:`~netprotocols.decode_frame` raises
+A capture that really is VXLAN but has the flag clear is rejected too.
+A strict :func:`~netprotocols.decode_frame` raises
 :class:`~netprotocols.InvalidFieldError` whose ``frame_offset`` is the
 VXLAN header's; a lax one keeps only the outer layers (Ethernet, IP,
 UDP) and reports the same error as ``stopped_by``. The inner frame
@@ -79,7 +76,7 @@ class VXLAN(Protocol):
 
     Construction accepts any value that fits each field, the I flag
     clear included; :meth:`decode` is stricter and rejects a header
-    without it (see the module docstring for why, and for decoding a
+    without it (see the module docstring, which also covers decoding a
     capture whose I flag is clear).
 
     :param flags: The flags byte. Only the I flag (:attr:`I_FLAG`,
@@ -144,16 +141,15 @@ class VXLAN(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte header at the start of ``data``.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 8 bytes.
-        :raises InvalidFieldError: the I flag is clear (``field`` is
+        :param data: The buffer, starting at the flags byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 8 bytes.
+        :raises InvalidFieldError: if the I flag is clear (``field`` is
             ``"flags"``, ``offset`` ``0``).
         """
         flags_word, vni_word = cls._unpack_fixed(data)
         flags = flags_word >> 24
         if not flags & cls.I_FLAG:
-            # Checked here and not in __post_init__: a constructed
-            # header may have the flag clear on purpose, but a decoded
-            # one without it is most likely not VXLAN at all.
+            # Decode-only: construction accepts a clear I flag.
             raise InvalidFieldError(
                 f"VXLAN I flag (0x08) must be set for a valid VNI "
                 f"(RFC 7348 §5), got flags {flags:#04x}",
@@ -179,7 +175,7 @@ class VXLAN(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The inner Ethernet frame this header carries.
+        """Return the class for the inner frame, always an Ethernet frame.
 
         VXLAN has no field naming its payload — it is always an Ethernet
         frame — so there is nothing for ``registry`` to select here. The

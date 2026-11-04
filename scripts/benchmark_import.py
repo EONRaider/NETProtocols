@@ -3,11 +3,9 @@
 
     uv run --group bench python scripts/benchmark_import.py
 
-Each library is timed in its own fresh subprocess — module caching
-makes re-importing within one process meaningless past the first call.
-Reports the fastest of ``--trials`` runs (a process is only ever slowed
-by scheduler noise, never sped up) alongside the module count each
-import pulled into ``sys.modules``. See docs/CLAIMS.md 1.4.
+Each library is timed in its own fresh subprocess, so every import is
+cold. Reports the fastest of ``--trials`` runs alongside the module
+count each import pulled into ``sys.modules``. See docs/CLAIMS.md 1.4.
 """
 
 from __future__ import annotations

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Capture an IGMP fixture for the corpus (plan item I-2).
+# Capture an IGMP fixture for the corpus.
 #
 #     sudo scripts/capture_fixtures_igmp.sh
 #
-# IGMP is IPv4 multicast group management — it never appeared in the
-# original corpus (which provoked IPv6 MLD, not IPv4 IGMP). Joining an
+# IGMP is IPv4 multicast group management. Joining an
 # IPv4 multicast group makes the kernel emit a membership report
 # (IGMPv2 type 0x16 or IGMPv3 type 0x22, depending on the host's
 # configured version); a querier on the LAN may also produce a
