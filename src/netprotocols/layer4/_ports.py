@@ -41,7 +41,7 @@ _TCP_APP_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_TCP_PORT)
 def udp_app_class(
     src_port: int, dst_port: int, registry: Registry | None = None
 ) -> type[Protocol] | None:
-    """The class that decodes a UDP payload, chosen by well-known port.
+    """Return the class that decodes a UDP payload, chosen by port.
 
     Returns ``None`` when neither port names a known application
     protocol — the common case, where the chain ends at UDP.
@@ -54,7 +54,7 @@ def udp_app_class(
 def tcp_app_class(
     src_port: int, dst_port: int, registry: Registry | None = None
 ) -> type[Protocol] | None:
-    """The class that decodes a TCP payload, chosen by well-known port.
+    """Return the class that decodes a TCP payload, chosen by port.
 
     DNS over TCP is length-prefixed (RFC 1035 §4.2.2), so port 53 names
     :class:`~netprotocols.DNSOverTCP` — a 2-byte length shim that then
