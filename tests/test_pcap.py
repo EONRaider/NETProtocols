@@ -6,10 +6,9 @@ pcapng coverage cannot: the corpus holds no pcapng captures, and the
 exotic ``if_tsresol`` cases in particular (nanosecond and non-default
 resolutions) essentially never occur in real traffic, which is
 overwhelmingly the tcpdump/Wireshark default (microseconds, or classic
-pcap). This file therefore hand-builds pcapng byte sequences instead —
-a deliberate, flagged exception to tests/fixtures/MANIFEST.md's
-real-capture rule, kept as small Python builders rather than binary
-fixture files so every byte is reviewable in the diff.
+pcap). This file hand-builds pcapng byte sequences instead — a
+flagged exception to tests/fixtures/MANIFEST.md's real-capture rule, as
+small Python builders, so every byte is readable in the source.
 """
 
 from __future__ import annotations
@@ -33,10 +32,8 @@ def _reference_read_pcap(data: bytes) -> list[bytes]:
     :mod:`netprotocols.pcap` (the module under test) — mirrors the
     same "standalone, so a shared bug can't cancel itself out"
     philosophy as scripts/benchmark.py and scripts/check_fixtures.py.
-    This is what tests/conftest.py's own private reader used to be
-    before #100; it lives here now, scoped to this one cross-check,
-    rather than as a general-purpose test helper other files reach
-    for (that's netprotocols.pcap.read_pcap's job now)."""
+    Scoped to this one cross-check; other tests read captures with
+    netprotocols.pcap.read_pcap."""
     magic = data[:4]
     if magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
         endian = ">"
@@ -56,11 +53,10 @@ def _reference_read_pcap(data: bytes) -> list[bytes]:
 
 # -- pcapng builders (little- and big-endian) --
 #
-# Deliberately independent of netprotocols.pcap's own implementation:
-# these pack blocks by hand from the wire format
-# (draft-ietf-opsawg-pcapng-03), so a bug shared between builder and
-# reader can't cancel itself out the way reusing the library under
-# test to build its own fixtures would risk.
+# Independent of netprotocols.pcap's own implementation: these pack
+# blocks by hand from the wire format (draft-ietf-opsawg-pcapng-03), so
+# a bug in the reader cannot cancel itself out in the fixtures it
+# reads.
 
 _SHB_MAGIC_LE = b"\x4d\x3c\x2b\x1a"
 _SHB_MAGIC_BE = b"\x1a\x2b\x3c\x4d"

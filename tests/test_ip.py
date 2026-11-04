@@ -199,9 +199,8 @@ class TestIPv6:
     @given(st.binary(min_size=16, max_size=16))
     def test_bytes_to_ipv6_matches_glibc(self, data):
         # bytes_to_ipv6 is a hand-rolled reimplementation of glibc's
-        # inet_ntop, kept for Pyodide portability (see _base.py) — this
-        # is what guarantees it stays byte-for-byte identical to the
-        # platform's own formatting instead of quietly drifting.
+        # inet_ntop (see _base.py), byte-for-byte identical to the
+        # platform's own formatting.
         assert bytes_to_ipv6(data) == socket.inet_ntop(socket.AF_INET6, data)
 
     @given(st.binary(min_size=16, max_size=16))
@@ -209,9 +208,8 @@ class TestIPv6:
         assert ipv6_to_bytes(bytes_to_ipv6(data)) == data
 
     def test_invalid_address_raises_oserror(self):
-        # ipv6_to_bytes wraps ipaddress.AddressValueError back into
-        # OSError so this stays the same failure mode socket.inet_pton
-        # raised before the ipaddress swap (see _base.py).
+        # ipv6_to_bytes raises OSError for a malformed address, as
+        # socket.inet_pton does (see _base.py).
         ip = IPv6(
             version=6,
             traffic_class=0,
@@ -299,7 +297,7 @@ class TestIPv4Options:
 
 
 class TestIPv4OptionValue:
-    """#96: `.value` decodes Record Route, Timestamp and Router Alert
+    """`.value` decodes Record Route, Timestamp and Router Alert
     (RFC 791 §3.1, RFC 2113); every other kind, and malformed data on
     one of these three, degrades to `None` rather than raising."""
 

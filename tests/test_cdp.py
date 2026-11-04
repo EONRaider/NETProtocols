@@ -59,8 +59,8 @@ IPV6_ENTRY = (
 #: Wireshark's names, copied from epan/dissectors/packet-cdp.c at commit
 #: 31bf085794733ece0436365ad3e0bbcc2292fc9a (gitlab.com/wireshark/wireshark,
 #: read 2026-10-28): ``type_vals``, and the ``hf_cdp_capabilities_*``
-#: fields' masks and names. Kept apart from cdp.py's tables so a change
-#: to one shows up as a failure here.
+#: fields' masks and names. Independent of cdp.py's tables, so a change
+#: to either shows up as a failure here.
 WIRESHARK_TLV_TYPE_NAMES = {
     0x0001: "Device ID",
     0x0002: "Addresses",
@@ -391,7 +391,7 @@ class TestWhereThePDUEnds:
 
     @staticmethod
     def malformed_frame(check_fixtures) -> bytes:
-        """Return the review's frame: a TLV, then 8 bytes no TLV fits.
+        """Return a frame of one TLV, then 8 bytes no TLV fits.
 
         Bytes 10-13 read as a TLV of type 0xFFFF and Length 0; the
         checksum is filled over all 18 bytes the 802.3 Length holds,
@@ -844,9 +844,8 @@ class _SliceCountingBytes(bytes):
 class TestDecodeCost:
     """A 64 KiB PDU of empty TLVs, and an address count of 2**32 - 1.
 
-    A wall-clock bound would be flaky under coverage tracing, so the
-    bytes read by slicing and indexing are counted instead: they must
-    stay linear in the input's length.
+    The bytes read by slicing and indexing are counted: they must stay
+    linear in the input's length.
     """
 
     COUNT = 16000

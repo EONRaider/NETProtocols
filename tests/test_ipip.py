@@ -241,8 +241,8 @@ class TestCorpusIPIP:
         assert protocols == [4, 4, 41, 41]
 
     def test_recomputed_checksums_match_the_wire(self):
-        # The inner checksums were verified by check_fixtures.py, which
-        # shares no code with this library. with_checksums() must reach
+        # check_fixtures.py, which shares no code with this library,
+        # verifies the inner checksums. with_checksums() must reach
         # the same values, which it only does if each transport keys on
         # the IP header nearest before it rather than the outer one.
         for frame in self.FRAMES:

@@ -344,7 +344,7 @@ class TestChainWalk:
 
 class TestDecodePathValidation:
     """The decoder does not re-validate strings it generated itself,
-    but every public constructor still does (#84)."""
+    but every public constructor still does."""
 
     def spy_on(self, module, name):
         """Replace a compiled regex with a spy that fails if used."""
@@ -415,9 +415,8 @@ class TestDecodePathValidation:
             )
 
     def test_http_decode_runs_no_construction_check(self):
-        """decode() parses once and builds the instance from that parse;
-        the construction check re-parsing head + raw_body would double
-        the cost of every decode."""
+        """decode() parses once and builds the instance from that parse,
+        without the construction check that re-parses head + raw_body."""
         from unittest import mock
 
         from netprotocols.layer7 import http

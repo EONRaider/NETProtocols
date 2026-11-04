@@ -1,13 +1,12 @@
 """Tests that documented facts about the corpus match the corpus.
 
-`ARCHITECTURE.md` claimed "93 frames across 16 scenarios" long after the
-corpus reached 97 across 17, because three separate files each restated
-the figure and only one was updated. ARCHITECTURE.md now defers to the
-MANIFEST; these tests hold the two statements that remain — the
-MANIFEST's own, and the README's — against the fixtures themselves.
+The corpus's frame and scenario counts are stated in two places, the
+MANIFEST and the README; these tests hold both against the fixtures
+themselves, and check that ARCHITECTURE.md points at the MANIFEST
+instead of restating them.
 
-`test_corpus.py` already gates on the corpus being large enough; what it
-cannot catch is prose drifting away from it.
+`test_corpus.py` gates on the corpus being large enough; these tests
+catch prose drifting away from it.
 """
 
 import doctest
@@ -73,10 +72,10 @@ class TestCorpusFiguresInDocs:
         )
 
     def test_architecture_does_not_restate_the_counts(self) -> None:
-        """Only the MANIFEST and README should carry the figures.
+        """Only the MANIFEST and README carry the figures.
 
-        A third copy is what drifted last time, so this fails rather
-        than inviting someone to re-add one and keep it in sync by hand.
+        ARCHITECTURE.md points at the MANIFEST; a copy of the counts
+        there fails.
         """
         stale = re.search(
             r"\d+ frames across \d+\s+scenarios", ARCHITECTURE.read_text()
@@ -113,7 +112,7 @@ class TestCorpusFiguresInDocs:
         ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:
-        """The layout map went stale by omission, not by wrong values."""
+        """ARCHITECTURE.md's layout map names every shipped module."""
         assert module in ARCHITECTURE.read_text(), (
             f"ARCHITECTURE.md's layout map does not mention {module}, "
             f"which ships in src/netprotocols/"
@@ -121,10 +120,9 @@ class TestCorpusFiguresInDocs:
 
 
 class TestReadmeRoadmap:
-    """The README's Roadmap section listed eight items tracked by #67 —
-    all of which had shipped in 1.3.0, with #67 itself closed. Presenting
-    finished work as planned is the front page's version of the drift
-    ARCHITECTURE.md had, and the cause was the same: a copied list."""
+    """The README's Roadmap section points at the open roadmap issue
+    and restates no planned or shipped work: a copied list of tracked
+    items drifts from the tracker."""
 
     def test_does_not_point_at_the_superseded_roadmap(self) -> None:
         assert "issues/67" not in README.read_text(), (
@@ -132,8 +130,8 @@ class TestReadmeRoadmap:
         )
 
     def test_points_at_the_current_roadmap(self) -> None:
-        """#170 is the open roadmap; #107, the one before it, is closed
-        and may only appear as history."""
+        """The open roadmap issue leads the section; the closed one
+        before it may only follow, as history."""
         roadmap = _readme_section("Roadmap")
         assert "issues/170" in roadmap, (
             "README's Roadmap section should point at the current tracker "
@@ -145,9 +143,8 @@ class TestReadmeRoadmap:
         )
 
     def test_does_not_restate_the_current_tiers(self) -> None:
-        """#170's tiers and their target versions live in the issue; a
-        copy here drifts the moment a tier moves, as they all did when
-        2.3.0 shipped HTTP outside them."""
+        """The open roadmap's tiers and their target versions live in
+        the issue; the section links none of the tier issues."""
         roadmap = _readme_section("Roadmap")
         for tier in range(171, 176):
             assert f"issues/{tier}" not in roadmap, (
@@ -156,7 +153,7 @@ class TestReadmeRoadmap:
             )
 
     def test_does_not_relist_shipped_work_as_planned(self) -> None:
-        """The 1.3.0 items must not reappear as upcoming."""
+        """The section links none of the items that shipped in 1.3.0."""
         text = README.read_text()
         roadmap = text[text.index("## Roadmap") : text.index("## Contributing")]
         for shipped in ("issues/59", "issues/60", "issues/61", "issues/66"):
@@ -244,10 +241,9 @@ class TestRegisterExample:
 
     README.md, ARCHITECTURE.md and docs/CLAIMS.md show one each, and
     registry.py's docstrings three. Each must claim a key no built-in
-    decoder holds, or it raises RegistryConflictError: the EtherType
-    was 0x8847 until MPLS shipped (#187), and is now 0x88B5, IEEE 802's
-    Local Experimental EtherType; the IP protocol is 253, reserved for
-    experimentation (RFC 3692).
+    decoder holds, or it raises RegistryConflictError: the EtherType is
+    0x88B5, IEEE 802's Local Experimental EtherType, and the IP protocol
+    253, reserved for experimentation (RFC 3692).
     """
 
     @pytest.mark.parametrize(

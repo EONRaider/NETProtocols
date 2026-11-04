@@ -1,9 +1,8 @@
 """Checksum computation and verification, held to the wire by the
 real-capture corpus: every checksummed inbound frame must recompute to
-its captured value. SCTP's CRC32c is tested here too, not in
-test_sctp.py, because this file is in the mutation audit's test
-selection (pyproject.toml's [tool.mutmut]); so are CDP's checksum and
-STUN's FINGERPRINT."""
+its captured value. This file is in the mutation audit's test
+selection (pyproject.toml's [tool.mutmut]), so it also tests SCTP's
+CRC32c, CDP's checksum and STUN's FINGERPRINT."""
 
 import hashlib
 import hmac
@@ -368,8 +367,8 @@ def hex_id(value):
 def cdp_oracle(data: bytes) -> int:
     """Return CDP's checksum of ``data``, built as Wireshark builds it.
 
-    Written out here, not taken from the library, and in the form of
-    epan/dissectors/packet-cdp.c rather than lldpd's: an odd PDU gets a
+    Independent of the library, in the form of
+    epan/dissectors/packet-cdp.c (not lldpd's): an odd PDU gets a
     last word whose high byte is 0 and low byte the final byte, and when
     that byte has its high bit set both bytes of the word are
     decremented. The words are then summed as RFC 1071 sums them.
@@ -609,8 +608,8 @@ class TestVRRPChecksum:
         """Return ``0x0000`` for a message whose checksum is zero.
 
         VRRP has no UDP-style ``0x0000 → 0xFFFF`` substitution. The last
-        authentication-data word of this VRRPv2 message was chosen to
-        make its checksum zero.
+        authentication-data word of this VRRPv2 message makes its
+        checksum zero.
         """
         raw = bytes.fromhex("2133c802010100000a0914330a0914346e702d767272caf6")
         assert ones_complement(raw) == 0x0000
@@ -638,7 +637,7 @@ class TestVRRPChecksum:
                 try:
                     corrupted = VRRP.decode(bytes(flipped))
                 except ProtocolError:
-                    continue  # a flipped version or count no longer decodes
+                    continue  # a flipped version or count does not decode
                 assert not verify(corrupted, ip=ip), (index, position)
 
     def test_with_checksums_fills_both_families(self):
@@ -729,7 +728,7 @@ class TestGREChecksum:
 
 
 def _rfc1071(data: bytes) -> int:
-    """The internet checksum, written here rather than taken from the
+    """The internet checksum, written here independently of the
     module under test."""
     data += b"\x00" * (len(data) % 2)
     total = sum(int.from_bytes(data[i : i + 2]) for i in range(0, len(data), 2))
@@ -902,8 +901,7 @@ class TestChecksumRules:
 
     def test_tcp_legitimately_computes_zero(self):
         """The substitution is UDP-only: for TCP a raw result of 0x0000
-        must be returned as-is (regression against misplacing the rule
-        in the shared primitive)."""
+        is returned as-is: the shared primitive does not substitute."""
         base = TCP(
             src_port=1,
             dst_port=2,
@@ -960,9 +958,9 @@ class TestChecksumRules:
     )
     def test_pseudo_header_layers_require_ip(self, layer):
         """Every pseudo-header layer's missing-``ip`` error names its
-        own class — regression against `compute`'s ICMPv6/TCP/UDP arms
-        losing track of which layer asked (each passes `layer` through
-        to `_require_ip`, which only uses it to build this message)."""
+        own class: `compute`'s ICMPv6/TCP/UDP arms each pass `layer`
+        through to `_require_ip`, which only uses it to build this
+        message."""
         with pytest.raises(InvalidFieldError) as excinfo:
             compute(layer)
         err = excinfo.value
@@ -988,9 +986,9 @@ class TestChecksumRules:
         assert str(err) == "Ethernet has no checksum field to compute"
 
     def test_compute_payload_defaults_to_empty_bytes(self):
-        """`compute`'s ``payload`` parameter defaults to ``b""`` —
-        regression against a corrupted default silently changing every
-        checksum computed without an explicit payload."""
+        """`compute`'s ``payload`` parameter defaults to ``b""``, so a
+        checksum computed without an explicit payload covers no bytes
+        past the layer."""
         icmp = ICMPv4(type=8, code=0, checksum=0, rest=b"\x00" * 4)
         assert compute(icmp) == compute(icmp, payload=b"")
 
@@ -1489,16 +1487,17 @@ class TestLSAChecksum:
         assert not verify_lsa(changed)
 
 
-# --- IPv6 Routing headers: the final destination (#236, RFC 8200 §8.1) ---
+# --- IPv6 Routing headers: the final destination (RFC 8200 §8.1) ---
 #
-# These live here, not in a file of their own, because this file is in the
-# mutation audit's test selection (pyproject.toml's [tool.mutmut]): a test
-# elsewhere never reaches the mutants of ``_pseudo_ip``, ``compute`` or
-# ``verify``. Every expected checksum is computed by :func:`ref_checksum`,
-# a stdlib-only ones'-complement sum written here from RFC 8200 §8.1 and
-# RFC 1071, sharing no code with ``netprotocols.checksum``. ``ISSUE_FRAME``
-# is the issue's reproduction frame, whose wire checksum (0x2fad) was
-# computed the same independent way before the fix existed.
+# This file is in the mutation audit's test selection (pyproject.toml's
+# [tool.mutmut]), so these tests reach the mutants of ``_pseudo_ip``,
+# ``compute`` and ``verify``; a test elsewhere does not. Every expected
+# checksum is computed by :func:`ref_checksum`, a stdlib-only
+# ones'-complement sum written here from RFC 8200 §8.1 and RFC 1071,
+# sharing no code with ``netprotocols.checksum``. ``ISSUE_FRAME`` is a UDP
+# datagram behind a Segment Routing Header with one segment left; its
+# wire checksum, 0x2fad, is :func:`ref_checksum`'s value for the final
+# destination.
 
 RT_SRC = "2001:db8::1"
 RT_NEXT_HOP = "2001:db8::2"
@@ -1836,7 +1835,7 @@ class TestRoutingEveryTransport:
 class TestRoutingFallsBackToIpDst:
     def test_segments_left_zero_uses_ip_dst(self):
         # The last hop: ip.dst IS the final destination, while the
-        # list's final entry deliberately differs, to pin the `> 0`.
+        # list's final entry differs from it, which pins the `> 0`.
         for routing in (
             routing_srh(["2001:db8::77", RT_FINAL], 0),
             routing_type0(["2001:db8::77"], 0),
@@ -2037,12 +2036,12 @@ class TestRoutingWhichHeader:
         )
 
 
-# --- The independent checker follows the route too (#259) ---
+# --- The independent checker follows the route too ---
 #
 # scripts/check_fixtures.py resolves the final destination with code of
 # its own, so each frame above must pass it as it passes the library,
-# and the same frame summed for the wire Destination Address (what both
-# did before #236 and #259) must fail it.
+# and the same frame summed for the wire Destination Address must fail
+# it.
 
 CHECKER = Path(__file__).resolve().parent.parent / "scripts/check_fixtures.py"
 
@@ -2129,7 +2128,7 @@ class TestRoutingIndependentChecker:
 
     def test_the_issue_frame(self, check_fixtures):
         assert self.check(check_fixtures, ISSUE_FRAME) == []
-        # 0x3044: the issue's value for the wire Destination Address.
+        # 0x3044: the checksum summed for the wire Destination Address.
         tampered = ISSUE_FRAME[:-4] + b"\x30\x44" + ISSUE_FRAME[-2:]
         assert self.check(check_fixtures, tampered) == ["udp6-checksum"]
 
@@ -2404,8 +2403,8 @@ class TestSTUNFingerprint:
 
     def test_a_length_that_breaks_the_walk_fails(self):
         """XOR-MAPPED-ADDRESS's Length 8 -> 12: the walk ends at the
-        next attribute, short of the FINGERPRINT, which used to read as
-        a message without one."""
+        next attribute, short of the FINGERPRINT, and the message does
+        not verify as one without a FINGERPRINT."""
         message = self.corrupt(20 + 3, 0x04)
         with pytest.raises(InvalidFieldError):
             _ = message.parsed_attributes
@@ -2441,9 +2440,7 @@ class TestSTUNFingerprint:
         still catches both.
 
         Over the eleven, 181 of the 7,392 flips verify: the 176 type
-        flips and 5 cut-offs. Before presence was read from more than
-        the walk, 858 did: 493 in the attributes before the
-        FINGERPRINT, 165 in its Length, 24 in the header and the 176.
+        flips and 5 cut-offs.
         """
         message = STUN_FINGERPRINTED[index]
         raw = bytes(message)
@@ -2507,8 +2504,8 @@ class TestSTUNFingerprint:
         assert second.next_protocol() is None
 
     def test_with_checksums_keeps_the_bgp_chain(self):
-        """BGP records the same; it has no checksum to fill and was
-        never rebuilt, and still names each next message."""
+        """BGP records the same; it has no checksum to fill, is never
+        rebuilt, and still names each next message."""
         frame = pcap_frames(FIXTURES / "bgp.pcap")[4]
         packet = decode_frame(frame)
         chain = [x.next_protocol() for x in packet.layers]

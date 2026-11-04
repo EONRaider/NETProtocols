@@ -195,7 +195,7 @@ class TestLinkLayerPadding:
         """A sender bug the walk cannot see past: the final chunk's
         missing padding (RFC 9260 §3.2) is filled from the link layer's
         zeros, so the decoded packet is three bytes longer than the one
-        sent, and its CRC no longer matches."""
+        sent, and its CRC does not match."""
         unpadded = SCTP.decode(bytes(make_sctp(chunk(0, 3, b"x")))[:17])
         assert unpadded.header_len == 17  # a 5-byte DATA chunk, unpadded
         sent = bytes(replace(unpadded, checksum=compute(unpadded)))

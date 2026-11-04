@@ -285,9 +285,8 @@ class TestDispatch:
 
 
 class TestWalk:
-    """The design question in #180: does the walker re-enter the
-    ``ethertype`` table cleanly from a non-``Ethernet`` layer? It does,
-    with no walker change — ``VXLAN.next_protocol()`` returns the
+    """The walker re-enters the ``ethertype`` table from a
+    non-``Ethernet`` layer: ``VXLAN.next_protocol()`` returns the
     ``Ethernet`` class, and the walk decodes it like any other layer."""
 
     def test_ipv4_udp_vxlan_ethernet_ipv4_end_to_end(self):
@@ -544,8 +543,8 @@ class TestCorpusVXLAN:
         assert checksums[7:] == [0] * 4
 
     def test_recomputed_checksums_match_the_wire(self):
-        # The inner checksums were verified by check_fixtures.py, which
-        # shares no code with this library. with_checksums() must reach
+        # check_fixtures.py, which shares no code with this library,
+        # verifies the inner checksums. with_checksums() must reach
         # the same values, which it only does if each transport keys on
         # the IP header nearest before it, inner or outer.
         for frame, packet in zip(self.FRAMES, self.packets(), strict=True):
