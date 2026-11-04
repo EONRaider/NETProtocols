@@ -44,8 +44,11 @@ files, reported as "no match in N files". A check whose file is
 missing fails rather than passing, and any failed check makes the cell
 FAILED and the script exit 1. So does a scapy ``config.py`` that is
 missing or does not parse, or in which ``class Conf`` does not assign
-``load_layers`` exactly once, as a non-empty list of string literals:
-the run then stops before printing either table.
+``load_layers`` exactly once, as a non-empty list of string literals,
+or which names ``load_layers`` anywhere else, except as an attribute
+that is an operand of a comparison (``m in Conf.load_layers``) or whose
+``remove`` method is called (``Conf.load_layers.remove(m)``): the run
+then stops before printing either table.
 
 The second table lists the protocols all three releases decode and
 netprotocols does not: every one of dpkt's modules and pypacker's
@@ -636,13 +639,20 @@ def scapy_loaded_layers(root: Path) -> set[str]:
     names are those of the one statement in the top-level ``class Conf``
     that binds ``load_layers``, an assignment with or without an
     annotation whose value is a list display of string literals.
+    Elsewhere in the module, ``load_layers`` may appear only as an
+    attribute that is an operand of a comparison or whose ``remove``
+    method is called, neither of which can add a name.
 
     :param root: the scapy package directory.
     :raises Unreadable: if ``config.py`` is missing or does not parse,
         if it has no top-level ``class Conf`` or more than one, if
         ``Conf`` binds ``load_layers`` in no statement or in more than
-        one, or if that statement is not an assignment of a non-empty
-        list whose every element is a string literal.
+        one, if that statement is not an assignment of a non-empty list
+        whose every element is a string literal, or if any other node
+        names ``load_layers`` (a name, an attribute, a function, class
+        or argument name, an import alias, a keyword argument or the
+        string constant ``"load_layers"``) other than such a comparison
+        operand or ``remove`` call.
     """
     text = read(root, "config.py")
     if text is None:
@@ -694,7 +704,78 @@ def scapy_loaded_layers(root: Path) -> set[str]:
             f"FAILED config.py: line {statement.lineno}: `Conf.load_layers` "
             "is not assigned a non-empty list of string literals"
         )
+    _reject_other_references(tree, statement)
     return set(names)
+
+
+def _reject_other_references(tree: ast.Module, declaration: ast.stmt) -> None:
+    """Raise if any node but the declaration's targets names ``load_layers``.
+
+    A node names it when one of its fields is the string
+    ``"load_layers"``: a name, an attribute, a function, class or
+    argument name, an import alias, a keyword argument or a string
+    constant. Two readers are let through, an attribute load that is
+    an operand of a comparison (``m in Conf.load_layers``) and one whose
+    ``remove`` method is called (``Conf.load_layers.remove(m)``).
+
+    :param tree: the parsed ``config.py``.
+    :param declaration: the statement in ``class Conf`` that binds
+        ``load_layers``.
+    :raises Unreadable: if any other node names ``load_layers``.
+    """
+    parents = {
+        child: node
+        for node in ast.walk(tree)
+        for child in ast.iter_child_nodes(node)
+    }
+    targets = set(map(id, _targets(declaration)))
+    for node in ast.walk(tree):
+        if id(node) in targets or not _names_load_layers(node):
+            continue
+        if _is_compare_or_remove(node, parents):
+            continue
+        raise Unreadable(
+            f"FAILED config.py: line {getattr(node, 'lineno', '?')}: "
+            "`load_layers` is named outside its declaration in `class Conf`"
+        )
+
+
+def _names_load_layers(node: ast.AST) -> bool:
+    """Return whether one of ``node``'s fields is the string ``"load_layers"``.
+
+    :param node: any node of the tree.
+    """
+    for _, value in ast.iter_fields(node):
+        values = value if isinstance(value, list) else [value]
+        if "load_layers" in values:
+            return True
+    return False
+
+
+def _is_compare_or_remove(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> bool:
+    """Return whether ``node`` is an attribute load only compared or shrunk.
+
+    That is an ``ast.Attribute`` in load context that is an operand of
+    an ``ast.Compare``, or the object of an ``X.load_layers.remove(...)``
+    call.
+
+    :param node: a node that names ``load_layers``.
+    :param parents: each node of the tree mapped to its parent.
+    """
+    if not (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)):
+        return False
+    parent = parents.get(node)
+    if isinstance(parent, ast.Compare):
+        return True
+    return (
+        isinstance(parent, ast.Attribute)
+        and parent.attr == "remove"
+        and parent.value is node
+        and isinstance(call := parents.get(parent), ast.Call)
+        and call.func is parent
+    )
 
 
 def _targets(statement: ast.stmt) -> list[ast.expr]:

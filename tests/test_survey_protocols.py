@@ -85,6 +85,17 @@ READABLE = {
         ),
         {"bluetooth", "dns", "tls.all"},
     ),
+    "ipv6-remove-block": (
+        DECLARATION
+        + "\r\n"
+        + "if not Conf.ipv6_enabled:\r\n"
+        + '    log_scapy.warning("IPv6 support disabled in Python. '
+        + 'Cannot load Scapy IPv6 layers.")\r\n'
+        + '    for m in ["inet6", "dhcp6", "sixlowpan"]:\r\n'
+        + "        if m in Conf.load_layers:\r\n"
+        + "            Conf.load_layers.remove(m)\r\n",
+        {"bluetooth", "dns", "tls.all"},
+    ),
 }
 
 
@@ -160,6 +171,46 @@ UNREADABLE = {
     "bytes-element": (
         DECLARATION.replace("'dns'", "b'dns'"),
         "is not assigned a non-empty list",
+    ),
+    "conditional-rebind": (
+        DECLARATION
+        + "    if EXTRA:\r\n"
+        + "        load_layers = load_layers + ['sctp']\r\n",
+        "line 8: `load_layers` is named outside its declaration",
+    ),
+    "append-in-conf": (
+        DECLARATION + "    load_layers.append('sctp')\r\n",
+        "line 7: `load_layers` is named outside its declaration",
+    ),
+    "property-override": (
+        DECLARATION
+        + "    @property\r\n"
+        + "    def load_layers(self):\r\n"
+        + "        return ['sctp']\r\n",
+        "line 8: `load_layers` is named outside its declaration",
+    ),
+    "module-append": (
+        DECLARATION + "Conf.load_layers.append('sctp')\r\n",
+        "line 7: `load_layers` is named outside its declaration",
+    ),
+    "module-assign": (
+        DECLARATION + "Conf.load_layers = ['sctp']\r\n",
+        "line 7: `load_layers` is named outside its declaration",
+    ),
+    "instance-append": (
+        DECLARATION + "conf = Conf()\r\nconf.load_layers.append('sctp')\r\n",
+        "line 8: `load_layers` is named outside its declaration",
+    ),
+    "setattr": (
+        DECLARATION + "setattr(Conf, 'load_layers', ['sctp'])\r\n",
+        "line 7: `load_layers` is named outside its declaration",
+    ),
+    "subclass-override": (
+        DECLARATION
+        + "class Outer:\r\n"
+        + "    class Conf(Conf):\r\n"
+        + "        load_layers = ['sctp']\r\n",
+        "line 9: `load_layers` is named outside its declaration",
     ),
 }
 
