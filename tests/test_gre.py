@@ -1,4 +1,4 @@
-"""GRE decoding: the flags-driven optional fields, EtherType-based
+"""GRE decoding, covering the flags-driven optional fields, EtherType-based
 payload dispatch, and the IP protocol-47 wiring."""
 
 import struct
