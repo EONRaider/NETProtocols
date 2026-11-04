@@ -51,39 +51,42 @@ Requires Python 3.12+. Fully typed (`py.typed`, mypy strict).
 
 ## Why NETProtocols
 
-Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 293 frames of
-real captured traffic the corpus held at 2.6.0 (CPython 3.12.3, x86-64
-Linux; re-measured for 2.6.0 on 2026-10-28 — see
+Measured against `dpkt 1.9.8` and `scapy 2.8.0` on the 379 frames of
+real captured traffic the corpus held at 2.7.0 (CPython 3.12.12, x86-64
+Linux; re-measured for 2.7.0 on 2026-11-04 — see
 [docs/CLAIMS.md](docs/CLAIMS.md) for every number below, its
 reproduction command, and its caveats):
 
-- **3.4× faster than scapy on decode; dpkt is 1.3× faster** —
+- **3.4× faster than scapy on decode; dpkt is 1.4× faster** —
   `uv run --group bench python scripts/benchmark.py --compare`. dpkt is
   the faster of the two comparators. The routing captures 2.5.0 added
   (OSPF, BGP, PIM, RIP, VRRP) are where it pulls ahead, taking about
-  two thirds of netprotocols' time on them. On the 140 frames the
-  corpus held at 2.4.0 the two are no longer within 10% of each other:
-  dpkt is ahead there by a median 1.14× across runs. On the MPLS and
-  LLC/SNAP captures 2.6.0 added they are level; dpkt leaves LLDP
-  undecoded, so it is about 5× faster on those six frames. Narrowing
+  three fifths of netprotocols' time on them. On the 140 frames the
+  corpus held at 2.4.0 dpkt is ahead by a median 1.12× across runs. On
+  the MPLS and LLC/SNAP captures 2.6.0 added they are level; dpkt
+  leaves LLDP undecoded, so it is about 5× faster on those six frames,
+  and it stops at UDP on the TFTP, RADIUS, STUN, NTP and HSRP captures
+  2.7.0 added, where it is about 1.5× faster. Narrowing
   the gap is
   [#250](https://github.com/EONRaider/NETProtocols/issues/250). The gap
   moves both ways as this library and dpkt each change, and this file's
   job is to say so honestly rather than only when it's flattering.
-- **Decodes further into the stack than dpkt on 94 of those 293
-  frames** — BGP, RIP, LLDP, DNS, DHCP and VXLAN-tunnelled payloads
-  that dpkt leaves as raw bytes, and 802.1Q tags, MPLS label stacks and
+- **Decodes further into the stack than dpkt on 153 of those 379
+  frames** — BGP, RIP, LLDP, DNS, DHCP, NTP, RADIUS, STUN, HSRP, TFTP
+  and VXLAN-tunnelled payloads that dpkt leaves as raw bytes (dpkt
+  ships decoders for several of them, but its UDP never dispatches on
+  a port), and 802.1Q tags, MPLS label stacks and
   SNAP headers it folds into the Ethernet and LLC headers, netprotocols
   decodes as layers of their own. A throughput number means little
   without knowing how much work it bought.
-- **4.7× faster than dpkt at re-encoding** (`bytes(header)`,
+- **4.1× faster than dpkt at re-encoding** (`bytes(header)`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
-- **Imports in 90 ms; `scapy.all` takes 436+ ms** (`scripts/benchmark_import.py`),
+- **Imports in 99 ms; `scapy.all` takes 552+ ms** (`scripts/benchmark_import.py`),
   and never touches the host doing it — importing scapy populates live
   interface and routing tables as a side effect of the import
   statement.
-- **A 220.5 KiB wheel against scapy's 2.63 MiB** — 12.2× smaller.
+- **A 266.8 KiB wheel against scapy's 2.63 MiB** — 10.1× smaller.
 - **Regression-gated in CI, which — as far as we could establish by
   auditing ten comparable Python packet libraries' CI configurations
   (dpkt, scapy, pypacker, construct, pcapkit, dnspython, pyshark,
@@ -512,8 +515,10 @@ and the third — MPLS, LLDP, LLC/SNAP, STP and CDP
 [#253](https://github.com/EONRaider/NETProtocols/pull/253),
 [#254](https://github.com/EONRaider/NETProtocols/pull/254),
 [#255](https://github.com/EONRaider/NETProtocols/pull/255),
-[#256](https://github.com/EONRaider/NETProtocols/pull/256)) — as 2.6.0
-(see [CHANGELOG.md](CHANGELOG.md)).
+[#256](https://github.com/EONRaider/NETProtocols/pull/256)) — as 2.6.0,
+and the fourth — TFTP, RADIUS, STUN, NTP and HSRP
+([#174](https://github.com/EONRaider/NETProtocols/issues/174)) — as
+2.7.0 (see [CHANGELOG.md](CHANGELOG.md)).
 
 The roadmap before it, the post-1.3.0
 [#107](https://github.com/EONRaider/NETProtocols/issues/107), is
