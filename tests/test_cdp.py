@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import importlib.util
 import struct
-import tracemalloc
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from conftest import FIXTURES, pcap_frames
+from conftest import FIXTURES, allocation_peak, pcap_frames
 from netprotocols import (
     CDP,
     CDPTLV,
@@ -884,17 +883,13 @@ class TestDecodeCost:
     def test_a_long_tail_is_scanned_without_a_copy(self, last):
         """Scan a 4 MiB tail through a view: peak memory stays far below it."""
         data = b"\x02\xb4\x00\x00" + tlv(1, b"x") + bytes(1 << 22) + last
-        tracemalloc.start()
-        try:
+        with allocation_peak() as traced:
             if last:
                 with pytest.raises(InvalidFieldError):
                     CDP.decode(data)
             else:
                 CDP.decode(data)
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
-        assert peak < 1 << 16
+        assert traced.peak < 1 << 16, traced.peak
 
     def test_a_huge_address_count_reads_the_value_once(self):
         """End a count of 2**32 - 1 when the value runs out."""

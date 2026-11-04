@@ -7,13 +7,12 @@ stack never sends are built here. CRC32c itself is tested in
 test_checksum.py, where the mutation audit's test selection reaches it.
 """
 
-import tracemalloc
 import zlib
 from dataclasses import replace
 
 import pytest
 
-from conftest import FIXTURES, pcap_frames
+from conftest import FIXTURES, allocation_peak, pcap_frames
 from netprotocols import (
     SCTP,
     Ethernet,
@@ -214,39 +213,29 @@ class TestLinkLayerPadding:
     #: A trailer far larger than the peak memory the scans may allocate.
     LONG_TAIL = bytes(1 << 22)
 
-    @staticmethod
-    def peak_of(action) -> int:
-        """Run ``action`` and return the peak memory it traced."""
-        tracemalloc.start()
-        try:
-            action()
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
-        return peak
-
     def test_a_long_zero_tail_is_scanned_without_a_copy(self):
         """Decode a ``bytes`` packet with a 4 MiB zero trailer: the
         scan reads it through a view, so peak memory stays far below
         it, and the trailer is still left undecoded as padding."""
         raw = packet_bytes(3)
         data = raw + self.LONG_TAIL
-        decoded = []
-        peak = self.peak_of(lambda: decoded.append(SCTP.decode(data)))
-        assert decoded[0].header_len == len(raw)
-        assert peak < 1 << 16
+        with allocation_peak() as traced:
+            decoded = SCTP.decode(data)
+        assert decoded.header_len == len(raw)
+        assert traced.peak < 1 << 16, traced.peak
 
     def test_a_nonzero_byte_after_a_long_tail_is_found_without_a_copy(self):
         """Scan 4 MiB of zeros to a final nonzero byte, then raise for
         it: the walk over ``bytes`` chunks never copies the trailer."""
         header = make_sctp(chunk(0, 3, b"x") + self.LONG_TAIL + b"\x01")
 
-        def walk():
-            with pytest.raises(InvalidFieldError) as excinfo:
-                _ = header.parsed_chunks
-            assert excinfo.value.offset == 8  # the padded 5-byte DATA chunk
-
-        assert self.peak_of(walk) < 1 << 16
+        with (
+            allocation_peak() as traced,
+            pytest.raises(InvalidFieldError) as excinfo,
+        ):
+            _ = header.parsed_chunks
+        assert excinfo.value.offset == 8  # the padded 5-byte DATA chunk
+        assert traced.peak < 1 << 16, traced.peak
 
 
 class TestTruncationAndLyingLengths:

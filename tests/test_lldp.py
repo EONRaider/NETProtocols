@@ -14,14 +14,13 @@ is run over the corpus and over tampered copies of it.
 import importlib.util
 import struct
 import sys
-import tracemalloc
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-from conftest import FIXTURES, pcap_frames
+from conftest import FIXTURES, allocation_peak, pcap_frames
 from netprotocols import (
     LLDP,
     LLDPTLV,
@@ -703,25 +702,15 @@ class TestDecodeCost:
         65 KB from bytes and 99 KB from a memoryview (up to about 112 KB
         on a first run under coverage), so 10,000 would exceed the bound
         on their own, while a copy of the rest of the buffer at any one
-        TLV takes over a megabyte. If tracemalloc is already tracing it
-        is left on, else stopped.
+        TLV takes over a megabyte.
         """
         trailer = bytes(1 << 20)
         data = wrap(_reserved_tlvs(1000) + trailer)
-        started = not tracemalloc.is_tracing()
-        if started:
-            tracemalloc.start()
-        try:
-            tracemalloc.reset_peak()
-            base, _ = tracemalloc.get_traced_memory()
+        with allocation_peak() as traced:
             lldp = LLDP.decode(data)
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            if started:
-                tracemalloc.stop()
         assert len(lldp.tlvs) == 1001
         assert lldp.tlvs[-1] == LLDPTLV(0)
-        assert peak - base < len(trailer) // 2, peak - base
+        assert traced.peak < len(trailer) // 2, traced.peak
 
 
 def _load_checker() -> ModuleType:
