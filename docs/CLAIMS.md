@@ -763,10 +763,60 @@ What moved, and why:
   simulation table, which names no dpkt or pypacker version, and 4.1's
   dpkt last-commit date. They are for 2.8.0 ([#175](https://github.com/EONRaider/NETProtocols/issues/175)).
 
+### Re-measured for 2.8.0 (2026-11-04)
+
+Every number the README quotes, re-measured before tagging 2.8.0 (Tier 5
+of #170: TLS record framing with SNI, #284 and #290) on the same machine
+and method as 2.7.0 (see above: i7-1355U, CPython 3.12.12, every timed
+run `taskset -c 2 uv run --frozen --group bench python scripts/...`,
+started at a one-minute load average under 1.5; `dpkt 1.9.8`, `scapy
+2.8.0`). The corpus grew from 379 frames in 35 scenarios to 394 in 36
+with `tls.pcap` (15 frames). Kept brief: the roadmap defers profiling
+and optimization to its end (#250).
+
+| Claim | Command | Result |
+|---|---|---|
+| 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 149,090 / 152,096 / 158,328 f/s; dpkt 225,788 / 225,538 / 241,767; scapy 45,723 / 46,342 / 48,231. dpkt faster by 1.51×, 1.48×, 1.53×; against scapy 3.26×, 3.28×, 3.28×. Quoted: the median-ratio run, **dpkt 1.51× faster**, **3.3×** against scapy. netprotocols decodes 389 of 394 frames, dpkt 393 (see the depth bullet) |
+| 1.3 encode | `benchmark_encode.py` (whole frame, like for like; corrected, see 1.3), three runs | netprotocols 740,864 / 734,096 / 754,649 ops/s; dpkt 553,578 / 556,781 / 552,793; scapy 1,038,362 / 1,057,584 / 1,042,091. Against dpkt: 1.34×, 1.32×, 1.37×. Quoted: the median-ratio run, **1.34×** (the earlier 4.15× compared a header with a frame) |
+| 1.4 import | `env -u PYTHONDONTWRITEBYTECODE ... benchmark_import.py` after an untimed warm-up, best of three (warm) | netprotocols **55.2 ms** (117 modules), scapy.all **235.3 ms** (**4.3×**); dpkt 20.6 ms (117 modules) |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.8.0-py3-none-any.whl` 291,949 bytes (285.1 KiB), **9.5×** smaller than scapy 2.8.0's 2,762,122 |
+| 1.6 depth | `benchmark.py --depth` | deeper on **175 of 394** frames, not deeper on 213, 6 skipped |
+
+- **dpkt's lead rose from 1.37× to 1.51×.** On the 15 TLS frames dpkt
+  stops at TCP with the records raw and reads 2.04× faster (median of
+  five; 1.97-2.16×). On the 379 frames the 2.7.0 tree (`163a33f`)
+  shares, six alternating pairs of the 2.7.0 harness read
+  netprotocols' median 1.4% lower on this tree (153,989 against
+  156,154 f/s), inside the spread. The 140 frames of 2.4.0's corpus
+  read 1.21× (1.12× at 2.7.0) and the routing captures 1.62×; neither
+  move was investigated (#250).
+- **Depth grew by 22:** the 15 TLS frames, and 7 `tcp_https.pcap`
+  segments that now chain into `TLS` on port 443 where dpkt stops at
+  TCP. 6 frames are skipped: the STP TCN dpkt cannot decode, and 5
+  `tcp_https.pcap` segments netprotocols' strict walk rejects, which
+  `--compare` also counts (389 of 394): TLS now dispatches on port 443,
+  and those segments do not begin a record.
+- **Import grew about 1 ms** with one module (`layer7/tls.py`; 117,
+  from 116): three alternating warm pairs read 56.9 / 57.5 / 58.0 ms
+  against the 2.7.0 tree's 55.6 / 56.1 / 59.5 ms.
+- **Encode** is 1.34× ahead of dpkt on a whole frame, after the
+  benchmark was corrected (see 1.3: the 4.15× this run first read, and
+  4.10× before it, timed a header against a frame); TLS does not touch
+  the encode path.
+- The CI gate command (`benchmark.py --check --threshold 15 --compare`)
+  passes at −5.0% against the 2.5.0 baseline, which is not re-recorded
+  (#251).
+- 1.7's audit, 3.1's simulation and 4.1's dpkt dates were re-checked
+  for this release; see those sections.
+
 ## 1. Performance
 
-### 1.1 "3.4× faster than scapy at decoding"
-**Status: VERIFIED for 2.7.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+### 1.1 "3.3× faster than scapy at decoding"
+**Status: VERIFIED for 2.8.0**
+
+*Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
+the median-ratio run, 149,090 against scapy 2.8.0's 45,723, **3.3×**
+(3.26-3.28× across three runs).*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured 2026-09-04
 after #147 closed the dpkt-throughput regression below — see that
@@ -808,8 +858,13 @@ what the corpus shows on one machine today, and whoever writes the
 README should pick the number they are willing to defend on someone
 else's.
 
-### 1.2 "dpkt decodes 1.4× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
-**Status: VERIFIED for 2.7.0 — the 15% claim no longer holds, on the 265-, 293- or 379-frame corpus** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+### 1.2 "dpkt decodes 1.5× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
+**Status: VERIFIED for 2.8.0 — the 15% claim no longer holds, on the 265-, 293-, 379- or 394-frame corpus**
+
+*Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
+**dpkt 1.51× faster** on the median-ratio run (149,090 against
+225,788; 1.48-1.53× across three runs). The 15 TLS frames, on which
+dpkt stops at TCP, read 2.04×.*
 
 *Re-measured for 2.7.0 (2026-11-03, another machine and the 379-frame
 corpus; see above): **dpkt 1.37× faster** on the median-ratio run
@@ -883,15 +938,51 @@ have shipped it while it briefly was. From 2.5.0 the defensible form is
 further into the stack on 79 of its 265 frames" (1.6); for 2.6.0, on
 94 of its 293; for 2.7.0, "about 1.4× faster", on 153 of its 379.
 
-### 1.3 "4.1× faster than dpkt at encoding"
-**Status: VERIFIED for 2.7.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+### 1.3 "1.3× faster than dpkt at re-encoding a whole frame"
+**Status: VERIFIED for 2.8.0**
+
+*Re-measured for 2.8.0 (2026-11-04; see above), after the correction
+below: `bytes(decode_frame(FRAME))` on a 42-byte Ethernet/IPv4/UDP
+frame, best of three runs pinned to one core, the median-ratio run:
+netprotocols 740,864 ops/s, dpkt 553,578, **1.34×**; scapy 2.8.0
+1,038,362. The other two runs read 1.32× and 1.37× (734,096 against
+556,781; 754,649 against 552,793).*
+
+*Corrected for 2.8.0 (2026-11-04): every earlier figure in this section,
+from 5.3× at v1.3.0 through 4.15× at 2.8.0's first measurement, timed a
+14-byte header against dpkt's whole frame, so none of them is
+like for like and none should be quoted. `scripts/benchmark_encode.py`
+timed `bytes(Ethernet.decode(FRAME))` for netprotocols, which
+re-encodes the Ethernet header only, and `bytes(dpkt.ethernet.Ethernet(FRAME))`
+for dpkt, which serializes the whole 46-byte Ethernet/IPv4/UDP frame
+and fills a zero IPv4 checksum as it does. CodeRabbit reported it on
+#296. Measured on one machine, pinned, best of 9 × 20,000, the same
+frame three ways:*
+
+| Workload | netprotocols | dpkt | Ratio |
+|---|---|---|---|
+| As benchmarked until then (header against frame) | 2,376,526 | 573,510 | 4.14× |
+| Whole frame (`bytes(decode_frame(FRAME))` against `bytes(Ethernet(FRAME))`) | 794,627 | 573,510 | 1.39× |
+| Header only (`bytes(Ethernet)` against `Ethernet.pack_hdr()`) | 2,376,526 | 2,025,964 | 1.17× |
+
+*The benchmark now re-encodes the same whole frame in every library,
+asserts that each output equals the frame byte for byte before timing,
+and uses a frame with no payload, ports no library dispatches on and
+precomputed valid checksums: a netprotocols `Packet` holds decoded
+headers only, so a payload it does not decode would not come back out
+(with 53/53 and 4 bytes of payload, `decode_frame` raises in strict mode
+and, in lax mode, re-encodes 42 of the 46 bytes). The quoted figure is
+the second row's kind, 1.3×: netprotocols' advantage is in the
+whole frame, not in the header codec, where it is 1.17×.*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured under
 CPython 3.12, resolving the cross-version caveat this section used to
 carry — it now shares a baseline with the corpus decode numbers above.*
 
 `bytes(header)` re-serialization on a decoded synthetic Ethernet
-header, best of 9 trials × 20,000 reps, ops/sec:
+header, best of 9 trials × 20,000 reps, ops/sec (the original table;
+**not like for like**: netprotocols re-encoded the 14-byte header, dpkt
+the whole frame; see the correction above):
 
 | Library | ops/sec | Note |
 |---|---|---|
@@ -904,39 +995,47 @@ Reproduce: `uv run --group bench python scripts/benchmark_encode.py`
 reproduction script, which Rule 1 does not actually permit — fixed
 along with the re-measurement).
 
-*Re-measured for 2.3.0 (2026-10-23, another machine; see above):
-netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above; not like for
+like): netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
 
-*Re-measured for 2.7.0 (2026-11-03, another machine; see above):
-netprotocols 2,207,983 ops/s, dpkt 538,285, **4.10×**; scapy 2.8.0
+*Re-measured for 2.7.0 (2026-11-03, another machine; see above; not like for
+like): netprotocols 2,207,983 ops/s, dpkt 538,285, **4.10×**; scapy 2.8.0
 1,049,943. Tier 4 did not touch the encode path; five more runs read
 3.97-4.42×, and the 2.6.0 tree 4.27-4.69× on the same machine.*
 
-*Re-measured for 2.6.0 (2026-10-28; see above): netprotocols 1,532,546
+*Re-measured for 2.6.0 (2026-10-28; see above; not like for like):
+netprotocols 1,532,546
 ops/s, dpkt 329,211, **4.66×**; scapy 2.8.0 740,740. Tier 3 did not
 touch the encode path; both rates fell about 5% with the machine.*
 
-*Re-measured for 2.5.0 (2026-10-25; see above): netprotocols 1,601,847
+*Re-measured for 2.5.0 (2026-10-25; see above; not like for like):
+netprotocols 1,601,847
 ops/s, dpkt 346,818, **4.62×**; scapy 2.8.0 806,257. Tier 2 did not
 touch the encode path either.*
 
-*Re-measured for 2.4.0 (2026-10-25; see above): netprotocols 1,416,774
+*Re-measured for 2.4.0 (2026-10-25; see above; not like for like):
+netprotocols 1,416,774
 ops/s, dpkt 338,650, **4.18×**; scapy 2.8.0 700,191. Tier 1 did not
 touch the encode path; dpkt's rate rose more than ours between the two
 runs (15.8% against 7.0%), most likely the machine from run to run
 rather than either library.*
 
-Nobody benchmarks this direction; it remains the half of "codec" this
-library already wins. The ratio against dpkt narrowed from the 5.3×
-recorded at v1.3.0 to 4.5× by 2.2.x (4.53× for 2.3.0, 4.18× for 2.4.0;
-see their dated lines above) — netprotocols' own absolute rate dropped
-somewhat less than its decode rate did over the same tiers (encoding
-never touched the registry/walker/error-context surface that grew
-decode's cost), while dpkt's own number held essentially flat. Still a
-wide, clean win.
+Nobody benchmarks this direction. The ratios in the dated lines above,
+5.3× at v1.3.0 narrowing to 4.5× by 2.2.x (4.53× for 2.3.0, 4.18× for
+2.4.0), compared a 14-byte header with a whole frame and say nothing
+about either library's codec; the history is kept because it is what
+was published, not because it measures anything. On the same whole
+frame netprotocols is a modest 1.3× ahead of dpkt (1.17× on the
+Ethernet header alone) and scapy, whose `bytes()` returns the bytes it
+was built from, reads faster than both because it does no repack. A
+modest win, not a wide one, and none over scapy.
 
-### 1.4 "Imports in 57 ms; scapy takes about 240 ms"
-**Status: VERIFIED for 2.7.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+### 1.4 "Imports in 55 ms; scapy takes about 235 ms"
+**Status: VERIFIED for 2.8.0**
+
+*Re-measured for 2.8.0 (2026-11-04, warm; see above): best of three,
+netprotocols **55.2 ms** (117 modules), `scapy.all` 2.8.0 **235.3 ms**,
+**4.3×**; dpkt 20.6 ms. TLS adds about 1 ms.*
 
 *Re-measured for 2.7.0 (cold on 2026-11-03, warm on 2026-11-04, another
 machine; see above). **Warm**, with bytecode cached (what an installed
@@ -1002,8 +1101,12 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "10.1× smaller wheel than scapy"
-**Status: VERIFIED for 2.7.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+### 1.5 "9.5× smaller wheel than scapy"
+**Status: VERIFIED for 2.8.0**
+
+*Re-measured for 2.8.0 (2026-11-04): `netprotocols-2.8.0-py3-none-any.whl`
+is 291,949 bytes (285.1 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+2,762,122 (2.63 MiB), **9.5× smaller**.*
 
 *Re-measured for 2.7.0 (2026-11-04): `netprotocols-2.7.0-py3-none-any.whl`
 is 273,334 bytes (266.9 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
@@ -1044,7 +1147,11 @@ since the version on file. Both move with releases — re-check before
 quoting.
 
 ### 1.6 "Decodes further into the stack than dpkt, on the same bytes"
-**Status: VERIFIED for 2.7.0** — `NEEDS RE-MEASUREMENT` for the next release (Rule 4; master carries Tier 5 since 2.7.0)
+**Status: VERIFIED for 2.8.0**
+
+*Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
+**175 deeper, 213 not deeper**, 6 skipped; the 22 new are the 15 TLS
+frames and 7 `tcp_https.pcap` segments that now chain into `TLS`.*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-confirmed unchanged
 against the Tiers-2-4 tree, again after #147's `decode_frame()`
@@ -1094,7 +1201,7 @@ which overstated how tightly the two are joined there — an independent
 audit for #101 caught the mismatch).
 
 ### 1.7 "Decode throughput is regression-gated in CI"
-**Status: `NEEDS RE-MEASUREMENT`** — the gate itself stands; the comparative form rests on the #124 audit below, dated 2026-09-04 and not re-run since (Rule 4; see the 2026-11-01 status audit above)
+**Status: VERIFIED** — the gate itself stands; the comparative form rests on the #124 audit below, re-run 2026-11-04 for 2.8.0
 
 Every pull request runs the corpus benchmark and fails at 15% below
 `benchmarks/baseline.json` (`.github/workflows/ci.yml`). Throughput is
@@ -1114,22 +1221,30 @@ counted as equivalent to a corpus benchmark.
 
 | Project | Repo @ commit (date inspected) | Runs a benchmark in CI | Fails build on regression | Commits a baseline | Gates? |
 |---|---|---|---|---|---|
-| dpkt | `kbandla/dpkt` @ `4f8958e` (2024-05-05, last commit) | No — no benchmark code anywhere in the tree or its history | No | No | **No** |
-| scapy | `secdev/scapy` @ `03f455c` (2026-09-03) | No — `test/benchmark/dissection_and_build.py` is a microbenchmark (one hardcoded packet, `N=10000`) that only `print()`s a number; never invoked by `.github/workflows/unittests.yml` or `tox.ini` | No | No | **No** |
-| pypacker | `gitlab.com/mike01/pypacker` @ `8ae3890` (2026-07-27) — canonical repo; the `mike01/pypacker` GitHub mirror is frozen since 2020 | No — no CI pipeline exists on the canonical repo at all. Historically (GitHub/Travis, deleted 2018) ran the full unittest file, which incidentally included assertion-free perf-logging methods (`tests/test_pypacker.py::PerfTestCase`) | No | No — only `logger.info()` output, never compared | **No** |
-| construct | `construct/construct` @ `28c6e57` (2025-04-22) | Yes — `tests/test_benchmarks.py` is a real corpus-style `pytest-benchmark` suite (190+ cases), **but** CI runs it with `--benchmark-disable` (`.github/workflows/main.yml:33`), which collects zero timing data | No | No — `make benchsave` exists but is never invoked by CI | **No** |
-| pcapkit | `JarryShaw/PyPCAPKit` @ `d86947e` (2026-08-31) | No — zero benchmark infrastructure; the only "benchmark" hit is an unrelated port-name comment | No | No | **No** |
-| dnspython | `rthalley/dnspython` @ `bc3009d` (2026-08-31) | No — no benchmark tooling in the dependency list or CI steps | No | No | **No** |
-| pyshark | `KimiNewt/pyshark` @ `91441d3` (2026-03-22) | No — CI runs `pytest` only | No | No | **No** |
-| nfstream | `nfstream/nfstream` @ `1426d78` (2026-08-01) | No — five CI workflows (build/test × 3 OSes, CodeQL, fuzz), none time anything | No | No | **No** |
-| stackforge | `AKOrojo/stackforge` @ `f0cf66b` (2026-03-15) | No — real Criterion benches exist (`crates/stackforge-core/benches/{packet_parse,layer_dispatch,pcap_throughput}.rs`), but `.github/workflows/test.yml` runs `cargo test`/`pytest`, never `cargo bench` | No | No | **No** |
-| PyTCP-net_proto | `ccie18643/PyTCP` (`packages/net_proto/`) @ `e24ab3e` (2026-08-09) | No — `.github/workflows/ci.yml` runs lint, `make test`, and a privileged real-TAP smoke test; a manual `tools/bench_rx_ring.py` microbenchmark exists but is wired to no CI job and benchmarks the RX daemon, not `net_proto` itself | No | No | **No** |
+| dpkt | `kbandla/dpkt` @ `4f8958e` (2024-05-05, last commit; inspected 2026-11-04) | No — no benchmark code anywhere in the tree or its history | No | No | **No** |
+| scapy | `secdev/scapy` @ `ebaf9f0` (2026-11-04; inspected 2026-11-04) | No — `test/benchmark/dissection_and_build.py` is a microbenchmark (one hardcoded packet, `N=10000`) that only `print()`s a number; never invoked by `.github/workflows/unittests.yml`, `tox.ini` or `.config/ci/*.sh` | No | No | **No** |
+| pypacker | `gitlab.com/mike01/pypacker` @ `e3be831` (2026-09-06; inspected 2026-11-04) — canonical repo; the `mike01/pypacker` GitHub mirror is frozen since 2020 | No — no CI pipeline exists on the canonical repo at all (no `.gitlab-ci.yml`). Historically (GitHub/Travis, deleted 2018) ran the full unittest file, which incidentally included assertion-free perf-logging methods (`tests/test_pypacker.py::PerfTestCase`, whose suite registration is now commented out) | No | No — only `logger.info()` output, never compared | **No** |
+| construct | `construct/construct` @ `28c6e57` (2025-04-22; inspected 2026-11-04) | Yes — `tests/test_benchmarks.py` is a real corpus-style `pytest-benchmark` suite (190+ cases), **but** CI runs it with `--benchmark-disable` (`.github/workflows/main.yml:33`), which collects zero timing data | No | No — `make benchsave` exists but is never invoked by CI | **No** |
+| pcapkit | `JarryShaw/PyPCAPKit` @ `453e388` (2026-11-04; inspected 2026-11-04) | **Yes, but never on a pull request** — `.github/workflows/benchmark.yml` (added 2026-10-24) runs an engine-comparison benchmark (`examples/benchmark/native.sh`) weekly and on `workflow_dispatch` only, timing pcapkit's extraction engines on one capture and reporting each as a ratio to its own `default` engine: a report, not a check | No — the step fails only when no table can be produced; nothing is compared with an earlier run | No — the "baseline" is the in-run `default` engine; the docs' tables are updated by hand | **No** |
+| dnspython | `rthalley/dnspython` @ `2fa80df` (2026-11-04; inspected 2026-11-04) | No — no benchmark tooling in the dependency list or CI steps | No | No | **No** |
+| pyshark | `KimiNewt/pyshark` @ `91441d3` (2026-03-22; inspected 2026-11-04) | No — CI runs `pytest` only | No | No | **No** |
+| nfstream | `nfstream/nfstream` @ `1426d78` (2026-08-01; inspected 2026-11-04) | No — five CI workflows (build/test × 3 OSes, CodeQL, fuzz), none time anything | No | No | **No** |
+| stackforge | `AKOrojo/stackforge` @ `f0cf66b` (2026-03-15; inspected 2026-11-04) | No — real Criterion benches exist (`crates/stackforge-core/benches/{packet_parse,layer_dispatch,pcap_throughput}.rs`), but `.github/workflows/test.yml` runs `cargo test`/`pytest`, never `cargo bench` | No | No | **No** |
+| PyTCP-net_proto | `ccie18643/PyTCP` (`packages/net_proto/`) @ `e24ab3e` (2026-08-09; inspected 2026-11-04) | No — `.github/workflows/ci.yml` runs lint, `make test`, and a privileged real-TAP smoke test; a manual `tools/bench_rx_ring.py` microbenchmark exists but is wired to no CI job and benchmarks the RX daemon, not `net_proto` itself | No | No | **No** |
 
-Zero of ten. The closest any project comes is construct (a real corpus
+Zero of ten. The closest any project comes is pcapkit (a real engine
+benchmark, run weekly and on dispatch but never on a pull request,
+reporting ratios with no regression check), construct (a real corpus
 suite, deliberately disabled in CI) and stackforge (real Criterion
-benches, never invoked) — both have the harness and skip the gate.
-Reproduce this table: each repo was attached read-only via `add_repo`
-and inspected at the commit shown; re-run before quoting, since CI
+benches, never invoked) — all three have the harness and skip the
+gate. pcapkit's separate `ci-timing.yml` can fail a weekly workflow
+when CI's own duration rises, which monitors CI, not the library's
+throughput. Re-audited 2026-11-04 for 2.8.0: four HEADs had moved
+(scapy, pypacker, pcapkit, dnspython), and only pcapkit's row changed.
+Reproduce this table: the 2026-09-04 audit attached each repo read-only
+via `add_repo`; the 2026-11-04 re-audit read each default branch's CI
+configuration at the HEAD shown through `gh api` (GitLab's API for
+pypacker), cloning and running nothing. Re-run before quoting, since CI
 configuration is exactly the kind of thing that changes without a
 version bump.
 
@@ -1243,7 +1358,7 @@ out of a full TCP/IP stack rather than a standalone codec. We are MIT,
 ## 3. Purity and portability
 
 ### 3.1 "Runs where scapy cannot — including the browser"
-**Status: `NEEDS RE-MEASUREMENT`** — the simulation table below names no dpkt or pypacker version (Rule 3); re-run it with both pinned before quoting (see the 2026-11-01 status audit above)
+**Status: VERIFIED** — the simulation below re-run 2026-11-04 with every version pinned (Rule 3)
 
 *Published 2026-09-04 (embargo lifted, #107). Corrected 2026-09-04: the
 original text of this section credited the whole table below to #99's
@@ -1251,7 +1366,13 @@ real-Pyodide CI job, which overstated what that job actually runs —
 see the note after the table.*
 
 Blocking exactly the modules Pyodide removes (`fcntl`, `termios`,
-`resource`, `grp`, `pwd`) under ordinary CPython and re-importing:
+`resource`, `grp`, `pwd`) under ordinary CPython and re-importing,
+each target in a fresh `python -I` subprocess. Re-run 2026-11-04 for
+2.8.0 on CPython 3.12.12 with `dpkt 1.9.8`, `pypacker 5.4` (built from
+its sdist, the only artifact it publishes) and `scapy 2.8.0`, the
+latest PyPI release of each, in a venv of their own; without the
+blocklist all five imports succeed, so the two failures are the
+blocklist's:
 
 ```
 OK    netprotocols
@@ -1261,8 +1382,33 @@ FAIL  scapy.layers.l2 : ModuleNotFoundError: No module named 'fcntl'
 FAIL  scapy.all       : ModuleNotFoundError: No module named 'fcntl'
 ```
 
+Reproduce (2026-11-04): in a fresh venv with `uv pip install dpkt==1.9.8
+pypacker==5.4 scapy==2.8.0` and netprotocols, run this with `python -I`:
+
+```python
+import subprocess, sys
+BLOCK = ("fcntl", "termios", "resource", "grp", "pwd")
+CHILD = """
+import sys
+if {block}:
+    class B:
+        def find_spec(self, n, p=None, t=None):
+            if n in {mods!r}: raise ModuleNotFoundError(f"No module named {{n!r}}", name=n)
+    sys.meta_path.insert(0, B())
+    for m in {mods!r}: sys.modules.pop(m, None)
+import importlib; importlib.import_module({target!r})
+"""
+for block in (False, True):
+    print("== blocklist:", "ON" if block else "OFF")
+    for t in ("netprotocols", "dpkt", "pypacker", "scapy.layers.l2", "scapy.all"):
+        r = subprocess.run([sys.executable, "-I", "-c", CHILD.format(block=block, mods=BLOCK, target=t)], capture_output=True, text=True)
+        err = r.stderr.strip().splitlines()[-1] if r.returncode else ""
+        print(f"{'OK  ' if not r.returncode else 'FAIL'}  {t:<16}" + (f" : {err}" if err else ""))
+```
+
 Scapy's `from fcntl import ioctl` is **unconditional** in
-`scapy/arch/linux/__init__.py:11` and `scapy/arch/unix.py:13`, and
+`scapy/arch/linux/__init__.py:11` and `scapy/arch/unix.py:13` (still so
+in 2.8.0), and
 `scapy.arch` is on the import path of every scapy import. Scapy cannot
 be *imported* under Pyodide — not "cannot sniff". It is also absent
 from Pyodide's built package set.
@@ -1334,11 +1480,11 @@ there without a separate build. Say nothing about embedded targets.
 For anyone embedding a packet codec in a commercial product, the GPL
 column is unavailable. That leaves dpkt and us — and dpkt was last
 released **2022-08-18**, last committed **2024-05-05** (both
-unchanged, re-confirmed against PyPI's JSON API and `kbandla/dpkt` @
-`4f8958e`), still advertises Python 2.7 and 3.5–3.9 in its classifiers,
+unchanged, re-confirmed on 2026-11-04 against PyPI's JSON API and
+`gh api 'repos/kbandla/dpkt/commits?per_page=1'`, still `4f8958e`), still advertises Python 2.7 and 3.5–3.9 in its classifiers,
 is still marked `Development Status :: 4 - Beta` after twelve years,
 has **81 open issues** (77 on 2026-09-04, itself down from 95;
-re-counted 2026-11-01 with `gh api
+re-counted 2026-11-01 and again 81 on 2026-11-04 with `gh api
 'search/issues?q=repo:kbandla/dpkt+is:issue+is:open' --jq
 .total_count`), and cannot be type-checked at all.
 
@@ -1719,11 +1865,9 @@ section to begin with.
 ## 7. Protocol coverage
 
 ### 7.1 "Every protocol on #170's gap list decodes"
-**Status: VERIFIED for `master`** (surveyed 2026-11-01, #197) — for a
-release, `GATED ON` [#174](https://github.com/EONRaider/NETProtocols/issues/174)
-and [#175](https://github.com/EONRaider/NETProtocols/issues/175): 2.6.0,
-the latest release, ships 15 of the 21, and the other six are merged
-but unreleased.
+**Status: VERIFIED** (surveyed 2026-11-01, #197) — 2.8.0 ships all 21:
+2.7.0 released Tier 4's five ([#174](https://github.com/EONRaider/NETProtocols/issues/174))
+and 2.8.0 Tier 5's TLS ([#175](https://github.com/EONRaider/NETProtocols/issues/175)).
 
 [#170](https://github.com/EONRaider/NETProtocols/issues/170) built its
 five tiers by cross-referencing dpkt's, scapy's (`layers/` and
@@ -1804,12 +1948,12 @@ first shipped each row instead of its file):
 | 802.2 LLC / SNAP | #188 | 2.6.0 | yes (SNAP folded into LLC) | yes | partial (its Ethernet reads no 802.3 Length: "not supported"; its LLC drops the SNAP field from a non-SNAP header but still returns a header length of 8, not 3, so every non-SNAP PDU, STP's included, is read 5 bytes late) |
 | STP | #189 | 2.6.0 | yes | yes | yes |
 | CDP | #190 | 2.6.0 | yes | yes (`contrib`) | no (an EtherType constant only) |
-| NTP | #191 | `master`, unreleased | yes | yes | yes |
-| TFTP | #192 | `master`, unreleased | yes | yes | yes |
-| RADIUS | #193 | `master`, unreleased | yes | yes | yes |
-| STUN | #194 | `master`, unreleased | yes | yes (`contrib`) | yes |
-| HSRP | #195 | `master`, unreleased | yes | yes | yes |
-| TLS records + SNI | #196 | `master`, unreleased | partial (records and generic ClientHello extensions; no server_name decoding) | yes (`load_layer("tls")`) | partial (records and generic ClientHello extensions; no server_name decoding) |
+| NTP | #191 | 2.7.0 | yes | yes | yes |
+| TFTP | #192 | 2.7.0 | yes | yes | yes |
+| RADIUS | #193 | 2.7.0 | yes | yes | yes |
+| STUN | #194 | 2.7.0 | yes | yes (`contrib`) | yes |
+| HSRP | #195 | 2.7.0 | yes | yes | yes |
+| TLS records + SNI | #196 | 2.8.0 | partial (records and generic ClientHello extensions; no server_name decoding) | yes (`load_layer("tls")`) | partial (records and generic ClientHello extensions; no server_name decoding) |
 | **of 21** | | **21** (15 released) | **19**, 1 partial | **21** | **17**, 3 partial |
 
 The script's own summary line reads "Of #170's 21 items: netprotocols
@@ -1817,7 +1961,7 @@ The script's own summary line reads "Of #170's 21 items: netprotocols
 cell counts." The release column is each module's first tag:
 
 ```
-for v in 2.3.0 2.4.0 2.5.0 2.6.0; do printf 'v%s:' $v
+for v in 2.3.0 2.4.0 2.5.0 2.6.0 2.7.0 2.8.0; do printf 'v%s:' $v
   for m in layer4/sctp layer3/esp layer3/ah layer7/vxlan layer3/vrrp \
       layer7/rip layer3/ospf layer3/pim layer7/bgp layer2/lldp layer2/mpls \
       layer2/llc layer2/stp layer2/cdp layer7/ntp layer7/tftp layer7/radius \
@@ -1831,15 +1975,14 @@ git grep -c 'IPProtocol.IPIP, IPv4' v2.3.0 v2.4.0 -- src/netprotocols/_defaults.
 prints nothing for `v2.3.0`; `sctp esp ah vxlan` for `v2.4.0`, plus
 the last line's `v2.4.0:src/netprotocols/_defaults.py:1` for IP-in-IP,
 which has no module of its own; `vrrp rip ospf pim bgp` added for
-`v2.5.0`; and `lldp mpls llc stp cdp` added for `v2.6.0`: fifteen
-released. The other six modules are in no tag.
+`v2.5.0`; `lldp mpls llc stp cdp` added for `v2.6.0`; `ntp tftp
+radius stun hsrp` added for `v2.7.0`; and `tls` added for `v2.8.0`: all
+21 released.
 
 What it shows:
 
-- **Every item on #170's list decodes on `master`.** 2.4.0, 2.5.0 and
-  2.6.0 released fifteen; Tier 4's five and Tier 5's TLS are merged and
-  will first ship in the next release. Until then the claim is about
-  `master`, not about anything on PyPI.
+- **Every item on #170's list decodes in a release.** 2.4.0, 2.5.0 and
+  2.6.0 released fifteen, 2.7.0 Tier 4's five and 2.8.0 Tier 5's TLS.
 - **None of the 21 is unique to this library.** scapy 2.8.0 has a
   decoder for every one, though eight of them do not load with `import
   scapy.all`: seven sit in `contrib/` and need `load_contrib()`, and
