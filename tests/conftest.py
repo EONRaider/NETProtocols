@@ -5,8 +5,8 @@ https://wiki.wireshark.org/SampleCaptures (arp-storm.pcap, among
 others), locally captured frames, and the real-capture corpus under
 ``tests/fixtures/`` (see its MANIFEST.md).
 
-Two pieces of suite-wide setup also live here, because conftest.py is
-the one module pytest loads for *every* selection of test files —
+Two pieces of suite-wide setup also live here: conftest.py is the one
+module pytest loads for *every* selection of test files —
 including the narrow selection mutmut runs (pyproject.toml's
 ``pytest_add_cli_args_test_selection``), which never imports
 test_fuzz.py:
@@ -16,10 +16,9 @@ test_fuzz.py:
   settings whether or not test_fuzz.py was collected.
 - Clearing every module-level ``functools`` cache in the package before
   each test. mutmut 3 runs the clean suite in-process and then forks
-  once per mutant, so without this a cache warmed by the original code
-  answers in the child and hides the mutant (a false survivor), and a
-  test whose input was already cached is never associated with the
-  cached function at all.
+  once per mutant; with every cache empty, no result the original code
+  cached answers in the child and hides the mutant (a false survivor),
+  and every test calls the cached functions its input reaches.
 """
 
 import importlib
@@ -50,8 +49,8 @@ def _package_caches() -> tuple[Callable[[], None], ...]:
     """The ``cache_clear`` of every ``functools`` cache defined at module
     level anywhere in the package.
 
-    Discovered rather than listed, so a cache added to any module later
-    is cleared without anyone remembering to register it here. The
+    Found by walking the package's modules, so a cache in any module is
+    cleared without being registered here. The
     ``__module__`` check skips a cached function re-exported from some
     other module, so each cache is collected once.
     """
@@ -84,9 +83,8 @@ def pcap_frames(path: Path) -> list[bytes]:
 
     A thin adapter over :func:`netprotocols.pcap.read_pcap` for call
     sites that only want frame bytes, not timestamps (see
-    :func:`corpus_frames` for both) — this suite no longer carries its
-    own pcap-parsing implementation (#100); it exercises the shipped
-    one, the same as any other caller would.
+    :func:`corpus_frames` for both), so the suite reads captures
+    through the shipped reader, as any other caller does.
     """
     return [frame.data for frame in read_pcap(path.read_bytes())]
 
@@ -284,8 +282,8 @@ def raw_hsrp_hello() -> bytes:
     """A constructed HSRPv1 Hello (RFC 2281 §5.1's layout): Speak state
     for group 1 (Hellotime 3, Holdtime 10, priority 100), the default
     Authentication Data ``cisco`` and virtual IP 192.0.2.1. Built by
-    hand rather than cut from tests/fixtures/hsrp.pcap, so the tests
-    that use it do not depend on the capture."""
+    hand, not cut from tests/fixtures/hsrp.pcap, so the tests that use
+    it do not depend on the capture."""
     return bytes.fromhex("000004030a640100636973636f000000c0000201")
 
 
@@ -294,7 +292,7 @@ def tls_client_hello_record() -> bytes:
     record version 0x0301, ClientHello version 0x0303, a Random of
     bytes 0-31, no session ID, one cipher suite (TLS_AES_128_GCM_SHA256),
     the null compression method and one extension, server_name for
-    ``example.com``. Built by hand rather than cut from
+    ``example.com``. Built by hand, not cut from
     tests/fixtures/tls.pcap, so the tests that use it do not depend on
     the capture. A function as well as the fixture below, for
     test_fuzz.py's seeds, which are built at import."""

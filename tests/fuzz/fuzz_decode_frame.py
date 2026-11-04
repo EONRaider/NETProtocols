@@ -31,20 +31,20 @@ with atheris.instrument_imports():
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
-#: Fixed rather than per-run: libFuzzer exits the process from C, so
-#: no Python cleanup runs and a fresh temporary directory would leak on
-#: every run. Files are named by content hash, so reruns, and the
-#: workers ``-jobs``/``-fork`` start, reuse them instead of rewriting.
+#: One fixed directory for every run: libFuzzer exits the process from
+#: C, so no Python cleanup runs. Files are named by content hash, so
+#: reruns, and the workers ``-jobs``/``-fork`` start, reuse them instead
+#: of rewriting.
 SEED_DIR = Path(tempfile.gettempdir()) / "netprotocols-fuzz-seeds"
 
 
 def seed_inputs() -> list[Path]:
     """Write every fixture frame to :data:`SEED_DIR`; return their paths.
 
-    Non-recursive on purpose: the subdirectories hold captures kept
-    outside the corpus (the BGP and TLS sessions, MPLS cut at a 20-byte
-    snap length, classic RFC 3489 STUN, and the HTTP session with its
-    byte streams), and a local, git-ignored ``tests/fixtures/staging/``
+    Reads the top-level captures only: the subdirectories hold captures
+    kept outside the corpus (the BGP and TLS sessions, MPLS cut at a
+    20-byte snap length, classic RFC 3489 STUN, and the HTTP session with
+    its byte streams), and a local, git-ignored ``tests/fixtures/staging/``
     may hold copies of the corpus captures. Identical frames collapse to
     one file. Exits if no frame is found, so a moved fixture directory
     fails the run instead of silently falling back to fuzzing from
