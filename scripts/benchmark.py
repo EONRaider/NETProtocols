@@ -12,9 +12,8 @@ frame does not. Frames the library rejects are counted, not skipped, so
 a change that "speeds things up" by decoding less shows up.
 
 Comparison mode (``--compare``) times `dpkt` and `scapy` on the same
-frames, and prints exactly what each library was asked to do — the
-comparison is only worth publishing if that is on the record. Both are
-dev-only extras: the package itself still has zero runtime dependencies.
+frames, and prints exactly what each library was asked to do. Both are
+dev-only extras: the package itself has zero runtime dependencies.
 
 Cross-machine comparison
 ------------------------
@@ -31,11 +30,10 @@ machine named.
 rather than trusting the caller to match them.
 
 Normalization cancels how fast the *machine* is; it does not cancel the
-interpreter. Measured here, the same code and machine normalize to 6.8
-on CPython 3.12 and 7.6 on 3.13, because the release speeds the decode
-path and the calibration workload up by different amounts. A baseline
-is therefore tied to the Python version that recorded it — ``--check``
-says so when they differ, and the CI job pins one version.
+interpreter, since a CPython release can speed the decode path and the
+calibration workload up by different amounts. A baseline holds for the
+Python version that recorded it: ``--check`` says so when they differ,
+and the CI job pins one version.
 """
 
 from __future__ import annotations
@@ -51,9 +49,8 @@ from pathlib import Path
 from typing import Any
 
 #: Calibration passes per trial. Fixed, and large enough that a pass
-#: takes tens of milliseconds: timing a workload that runs for barely a
-#: millisecond measures the scheduler, not the machine, and the noise
-#: lands straight in the normalized figure the regression gate reads.
+#: takes tens of milliseconds, well above scheduler noise, which would
+#: otherwise land in the normalized figure the regression gate reads.
 CALIBRATION_PASSES = 1000
 
 REPOSITORY = Path(__file__).resolve().parent.parent
@@ -110,8 +107,8 @@ def calibration_workload() -> int:
     """A fixed unit of work built from the decode path's primitives.
 
     Used only as a speed reference for the machine, so a baseline
-    recorded elsewhere stays comparable. Deliberately not a decode: it
-    must not change when the decoder does.
+    recorded elsewhere stays comparable. It is not a decode, and does
+    not change when the decoder does.
     """
     header = struct.Struct("!BBHHHBBH4s4s")
     buffer = bytes(range(64))
@@ -125,12 +122,7 @@ def calibration_workload() -> int:
 
 
 def best_of(work: Callable[[], Any], trials: int) -> float:
-    """Shortest wall-clock time of ``trials`` runs.
-
-    The minimum, not the mean: a benchmark process is only ever
-    interrupted, never helped, so the fastest run is the closest to the
-    cost of the code itself.
-    """
+    """Shortest wall-clock time of ``trials`` runs, after one warm-up run."""
     work()  # warm caches and imports
     return min(_timed(work) for _ in range(trials))
 
@@ -205,11 +197,10 @@ def compare(frames: list[bytes], repetitions: int, trials: int) -> list[str]:
 
 
 def _comparison_caveats() -> list[str]:
-    """Read these before quoting the table above anywhere.
+    """Print how the libraries' work per frame differs.
 
-    The point of this harness is a comparison someone can trust, and no
-    two of these libraries do quite the same work per frame. Saying so
-    is part of the measurement, not a disclaimer bolted onto it.
+    Printed with the throughput table, which is not comparable without
+    it.
     """
     return [
         "",
@@ -247,12 +238,10 @@ def _dpkt_chain(frame: bytes) -> list[str]:
 
 
 def depth_report(frames: list[bytes]) -> list[str]:
-    """Where the libraries stop, frame by frame.
+    """Report where each library stops decoding, frame by frame.
 
-    Throughput means little without this: a decoder that gives up
-    earlier has less to do. This reports where each library stops on
-    the same bytes, so a speed comparison can be read next to the work
-    each one actually performed.
+    Each library decodes the same bytes, so a throughput figure can be
+    read next to the work each one performed.
     """
     lines = ["", "Decode depth on the same frames:", ""]
     deeper, same, example = 0, 0, ""
@@ -335,8 +324,7 @@ def main() -> int:
         "--check", action="store_true", help="fail on a regression"
     )
     parser.add_argument("--update-baseline", action="store_true")
-    # CI passes this explicitly so the gate's number is visible in
-    # ci.yml; the default matches it so a local run gates the same.
+    # The default equals the --threshold that ci.yml passes.
     parser.add_argument("--threshold", type=float, default=15.0)
     parser.add_argument("--json", type=Path, help="write the results here")
     args = parser.parse_args()
@@ -348,9 +336,9 @@ def main() -> int:
 
     repetitions, trials = args.repetitions, args.trials
     if args.check and BASELINE.exists():
-        # Both figures are a best-of, so they tighten as trials rise --
-        # at different rates. A baseline is therefore only comparable to
-        # a run with the same settings, and the baseline's win.
+        # Both figures are a best-of, which tightens as trials rise, at
+        # different rates, so a run measures with the baseline's
+        # repetitions and trials, whatever the command line says.
         recorded = json.loads(BASELINE.read_text())
         repetitions = recorded.get("repetitions", repetitions)
         trials = recorded.get("trials", trials)

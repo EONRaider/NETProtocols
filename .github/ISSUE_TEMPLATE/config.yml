@@ -1,5 +1,4 @@
-# Freeform issues stay enabled (the roadmap and design discussions don't
-# fit a form); the templates just make the common cases structured.
+# Freeform issues are enabled alongside the issue templates.
 blank_issues_enabled: true
 contact_links:
   - name: Contributing guide

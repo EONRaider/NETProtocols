@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture the real-frame fixture corpus (issue #27, plan item L-0).
+# Capture the real-frame fixture corpus.
 #
 # Run once with sudo from the repository root:
 #
@@ -76,9 +76,10 @@ arp_traffic() {
 }
 capture arp_exchange "$IFACE" 4 "arp" -- arp_traffic
 
-# --- IPv6 NDP / MLD, ambient + provoked. MLD reports ride behind a
-# --- hop-by-hop header (the L-1 fixture). Joining a multicast group
-# --- provokes a report; pinging the all-nodes address provokes NDP.
+# --- IPv6 NDP / MLD, ambient + provoked. Joining a multicast group
+# --- provokes an MLD report; pinging the all-nodes address provokes NDP.
+# --- MLD reports ride behind a hop-by-hop header, which the `icmp6`
+# --- filter does not match; capture_fixtures_supplement.sh captures them.
 ipv6_traffic() {
     ping -6 -c 2 -W 2 "ff02::1%$IFACE" || true
     python3 - "$IFACE" <<'PY' || true

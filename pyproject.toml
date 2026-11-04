@@ -94,21 +94,15 @@ source = ["netprotocols"]
 
 [tool.coverage.report]
 show_missing = true
-# The suite covers 99.98% of 6202 statements (6201 hit, 1 miss); the
-# only miss is Packet's __eq__ NotImplemented branch. Gate at 98 rather
-# than at the current figure so a legitimately unreachable branch does
-# not fail CI, and well above it so the bar is actually held.
+# A run that covers less than 98% of the statements fails.
 fail_under = 98
 
 [tool.mutmut]
-# Scoped mutation-testing audit (backlog: mutmut-audit), not a
-# full-codebase run: only the checksum module (every protocol's
-# checksum handling routes through it), the shared TLV walker, and
-# DNS's name-compression byte walk carry real correctness stakes dense
-# enough to justify the runtime. `source_paths` still lists the whole
-# `src` tree because mutmut mirrors it under `mutants/` to keep the
-# package importable; `only_mutate` is what actually narrows which
-# files get mutated (everything else is copied through unmodified).
+# Scoped mutation testing: `only_mutate` lists the files mutated, the
+# checksum module (every protocol's checksum handling routes through
+# it), the shared TLV walker, DNS and HTTP; every other file is copied
+# through unmodified. `source_paths` lists the whole `src` tree, which
+# mutmut mirrors under `mutants/` so the package stays importable.
 source_paths = ["src"]
 only_mutate = [
     "src/netprotocols/checksum.py",
@@ -147,8 +141,8 @@ also_copy = ["scripts"]
 # http.py (the HTTP/1.1 grammar) is audited whole: every rule is a
 # private module-level function, matched by 'x__*'.
 # Mutants mutmut generates elsewhere in dns.py (record/RDATA parsing,
-# the DNS/DNSOverTCP dataclass methods, ...) are out of scope for this
-# audit and were not triaged. mutmut (3.8.1) generates none at all for
+# the DNS/DNSOverTCP dataclass methods, ...) are out of scope and not
+# triaged. mutmut (3.8.1) generates none at all for
 # a decorated function other than a lone @staticmethod/@classmethod, so
 # the @lru_cache section parsers are never mutated, whatever the
 # filters say; logic meant to be audited belongs in undecorated

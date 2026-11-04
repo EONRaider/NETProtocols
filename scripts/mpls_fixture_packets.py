@@ -2,9 +2,8 @@
 """Build, send, and cross-check the MPLS fixture frames.
 
 Run by ``scripts/capture_fixtures_mpls.sh``; stdlib only, and never
-imports netprotocols, for the same reason ``check_fixtures.py`` does
-not: a fixture must be able to disqualify the library, not be shaped
-by it.
+imports netprotocols, like ``check_fixtures.py``, so the fixture is
+independent of the library it tests.
 
 The kernel cannot build MPLS (CONFIG_MPLS_ROUTING is off on the capture
 host, and on many others), so this script builds the Ethernet header

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protocol-coverage survey: #170's gap list against dpkt, scapy, pypacker.
+"""Protocol-coverage survey: the roadmap gap list vs dpkt, scapy, pypacker.
 
     python3 -I scripts/survey_protocols.py \\
         --dpkt /tmp/survey-dpkt-src/dpkt \\
@@ -15,11 +15,10 @@ no third-party package installed, and ``-I`` keeps the interpreter from
 importing anything that sits beside the script or in the working
 directory.
 
-#170 built its five tiers by cross-referencing the three libraries'
-module lists against this one's. This repeats that, one row per item on
-the roadmap's list, and adds what #170 did not write down: the file and
-class that answer each cell, so a reader can check any one of them in
-seconds. A cell names a decoder that exists in the release; it does not
+The survey cross-references the three libraries' modules against this
+one's, one row per item on the roadmap's gap list, and names the file
+and class that answer each cell. A cell names a decoder that exists in
+the release; it does not
 say the library's own decode walk reaches it (dpkt does not dispatch
 TCP or UDP ports at all, for one, docs/CLAIMS.md 1.6). Two things that
 do decide whether a decoder is usable are reported beside it: a caveat
@@ -34,11 +33,11 @@ names (TLS's server_name, the SNI of "TLS records + SNI") or mis-frames
 the protocol's own header (pypacker's AH, every valid one, and its
 non-SNAP LLC, every one). How far a decoder goes beyond that, which
 message bodies, versions, formats or optional fields it covers, is not
-scored, since #170 counted modules: "yes" is a claim about a module,
-not about its depth (docs/CLAIMS.md 7.1 names the gaps known and left
-unscored). Dispatch is scored only in the two rows whose issue is that
-dispatch: IP-in-IP (#177, IP protocol 4) and 802.2 LLC / SNAP (#188,
-the 802.3 Length). "no" is evidence too, not an empty cell: a check
+scored: "yes" is a claim about a module, not about its depth
+(docs/CLAIMS.md 7.1 names the gaps known and left unscored). Dispatch
+is scored only in the two rows whose item is that dispatch: IP-in-IP
+(IP protocol 4) and 802.2 LLC / SNAP (the 802.3 Length). "no" is
+evidence too, not an empty cell: a check
 that a class or handler pattern matches none of the package's source
 files, reported as "no match in N files". A check whose file is
 missing fails rather than passing, and any failed check makes the cell
@@ -49,8 +48,7 @@ netprotocols does not: every one of dpkt's modules and pypacker's
 ``layer*/`` modules was matched by protocol, and each protocol both
 decode and netprotocols does not was then looked for in scapy's
 ``layers/`` and ``contrib/`` (docs/CLAIMS.md 7.1 has the sweep). It is
-a survey, not a gap list: the register's standing rule is never to race
-scapy on coverage (docs/CLAIMS.md 6).
+a survey, not a gap list (docs/CLAIMS.md 6).
 """
 
 from __future__ import annotations
@@ -120,7 +118,8 @@ NO_SNI = Check(
     verdict="partial",
 )
 
-#: #170's gap list: every item of its five tiers, in tier order (#171-#175).
+#: The roadmap's gap list: every item of its five tiers, in tier order,
+#: each row labelled with the issue that tracks it.
 GAP = (
     Row(
         "SCTP",

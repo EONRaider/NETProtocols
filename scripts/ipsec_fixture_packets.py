@@ -2,9 +2,8 @@
 """Build, send, and cross-check the IPsec fixture packets.
 
 Run by ``scripts/capture_fixtures_ipsec.sh`` inside the sending netns;
-stdlib only, and never imports netprotocols, for the same reason
-``check_fixtures.py`` does not: a fixture must be able to disqualify
-the library, not be shaped by it.
+stdlib only, and never imports netprotocols, like ``check_fixtures.py``,
+so the fixture is independent of the library it tests.
 
 The packets are genuine IPsec, not random bytes: ESP with NULL
 encryption (RFC 2410) and AH, both with HMAC-SHA-256-128 integrity (RFC
@@ -208,9 +207,9 @@ def ah_datagram(
     The ICV covers the IPv4 header with its mutable fields — TOS,
     flags and fragment offset, TTL, header checksum — zeroed, then the
     AH header with its ICV zeroed, then the payload (RFC 4302 §3.3.3).
-    That is why the script builds the IPv4 header itself and sends it
-    with IP_HDRINCL: the identification and every other immutable field
-    on the wire must be the ones that were authenticated.
+    The script builds the IPv4 header itself and sends it with
+    IP_HDRINCL, so the identification and every other immutable field
+    on the wire are the ones that were authenticated.
     """
     payload_len = (12 + ICV_LEN) // 4 - 2  # 28 bytes, IPv4-aligned
     ah = struct.pack("!BBHII", next_header, payload_len, 0, sa.spi, seq)

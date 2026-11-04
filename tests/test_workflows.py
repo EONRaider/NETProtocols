@@ -2,23 +2,17 @@
 and that every workflow file under .github/workflows/ holds this
 project's baseline structural bar.
 
-A published version can only be yanked, never replaced, so the gate that
-stops a broken tag reaching PyPI is worth asserting rather than trusting.
-The wiring is easy to break silently: drop ``needs:`` from the publish
-job, or ``workflow_call:`` from the CI workflow, and releases keep
-working while the gate quietly stops existing.
+Without ``needs:`` on the publish job, or ``workflow_call:`` on the CI
+workflow, releases keep working while the gate stops existing; these
+tests fail instead.
 
-These parse the workflow YAML by indentation rather than with a YAML
-library, to avoid adding a dependency for a handful of assertions. The
+These parse the workflow YAML by indentation, with no YAML library. The
 files are small and uniformly two-space indented; a parse failure here
 fails the test loudly instead of passing vacuously.
 
-The commit-SHA-pinning check in particular is parametrized over every
-file a glob of .github/workflows/*.yml and *.yaml finds, rather than a
-fixed list of workflow names. A fixed list quietly stops covering a file the
-moment someone adds a new one and forgets to update the list here --
-the same failure mode as ALL_PROTOCOLS silently skipping DNSOverTCP
-(see the fuzz-completeness test), just relocated to CI's own workflows.
+The commit-SHA-pinning check is parametrized over every file a glob of
+.github/workflows/*.yml and *.yaml finds, so it covers a workflow file
+as soon as it is added.
 """
 
 import re
@@ -153,7 +147,7 @@ def test_reusable_workflow_concurrency_is_not_keyed_on_its_own_name(
     not this workflow's own -- a concurrency group built from it can
     collide with the caller's own top-level group on the same ref and
     get the whole run cancelled as a self-deadlock, as release.yml
-    calling ci.yml on a tag push once did."""
+    calling ci.yml on a tag push would."""
     match = re.search(
         r"^concurrency:\n  group: (?P<group>.+)$", workflow.read_text(), re.M
     )
@@ -169,19 +163,15 @@ def test_reusable_workflow_concurrency_is_not_keyed_on_its_own_name(
 def uses_ref(line: str) -> str | None:
     """The action reference on a ``uses:`` step line, or ``None`` if the
     line isn't one. Matches both the standard YAML list form
-    (``- uses: ...``) and the bare form (``uses: ...``) -- a regex
-    anchored past only the list marker's optional dash previously
-    missed every real ``- uses:`` line in this repo, silently turning
-    :class:`TestActionPinning` into a no-op."""
+    (``- uses: ...``) and the bare form (``uses: ...``); missing the
+    list form would turn :class:`TestActionPinning` into a no-op."""
     match = re.match(r"\s*(?:-\s*)?uses:\s*(\S+)", line)
     return match.group(1) if match else None
 
 
 class TestUsesRefMatching:
-    """Regression coverage for :func:`uses_ref` itself, independent of
-    which real workflow files currently exist -- this is what actually
-    failed silently before, so it gets tested directly rather than only
-    through TestActionPinning's end-to-end check."""
+    """:func:`uses_ref` itself, independent of which real workflow files
+    exist and of TestActionPinning's end-to-end check."""
 
     def test_matches_the_list_form(self):
         assert (
@@ -198,7 +188,7 @@ class TestUsesRefMatching:
     def test_list_form_with_a_moving_tag_is_still_extracted(self):
         """Extraction doesn't itself judge the ref -- TestActionPinning
         does that -- but it must not silently drop an unpinned list-form
-        line the way the pre-fix regex did."""
+        line."""
         assert uses_ref("      - uses: actions/checkout@v4") == (
             "actions/checkout@v4"
         )
@@ -210,10 +200,8 @@ class TestUsesRefMatching:
 class TestActionPinning:
     """Every third-party action, in every workflow, must be pinned.
 
-    Parametrized over ``ALL_WORKFLOWS`` -- a glob of
-    .github/workflows/*.yml -- rather than a fixed list of files, so a
-    workflow added after this test was written is covered automatically
-    instead of silently skipped.
+    Parametrized over ``ALL_WORKFLOWS``, a glob of
+    .github/workflows/*.yml, so it covers every workflow file.
     """
 
     @pytest.mark.parametrize("workflow", ALL_WORKFLOWS, ids=lambda p: p.name)
@@ -261,11 +249,9 @@ class TestCodeQLActionVersionLockstep:
 
     ``init`` writes a config file that ``analyze`` refuses to load when
     their versions differ ("Loaded a configuration file for version
-    '4.37.9', but running version '4.38.1'"), and Dependabot bumps each
-    sub-action path in its own PR, so a half-applied bump is the
-    default outcome rather than a hypothetical one. Checking it here
-    fails the ordinary test job with the offending steps named, instead
-    of surfacing only as a CodeQL "configuration error".
+    '4.37.9', but running version '4.38.1'"), and Dependabot tracks
+    each sub-action path as its own dependency. This fails the ordinary
+    test job with the offending steps named.
     """
 
     def test_all_workflows_pin_a_single_codeql_action_commit(self) -> None:
@@ -274,9 +260,9 @@ class TestCodeQLActionVersionLockstep:
         )
         steps = {step for group in pins.values() for step in group}
         # Guard against passing vacuously: codeql.yml's init/analyze
-        # pair is the reason this check exists, so it must be seen, and
-        # so must the upload-sarif step that uploads analyze's SARIF
-        # once scripts/filter_codeql_sarif.py has filtered it.
+        # pair must be seen, and so must the upload-sarif step that
+        # uploads analyze's SARIF once scripts/filter_codeql_sarif.py
+        # has filtered it.
         expected = {
             "codeql.yml: init",
             "codeql.yml: analyze",
@@ -600,19 +586,15 @@ class TestCIWorkflow:
         )
         # Known accepted limitation: `body` is captured non-greedily up
         # to the first line that is just `fi`, not necessarily the one
-        # that actually balances this `if`. A deliberately nested dead
-        # branch inside the real mismatch block -- e.g. `if false; then
+        # that actually balances this `if`. A nested dead branch inside
+        # the real mismatch block -- e.g. `if false; then
         # exit 1; fi` sitting inside the outer `if [ "$hash1" !=
         # "$hash2" ]; then ... fi` -- would still read as "exit 1 is in
         # body" without being reachable. The same blind spot covers an
         # `elif` arm: `if [ "$hash1" != "$hash2" ]; then echo ...; elif
         # false; then exit 1; fi` textually places "exit 1" inside the
         # captured body even though it can only run when the mismatch
-        # branch does NOT. Closing either case would mean tracking
-        # `if`/`elif`/`fi` control flow instead of matching to the
-        # first `fi`, which is more machinery than a YAML/bash text
-        # heuristic like this one is worth carrying for a case the real
-        # ci.yml step doesn't (and has no reason to) construct.
+        # branch does NOT. The real ci.yml step has neither.
         mismatch = re.search(
             r'if \[ "?\$hash1"?\s*!=\s*"?\$hash2"?\s*\];?\s*then\n'
             r"(?P<body>(?:.*\n)*?)"
@@ -635,13 +617,9 @@ class TestCIWorkflow:
         self, ci_jobs: dict[str, str]
     ) -> None:
         """The build job must actually compare two independent builds'
-        artifacts, not merely claim to and mention the right words --
-        a block containing the word "reproducible" plus echoed
-        mentions of "sha256sum", "$hash1 != $hash2", and "exit 1"
-        would previously pass this test without ever hashing anything
-        or failing on a real mismatch, because every assertion here
-        used to search the whole raw `build` job block rather than
-        this step's own, actually-executed script."""
+        artifacts, not merely mention the right words: the assertions
+        search this step's own executed script, not the whole raw
+        `build` job block."""
         block = ci_jobs.get("build")
         assert block is not None, "ci.yml has no build job"
         script = self._reproducibility_step_script(block)
@@ -650,19 +628,14 @@ class TestCIWorkflow:
     def test_build_reproducibility_check_rejects_a_cosmetic_stand_in(
         self,
     ) -> None:
-        """Regression test for the gap in the previous version of
-        :meth:`test_build_verifies_reproducibility`.
+        """A step that only mentions the checks fails
+        :meth:`test_build_verifies_reproducibility`'s assertions.
 
-        The old test only checked that "reproducible", "sha256sum",
-        a "$hash1 ... != ... $hash2" pattern, and "exit 1" each
-        occurred *somewhere* in the raw `build` job block. This
-        fixture's step builds both wheels, but its "hashing" and
-        "comparison" are just words inside one echoed string -- no
-        `sha256sum` call, no `hash1`/`hash2` assignment, and no real
-        `if`/`exit 1` ever run. Every old assertion (verified by hand
-        against the pre-fix logic) is satisfied by this text, so this
-        case would have slipped past it silently; it must fail the
-        tightened checks instead.
+        This fixture's step builds both wheels and contains "reproducible",
+        "sha256sum", a "$hash1 ... != ... $hash2" pattern and "exit 1",
+        but its "hashing" and "comparison" are just words inside one
+        echoed string -- no `sha256sum` call, no `hash1`/`hash2`
+        assignment, and no real `if`/`exit 1` ever run.
         """
         cosmetic_step = (
             f"      - name: {self.REPRODUCIBILITY_STEP_NAME}\n"
@@ -682,12 +655,12 @@ class TestCIWorkflow:
     def test_build_reproducibility_check_rejects_a_non_failing_mismatch(
         self,
     ) -> None:
-        """Regression test for the other gap in the previous version of
-        :meth:`test_build_verifies_reproducibility`: the cosmetic-stand-in
-        fixture above trips the ``hash1=`` assertion, so it never reaches
-        -- and never proves correct -- the two strongest checks after it,
-        the reachable ``if [ "$hash1" != "$hash2" ]; then ... fi`` block
-        match and the "exit 1 inside that block" requirement.
+        """A mismatch branch that does not exit fails
+        :meth:`test_build_verifies_reproducibility`'s assertions. The
+        cosmetic-stand-in fixture above trips the ``hash1=`` assertion,
+        so it never reaches the two checks after it, the reachable
+        ``if [ "$hash1" != "$hash2" ]; then ... fi`` block match and the
+        "exit 1 inside that block" requirement; this one does.
 
         This fixture's step performs the real `sha256sum` assignments and
         has a real, reachable hash-mismatch `if`/`fi` block -- so it must
@@ -840,7 +813,7 @@ class TestMutationWorkflow:
     # documents these positional filters as the way to reproduce that
     # narrower scope. If the workflow step doesn't pass them, it mutates
     # (and reports on) all of dns.py's untriaged record/RDATA parsing
-    # code every night, silently wider than what was ever audited.
+    # code every night, wider than the audited scope.
     EXPECTED_FILTERS = (
         "netprotocols.checksum.*",
         "netprotocols._tlv.*",
@@ -988,20 +961,18 @@ class TestMutationWorkflow:
     def test_run_rejects_an_unquoted_argument_on_a_continued_line(
         self,
     ) -> None:
-        """Regression test: a continued line that is not a quoted
-        filter must fail loudly, not be silently dropped.
+        """A continued line that is not a quoted filter must fail
+        loudly, not be silently dropped.
 
         All five real filters are present and correctly continued,
         followed by one more continued line that is an unquoted
-        wildcard rather than a quoted filter. Bash would still pass
-        that word to mutmut as a sixth positional argument -- it is
-        not a shell syntax error, just an argument this parse must not
-        let slide by unnoticed. Before the fix that replaced a bare
-        `break` with this assertion, the loop stopped as soon as the
-        unquoted line failed to match, leaving `filters` holding
-        exactly the five expected entries and the equality check in
-        `test_run_applies_the_documented_dns_scope_filters` passing
-        despite the extra argument -- this proves that gap is closed.
+        wildcard, not a quoted filter. Bash would still pass that word
+        to mutmut as a sixth positional argument -- it is not a shell
+        syntax error, just an argument this parse must not let slide by
+        unnoticed. A parse that stopped at the unquoted line would hold
+        exactly the five expected entries, and the equality check in
+        `test_run_applies_the_documented_dns_scope_filters` would pass
+        despite the extra argument.
         """
         malformed = (
             "          uv run --frozen mutmut run \\\n"
@@ -1023,8 +994,7 @@ class TestMutationWorkflow:
 # which holds the source paths, plus what mutmut copies by default
 # (mutmut/configuration.py) and whatever [tool.mutmut]'s also_copy
 # names. A selected test that loads any other repo file by a path
-# relative to itself dies there with FileNotFoundError -- which is how
-# #263's scripts/check_fixtures.py fixture broke the nightly run.
+# relative to itself dies there with FileNotFoundError.
 MUTMUT_DEFAULT_COPIES = (
     "tests",
     "test",

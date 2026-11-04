@@ -8,11 +8,7 @@ then times re-serializing the whole decoded frame back to bytes. This
 is the half of "codec" throughput ``scripts/benchmark.py`` does not
 cover: decode-then-encode, not decode alone. Every library re-encodes
 the same work, all 42 bytes of three layers, and each output is
-asserted equal to ``FRAME`` before anything is timed. An earlier
-version timed ``bytes(Ethernet.decode(FRAME))`` for netprotocols, which
-re-encodes the 14-byte Ethernet header only, against dpkt's
-``bytes(Ethernet(FRAME))``, which serializes the whole frame (CodeRabbit
-on #296), so its ratio compared a header with a frame. dpkt and
+asserted equal to ``FRAME`` before anything is timed. dpkt and
 netprotocols both rebuild their bytes from fields on every call; scapy
 returns a cached copy of the bytes it was built from unless a field
 changed, so its number here is not a like-for-like repack (see
