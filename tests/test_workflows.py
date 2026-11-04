@@ -538,6 +538,22 @@ class TestCIWorkflow:
             "are not collected"
         )
 
+    def test_typecheck_covers_scripts(self, ci_jobs: dict[str, str]) -> None:
+        """The typecheck job runs plain ``uv run mypy``, which reads
+        pyproject.toml's ``[tool.mypy]``: strict, with ``scripts`` in its
+        ``files``."""
+        block = ci_jobs.get("typecheck")
+        assert block is not None, "ci.yml has no typecheck job"
+        assert re.search(r"(?m)^ +- run: uv run mypy$", block), (
+            "typecheck job no longer runs plain `uv run mypy`"
+        )
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        mypy_config = pyproject["tool"]["mypy"]
+        assert mypy_config.get("strict") is True, "mypy is no longer strict"
+        assert "scripts" in mypy_config["files"], (
+            "[tool.mypy] files no longer include scripts"
+        )
+
     TRACEMALLOC_STEP_NAME = "Allocation tests under PYTHONTRACEMALLOC=1"
 
     def test_test_job_runs_the_allocation_tests_while_tracing(

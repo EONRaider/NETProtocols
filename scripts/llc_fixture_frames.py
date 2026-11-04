@@ -63,7 +63,7 @@ def internet_checksum(data: bytes) -> int:
     """Return the RFC 1071 checksum of ``data``."""
     if len(data) % 2:
         data += b"\x00"
-    total = sum(word for (word,) in struct.iter_unpack("!H", data))
+    total: int = sum(word for (word,) in struct.iter_unpack("!H", data))
     while total >> 16:
         total = (total & 0xFFFF) + (total >> 16)
     return ~total & 0xFFFF
