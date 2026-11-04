@@ -72,8 +72,9 @@ class TCPOption:
 
     @property
     def kind_name(self) -> str:
-        """Display name of the option kind, e.g. ``"Timestamps"``; falls
-        back to ``"unknown (n)"`` for kinds this library does not name.
+        """Display name of the option kind, e.g. ``"Timestamps"``.
+
+        ``"unknown (n)"`` for kinds this library does not name.
         """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
@@ -81,8 +82,9 @@ class TCPOption:
     def value(
         self,
     ) -> int | tuple[int, int] | tuple[tuple[int, int], ...] | None:
-        """The decoded value, for the kinds this library understands:
-        the segment size for MSS, the shift count for Window Scale, a
+        """The decoded value, for the kinds this library understands.
+
+        The segment size for MSS, the shift count for Window Scale, a
         ``(tsval, tsecr)`` pair for Timestamps, and a tuple of
         ``(left_edge, right_edge)`` pairs for SACK. ``None`` — read
         :attr:`data` raw instead — for the single-byte kinds,
@@ -143,11 +145,10 @@ class TCP(Protocol):
     urgent_pointer: int
     options: bytes = b""
 
-    #: Curated positional form for `match`/`case` (#94): declared by
-    #: hand because the auto-generated tuple would list all 11 fields,
-    #: unusable positionally. ``src_port``/``dst_port`` identify the
-    #: connection, ``flags`` says what kind of segment this is (SYN,
-    #: SYN-ACK, ...) — mirrors :attr:`~netprotocols.IPv4.__match_args__`.
+    #: Positional form for ``match``/``case``: ``src_port``/``dst_port``
+    #: identify the connection, ``flags`` says what kind of segment this
+    #: is (SYN, SYN-ACK, ...). Same shape as
+    #: :attr:`~netprotocols.IPv4.__match_args__`.
     __match_args__ = ("src_port", "dst_port", "flags")
 
     _struct: ClassVar[Struct] = Struct("!HHIIHHHH")
@@ -190,6 +191,14 @@ class TCP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the TCP header, options included, at the start of ``data``.
+
+        :param data: The buffer holding the header and what follows it.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            20-byte fixed header or than the length ``data_offset``
+            declares.
+        :raises InvalidFieldError: if ``data_offset`` is below 5.
+        """
         (
             src_port,
             dst_port,
@@ -251,24 +260,27 @@ class TCP(Protocol):
 
     @property
     def header_len(self) -> int:
+        """Header length in bytes, options included: ``data_offset * 4``."""
         return self.data_offset * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The application protocol carried by this segment, chosen by
-        well-known port (best-effort — see
+        """Return the application protocol carried by this segment.
+
+        The protocol is chosen by well-known port (best-effort; see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
         recognized. DNS over TCP is length-prefixed, so it chains through
         a :class:`~netprotocols.DNSOverTCP` shim.
+
+        :param registry: The registry to consult; ``None`` for the
+            default one.
         """
         return tcp_app_class(self.src_port, self.dst_port, registry)
 
     @property
     def flags_str(self) -> str:
-        """Space-separated names of the flags set on the segment, e.g.
-        ``"SYN ACK"``.
-        """
+        """Space-separated names of the flags set, e.g. ``"SYN ACK"``."""
         return " ".join(
             name
             for shift, name in enumerate(self.flag_names)
@@ -289,8 +301,9 @@ class TCP(Protocol):
 
     @property
     def parsed_options(self) -> tuple[TCPOption, ...]:
-        """The options as a tuple of :class:`TCPOption`, in wire order,
-        parsed on demand (RFC 9293 §3.1). The single-byte kinds (EOL,
+        """The options as :class:`TCPOption` objects, in wire order.
+
+        Parsed on demand (RFC 9293 §3.1). The single-byte kinds (EOL,
         NOP) carry no data; an End of Option List option ends the parse,
         so whatever follows it is padding and is not returned. Empty for
         a header without options.

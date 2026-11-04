@@ -109,7 +109,7 @@ what it can without reassembly:
   header. Over IPv4 a bare segment whose TCP header has no options is a
   54-byte frame, short of Ethernet's 60-byte minimum, and where the
   capture holds the padding the sender added, the walk, which does not
-  yet end a layer's buffer at IPv4's Total Length (#235), hands TLS the
+  end a layer's buffer at IPv4's Total Length, hands TLS the
   6 zero bytes as its payload: a ContentType of 0, so it raises
   :class:`~netprotocols.InvalidFieldError` (``field``
   ``"content_type"``) instead. BGP's decoder judges nothing before its
@@ -434,7 +434,7 @@ class TLSExtension:
     def __post_init__(self) -> None:
         """Check the type fits 2 bytes and the data a 2-byte length.
 
-        :raises InvalidFieldError: either does not.
+        :raises InvalidFieldError: if either does not.
         """
         if not 0 <= self.type <= 0xFFFF:
             raise InvalidFieldError(
@@ -473,7 +473,7 @@ class TLSExtension:
 
 @dataclass(frozen=True, slots=True)
 class TLSClientHello:
-    """A ClientHello's fields (RFC 9846 §4.2.2, RFC 5246 §7.4.1.2).
+    r"""A ClientHello's fields (RFC 9846 §4.2.2, RFC 5246 §7.4.1.2).
 
     Built by :attr:`TLS.client_hello` from a record's fragment, never
     on decode; a value, not a layer.
@@ -487,7 +487,7 @@ class TLSClientHello:
     :param cipher_suites: The cipher suite list, raw: two bytes a
         suite, in the client's order of preference.
     :param legacy_compression_methods: The compression method list,
-        raw: one byte a method, ``b"\\x00"`` (null) in practice.
+        raw: one byte a method, ``b"\x00"`` (null) in practice.
     :param extensions: The extensions in wire order; ``None`` when the
         ClientHello ends after its compression methods with no
         extensions block (RFC 5246 §7.4.1.2), ``()`` for an empty one.
@@ -506,7 +506,7 @@ class TLSClientHello:
     def __post_init__(self) -> None:
         """Check each field fits the length the wire gives it.
 
-        :raises InvalidFieldError: one does not.
+        :raises InvalidFieldError: if one does not.
         """
         limits = (
             ("legacy_session_id", len(self.legacy_session_id), _MAX_SESSION_ID),
@@ -625,11 +625,10 @@ class TLSServerNamePeek:
     server_name: str | None = None
 
     def __post_init__(self) -> None:
-        """Check a name comes only with a complete answer, and is not
-        empty.
+        """Check a name comes only with a complete answer, and is not empty.
 
-        :raises InvalidFieldError: a name without a complete answer, or
-            an empty one.
+        :raises InvalidFieldError: if there is a name without a complete
+            answer, or an empty one.
         """
         if self.server_name is None:
             return
@@ -683,11 +682,16 @@ def _prefixed(
     of ``data`` when ``data`` is a prefix (see :func:`peek_server_name`);
     the strict parsers pass an ``end`` within ``data``.
 
+    :param data: The bytes holding the element, or a prefix of them.
+    :param at: Where the element's length starts in ``data``.
+    :param width: Bytes in the element's length.
+    :param end: Where what contains the element ends.
+    :param what: The element's name, for a raised error's message.
     :returns: ``(start, stop)`` of its contents, which need not be in
         ``data``.
-    :raises InvalidFieldError: its length, or its contents, runs past
+    :raises InvalidFieldError: if its length, or its contents, runs past
         ``end`` (offsets as in ``data``).
-    :raises _Unreached: its length runs past ``data`` but not ``end``.
+    :raises _Unreached: if its length runs past ``data`` but not ``end``.
     """
     if at + width > end:
         raise _malformed(f"TLS {what} length runs past its message", at)
@@ -703,16 +707,19 @@ def _prefixed(
 def _extension_spans(
     data: bytes, at: int, end: int
 ) -> Iterator[tuple[int, int, int, int]]:
-    """Yield ``(offset, type, start, stop)`` for each extension in
-    ``data[at:end]``: where its header and its data start, its type,
-    and where its data stops.
+    """Yield ``(offset, type, start, stop)`` for each extension.
 
+    The extensions are those in ``data[at:end]``; each tuple gives where
+    its header starts, its type, and where its data starts and stops.
     Nothing is read past an extension's header, so an extension whose
     data lies past the end of a prefix is still stepped over.
 
-    :raises InvalidFieldError: an extension's header or data runs past
+    :param data: The bytes holding the extensions block, or a prefix.
+    :param at: Where the first extension starts in ``data``.
+    :param end: Where the extensions block ends.
+    :raises InvalidFieldError: if an extension's header or data runs past
         ``end``.
-    :raises _Unreached: an extension's header runs past ``data``.
+    :raises _Unreached: if an extension's header runs past ``data``.
     """
     while at < end:
         if at + 4 > end:
@@ -727,7 +734,10 @@ def _walk_extensions(
 ) -> Iterator[tuple[int, TLSExtension]]:
     """Yield ``(offset, extension)`` for each extension in ``data[at:end]``.
 
-    :raises InvalidFieldError: an extension's header or data runs past
+    :param data: The bytes holding the whole extensions block.
+    :param at: Where the first extension starts in ``data``.
+    :param end: Where the extensions block ends.
+    :raises InvalidFieldError: if an extension's header or data runs past
         ``end``.
     """
     for offset, kind, start, stop in _extension_spans(data, at, end):
@@ -742,21 +752,22 @@ def _hello_spans(
     tuple[int, int],
     tuple[int, int] | None,
 ]:
-    """Locate a ClientHello's variable-length fields, the message ending
-    at ``end`` in ``fragment``.
+    """Locate a ClientHello's variable-length fields.
 
-    Every length is judged against what contains it, as soon as it is
-    read and in wire order, whether or not the bytes it covers are in
-    ``fragment``, which is only a prefix of the message when
-    :func:`peek_server_name` calls this.
+    The message ends at ``end`` in ``fragment``. Every length is judged
+    against what contains it, as soon as it is read and in wire order,
+    whether or not the bytes it covers are in ``fragment``, which is only
+    a prefix of the message when :func:`peek_server_name` calls this.
 
+    :param fragment: The Handshake fragment, or a prefix of it.
+    :param end: Where the ClientHello message ends.
     :returns: ``(start, stop)`` of the session ID, the cipher suites and
         the compression methods, and of the extensions block's contents
         or ``None`` when the message ends after the compression methods.
-    :raises InvalidFieldError: the message ends inside its Random, a
+    :raises InvalidFieldError: if the message ends inside its Random, a
         length runs past what contains it, the session ID exceeds 32
         bytes, or bytes follow the extensions block.
-    :raises _Unreached: ``fragment`` ends before a length that decides
+    :raises _Unreached: if ``fragment`` ends before a length that decides
         any of that.
     """
     if end < 4 + 2 + 32:
@@ -788,11 +799,12 @@ def _parse_client_hello(
 ) -> tuple[TLSClientHello, tuple[int, ...]]:
     """Parse the ClientHello at the start of a Handshake fragment.
 
+    :param fragment: The Handshake record's fragment.
     :returns: The ClientHello, and where in ``fragment`` each of its
         extensions starts.
-    :raises TruncatedHeaderError: ``fragment`` holds less than the
+    :raises TruncatedHeaderError: if ``fragment`` holds less than the
         handshake message's length says.
-    :raises InvalidFieldError: a length inside the message runs past
+    :raises InvalidFieldError: if a length inside the message runs past
         what contains it, the session ID exceeds 32 bytes, or bytes
         follow the extensions block.
     """
@@ -829,15 +841,18 @@ def _parse_client_hello(
 
 
 def _host_name(fragment: bytes, begin: int, end: int) -> str | None:
-    """Read the first host_name of the server_name extension whose data
-    is ``fragment[begin:end]``.
+    """Read the first host_name of a server_name extension.
 
-    Every position is the fragment's, so every offset raised is one in
+    The extension's data is ``fragment[begin:end]``. Every position is
+    the fragment's, so every offset raised is one in
     :attr:`TLS.fragment`, as the accessors promise.
 
     ``None`` when the list holds names of other types only.
 
-    :raises InvalidFieldError: the list is empty or malformed, or the
+    :param fragment: The Handshake fragment, or a prefix of it.
+    :param begin: Where the extension's data starts.
+    :param end: Where the extension's data ends.
+    :raises InvalidFieldError: if the list is empty or malformed, or the
         host_name is empty or not ASCII.
     """
     list_start, list_stop = _prefixed(
@@ -892,10 +907,13 @@ def _reject(
 
 
 def _judge_lead(owner: type, data: bytes | memoryview) -> None:
-    """Judge as much of a record header's first 3 bytes as ``data``
-    holds, each by its own rule, as :meth:`TLS.decode` does.
+    """Judge as much of a record header's first 3 bytes as ``data`` holds.
 
-    :raises InvalidFieldError: the ContentType is not 20-24, the
+    Each byte is judged by its own rule, as :meth:`TLS.decode` does.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param data: The bytes starting at a record header.
+    :raises InvalidFieldError: if the ContentType is not 20-24, the
         version's first byte is not 3, or its second is above 4.
     """
     size = len(data)
@@ -931,7 +949,9 @@ def _judge_lead(owner: type, data: bytes | memoryview) -> None:
 def _judge_length(owner: type, length: int) -> None:
     """Judge a record's length against the bound any version sets.
 
-    :raises InvalidFieldError: it exceeds 2**14 + 2048.
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param length: The record header's length field.
+    :raises InvalidFieldError: if it exceeds 2**14 + 2048.
     """
     if length > _MAX_LENGTH:
         _reject(
@@ -989,7 +1009,7 @@ class TLS(Protocol):
     def __post_init__(self) -> None:
         """Check each header field fits and the length matches.
 
-        :raises InvalidFieldError: a field does not.
+        :raises InvalidFieldError: if a field does not.
         """
         if not 0 <= self.content_type <= 0xFF:
             raise InvalidFieldError(
@@ -1036,7 +1056,8 @@ class TLS(Protocol):
         the length against the buffer (see the module docstring's
         *Validation*).
 
-        :raises InvalidFieldError: the ContentType is not 20-24
+        :param data: The buffer holding the record and what follows it.
+        :raises InvalidFieldError: if the ContentType is not 20-24
             (``field`` ``"content_type"``, ``offset`` 0), else the
             version's first byte is not 3 (``"legacy_version"``, 1) or
             its second above 4 (``"legacy_version"``, 2), else the
@@ -1044,12 +1065,15 @@ class TLS(Protocol):
             three at any buffer length, the length once both its bytes
             are present. ``actual`` is the value judged: the byte, the
             version (``0x0305`` and up) or the length.
-        :raises TruncatedHeaderError: ``data`` is shorter than the
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
             5-byte header and every byte of the first three it holds
             passes, or shorter than the record's length says (``field``
             ``"length"``).
         """
         size = len(data)
+        # TODO(#235): end ``data`` at IPv4's Total Length in decode_frame,
+        # so Ethernet padding after a bare segment does not reach this
+        # guard.
         _judge_lead(cls, data)
         content_type, version, length = cls._unpack_fixed(data)
         _judge_length(cls, length)
@@ -1159,9 +1183,9 @@ class TLS(Protocol):
         one of the errors below, almost always TruncatedHeaderError,
         instead of answering ``None`` (see the module docstring).
 
-        :raises TruncatedHeaderError: the record holds less than the
+        :raises TruncatedHeaderError: if the record holds less than the
             ClientHello's length says (``field`` ``"fragment"``).
-        :raises InvalidFieldError: a length inside it runs past what
+        :raises InvalidFieldError: if a length inside it runs past what
             contains it, the session ID exceeds 32 bytes, or bytes
             follow its extensions (``field`` ``"fragment"``, ``offset``
             within :attr:`fragment`).
@@ -1184,8 +1208,8 @@ class TLS(Protocol):
         Under Encrypted Client Hello this is the outer ClientHello's
         name, the client-facing server's (see the module docstring).
 
-        :raises TruncatedHeaderError: as :attr:`client_hello`.
-        :raises InvalidFieldError: as :attr:`client_hello`, or the
+        :raises TruncatedHeaderError: if :attr:`client_hello` does.
+        :raises InvalidFieldError: if :attr:`client_hello` does, or the
             extension is malformed, empty, or holds a non-ASCII byte
             (``field`` ``"fragment"``, ``offset`` within
             :attr:`fragment`).
@@ -1215,16 +1239,17 @@ def _begins_record(rest: bytes) -> bool:
 
 
 def _peek_host_name(fragment: bytes) -> str | None:
-    """Read a ClientHello's host name from a prefix of its record's
-    fragment, as :attr:`TLS.server_name` reads it from the whole.
+    """Read a ClientHello's host name from a prefix of its fragment.
 
-    Every length is judged against the length that encloses it, the
+    It is read as :attr:`TLS.server_name` reads it from the whole
+    fragment. Every length is judged against the length that encloses it, the
     handshake message's own included, never against ``fragment``'s end,
     which only says how far the bytes go.
 
-    :raises InvalidFieldError: as :attr:`TLS.server_name`, for bytes
-        that are present.
-    :raises _Unreached: ``fragment`` ends before the answer is known.
+    :param fragment: A prefix of the Handshake record's fragment.
+    :raises InvalidFieldError: if the bytes present are malformed, as
+        :attr:`TLS.server_name` reports them.
+    :raises _Unreached: if ``fragment`` ends before the answer is known.
     """
     if len(fragment) < 4:
         raise _Unreached
@@ -1252,10 +1277,9 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
     *found* when the whole ``server_name`` extension is in them,
     *absent* when they show the first record carries no host name, and
     *not reached* when they end first, which is not "no SNI" (see
-    :class:`TLSServerNamePeek`). :meth:`TLS.decode`'s contract is
-    unchanged: this is a separate function, not a decode mode, and it
-    builds no :class:`TLS` instance, re-encodes nothing, keeps no state,
-    and does work bounded by ``len(data)``.
+    :class:`TLSServerNamePeek`). This is a separate function, not a
+    decode mode of :meth:`TLS.decode`: it builds no :class:`TLS` instance,
+    re-encodes nothing, keeps no state, and does work bounded by ``len(data)``.
 
     Only the first record is read, as far as its length says or the
     bytes go, whichever is shorter, and *absent* means "this first
@@ -1314,7 +1338,7 @@ def peek_server_name(data: bytes | memoryview) -> TLSServerNamePeek:
 
     :param data: Bytes starting at a record header, cut anywhere.
     :returns: *found*, *absent* or *not reached*.
-    :raises InvalidFieldError: a byte present fails :meth:`TLS.decode`'s
+    :raises InvalidFieldError: if a byte present fails :meth:`TLS.decode`'s
         guard (``field`` ``"content_type"``, ``"legacy_version"`` or
         ``"length"``, the length once both its bytes are present), or
         the ClientHello's bytes present are malformed as

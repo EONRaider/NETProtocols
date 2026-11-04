@@ -169,25 +169,27 @@ class SCTPChunk:
 
     @property
     def length(self) -> int:
-        """The chunk length field: the 4-byte chunk header plus the
-        value, not counting the padding (RFC 9260 §3.2).
+        """The chunk length field (RFC 9260 §3.2).
+
+        It counts the 4-byte chunk header and the value, not the padding.
         """
         return _CHUNK_HEADER.size + len(self.value)
 
     @property
     def type_name(self) -> str:
-        """Display name of the chunk type, e.g. ``"INIT ACK"``; falls
-        back to ``"unknown (n)"`` for types this library does not
-        name.
+        """Display name of the chunk type, e.g. ``"INIT ACK"``.
+
+        ``"unknown (n)"`` for types this library does not name.
         """
         return _CHUNK_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
     def flags_str(self) -> str:
-        """Space-separated names of the flags set on the chunk, for the
-        types that define any: ``"B E"`` for an unfragmented DATA chunk,
-        ``"T"`` for an ABORT that carries the sender's own tag. Empty for
-        other types; bits this library does not name are left out (read
+        """Space-separated names of the flags set on the chunk.
+
+        ``"B E"`` for an unfragmented DATA chunk, ``"T"`` for an ABORT
+        that carries the sender's own tag. Empty for types that define no
+        flags; bits this library does not name are left out (read
         :attr:`flags` for them).
         """
         return " ".join(
@@ -198,8 +200,9 @@ class SCTPChunk:
 
     @property
     def unrecognized_action(self) -> int:
-        """What a receiver does with a chunk type it does not recognize
-        — the two high bits of the type (RFC 9260 §3.2): ``0`` stop
+        """What a receiver does with a chunk type it does not recognize.
+
+        These are the two high bits of the type (RFC 9260 §3.2): ``0`` stop
         processing the packet, discarding this chunk and every chunk
         after it (the chunks before it were already processed), ``1``
         the same and report the chunk in an ERROR chunk, ``2`` skip the
@@ -211,10 +214,11 @@ class SCTPChunk:
 def _walk_chunks(
     raw: bytes | memoryview, start: int, protocol: type
 ) -> Iterator[tuple[int, int, int, int, int]]:
-    """Walk the chunks in ``raw`` from ``start``, yielding ``(offset,
-    type, flags, value_end, end)`` for each: ``raw[offset + 4 :
-    value_end]`` is its value and ``end`` is where the next chunk
-    starts, padding skipped.
+    """Walk the chunks in ``raw`` from ``start``.
+
+    Yields ``(offset, type, flags, value_end, end)`` for each chunk:
+    ``raw[offset + 4 : value_end]`` is its value and ``end`` is where the
+    next chunk starts, padding skipped.
 
     The walk ends at the end of ``raw``, or early at a remainder made
     only of zero bytes, which is link-layer padding rather than a chunk
@@ -222,14 +226,17 @@ def _walk_chunks(
     buffer cuts short ends at the end of ``raw``. Offsets in raised
     errors are relative to ``raw``.
 
+    Bounded: every chunk advances the walk by at least 4 bytes, so it
+    never hangs or over-reads whatever ``raw`` holds. The zero-tail scan
+    reads through a view, so a long trailer is not copied to be checked.
+
+    :param raw: The chunk bytes to walk.
+    :param start: Offset in ``raw`` of the first chunk.
+    :param protocol: The class named as ``protocol`` in raised errors.
     :raises TruncatedHeaderError: if fewer than 4 bytes (not all zero)
         remain for a chunk header, or a chunk's length runs past
         ``raw``.
     :raises InvalidFieldError: if a chunk's length is below 4.
-
-    Bounded: every chunk advances the walk by at least 4 bytes, so it
-    never hangs or over-reads whatever ``raw`` holds. The zero-tail scan
-    reads through a view, so a long trailer is not copied to be checked.
     """
     size = len(raw)
     cursor = start
@@ -248,7 +255,7 @@ def _walk_chunks(
             )
         type_, flags, length = _CHUNK_HEADER.unpack_from(raw, cursor)
         if length < _CHUNK_HEADER.size:
-            # Checked only on the way out, so the scan runs once.
+            # The zero-tail scan runs only for a length below 4.
             if not any(memoryview(raw)[cursor:]):
                 return
             raise InvalidFieldError(
@@ -309,6 +316,7 @@ class SCTP(Protocol):
         parse is kept in :attr:`chunks` as is, so past the common header
         this never raises (see the module docstring).
 
+        :param data: The buffer holding the packet and what follows it.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             12-byte common header.
         """
@@ -320,6 +328,9 @@ class SCTP(Protocol):
         except (TruncatedHeaderError, InvalidFieldError):
             # Unwalkable: keep the rest verbatim, for parsed_chunks to
             # report and verify() to reject.
+            # TODO(#235): bound ``data`` by the IP length in decode_frame,
+            # so a nonzero trailer such as an Ethernet FCS stays out of
+            # ``chunks``.
             end = len(data)
         return cls(
             src_port=src_port,
@@ -342,7 +353,7 @@ class SCTP(Protocol):
 
     @property
     def header_len(self) -> int:
-        # The chunks are the whole packet: SCTP is terminal here.
+        """Length of the whole packet: the common header and the chunks."""
         return self._struct.size + len(self.chunks)
 
     @property
@@ -352,15 +363,16 @@ class SCTP(Protocol):
 
     @property
     def verification_tag_hex_str(self) -> str:
-        """The verification tag as a hexadecimal string, e.g.
-        ``"0x7324d044"``.
-        """
+        """The verification tag as a hex string, e.g. ``"0x7324d044"``."""
         return hex_str(self.verification_tag, 10)
 
+    # TODO(#238): add typed DATA, INIT and SACK chunk accessors and
+    # payload-protocol (PPID) dispatch.
     @property
     def parsed_chunks(self) -> tuple[SCTPChunk, ...]:
-        """The chunks as a tuple of :class:`SCTPChunk`, in wire order,
-        parsed on demand (RFC 9260 §3.2); their padding is dropped. A
+        """The chunks as :class:`SCTPChunk` objects, in wire order.
+
+        Parsed on demand (RFC 9260 §3.2); their padding is dropped. A
         trailing run of zero bytes is padding and yields no chunk.
 
         Raises when :attr:`chunks` does not walk: on a decoded instance,

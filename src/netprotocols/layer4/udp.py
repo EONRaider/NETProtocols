@@ -33,6 +33,12 @@ class UDP(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 8-byte UDP header at the start of ``data``.
+
+        :param data: The buffer holding the header and what follows it.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            8-byte header.
+        """
         src_port, dst_port, length, checksum = cls._unpack_fixed(data)
         return cls(
             src_port=src_port,
@@ -49,10 +55,14 @@ class UDP(Protocol):
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The application protocol carried by this datagram, chosen by
-        well-known port (best-effort — see
+        """Return the application protocol carried by this datagram.
+
+        The protocol is chosen by well-known port (best-effort; see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port
         is recognized.
+
+        :param registry: The registry to consult; ``None`` for the
+            default one.
         """
         return udp_app_class(self.src_port, self.dst_port, registry)
 
