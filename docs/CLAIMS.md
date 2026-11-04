@@ -777,7 +777,7 @@ and optimization to its end (#250).
 | Claim | Command | Result |
 |---|---|---|
 | 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 149,090 / 152,096 / 158,328 f/s; dpkt 225,788 / 225,538 / 241,767; scapy 45,723 / 46,342 / 48,231. dpkt faster by 1.51×, 1.48×, 1.53×; against scapy 3.26×, 3.28×, 3.28×. Quoted: the median-ratio run, **dpkt 1.51× faster**, **3.3×** against scapy. netprotocols decodes 389 of 394 frames, dpkt 393 (see the depth bullet) |
-| 1.3 encode | `benchmark_encode.py` | netprotocols 2,293,856 ops/s, dpkt 552,585 (**4.15×**), scapy 1,110,609 |
+| 1.3 encode | `benchmark_encode.py` (whole frame, like for like; corrected, see 1.3), three runs | netprotocols 740,864 / 734,096 / 754,649 ops/s; dpkt 553,578 / 556,781 / 552,793; scapy 1,038,362 / 1,057,584 / 1,042,091. Against dpkt: 1.34×, 1.32×, 1.37×. Quoted: the median-ratio run, **1.34×** (the earlier 4.15× compared a header with a frame) |
 | 1.4 import | `env -u PYTHONDONTWRITEBYTECODE ... benchmark_import.py` after an untimed warm-up, best of three (warm) | netprotocols **55.2 ms** (117 modules), scapy.all **235.3 ms** (**4.3×**); dpkt 20.6 ms (117 modules) |
 | 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.8.0-py3-none-any.whl` 291,922 bytes (285.1 KiB), **9.5×** smaller than scapy 2.8.0's 2,762,122 |
 | 1.6 depth | `benchmark.py --depth` | deeper on **175 of 394** frames, not deeper on 213, 6 skipped |
@@ -799,8 +799,10 @@ and optimization to its end (#250).
 - **Import grew about 1 ms** with one module (`layer7/tls.py`; 117,
   from 116): three alternating warm pairs read 56.9 / 57.5 / 58.0 ms
   against the 2.7.0 tree's 55.6 / 56.1 / 59.5 ms.
-- **Encode** is unchanged in substance (4.15× against 4.10×); TLS does
-  not touch the encode path.
+- **Encode** is 1.34× ahead of dpkt on a whole frame, after the
+  benchmark was corrected (see 1.3: the 4.15× this run first read, and
+  4.10× before it, timed a header against a frame); TLS does not touch
+  the encode path.
 - The CI gate command (`benchmark.py --check --threshold 15 --compare`)
   passes at −5.0% against the 2.5.0 baseline, which is not re-recorded
   (#251).
@@ -936,18 +938,51 @@ have shipped it while it briefly was. From 2.5.0 the defensible form is
 further into the stack on 79 of its 265 frames" (1.6); for 2.6.0, on
 94 of its 293; for 2.7.0, "about 1.4× faster", on 153 of its 379.
 
-### 1.3 "4.2× faster than dpkt at encoding"
+### 1.3 "1.3× faster than dpkt at re-encoding a whole frame"
 **Status: VERIFIED for 2.8.0**
 
-*Re-measured for 2.8.0 (2026-11-04; see above): netprotocols 2,293,856
-ops/s, dpkt 552,585, **4.15×**; scapy 2.8.0 1,110,609.*
+*Re-measured for 2.8.0 (2026-11-04; see above), after the correction
+below: `bytes(decode_frame(FRAME))` on a 42-byte Ethernet/IPv4/UDP
+frame, best of three runs pinned to one core, the median-ratio run:
+netprotocols 740,864 ops/s, dpkt 553,578, **1.34×**; scapy 2.8.0
+1,038,362. The other two runs read 1.32× and 1.37× (734,096 against
+556,781; 754,649 against 552,793).*
+
+*Corrected for 2.8.0 (2026-11-04): every earlier figure in this section,
+from 5.3× at v1.3.0 through 4.15× at 2.8.0's first measurement, timed a
+14-byte header against dpkt's whole frame, so none of them is
+like for like and none should be quoted. `scripts/benchmark_encode.py`
+timed `bytes(Ethernet.decode(FRAME))` for netprotocols, which
+re-encodes the Ethernet header only, and `bytes(dpkt.ethernet.Ethernet(FRAME))`
+for dpkt, which serializes the whole 46-byte Ethernet/IPv4/UDP frame
+and fills a zero IPv4 checksum as it does. CodeRabbit reported it on
+#296. Measured on one machine, pinned, best of 9 × 20,000, the same
+frame three ways:*
+
+| Workload | netprotocols | dpkt | Ratio |
+|---|---|---|---|
+| As benchmarked until then (header against frame) | 2,376,526 | 573,510 | 4.14× |
+| Whole frame (`bytes(decode_frame(FRAME))` against `bytes(Ethernet(FRAME))`) | 794,627 | 573,510 | 1.39× |
+| Header only (`bytes(Ethernet)` against `Ethernet.pack_hdr()`) | 2,376,526 | 2,025,964 | 1.17× |
+
+*The benchmark now re-encodes the same whole frame in every library,
+asserts that each output equals the frame byte for byte before timing,
+and uses a frame with no payload, ports no library dispatches on and
+precomputed valid checksums: a netprotocols `Packet` holds decoded
+headers only, so a payload it does not decode would not come back out
+(with 53/53 and 4 bytes of payload, `decode_frame` raises in strict mode
+and, in lax mode, re-encodes 42 of the 46 bytes). The quoted figure is
+the second row's kind, 1.3×: netprotocols' advantage is in the
+whole frame, not in the header codec, where it is 1.17×.*
 
 *Published 2026-09-04 (embargo lifted, #107). Re-measured under
 CPython 3.12, resolving the cross-version caveat this section used to
 carry — it now shares a baseline with the corpus decode numbers above.*
 
 `bytes(header)` re-serialization on a decoded synthetic Ethernet
-header, best of 9 trials × 20,000 reps, ops/sec:
+header, best of 9 trials × 20,000 reps, ops/sec (the original table;
+**not like for like**: netprotocols re-encoded the 14-byte header, dpkt
+the whole frame; see the correction above):
 
 | Library | ops/sec | Note |
 |---|---|---|
@@ -960,36 +995,40 @@ Reproduce: `uv run --group bench python scripts/benchmark_encode.py`
 reproduction script, which Rule 1 does not actually permit — fixed
 along with the re-measurement).
 
-*Re-measured for 2.3.0 (2026-10-23, another machine; see above):
-netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
+*Re-measured for 2.3.0 (2026-10-23, another machine; see above; not like for
+like): netprotocols 1,324,381 ops/s, dpkt 292,408, **4.53×**; scapy 658,403.*
 
-*Re-measured for 2.7.0 (2026-11-03, another machine; see above):
-netprotocols 2,207,983 ops/s, dpkt 538,285, **4.10×**; scapy 2.8.0
+*Re-measured for 2.7.0 (2026-11-03, another machine; see above; not like for
+like): netprotocols 2,207,983 ops/s, dpkt 538,285, **4.10×**; scapy 2.8.0
 1,049,943. Tier 4 did not touch the encode path; five more runs read
 3.97-4.42×, and the 2.6.0 tree 4.27-4.69× on the same machine.*
 
-*Re-measured for 2.6.0 (2026-10-28; see above): netprotocols 1,532,546
+*Re-measured for 2.6.0 (2026-10-28; see above; not like for like):
+netprotocols 1,532,546
 ops/s, dpkt 329,211, **4.66×**; scapy 2.8.0 740,740. Tier 3 did not
 touch the encode path; both rates fell about 5% with the machine.*
 
-*Re-measured for 2.5.0 (2026-10-25; see above): netprotocols 1,601,847
+*Re-measured for 2.5.0 (2026-10-25; see above; not like for like):
+netprotocols 1,601,847
 ops/s, dpkt 346,818, **4.62×**; scapy 2.8.0 806,257. Tier 2 did not
 touch the encode path either.*
 
-*Re-measured for 2.4.0 (2026-10-25; see above): netprotocols 1,416,774
+*Re-measured for 2.4.0 (2026-10-25; see above; not like for like):
+netprotocols 1,416,774
 ops/s, dpkt 338,650, **4.18×**; scapy 2.8.0 700,191. Tier 1 did not
 touch the encode path; dpkt's rate rose more than ours between the two
 runs (15.8% against 7.0%), most likely the machine from run to run
 rather than either library.*
 
-Nobody benchmarks this direction; it remains the half of "codec" this
-library already wins. The ratio against dpkt narrowed from the 5.3×
-recorded at v1.3.0 to 4.5× by 2.2.x (4.53× for 2.3.0, 4.18× for 2.4.0;
-see their dated lines above) — netprotocols' own absolute rate dropped
-somewhat less than its decode rate did over the same tiers (encoding
-never touched the registry/walker/error-context surface that grew
-decode's cost), while dpkt's own number held essentially flat. Still a
-wide, clean win.
+Nobody benchmarks this direction. The ratios in the dated lines above,
+5.3× at v1.3.0 narrowing to 4.5× by 2.2.x (4.53× for 2.3.0, 4.18× for
+2.4.0), compared a 14-byte header with a whole frame and say nothing
+about either library's codec; the history is kept because it is what
+was published, not because it measures anything. On the same whole
+frame netprotocols is a modest 1.3× ahead of dpkt (1.17× on the
+Ethernet header alone) and scapy, whose `bytes()` returns the bytes it
+was built from, reads faster than both because it does no repack. A
+modest win, not a wide one, and none over scapy.
 
 ### 1.4 "Imports in 55 ms; scapy takes about 235 ms"
 **Status: VERIFIED for 2.8.0**

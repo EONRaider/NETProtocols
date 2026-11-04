@@ -80,7 +80,8 @@ reproduction command, and its caveats):
   SNAP headers it folds into the Ethernet and LLC headers, netprotocols
   decodes as layers of their own. A throughput number means little
   without knowing how much work it bought.
-- **4.2× faster than dpkt at re-encoding** (`bytes(header)`,
+- **1.3× faster than dpkt at re-encoding** a whole Ethernet/IPv4/UDP
+  frame (`bytes(packet)` against `bytes(dpkt.ethernet.Ethernet(frame))`,
   `scripts/benchmark_encode.py`) — the other half of "codec" that
   nobody else benchmarks.
 - **Imports in 55 ms; `scapy.all` takes about 235 ms** (`scripts/benchmark_import.py`,
