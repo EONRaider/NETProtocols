@@ -8,6 +8,7 @@ downloaded.
 """
 
 import importlib.util
+import re
 from pathlib import Path
 from types import ModuleType
 
@@ -48,57 +49,134 @@ def _scapy(tmp_path: Path, config: str | None) -> Path:
     return root
 
 
-def test_loaded_layers_reads_the_declaration(tmp_path: Path) -> None:
-    root = _scapy(tmp_path, DECLARATION)
-    assert survey.scapy_loaded_layers(root) == {"bluetooth", "dns", "tls.all"}
-
-
-def test_missing_config_is_unreadable(tmp_path: Path) -> None:
-    root = _scapy(tmp_path, None)
-    with pytest.raises(survey.Unreadable, match=r"config\.py: no such file"):
-        survey.scapy_loaded_layers(root)
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        DECLARATION.replace("List[str]", "list[str]"),
-        DECLARATION.replace(" = [", " = (").replace("    ]", "    )"),
-        "",
-    ],
-    ids=["annotation", "tuple", "empty-file"],
-)
-def test_unmatched_declaration_is_unreadable(
-    tmp_path: Path, config: str
-) -> None:
-    root = _scapy(tmp_path, config)
-    with pytest.raises(survey.Unreadable, match="matches nothing"):
-        survey.scapy_loaded_layers(root)
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
+#: Each success case's ``config.py`` and the names it declares.
+READABLE = {
+    "scapy-2.8.0": (DECLARATION, {"bluetooth", "dns", "tls.all"}),
+    "double-quoted": (
         DECLARATION.replace("'", '"'),
-        DECLARATION.replace(" = [", " = [] + ["),
-    ],
-    ids=["double-quoted", "split"],
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "list-annotation": (
+        DECLARATION.replace("List[str]", "list[str]"),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "unannotated": (
+        DECLARATION.replace(": List[str]", ""),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "bracket-on-next-line": (
+        DECLARATION.replace(" = [\r\n", " = \\\r\n        [\r\n"),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "commented-out-entry": (
+        DECLARATION.replace(
+            "        'dns',\r\n", "        'dns',\r\n        # 'tls',\r\n"
+        ),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "mixed-quoting": (
+        DECLARATION.replace("'dns'", '"dns"'),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+    "bracket-in-comment": (
+        DECLARATION.replace(
+            "        'dns',\r\n",
+            "        'dns',  # see conf.load_layers [docs]\r\n",
+        ),
+        {"bluetooth", "dns", "tls.all"},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("config", "names"), READABLE.values(), ids=READABLE.keys()
 )
-def test_declaration_without_names_is_unreadable(
-    tmp_path: Path, config: str
+def test_loaded_layers_reads_the_declaration(
+    tmp_path: Path, config: str, names: set[str]
 ) -> None:
     root = _scapy(tmp_path, config)
-    with pytest.raises(survey.Unreadable, match="no quoted module names"):
+    assert survey.scapy_loaded_layers(root) == names
+
+
+#: Each failure case's ``config.py`` (``None``: no such file) and a
+#: fragment of the message it raises.
+UNREADABLE = {
+    "missing": (None, "config.py: no such file"),
+    "syntax-error": (
+        DECLARATION.replace("    ]\r\n", ""),
+        "does not parse as Python",
+    ),
+    "empty-file": ("", "0 top-level `class Conf`"),
+    "no-conf": (
+        DECLARATION.replace("class Conf(", "class Config("),
+        "0 top-level `class Conf`",
+    ),
+    "nested-conf": (
+        "class Outer:\r\n    "
+        + DECLARATION.replace("\r\n", "\r\n    ").rstrip(),
+        "0 top-level `class Conf`",
+    ),
+    "two-confs": (DECLARATION * 2, "2 top-level `class Conf`"),
+    "no-load-layers": (
+        DECLARATION.replace("load_layers", "other_layers"),
+        "binds `load_layers` in 0 statements",
+    ),
+    "assigned-twice": (
+        DECLARATION + "    load_layers = ['dns']\r\n",
+        "binds `load_layers` in 2 statements",
+    ),
+    "augmented": (
+        DECLARATION + "    load_layers += ['sctp']\r\n",
+        "binds `load_layers` in 2 statements",
+    ),
+    "annotation-only": (
+        "class Conf(ConfClass):\r\n    load_layers: List[str]\r\n",
+        "is not assigned a non-empty list",
+    ),
+    "tuple": (
+        DECLARATION.replace(" = [", " = (").replace("    ]", "    )"),
+        "is not assigned a non-empty list",
+    ),
+    "empty-list": (
+        "class Conf(ConfClass):\r\n    load_layers: List[str] = []\r\n",
+        "is not assigned a non-empty list",
+    ),
+    "empty-plus-list": (
+        DECLARATION.replace(" = [", " = [] + ["),
+        "is not assigned a non-empty list",
+    ),
+    "list-plus-name": (
+        DECLARATION.replace("    ]\r\n", "    ] + EXTRA_LAYERS\r\n"),
+        "is not assigned a non-empty list",
+    ),
+    "name": (
+        "class Conf(ConfClass):\r\n    load_layers = DEFAULT_LAYERS\r\n",
+        "is not assigned a non-empty list",
+    ),
+    "non-str-element": (
+        DECLARATION.replace("'dns'", "DNS"),
+        "is not assigned a non-empty list",
+    ),
+    "bytes-element": (
+        DECLARATION.replace("'dns'", "b'dns'"),
+        "is not assigned a non-empty list",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("config", "message"), UNREADABLE.values(), ids=UNREADABLE.keys()
+)
+def test_unreadable_declaration_raises(
+    tmp_path: Path, config: str | None, message: str
+) -> None:
+    root = _scapy(tmp_path, config)
+    with pytest.raises(survey.Unreadable, match=re.escape(message)):
         survey.scapy_loaded_layers(root)
 
 
 @pytest.mark.parametrize(
-    ("config", "message"),
-    [
-        (None, "no such file"),
-        (DECLARATION.replace("List[str]", "list[str]"), "matches nothing"),
-    ],
-    ids=["missing", "unmatched"],
+    ("config", "message"), UNREADABLE.values(), ids=UNREADABLE.keys()
 )
 def test_main_exits_1_before_any_table(
     tmp_path: Path,
@@ -128,3 +206,6 @@ def test_main_exits_1_before_any_table(
     assert out == ""
     assert err.startswith("scapy: FAILED config.py: ")
     assert message in err
+    assert err.endswith(
+        "; cannot tell which layers/ modules `import scapy.all` loads.\n"
+    )
