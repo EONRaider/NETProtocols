@@ -228,7 +228,11 @@ class Packet:
         return sum(layer.header_len for layer in self.layers)
 
     def with_checksums(self, payload: bytes = b"") -> Self:
-        """A copy of this packet with every checksum field computed.
+        """A copy with IPv4, TCP, UDP, SCTP, ICMPv4/v6, IGMP, GRE,
+        VRRP, PIM, CDP and non-cryptographic OSPF checksums computed.
+
+        GRE is refilled only when its Checksum-Present bit is set;
+        its reserved word, key and sequence number are preserved.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
@@ -243,7 +247,9 @@ class Packet:
         """
         from netprotocols.checksum import compute
         from netprotocols.layer2.cdp import CDP
+        from netprotocols.layer3.gre import GRE
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
+        from netprotocols.layer3.igmp import IGMP
         from netprotocols.layer3.ip import IPv4
         from netprotocols.layer3.ospf import OSPF
         from netprotocols.layer3.pim import PIM
@@ -265,7 +271,10 @@ class Packet:
                         layer, ip=enclosing, routing=routing, payload=trailing
                     ),
                 )
-            elif isinstance(layer, (IPv4, CDP)) or (
+            elif isinstance(layer, GRE) and layer.checksum_present:
+                checksum = compute(layer, payload=trailing).to_bytes(2, "big")
+                layer = _refilled(layer, fields=checksum + layer.fields[2:])
+            elif isinstance(layer, (IPv4, IGMP, CDP)) or (
                 isinstance(layer, OSPF)
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES
             ):

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Packet.with_checksums()` now recomputes IGMP checksums and GRE checksums when the Checksum-Present bit is set (#300). GRE includes the rebuilt inner packet and trailing payload; its reserved word, key and sequence number are preserved. GRE without a checksum is unchanged.
+
 ## [2.8.0] - 2026-11-04
 
 ### Added
