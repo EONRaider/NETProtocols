@@ -1,21 +1,14 @@
 name: CodeQL
 
-# Advanced-setup workflow (a checked-in file) rather than GitHub's
-# built-in "default setup", so this analysis lives in version control
-# alongside the rest of this repository's CI (ci.yml, fuzz.yml,
-# release.yml, mutation.yml, scorecard.yml) and its action pins are
-# reviewable the same way theirs are. Default setup is configured
-# through repository settings instead of a file, so it isn't available
-# to author from here.
+# CodeQL advanced setup: the Python analysis is configured in this file.
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
   schedule:
-    # Arbitrary; weekly on Sundays, clear of fuzz.yml's and mutation.yml's
-    # daily 03:00/04:00 UTC slots and scorecard.yml's own Sunday 05:00
-    # UTC slot.
+    # Weekly on Sundays at 06:00 UTC, clear of the other workflows'
+    # cron slots.
     - cron: "0 6 * * 0"
 
 permissions:
@@ -36,12 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Python is interpreted, so there is nothing for autobuild (or a
-      # manual build step) to do: build-mode: none has CodeQL extract
-      # the database straight from source instead. This is the build
-      # mode the CodeQL Action's own docs recommend for interpreted
-      # languages, and it sidesteps the question of an autobuild step
-      # fitting this project's uv-based build at all.
+      # build-mode: none extracts the database straight from source,
+      # with no build step.
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: python
@@ -50,14 +39,12 @@ jobs:
       # analyze writes the SARIF without uploading it, the filter step
       # drops one query's results on two paths, and upload-sarif uploads
       # what is left. py/weak-sensitive-data-hashing flags the MD5 that
-      # RADIUS (#265) and STUN (#267) mandate, which their tests and
+      # RADIUS and STUN mandate, which their tests and
       # scripts/check_fixtures.py compute over published test secrets
-      # with usedforsecurity=False to verify captured traffic.
-      # The CodeQL config can't scope a query to paths: query-filters
-      # drops it everywhere, src/ included, and paths-ignore drops the
-      # paths from every query. So the filter removes only that query's
-      # results whose primary location is under tests/ or scripts/; the
-      # query still runs on src/, every other query on all three.
+      # with usedforsecurity=False to verify captured traffic. The
+      # filter removes only that query's results whose primary location
+      # is under tests/ or scripts/; the query still runs on src/, every
+      # other query on all three.
       #
       # upload: failure-only is the action's documented mode for a
       # workflow that post-processes the SARIF: analyze uploads nothing

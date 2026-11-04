@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Boots a real Pyodide (CPython-on-WebAssembly) runtime under Node and
-// runs check_in_pyodide.py inside it. Node/WASM rather than a browser:
-// the `pyodide` npm package runs the identical WebAssembly build a
-// browser would load, without needing a display or a browser binary in
-// CI — the interpreter is the same either way, only the host differs.
+// runs check_in_pyodide.py inside it. The `pyodide` npm package runs
+// the same WebAssembly build of CPython a browser loads, with no
+// display or browser binary.
 //
 // Usage: node run_in_pyodide.mjs <repo-root> <python-script>
 

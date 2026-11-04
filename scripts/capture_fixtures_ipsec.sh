@@ -21,11 +21,10 @@
 # the test keys published in tests/fixtures/MANIFEST.md and then the
 # protected packet's own checksums.
 #
-# Many kernels -- minimal and VM builds in particular -- ship without
-# the xfrm ESP/AH transforms (`ip xfrm state add ... proto esp` fails
-# with "Requested type not found"), so the kernel cannot do the IPsec
-# processing itself. scripts/ipsec_fixture_packets.py builds the
-# packets in stdlib Python instead. ESP goes out through a raw socket
+# scripts/ipsec_fixture_packets.py builds the packets in stdlib Python,
+# so the capture needs no xfrm ESP/AH transform in the kernel (many
+# minimal and VM kernels have none: `ip xfrm state add ... proto esp`
+# fails with "Requested type not found"). ESP goes out through a raw socket
 # opened for protocol 50, so the kernel builds and checksums the outer
 # IPv4 header exactly as an IPsec endpoint's stack would. AH cannot:
 # its ICV covers the outer IPv4 header, so the script builds that

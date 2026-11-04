@@ -2,9 +2,8 @@
 """Build and send the script-built frames of the LLC fixture.
 
 Run by ``scripts/capture_fixtures_llc.sh`` inside the sending netns;
-stdlib only, and never imports netprotocols, for the same reason
-``check_fixtures.py`` does not: a fixture must be able to disqualify
-the library, not be shaped by it.
+stdlib only, and never imports netprotocols, like ``check_fixtures.py``,
+so the fixture is independent of the library it tests.
 
 The kernel's bridge and lldpd produce the fixture's 802.1D BPDUs and
 CDP frames. What neither produces on this host is built here, every

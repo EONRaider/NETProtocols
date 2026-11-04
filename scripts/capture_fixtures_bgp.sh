@@ -247,8 +247,8 @@ TCPDUMP_PID=
 # carrying nothing but a KEEPALIVE only the first in each direction of
 # each session is kept (the rest differ only in their TCP fields). Then
 # assert what the session carried, reassembled per direction, and what
-# the corpus file holds. Stdlib only: this must not trust the library
-# it produces fixtures for.
+# the corpus file holds. Stdlib only, independent of the library it
+# produces fixtures for.
 SPLIT_PY=$(cat <<'PY'
 import struct
 import sys

@@ -1,0 +1,49 @@
+name: Marker issues
+
+# Runs scripts/check_todos.py --check-open: every issue-tracked marker
+# in the tree must name an open issue, not a closed or missing issue or
+# a pull request. On a pull request it also fails on a marker naming an
+# issue the pull request body closes with a GitHub closing keyword.
+# ci.yml's lint job runs the offline marker check. The weekly schedule
+# fails on a marker whose issue was closed outside a pull request.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    types: [opened, edited, synchronize, reopened]
+  schedule:
+    # Weekly on Wednesdays, clear of the other workflows' cron slots.
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+# One run per pull request, or per ref and event otherwise, so the
+# schedule never cancels a push run and an edit supersedes the run
+# before it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  todo-issues:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The pull request body is read from the event payload file, never
+      # expanded into the command line. An event with no pull request
+      # (push, schedule, workflow_dispatch) closes no issues. Stdlib
+      # only, so the runner's own python3 runs it.
+      - name: Check that each issue-tracked marker names an open issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 scripts/check_todos.py --check-open
+          --closing-issues-from-event "$GITHUB_EVENT_PATH"

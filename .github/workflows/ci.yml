@@ -5,26 +5,20 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
-  # Callable so the release workflow can run this exact ladder against a
-  # tagged commit before publishing (see release.yml). Keeping one
-  # definition means the release gate cannot drift from the PR gate.
+  # release.yml calls this workflow to run the same ladder against a
+  # tagged commit before publishing.
   workflow_call:
 
-# Cancel a stale run the moment a newer one starts for the same branch
-# or pull request, so a quick follow-up push doesn't leave two ladders
-# racing for runners. Keyed on the PR number when this is a pull_request
-# run and on the ref otherwise. The group name is the literal "ci"
-# prefix, not ${{ github.workflow }}: inside a workflow_call, that
-# expression is the CALLER's workflow name, not this one's. Using it
-# here made this group collide with release.yml's own top-level
-# "Release-<ref>" group on a tag push, and GitHub cancelled the whole
-# run as a self-deadlock.
+# A newer run for the same pull request (keyed on its number) or ref
+# cancels the older one. The group's prefix is the literal "ci": inside
+# a workflow_call, ${{ github.workflow }} is the CALLER's workflow name,
+# and a group built from it matches release.yml's own top-level group
+# on a tag push, which GitHub cancels as a self-deadlock.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# No job here needs to write anything -- lint/typecheck/test/build/pyodide/
-# benchmark all read the checked-out tree and call out to local tools.
+# Every job only reads the checked-out tree.
 permissions:
   contents: read
 
@@ -40,6 +34,10 @@ jobs:
       - run: uv run ruff format --check
       # pydoclint, run as a flake8 plugin with the settings in .flake8.
       - run: uv run flake8 src
+      # Fails on a marker comment that is not an issue-tracked one (see
+      # scripts/check_todos.py). Offline; todo-issues.yml checks that
+      # the issues are open.
+      - run: python3 scripts/check_todos.py
 
   typecheck:
     runs-on: ubuntu-latest
@@ -65,11 +63,9 @@ jobs:
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
 
   # Scans the dev dependency group (the only third-party code CI itself
-  # pulls in) for known vulnerabilities. Exported with --no-emit-project
-  # so the audit sees pinned, hashed third-party requirements only --
-  # not an unhashable `-e .` reference to this repo's own in-tree
-  # package, which pip-audit cannot install under --require-hashes
-  # (implied automatically once any requirement carries a hash).
+  # installs) for known vulnerabilities. --no-emit-project leaves out
+  # the `-e .` line for this package, which has no hash: pip-audit
+  # requires a hash on every requirement once any one carries a hash.
   dependency-scan:
     runs-on: ubuntu-latest
     steps:
@@ -93,11 +89,9 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       - run: uv build
       - run: uv run --isolated --no-project --with dist/*.whl python -c "import netprotocols; print(netprotocols.__version__)"
-      # Builds are supposed to be a pure function of the source tree, so
-      # two runs back-to-back must emit byte-identical wheels. Diffing
-      # their sha256 (rather than the files directly) catches drift
-      # from things like embedded timestamps or non-deterministic
-      # archive member ordering without needing a full binary diff.
+      # Two back-to-back builds must emit byte-identical wheels: the step
+      # compares their sha256 and fails on any difference, such as an
+      # embedded timestamp or a change in archive member order.
       - name: Verify the wheel build is reproducible
         run: |
           set -euo pipefail
@@ -113,12 +107,10 @@ jobs:
           fi
           echo "Wheel build is reproducible."
 
-  # Proves the README's browser/WASM claim (#99) against the real
-  # thing, not a simulation of it: boots an actual Pyodide runtime
-  # (scripts/pyodide/run_in_pyodide.mjs, via Node — no browser needed,
-  # same WebAssembly build either way) and decodes the whole
-  # real-capture corpus with the wheel this job just built. See
-  # scripts/pyodide/check_in_pyodide.py for what it checks and why.
+  # Checks the README's browser/WASM claim: boots a Pyodide runtime
+  # under Node (scripts/pyodide/run_in_pyodide.mjs) and decodes the
+  # whole real-capture corpus with the wheel this job builds.
+  # scripts/pyodide/check_in_pyodide.py describes the checks.
   pyodide:
     runs-on: ubuntu-latest
     steps:
@@ -136,21 +128,14 @@ jobs:
           node scripts/pyodide/run_in_pyodide.mjs
           "$GITHUB_WORKSPACE" scripts/pyodide/check_in_pyodide.py
 
-  # Blocking, at 15% below the committed baseline. The threshold has
-  # runner data behind it: this job's first run measured 3.7% away from
-  # a baseline recorded on entirely different hardware, and run-to-run
-  # spread on one machine is ~2%. 15% is therefore roughly four times
-  # the noise it has to tolerate, which leaves real regressions (Tier 1
-  # moved this number by 30-90% a step) nowhere to hide.
+  # Blocking: fails when normalized decode throughput is more than 15%
+  # below the committed baseline. A failing measurement is repeated
+  # once, and the job fails only if the second fails too.
   #
-  # A failure re-measures once before failing, because a shared runner
-  # can lose a slice of CPU to a neighbour: a genuine regression fails
-  # both attempts, a noisy one usually does not.
-  #
-  # Pinned to the baseline's interpreter on purpose: normalization
-  # cancels how fast the machine is, not which CPython it runs (see the
-  # module docstring in scripts/benchmark.py). If a change is a
-  # deliberate trade, re-record with --update-baseline and say why.
+  # Runs on the baseline's interpreter: normalization cancels how fast
+  # the machine is, not which CPython runs it (see the module docstring
+  # in scripts/benchmark.py). `--update-baseline` re-records the
+  # baseline.
   benchmark:
     runs-on: ubuntu-latest
     steps:
@@ -161,10 +146,8 @@ jobs:
       - name: Corpus decode throughput
         shell: bash
         run: |
-          # Keep the benchmark's own exit status: piping the whole thing
-          # into tee would report tee's, and wrapping it in a { } group
-          # would report the trailing echo's -- either way the gate
-          # would pass while the check failed.
+          # The step exits with the benchmark's own status, saved in
+          # $status before its output is copied to the step summary.
           status=0
           uv run --frozen --group bench python scripts/benchmark.py \
             --check --threshold 15 --compare >benchmark.out 2>&1 || status=$?

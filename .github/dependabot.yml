@@ -3,13 +3,10 @@ version: 2
 updates:
   # --- Python tooling, managed by uv --------------------------------
   #
-  # This project's dependencies are declared exclusively via PEP 735
-  # [dependency-groups] in pyproject.toml (see uv.lock), not the older
-  # [project.optional-dependencies] table. Dependabot's "pip" ecosystem
-  # does not parse [dependency-groups]; only the native "uv" ecosystem
-  # does (GA since March 2025, with dependency-groups parsing landing
-  # in dependabot/dependabot-core#11796), so "uv" is used here rather
-  # than "pip".
+  # This project's dependencies are declared only as PEP 735
+  # [dependency-groups] in pyproject.toml (see uv.lock). The "uv"
+  # ecosystem parses [dependency-groups]; Dependabot's "pip" ecosystem
+  # does not.
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
@@ -17,21 +14,13 @@ updates:
     commit-message:
       prefix: "chore"
     groups:
-      # netprotocols ships zero runtime dependencies today, so every
-      # update currently comes from the "dev" dependency-group (pytest,
-      # mypy, ruff, etc.) -- kept current here as its own group rather
-      # than left to open one PR per package. Matched by explicit
-      # package name instead of `dependency-type: development`: as of
-      # this writing Dependabot's dependency-type classifier does not
-      # work correctly for the uv ecosystem and reports every
-      # dependency as "production" regardless of where it's declared
-      # (see dependabot/dependabot-core#13202), which would leave a
-      # `dependency-type: development` group empty -- or, used the
-      # other way around, wrongly sweep this same dev tooling into a
-      # "runtime" group. A future runtime dependency added under
-      # [project.dependencies] is intentionally left out of this list,
-      # so it keeps updating on its own outside this group rather than
-      # being bundled in with dev tooling.
+      # The "dev" dependency-group's packages (pytest, mypy, ruff, etc.),
+      # updated together in one PR. Matched by package name: for the uv
+      # ecosystem, Dependabot's dependency-type classifier reports every
+      # dependency as "production" (dependabot/dependabot-core#13202),
+      # so a `dependency-type: development` group would be empty. A
+      # runtime dependency under [project.dependencies] is not in this
+      # list, and updates in a PR of its own.
       dev-dependencies:
         patterns:
           - "hypothesis"
@@ -53,13 +42,10 @@ updates:
       prefix: "ci"
     groups:
       # github/codeql-action ships init, analyze, and upload-sarif as
-      # subdirectories of one repository, but Dependabot tracks each
-      # `uses:` path as its own dependency and opens one PR per path.
-      # init and analyze must run the same release -- analyze refuses a
-      # config file written by a different init version ("Loaded a
-      # configuration file for version '4.37.9', but running version
-      # '4.38.1'") -- so every split PR fails CodeQL on its own and
-      # none can merge. Grouping them bumps all three together.
+      # subdirectories of one repository, and Dependabot tracks each
+      # `uses:` path as its own dependency. init and analyze must run
+      # the same release: analyze refuses a config file written by a
+      # different init version. This group bumps all three in one PR.
       codeql-action:
         patterns:
           - "github/codeql-action*"

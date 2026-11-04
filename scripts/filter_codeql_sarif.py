@@ -17,18 +17,12 @@ definitions, invocations, artifacts, properties) and every file with
 nothing to drop are left byte for byte as they were. A file that loses
 results is rewritten in place, and one line per file, naming it by its
 path under the directory given, says what was dropped, so the CI log
-records it.
-
-Why this exists rather than a CodeQL config: ``query-filters`` drops a
-query everywhere, src/ included, and ``paths-ignore`` drops paths from
-every query, so neither can scope one query out of two directories.
-This keeps both: the query still runs on the shipped package, and every
+records it. The query still runs on the shipped package, and every
 other query still runs on tests/ and scripts/.
 
 It fails (exit 1) on SARIF it cannot read as CodeQL writes it, rather
 than pass a file along unfiltered or upload nothing. A result whose
-location it cannot place in the repository is kept, never dropped:
-keeping an alert is the safe way to be wrong.
+location it cannot place in the repository is kept, never dropped.
 """
 
 from __future__ import annotations
@@ -44,8 +38,8 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 #: The query whose results this filters, and only on PATH_PREFIXES. It
 #: reads a variable named like a secret or password as sensitive data,
-#: as RADIUS's (#265: RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP)
-#: and STUN's (#267: the long-term-credential key) are, and flags the
+#: as RADIUS's (RFC 2865 §3/§5.2, RFC 2866 §3, RFC 1994 §4.1 CHAP) and
+#: STUN's (the long-term-credential key) are, and flags the
 #: MD5 their RFCs require, computed in tests/ and scripts/ over
 #: published test secrets with ``usedforsecurity=False`` to verify
 #: captured traffic, so its findings there are noise; in src/ they
