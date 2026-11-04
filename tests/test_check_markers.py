@@ -67,6 +67,21 @@ class TestEveryMarkerFails:
         text = f'def f():\n    """{T}: not here."""\nx = "{F}"\n'
         assert words("src/a.py", text) == [T, F]
 
+    @pytest.mark.parametrize(
+        ("path", "text"),
+        [
+            ("README.md", f"{T}s remain.\n"),
+            ("notes.txt", f"{T}s remain.\n"),
+            ("src/a.py", f'"""{F}s remain."""\n'),
+            ("src/a.py", f'x = "{H}_later"\n'),
+            ("a.yml", f"key: {X}s\n"),
+        ],
+    )
+    def test_plurals_and_suffixes_in_plain_text(
+        self, path: str, text: str
+    ) -> None:
+        assert len(words(path, text)) == 1
+
     def test_every_marker_on_a_line_is_reported(self) -> None:
         assert words("a.sh", f"# {T}: a {X} b {F}\n") == [T, X, F]
 
@@ -107,7 +122,6 @@ class TestCommentMatching:
             ("a.sh", f"WORK=$(mktemp -d /tmp/x.{X}{X})"),
             ("a.yml", f"key: {T.lower()}"),
             ("README.md", f"a {T.lower()} list"),
-            ("README.md", f"{T}s"),
             ("a.txt", f"{T.lower()}"),
         ],
     )
@@ -115,6 +129,67 @@ class TestCommentMatching:
         self, path: str, line: str
     ) -> None:
         assert words(path, line + "\n") == []
+
+    @pytest.mark.parametrize(
+        ("path", "line"),
+        [
+            (".gitignore", f"# {T.lower()}: ignore the caches"),
+            (".github/CODEOWNERS", f"* @owner  # {F.lower()}s"),
+            ("docker/Dockerfile", f"RUN make  # {H.capitalize()}"),
+            ("sub/.gitattributes", f"# {X.lower()}"),
+        ],
+    )
+    def test_hash_comment_files_by_basename(self, path: str, line: str) -> None:
+        assert len(words(path, line + "\n")) == 1
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            f"// {F.lower()}",
+            f"  // {T.lower()}s: later",
+            f"const a = 1; // {H.capitalize()}",
+        ],
+    )
+    def test_slash_comments_in_javascript(self, line: str) -> None:
+        assert len(words("scripts/a.mjs", line + "\n")) == 1
+        assert len(words("a.js", line + "\n")) == 1
+
+    def test_a_url_in_javascript_is_not_a_comment(self) -> None:
+        line = f'fetch("https://example.com/{T.lower()}");\n'
+        assert words("a.mjs", line) == []
+
+    def test_slash_comments_count_only_in_javascript(self) -> None:
+        assert words("a.sh", f"// {F.lower()}\n") == []
+
+    @pytest.mark.parametrize(
+        ("path", "line"),
+        [
+            ("a.sh", f"x=1\t# {T.lower()}"),
+            ("a.yml", f"key: value\t# {F.lower()}"),
+            ("a.toml", f"\t# {H.lower()}"),
+        ],
+    )
+    def test_a_hash_comment_after_a_tab(self, path: str, line: str) -> None:
+        assert len(words(path, line + "\n")) == 1
+
+    def test_a_hash_inside_a_word_is_not_a_comment(self) -> None:
+        assert words("a.sh", f"echo a#{T.lower()}\n") == []
+
+    @pytest.mark.parametrize(
+        "line", [f"; {T.lower()}", f"  # {F.lower()}", f";{X.lower()}s"]
+    )
+    def test_ini_comments(self, line: str) -> None:
+        assert len(words("setup.ini", line + "\n")) == 1
+
+    @pytest.mark.parametrize(
+        "line", [f".. {T.lower()}::", f"   .. {F.lower()}: check this"]
+    )
+    def test_rst_explicit_markup(self, line: str) -> None:
+        assert len(words("docs/a.rst", line + "\n")) == 1
+
+    def test_rst_prose_matches_only_capitals(self) -> None:
+        text = f"A {T.lower()} list... and {T}s.\n"
+        assert words("docs/a.rst", text) == [T]
 
     def test_a_python_file_that_does_not_tokenize_is_still_scanned(
         self,

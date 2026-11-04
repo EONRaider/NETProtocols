@@ -9,19 +9,26 @@ finding, whatever follows it.
 
 Where a marker is matched:
 
-- Everywhere, the four words in capitals as whole words.
-- In a Python file's ``#`` comment tokens, and in the comment text of a
-  shell, YAML, TOML, ``.cfg`` or ``.flake8`` file (a line that starts
-  with ``#``, or what follows `` #`` on a line), also in any case and
-  with a plural ``s`` or an ``_suffix``.
+- Everywhere, in prose, strings and docstrings of every file type, the
+  four words in capitals, alone or with a plural ``s`` or an
+  ``_suffix``.
+- In comments, also in any case. A comment is a Python ``#`` comment
+  token; ``#`` at the start of a line or after whitespace in a shell,
+  YAML, TOML, ``.cfg``, ``.flake8``, ``.gitignore``, ``.gitattributes``,
+  ``CODEOWNERS`` or ``Dockerfile`` file; ``//`` at the start of a line
+  or after whitespace in a ``.js`` or ``.mjs`` file; a line that starts
+  with ``;`` or ``#`` in an ``.ini`` file; and an explicit markup line
+  (``..``), a comment or a directive such as a to-do one, in an
+  ``.rst`` file.
 - In Markdown, prose only: the text of inline code spans is not
   scanned, and matching stays case-sensitive.
 
 The scan covers the files ``git ls-files`` lists under the repository
-root, minus files that hold a NUL byte (binary files) and the paths in
-:data:`EXCLUDED_FILES` and :data:`EXCLUDED_DIRS`. Other files are read
-as UTF-8 with undecodable bytes kept as surrogate escapes, so a Latin-1
-file is still scanned.
+root, minus anything that is not a regular file (a symlink, a
+submodule, a deleted file), files that hold a NUL byte (binary files)
+and the paths in :data:`EXCLUDED_FILES` and :data:`EXCLUDED_DIRS`.
+Other files are read as UTF-8 with undecodable bytes kept as surrogate
+escapes, so a Latin-1 file is still scanned.
 
 Exit status: 0 when nothing is found, 1 on findings, 2 on a usage
 error. The check runs offline.
@@ -44,8 +51,9 @@ from pathlib import Path
 #: The marker words, built by concatenation so this file holds none.
 WORDS = ("TO" + "DO", "FIX" + "ME", "X" + "XX", "HA" + "CK")
 _ALTERNATION = "|".join(WORDS)
-#: The words in capitals as whole words: the match everywhere.
-PLAIN = re.compile(rf"\b({_ALTERNATION})\b")
+#: The words in capitals, with an ``s`` or ``_suffix``: the match
+#: everywhere.
+PLAIN = re.compile(rf"\b({_ALTERNATION})(?:s|_\w*)?\b")
 #: Any case, with an ``s`` or ``_suffix``: the match in comments.
 IN_COMMENT = re.compile(rf"(?i)\b({_ALTERNATION})(?:s|_\w*)?\b")
 #: An inline Markdown code span: a backtick run, its text, and the same
@@ -54,9 +62,21 @@ CODE_SPAN = re.compile(r"(`+)(.+?)\1")
 #: The surrogate escapes ``errors="surrogateescape"`` decodes bytes to.
 SURROGATE = re.compile("[\udc80-\udcff]")
 
-#: Suffixes of the files whose ``#`` comment text is matched with
-#: :data:`IN_COMMENT`, besides Python's comment tokens.
-COMMENT_SUFFIXES = (".sh", ".yml", ".yaml", ".toml", ".cfg", ".flake8")
+#: Suffixes and basenames of the files whose ``#`` comment text is
+#: matched with :data:`IN_COMMENT`, besides Python's comment tokens.
+HASH_COMMENT_SUFFIXES = (".sh", ".yml", ".yaml", ".toml", ".cfg", ".flake8")
+HASH_COMMENT_NAMES = frozenset(
+    {".gitignore", ".gitattributes", "CODEOWNERS", "Dockerfile"}
+)
+#: Suffixes of the files whose ``//`` comment text is matched.
+SLASH_COMMENT_SUFFIXES = (".js", ".mjs")
+
+#: Where a comment starts on a line, by file type: the ``c`` group's
+#: start is the comment's column.
+HASH_COMMENT = re.compile(r"(?:^|\s)(?P<c>#)")
+SLASH_COMMENT = re.compile(r"(?:^|\s)(?P<c>//)")
+INI_COMMENT = re.compile(r"^\s*(?P<c>[;#])")
+RST_EXPLICIT_MARKUP = re.compile(r"^\s*(?P<c>\.\.)(?:\s|$)")
 
 #: Repository-relative files the scan skips: the CHANGELOG names the
 #: markers where it records the rule.
@@ -125,12 +145,27 @@ def python_comment_spans(text: str) -> list[tuple[int, int]] | None:
     return spans
 
 
-def line_comment_start(line: str) -> int | None:
-    """Where a ``#`` comment starts on a shell/YAML/TOML/cfg line."""
-    if line.lstrip().startswith("#"):
-        return line.index("#")
-    found = line.find(" #")
-    return None if found < 0 else found + 1
+def comment_pattern(path: str) -> re.Pattern[str] | None:
+    """The comment-start pattern for ``path``'s file type, if it has one.
+
+    Python files are not covered: their comments come from tokenizing.
+    """
+    name = path.rpartition("/")[2]
+    if path.endswith(HASH_COMMENT_SUFFIXES) or name in HASH_COMMENT_NAMES:
+        return HASH_COMMENT
+    if path.endswith(SLASH_COMMENT_SUFFIXES):
+        return SLASH_COMMENT
+    if path.endswith(".ini"):
+        return INI_COMMENT
+    if path.endswith(".rst"):
+        return RST_EXPLICIT_MARKUP
+    return None
+
+
+def line_comment_start(line: str, pattern: re.Pattern[str]) -> int | None:
+    """The column where ``pattern`` finds a comment on ``line``, if any."""
+    found = pattern.search(line)
+    return None if found is None else found.start("c")
 
 
 def comment_starts(path: str, text: str) -> dict[int, int]:
@@ -149,13 +184,14 @@ def comment_starts(path: str, text: str) -> dict[int, int]:
             for row, line in enumerate(lines, start=1)
             if line.lstrip().startswith("#")
         }
-    if path.endswith(COMMENT_SUFFIXES):
-        starts = {
-            row: line_comment_start(line)
-            for row, line in enumerate(lines, start=1)
-        }
-        return {row: col for row, col in starts.items() if col is not None}
-    return {}
+    pattern = comment_pattern(path)
+    if pattern is None:
+        return {}
+    starts = {
+        row: line_comment_start(line, pattern)
+        for row, line in enumerate(lines, start=1)
+    }
+    return {row: col for row, col in starts.items() if col is not None}
 
 
 def scan_text(path: str, text: str) -> list[Finding]:

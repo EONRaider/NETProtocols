@@ -200,11 +200,16 @@ else. An issue or PR number counts as history.
 `TODO`, `FIXME`, `XXX` and `HACK` markers are not used: work still to
 do is filed as an issue, or not done. `scripts/check_markers.py` fails
 CI on any of them; CI's lint job runs it and the QA ladder above
-includes it. It runs offline over the files `git ls-files` lists:
-everywhere it matches the four words in capitals as whole words, and
-in a comment (a Python `#` comment, or a `#` comment in a shell, YAML,
-TOML, `.cfg` or `.flake8` file) it also matches them in any case and
-with a plural `s` or an `_suffix`. It skips files holding a NUL byte,
+includes it. It runs offline over the files `git ls-files` lists.
+Everywhere, in prose, strings and docstrings alike, it matches the
+four words in capitals, alone or with a plural `s` or an `_suffix`;
+in a comment it also matches them in any case. A comment is a Python
+`#` comment; a `#` at the start of a line or after whitespace in a
+shell, YAML, TOML, `.cfg`, `.flake8`, `.gitignore`, `.gitattributes`,
+`CODEOWNERS` or `Dockerfile` file; a `//` the same way in a `.js` or
+`.mjs` file; a `;` or `#` line in an `.ini` file; and a `..` explicit
+markup line in an `.rst` file. It skips anything that is not a regular
+file (a symlink, a submodule), files holding a NUL byte, the root
 `CHANGELOG.md`, and in Markdown the text of inline code spans.
 
 **Configured exceptions.** Each one is set in `pyproject.toml` or
