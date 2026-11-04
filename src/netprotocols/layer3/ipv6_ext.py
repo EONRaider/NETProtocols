@@ -90,7 +90,8 @@ class IPv6Option:
     def type_name(self) -> str:
         """Display name of the option type, e.g. ``"Router Alert"``;
         falls back to ``"unknown (n)"`` for types this library does not
-        name."""
+        name.
+        """
         return _OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
@@ -99,7 +100,8 @@ class IPv6Option:
         the two high bits of the type (RFC 8200 §4.2): ``0`` skip it,
         ``1`` discard the packet, ``2`` discard and send an ICMP
         Parameter Problem, ``3`` discard and send the Parameter Problem
-        only to a non-multicast destination."""
+        only to a non-multicast destination.
+        """
         return self.type >> 6
 
     @property
@@ -111,7 +113,8 @@ class IPv6Option:
         (194, RFC 2675 §2 — used when the enclosing IPv6 header's
         ``payload_length`` is ``0``). ``None`` — read :attr:`data` raw
         instead — for every other type and for data whose length does
-        not match its type (degrades, never raises)."""
+        not match its type (degrades, never raises).
+        """
         if self.type == _OPT_ROUTER_ALERT and len(self.data) == 2:
             return int.from_bytes(self.data, "big")
         if self.type == _OPT_JUMBO_PAYLOAD and len(self.data) == 4:
@@ -204,7 +207,8 @@ class _IPv6OptionsHeader(Protocol):
         """What follows this header as an
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate."""
+        this library does not enumerate.
+        """
         return _ip_protocol_enum(self.next_header)
 
     @property
@@ -355,7 +359,8 @@ class IPv6Routing(Protocol):
         """What follows this header as an
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate."""
+        this library does not enumerate.
+        """
         return _ip_protocol_enum(self.next_header)
 
     @property
@@ -381,7 +386,8 @@ class IPv6Routing(Protocol):
 
         ``None`` for every other routing type and for data whose
         length is not ``4 + 16 * N`` bytes for some ``N`` (degrades,
-        never raises)."""
+        never raises).
+        """
         if self.routing_type not in (
             _ROUTING_TYPE_RH0,
             _ROUTING_TYPE_MOBILE_IPV6,
@@ -536,7 +542,8 @@ class IPv6Fragment(Protocol):
         """The reassembled payload's protocol as an
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate."""
+        this library does not enumerate.
+        """
         return _ip_protocol_enum(self.next_header)
 
 

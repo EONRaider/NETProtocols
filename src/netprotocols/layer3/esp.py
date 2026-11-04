@@ -112,5 +112,6 @@ class ESP(Protocol):
     @property
     def spi_hex_str(self) -> str:
         """The SPI as a hexadecimal string, e.g. ``"0x10000001"`` — the
-        form IPsec tooling (``ip xfrm``, tcpdump) prints it in."""
+        form IPsec tooling (``ip xfrm``, tcpdump) prints it in.
+        """
         return hex_str(self.spi, 10)

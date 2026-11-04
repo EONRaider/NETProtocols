@@ -300,7 +300,8 @@ def _check_width(owner: type, name: str, value: int, bits: int) -> None:
 
 def _check_length(owner: type, name: str, value: bytes) -> None:
     """Raise :class:`InvalidFieldError` unless ``value`` fits a 16-bit
-    length field."""
+    length field.
+    """
     if len(value) > 0xFFFF:
         raise InvalidFieldError(
             f"{owner.__name__} {name} must be at most 65535 bytes, "
@@ -404,7 +405,8 @@ class STUNAttribute:
     @property
     def comprehension_required(self) -> bool:
         """Whether a receiver must understand this type to process the
-        message: types ``0x0000``-``0x7FFF`` (RFC 8489 §14)."""
+        message: types ``0x0000``-``0x7FFF`` (RFC 8489 §14).
+        """
         return self.type < 0x8000
 
     @property
@@ -615,7 +617,8 @@ class STUN(Protocol):
     @property
     def _readable(self) -> tuple[tuple[STUNAttribute, ...], bool]:
         """Return the attributes up to the first malformed one, and
-        whether the walk reached the end without one."""
+        whether the walk reached the end without one.
+        """
         found: list[STUNAttribute] = []
         try:
             found.extend(self._walk())
@@ -754,7 +757,8 @@ def _check_header(
 ) -> None:
     """Raise :class:`InvalidFieldError` for a header no STUN message
     has: a nonzero top two bits, another cookie, or a Message Length
-    that is not a multiple of 4."""
+    that is not a multiple of 4.
+    """
     if message_type >> 14:
         raise InvalidFieldError(
             f"STUN message type {message_type:#06x} does not start with "

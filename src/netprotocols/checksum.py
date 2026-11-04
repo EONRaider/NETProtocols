@@ -327,7 +327,8 @@ def _zeroed(layer_bytes: bytes, checksum_offset: int) -> bytes:
 def _gre_checksum(layer: GRE, payload: bytes) -> int:
     """GRE header plus payload, checksum field (bytes 4-5) zeroed, no
     pseudo-header (RFC 2784 §2.5). Only meaningful when the
-    Checksum-Present bit announces the field."""
+    Checksum-Present bit announces the field.
+    """
     if layer.checksum is None:
         raise InvalidFieldError(
             "Computing a GRE checksum requires the Checksum-Present "
@@ -341,7 +342,8 @@ def _gre_checksum(layer: GRE, payload: bytes) -> int:
 def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
     """The whole packet, checksum field (bytes 8-11) zeroed, no
     pseudo-header. The CRC goes on the wire least significant byte
-    first, and the field reads its four bytes big-endian."""
+    first, and the field reads its four bytes big-endian.
+    """
     packet = bytes(layer)
     crc = crc32c(packet[:8] + b"\x00\x00\x00\x00" + packet[12:] + payload)
     field: int = struct.unpack("!I", crc.to_bytes(4, "little"))[0]
@@ -358,7 +360,8 @@ def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
     """The PIM message bytes the checksum covers, checksum field (bytes
     2-3) zeroed: the whole message, or a Register's first 8 bytes (RFC
     7761 §4.9.3). ``ip`` is required, since only the family says
-    whether a pseudo-header goes in front."""
+    whether a pseudo-header goes in front.
+    """
     if ip is None:
         raise InvalidFieldError(
             "Computing a PIM checksum requires the enclosing IPv4/IPv6 "
@@ -375,7 +378,8 @@ def _pim_covered(layer: PIM, ip: IPv4 | IPv6 | None) -> bytes:
 def _pim_sum(covered: bytes, ip: IPv4 | IPv6 | None) -> int:
     """The internet checksum over ``covered``, behind the IPv6
     pseudo-header (next header 103, the covered length) when ``ip`` is
-    IPv6, alone over IPv4 (RFC 7761 §4.9)."""
+    IPv6, alone over IPv4 (RFC 7761 §4.9).
+    """
     if isinstance(ip, IPv6):
         covered = _pseudo_header(ip, IPProtocol.PIM, len(covered)) + covered
     return internet_checksum(covered)
@@ -385,14 +389,16 @@ def _pim_checksum(layer: PIM, ip: IPv4 | IPv6 | None) -> int:
     """The PIM checksum: the internet checksum over the message, or over
     a Register's first 8 bytes, with the IPv6 pseudo-header in front
     over IPv6, whose length is then the covered length (RFC 7761
-    §4.9)."""
+    §4.9).
+    """
     return _pim_sum(_pim_covered(layer, ip), ip)
 
 
 def _verify_pim(layer: PIM, ip: IPv4 | IPv6 | None) -> bool:
     """Verify a PIM checksum. A Register's is also accepted computed
     over the whole message, encapsulated packet included, as RFC 7761
-    §4.9.3 asks for interoperability with senders that sum it all."""
+    §4.9.3 asks for interoperability with senders that sum it all.
+    """
     if layer.checksum == _pim_checksum(layer, ip):
         return True
     if layer.type != _PIM_REGISTER:
@@ -427,7 +433,8 @@ def _ospf_checksum(layer: OSPF) -> int:
 
 def _udp_checksum(layer: UDP, ip: IPv4 | IPv6 | None, payload: bytes) -> int:
     """UDP header plus payload behind the pseudo-header, whose length is
-    ``layer.length`` (RFC 768)."""
+    ``layer.length`` (RFC 768).
+    """
     enclosing = _require_ip(layer, ip)
     datagram = _zeroed(bytes(layer), 6) + payload
     raw = internet_checksum(
@@ -463,7 +470,8 @@ def _stun_fingerprint(layer: STUN) -> int:
     attribute, its header's Length already counting it, XORed with
     ``0x5354554E`` (RFC 8489 §14.7). The attribute must be the last,
     with a 4-byte value, so the message up to it is all but its last 8
-    bytes."""
+    bytes.
+    """
     if layer.fingerprint is None:
         raise InvalidFieldError(
             "Computing a STUN fingerprint requires a FINGERPRINT "

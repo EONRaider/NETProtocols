@@ -351,7 +351,8 @@ def _idb_tsresol(
 ) -> int:
     """The ``if_tsresol`` option's raw byte from an Interface
     Description Block's options list, or the format default if the
-    option is absent (RFC-draft §4.2)."""
+    option is absent (RFC-draft §4.2).
+    """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
     cursor = block_start + 16
@@ -373,7 +374,8 @@ def _timestamp_ns(raw: int, if_tsresol: int) -> int:
     nanoseconds. High bit set: resolution is a negative power of 2
     (the low 7 bits are the exponent); clear: a negative power of 10
     (RFC-draft §4.2). Integer floor division truncates any resolution
-    finer than a nanosecond rather than losing it to float rounding."""
+    finer than a nanosecond rather than losing it to float rounding.
+    """
     if if_tsresol & 0x80:
         return (raw * 1_000_000_000) // (1 << (if_tsresol & 0x7F))
     # int(...): int**int is typed as returning Any (it can yield float

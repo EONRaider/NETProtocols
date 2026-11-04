@@ -132,7 +132,8 @@ _ABSOLUTE_AUTHORITY = re.compile(
 
 class HTTPAnomalyKind(enum.Enum):
     """A way an HTTP/1.1 message departs from RFC 9112/9110 that the
-    codec resolved rather than rejected."""
+    codec resolved rather than rejected.
+    """
 
     #: Empty line(s) before the start line (§2.2), kept in the head.
     LEADING_EMPTY_LINE = "leading_empty_line"
@@ -235,7 +236,8 @@ class HTTPDisposition(enum.Enum):
 class HTTPHeaderField(NamedTuple):
     """One field line, as latin-1 text (lossless for any byte): the
     value is unfolded, CR/NUL-replaced and trimmed as the grammar read
-    it. A line with no colon is all name, with an empty value."""
+    it. A line with no colon is all name, with an empty value.
+    """
 
     name: str
     value: str
@@ -243,7 +245,8 @@ class HTTPHeaderField(NamedTuple):
 
 class HTTPAnomaly(NamedTuple):
     """One kind of anomaly, aggregated: where it first occurred and how
-    many times, so a body of a million odd chunks yields one record."""
+    many times, so a body of a million odd chunks yields one record.
+    """
 
     kind: HTTPAnomalyKind
     field: str | None
@@ -337,7 +340,8 @@ def _incomplete(
 ) -> NoReturn:
     """More input is needed -- unless the caller says the connection
     has closed, in which case the message is incomplete for good (RFC
-    9112 §6.3 rule 6, §8)."""
+    9112 §6.3 rule 6, §8).
+    """
     if closed:
         raise InvalidFieldError(
             f"{message} at connection close",
@@ -361,7 +365,8 @@ def _read_line(
     data: bytes, cursor: int, bound: int
 ) -> tuple[bytes, int, bool] | None:
     """The line at ``cursor`` as ``(content, end, bare_lf)``, or ``None``
-    when no LF occurs before ``bound``."""
+    when no LF occurs before ``bound``.
+    """
     lf = data.find(b"\n", cursor, bound)
     if lf == -1:
         return None
@@ -374,7 +379,8 @@ def _check_first_line_prefix(
     content: bytes, offset: int, protocol: type[object]
 ) -> None:
     """Fail fast on input that cannot begin an HTTP/1.x message: its
-    first word must be token characters (and ``/``, for ``HTTP/``)."""
+    first word must be token characters (and ``/``, for ``HTTP/``).
+    """
     if content and _FIRST_WORD.match(content) is None:
         raise InvalidFieldError(
             "input does not begin an HTTP/1.x start line",
@@ -388,7 +394,8 @@ def _scan_head(
     data: bytes, closed: bool, found: _Found, protocol: type[object]
 ) -> tuple[int, _StartLine, list[_Line]]:
     """Find the end of the head; return its length, the parsed start
-    line and the remaining head lines."""
+    line and the remaining head lines.
+    """
     cursor = 0
     start: _StartLine | None = None
     lines: list[_Line] = []
@@ -505,7 +512,8 @@ def _parse_request_line(
 ) -> _StartLine:
     """``method SP request-target SP HTTP-version`` (§3): the first word
     is the method, the last the version, everything between the
-    target."""
+    target.
+    """
     words = _split_words(content)
     if len(words) < 3:
         raise InvalidFieldError(
@@ -551,7 +559,8 @@ def _check_target_form(
     method: bytes, target: bytes, offset: int, found: _Found
 ) -> None:
     """asterisk-form is for OPTIONS and authority-form for CONNECT only
-    (§3.2.3, §3.2.4); CONNECT takes nothing else."""
+    (§3.2.3, §3.2.4); CONNECT takes nothing else.
+    """
     if target == b"*":
         fits = method == b"OPTIONS"
     elif target.startswith(b"/") or b"://" in target:
@@ -608,7 +617,8 @@ def _clean_value(
     raw: bytes, offset: int, label: str | None, found: _Found
 ) -> bytes:
     """A field value with CR and NUL replaced by SP (RFC 9110 §5.5) and
-    surrounding optional whitespace removed."""
+    surrounding optional whitespace removed.
+    """
     if b"\r" in raw or b"\x00" in raw:
         _flag(found, HTTPAnomalyKind.CTL_IN_FIELD_VALUE, label, offset)
         raw = raw.replace(b"\r", b" ").replace(b"\x00", b" ")
@@ -618,7 +628,8 @@ def _clean_value(
 def _parse_field_lines(lines: list[_Line], found: _Found) -> list[_Field]:
     """Field lines of a head or trailer section, in order (§5): each
     line opening a field, with any obs-fold continuation lines after
-    it."""
+    it.
+    """
     groups: list[tuple[_Line, list[_Line]]] = []
     for line in lines:
         if line.content[0] not in _OWS_SET:
@@ -676,7 +687,8 @@ def _join(parts: list[bytes]) -> bytes:
 
 def _values(fields: list[_Field], name: bytes) -> list[_Field]:
     """Every token-named field called ``name``, in order (lowercase
-    ``name``; field names are ASCII case-insensitive)."""
+    ``name``; field names are ASCII case-insensitive).
+    """
     return [f for f in fields if f.is_token and f.name.lower() == name]
 
 
@@ -684,7 +696,8 @@ def _parse_list(
     fields: list[_Field], label: str, found: _Found
 ) -> list[tuple[int, bytes]]:
     """The combined ``#element`` list of ``fields`` (RFC 9110 §5.3,
-    §5.6.1.2): empty elements are ignored, and flagged."""
+    §5.6.1.2): empty elements are ignored, and flagged.
+    """
     elements: list[tuple[int, bytes]] = []
     for f in fields:
         for part in f.value.split(b","):
@@ -702,7 +715,8 @@ def _parse_transfer_encoding(
     fields: list[_Field], version: tuple[int, int], found: _Found
 ) -> bool | None:
     """Whether the final transfer coding is chunked (§6.1, §7), or
-    ``None`` when the message has no Transfer-Encoding at all."""
+    ``None`` when the message has no Transfer-Encoding at all.
+    """
     te_fields = _values(fields, b"transfer-encoding")
     if not te_fields:
         return None
@@ -739,7 +753,8 @@ def _parse_content_length(
     protocol: type[object],
 ) -> _Framing | None:
     """The framing Content-Length gives the message (§6.3 rules 3 and 5):
-    ``None`` when there is none or Transfer-Encoding overrides it."""
+    ``None`` when there is none or Transfer-Encoding overrides it.
+    """
     cl_fields = _values(fields, b"content-length")
     if not cl_fields:
         return None
@@ -844,7 +859,8 @@ def _parse_chunk_line(
     protocol: type[object],
 ) -> tuple[int, int]:
     """``chunk-size [ chunk-ext ]``: return ``(size, extension bytes so
-    far)``."""
+    far)``.
+    """
     digits_end = _skip(line, 0, _HEXDIG)
     digits = line[:digits_end]
     rest = line[digits_end:]
@@ -899,7 +915,8 @@ def _parse_chunked(
     protocol: type[object],
 ) -> tuple[int, list[tuple[int, int]], list[_Field]]:
     """A chunked body starting at ``start`` (§7.1): return its end, the
-    spans of chunk data, and the trailer fields."""
+    spans of chunk data, and the trailer fields.
+    """
     cursor = start
     spans: list[tuple[int, int]] = []
     extension_bytes = 0
@@ -1069,7 +1086,8 @@ def _disposition(
 
 def _valid_ip_literal(literal: bytes) -> bool:
     """``IP-literal = "[" ( IPv6address / IPvFuture ) "]"``, brackets
-    removed (RFC 3986 §3.2.2)."""
+    removed (RFC 3986 §3.2.2).
+    """
     if _IP_FUTURE.fullmatch(literal):
         return True
     if any(b not in _IPV6_CHARS for b in literal):
@@ -1092,7 +1110,8 @@ def _valid_host(value: bytes) -> bool:
 
 def _target_authority(target: bytes) -> bytes | None:
     """An absolute-form target's authority without its userinfo (§3.2),
-    or ``None`` for any other form."""
+    or ``None`` for any other form.
+    """
     match = _ABSOLUTE_AUTHORITY.match(target)
     if match is None:
         return None
@@ -1104,7 +1123,8 @@ def _check_host(start: _StartLine, fields: list[_Field], found: _Found) -> None:
     ``uri-host [ ":" port ]``, and identical to an absolute-form
     target's authority. The comparison folds case (the host is case-
     insensitive and the port is digits) but neither percent-decodes nor
-    fills in a default port."""
+    fills in a default port.
+    """
     if start.is_response:
         return
     label = "host"
@@ -1131,7 +1151,8 @@ def _check_request_method(
     method: str | None, start: _StartLine, protocol: type[object]
 ) -> bytes | None:
     """Validate the decode context for a response and keep it only when
-    it changes framing: HEAD, or CONNECT answered with a 2xx."""
+    it changes framing: HEAD, or CONNECT answered with a 2xx.
+    """
     if method is None:
         return None
     if not method or any(ord(c) not in _TCHAR for c in method):
@@ -1193,7 +1214,8 @@ def _check_consistency(
     """Parse a constructed message: ``head`` must be exactly one complete
     head and ``raw_body`` exactly the body its framing delimits. A
     constructed message is complete by definition, so it is parsed as
-    ``closed``: an ``UNTIL_CLOSE`` body is whatever ``raw_body`` holds."""
+    ``closed``: an ``UNTIL_CLOSE`` body is whatever ``raw_body`` holds.
+    """
     message = _parse_message(head + raw_body, request_method, True, protocol)
     if message.head_len != len(head):
         raise InvalidFieldError(
@@ -1231,7 +1253,8 @@ def _header_fields(fields: tuple[_Field, ...]) -> tuple[HTTPHeaderField, ...]:
 def _field_values(fields: tuple[_Field, ...], name: str) -> tuple[str, ...]:
     """Every value of the token-named field ``name``, compared ASCII
     case-insensitively: ``str.lower()`` would fold the Kelvin sign
-    into ``k``, which no HTTP implementation does."""
+    into ``k``, which no HTTP implementation does.
+    """
     try:
         wanted = name.encode(_LATIN_1).lower()
     except UnicodeEncodeError:
@@ -1386,14 +1409,16 @@ class HTTP(Protocol):
 
     def header_values(self, name: str) -> tuple[str, ...]:
         """Every value of the field ``name`` (case-insensitive), in
-        order. Fields whose name is not a valid token never match."""
+        order. Fields whose name is not a valid token never match.
+        """
         return _field_values(self._message.fields, name)
 
     def header(self, name: str) -> str | None:
         """The values of ``name`` combined with ``", "`` (RFC 9110
         §5.3), or ``None`` when absent. ``Set-Cookie`` cannot be
         combined this way (RFC 6265 §3); read it with
-        :meth:`header_values`."""
+        :meth:`header_values`.
+        """
         values = self.header_values(name)
         return ", ".join(values) if values else None
 
@@ -1405,13 +1430,15 @@ class HTTP(Protocol):
     @property
     def connection_disposition(self) -> HTTPDisposition:
         """What the connection carries after this message. A caller
-        reading pipelined messages stops at ``CLOSE`` or ``TUNNEL``."""
+        reading pipelined messages stops at ``CLOSE`` or ``TUNNEL``.
+        """
         return self._message.disposition
 
     @property
     def content(self) -> bytes:
         """The body with chunked framing removed; content codings such
-        as gzip are not decoded."""
+        as gzip are not decoded.
+        """
         return _content(self._message, self.raw_body)
 
     @property
@@ -1422,5 +1449,6 @@ class HTTP(Protocol):
     @property
     def anomalies(self) -> tuple[HTTPAnomaly, ...]:
         """Every deviation the grammar resolved, aggregated by kind and
-        field, ordered by first offset."""
+        field, ordered by first offset.
+        """
         return self._message.anomalies

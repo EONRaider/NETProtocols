@@ -154,5 +154,6 @@ class VLAN(Protocol):
         """The tagged payload's EtherType as an
         :class:`~netprotocols.EtherType` (see
         :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate."""
+        value this library does not enumerate.
+        """
         return _ethertype_enum(self.ethertype)

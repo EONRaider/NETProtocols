@@ -102,7 +102,8 @@ class DHCPOption:
     def code_name(self) -> str:
         """Display name of the option code, e.g. ``"Subnet Mask"``;
         falls back to ``"unknown (n)"`` for codes this library does
-        not name."""
+        not name.
+        """
         return _OPTION_CODE_NAMES.get(self.code, f"unknown ({self.code})")
 
     @property
@@ -119,7 +120,8 @@ class DHCPOption:
         :attr:`DHCP.message_type`). ``None`` — read :attr:`data` raw
         instead — for codes this library does not decode and data
         whose length does not match its code (degrades, never
-        raises)."""
+        raises).
+        """
         if self.code in _SINGLE_ADDRESS_CODES and len(self.data) == 4:
             return IPv4Address(bytes_to_ipv4(self.data))
         if (
@@ -267,7 +269,8 @@ class DHCP(Protocol):
     def htype_name(self) -> str:
         """Display name of the hardware type, e.g. ``"Ethernet"``; falls
         back to the numeric value for types this library does not
-        name."""
+        name.
+        """
         try:
             return ARPHardwareType(self.htype).display_name
         except ValueError:
@@ -279,7 +282,8 @@ class DHCP(Protocol):
         :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
         this library does not enumerate; :attr:`htype` stays the
         canonical ``int`` (see :attr:`htype_name` for the display
-        form)."""
+        form).
+        """
         try:
             return ARPHardwareType(self.htype)
         except ValueError:
@@ -293,7 +297,8 @@ class DHCP(Protocol):
     @property
     def client_mac(self) -> str | None:
         """The client hardware address as a MAC string, for Ethernet
-        (``htype`` 1, ``hlen`` 6); ``None`` for other link types."""
+        (``htype`` 1, ``hlen`` 6); ``None`` for other link types.
+        """
         if self.htype == 1 and self.hlen == 6:
             return bytes_to_mac(self.chaddr[:6])
         return None
@@ -313,31 +318,36 @@ class DHCP(Protocol):
         """The client address as a stdlib
         :class:`~ipaddress.IPv4Address`, for comparison, subnet
         membership, and arithmetic; :attr:`ciaddr` stays the canonical
-        string form (likewise the three accessors below)."""
+        string form (likewise the three accessors below).
+        """
         return IPv4Address(self.ciaddr)
 
     @property
     def yiaddr_address(self) -> IPv4Address:
         """The "your" (assigned) address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`).
+        """
         return IPv4Address(self.yiaddr)
 
     @property
     def siaddr_address(self) -> IPv4Address:
         """The next-server address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`).
+        """
         return IPv4Address(self.siaddr)
 
     @property
     def giaddr_address(self) -> IPv4Address:
         """The relay-agent address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`)."""
+        :class:`~ipaddress.IPv4Address` (see :attr:`ciaddr_address`).
+        """
         return IPv4Address(self.giaddr)
 
     @property
     def has_magic_cookie(self) -> bool:
         """Whether the options begin with the DHCP magic cookie — false
-        for a plain BOOTP message that carries none."""
+        for a plain BOOTP message that carries none.
+        """
         return self.options[:4] == _MAGIC_COOKIE
 
     @property
@@ -423,7 +433,8 @@ class DHCP(Protocol):
     @property
     def message_type_name(self) -> str | None:
         """Display name of the DHCP message type, e.g. ``"DISCOVER"``;
-        ``None`` when no message-type option is present."""
+        ``None`` when no message-type option is present.
+        """
         message_type = self.message_type
         if message_type is None:
             return None

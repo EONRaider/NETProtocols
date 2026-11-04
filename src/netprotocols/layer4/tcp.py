@@ -73,7 +73,8 @@ class TCPOption:
     @property
     def kind_name(self) -> str:
         """Display name of the option kind, e.g. ``"Timestamps"``; falls
-        back to ``"unknown (n)"`` for kinds this library does not name."""
+        back to ``"unknown (n)"`` for kinds this library does not name.
+        """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
     @property
@@ -87,7 +88,8 @@ class TCPOption:
         :attr:`data` raw instead — for the single-byte kinds,
         SACK-Permitted (its presence is its meaning), kinds this
         library does not decode, and data whose length does not match
-        its kind (degrades, never raises)."""
+        its kind (degrades, never raises).
+        """
         if self.kind == _OPT_MSS and len(self.data) == 2:
             return int.from_bytes(self.data, "big")
         if self.kind == _OPT_WINDOW_SCALE and len(self.data) == 1:
@@ -258,13 +260,15 @@ class TCP(Protocol):
         well-known port (best-effort — see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port is
         recognized. DNS over TCP is length-prefixed, so it chains through
-        a :class:`~netprotocols.DNSOverTCP` shim."""
+        a :class:`~netprotocols.DNSOverTCP` shim.
+        """
         return tcp_app_class(self.src_port, self.dst_port, registry)
 
     @property
     def flags_str(self) -> str:
         """Space-separated names of the flags set on the segment, e.g.
-        ``"SYN ACK"``."""
+        ``"SYN ACK"``.
+        """
         return " ".join(
             name
             for shift, name in enumerate(self.flag_names)

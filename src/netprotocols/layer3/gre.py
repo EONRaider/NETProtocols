@@ -98,7 +98,8 @@ class GRE(Protocol):
     ) -> type[Protocol] | None:
         """The class that decodes the encapsulated payload, chosen by
         ``protocol_type`` (an EtherType); ``None`` when it is not one
-        this library decodes."""
+        this library decodes.
+        """
         return _ethertype_class(self.protocol_type, registry)
 
     @property
@@ -124,21 +125,24 @@ class GRE(Protocol):
     @property
     def protocol_name(self) -> str:
         """Display name of ``protocol_type``, e.g. ``"IPv4"``; falls back
-        to the hexadecimal value for EtherTypes unknown to this library."""
+        to the hexadecimal value for EtherTypes unknown to this library.
+        """
         return _ethertype_name(self.protocol_type)
 
     @property
     def protocol_enum(self) -> EtherType | None:
         """``protocol_type`` as an :class:`~netprotocols.EtherType` (see
         :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate."""
+        value this library does not enumerate.
+        """
         return _ethertype_enum(self.protocol_type)
 
     @property
     def checksum(self) -> int | None:
         """The header checksum, carried verbatim, or ``None`` when the
         checksum-present bit is clear (compute/verify via
-        :mod:`netprotocols.checksum`)."""
+        :mod:`netprotocols.checksum`).
+        """
         if not self.checksum_present or len(self.fields) < 2:
             return None
         return int.from_bytes(self.fields[:2], "big")
@@ -156,7 +160,8 @@ class GRE(Protocol):
     @property
     def sequence_number(self) -> int | None:
         """The 32-bit sequence number (RFC 2890), or ``None`` when its
-        bit is clear."""
+        bit is clear.
+        """
         if not self.sequence_present:
             return None
         offset = (4 if self.checksum_present else 0) + (
@@ -169,6 +174,7 @@ class GRE(Protocol):
     @property
     def checksum_hex_str(self) -> str | None:
         """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``, or
-        ``None`` when no checksum is present."""
+        ``None`` when no checksum is present.
+        """
         checksum = self.checksum
         return None if checksum is None else hex_str(checksum, 6)

@@ -76,7 +76,8 @@ class NDPOption:
     def type_name(self) -> str:
         """Display name of the option type, e.g. ``"Source Link-Layer
         Address"``; falls back to ``"unknown (n)"`` for types this
-        library does not name."""
+        library does not name.
+        """
         return _NDP_OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
@@ -84,7 +85,8 @@ class NDPOption:
         """The MAC of a Source/Target Link-Layer Address option (types
         1/2) over Ethernet, e.g. ``"84:01:12:be:7e:d9"``; ``None`` for
         other option types and for a payload that is not the 6-byte
-        Ethernet form (degrades, never raises)."""
+        Ethernet form (degrades, never raises).
+        """
         if self.type in _NDP_LLA_TYPES and len(self.data) == 6:
             return bytes_to_mac(self.data)
         return None
@@ -171,7 +173,8 @@ class _ICMP(Protocol):
     def identifier(self) -> int | None:
         """The identifier of an echo request/reply (``rest`` bytes 0-1),
         used to match replies to requests; ``None`` for other message
-        types."""
+        types.
+        """
         if self.type not in self._echo_types:
             return None
         return int.from_bytes(self.rest[:2], "big")
@@ -179,7 +182,8 @@ class _ICMP(Protocol):
     @property
     def sequence_number(self) -> int | None:
         """The sequence number of an echo request/reply (``rest`` bytes
-        2-3); ``None`` for other message types."""
+        2-3); ``None`` for other message types.
+        """
         if self.type not in self._echo_types:
             return None
         return int.from_bytes(self.rest[2:], "big")
@@ -190,7 +194,8 @@ class _ICMP(Protocol):
         starting at the original datagram's IP header, decodable as
         :class:`~netprotocols.IPv4` / :class:`~netprotocols.IPv6`.
         ``None`` for non-error message types and for an error whose body
-        is empty (degrades, never raises)."""
+        is empty (degrades, never raises).
+        """
         if self.type not in self._error_types or not self.body:
             return None
         return self.body
@@ -327,7 +332,8 @@ class ICMPv6(_ICMP):
         (types 135/136) — the 16 bytes after the reserved word, e.g.
         ``"fe80::f6d7:8b9a:993e:5efa"``; ``None`` for other message
         types and for a body too short to hold it (degrades, never
-        raises)."""
+        raises).
+        """
         if self.type not in (135, 136) or len(self.body) < 16:
             return None
         return bytes_to_ipv6(self.body[:16])

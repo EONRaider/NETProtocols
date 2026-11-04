@@ -89,7 +89,8 @@ def _ip_protocol_name(number: int) -> str:
 
 def _ip_protocol_enum(number: int) -> IPProtocol | None:
     """The ``IPProtocol`` member for a numeric value, or ``None`` if it
-    isn't one this library recognizes."""
+    isn't one this library recognizes.
+    """
     try:
         return IPProtocol(number)
     except ValueError:
@@ -140,7 +141,8 @@ class IPv4Option:
     def kind_name(self) -> str:
         """Display name of the option kind, e.g. ``"Router Alert"``;
         falls back to ``"unknown (n)"`` for kinds this library does not
-        name."""
+        name.
+        """
         return _OPTION_KIND_NAMES.get(self.kind, f"unknown ({self.kind})")
 
     @property
@@ -175,7 +177,8 @@ class IPv4Option:
         ``None`` — read :attr:`data` raw instead — for kinds this
         library does not decode, an unrecognized Timestamp flag, and
         data whose length or pointer is inconsistent with its kind
-        (degrades, never raises)."""
+        (degrades, never raises).
+        """
         if self.kind == _OPT_RECORD_ROUTE and len(self.data) >= 1:
             return self._record_route_addresses()
         if self.kind == _OPT_TIMESTAMP and len(self.data) >= 2:
@@ -398,13 +401,15 @@ class IPv4(Protocol):
         :class:`~netprotocols.IPProtocol`, or ``None`` for a value this
         library does not enumerate; :attr:`protocol` stays the
         canonical ``int`` (see :attr:`protocol_name` for the display
-        form)."""
+        form).
+        """
         return _ip_protocol_enum(self.protocol)
 
     @property
     def flags_name(self) -> str:
         """Display name of the fragmentation flags, e.g.
-        ``"Don't fragment (DF)"``."""
+        ``"Don't fragment (DF)"``.
+        """
         return self.flag_names.get(self.flags, f"unknown ({self.flags:#05b})")
 
     @property
@@ -417,13 +422,15 @@ class IPv4(Protocol):
         """The source address as a stdlib
         :class:`~ipaddress.IPv4Address`, for comparison, subnet
         membership, and arithmetic; :attr:`src` stays the canonical
-        string form."""
+        string form.
+        """
         return IPv4Address(self.src)
 
     @property
     def dst_address(self) -> IPv4Address:
         """The destination address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`src_address`)."""
+        :class:`~ipaddress.IPv4Address` (see :attr:`src_address`).
+        """
         return IPv4Address(self.dst)
 
     # -- options TLV list (parsed on demand, never re-encoded) --
@@ -528,7 +535,8 @@ class IPv6(Protocol):
         """The payload protocol as an
         :class:`~netprotocols.IPProtocol` (see
         :attr:`IPv4.protocol_enum`); ``None`` for a value this library
-        does not enumerate."""
+        does not enumerate.
+        """
         return _ip_protocol_enum(self.next_header)
 
     @property
@@ -546,11 +554,13 @@ class IPv6(Protocol):
         """The source address as a stdlib
         :class:`~ipaddress.IPv6Address`, for comparison, subnet
         membership, and arithmetic; :attr:`src` stays the canonical
-        string form."""
+        string form.
+        """
         return IPv6Address(self.src)
 
     @property
     def dst_address(self) -> IPv6Address:
         """The destination address as a stdlib
-        :class:`~ipaddress.IPv6Address` (see :attr:`src_address`)."""
+        :class:`~ipaddress.IPv6Address` (see :attr:`src_address`).
+        """
         return IPv6Address(self.dst)

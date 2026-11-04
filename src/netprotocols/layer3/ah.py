@@ -202,7 +202,8 @@ class AH(Protocol):
         family — ``ip.proto`` for :class:`AH`, ``ip.proto.v6`` for
         :class:`AHv6` — so an AH-wrapped TCP segment keeps decoding into
         :class:`~netprotocols.TCP`, and an IPv6 extension header can
-        follow AH only inside an IPv6 chain."""
+        follow AH only inside an IPv6 chain.
+        """
         return _ip_protocol_class(
             self.next_header, ipv6=self._ipv6, registry=registry
         )
@@ -217,13 +218,15 @@ class AH(Protocol):
         """What follows this header as an
         :class:`~netprotocols.IPProtocol` (see
         :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate."""
+        this library does not enumerate.
+        """
         return _ip_protocol_enum(self.next_header)
 
     @property
     def spi_hex_str(self) -> str:
         """The SPI as a hexadecimal string, e.g. ``"0x20000001"`` — the
-        form IPsec tooling (``ip xfrm``, tcpdump) prints it in."""
+        form IPsec tooling (``ip xfrm``, tcpdump) prints it in.
+        """
         return hex_str(self.spi, 10)
 
 

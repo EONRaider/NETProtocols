@@ -84,7 +84,8 @@ def _length(value: int) -> int | None:
 
 def _ethertype_name(ethertype: int) -> str:
     """Display name of an EtherType, e.g. ``"IPv4"``; falls back to the
-    hexadecimal value for types unknown to this library."""
+    hexadecimal value for types unknown to this library.
+    """
     try:
         return EtherType(ethertype).display_name
     except ValueError:
@@ -93,7 +94,8 @@ def _ethertype_name(ethertype: int) -> str:
 
 def _ethertype_enum(ethertype: int) -> EtherType | None:
     """The ``EtherType`` member for a numeric value, or ``None`` if it
-    isn't one this library recognizes."""
+    isn't one this library recognizes.
+    """
     try:
         return EtherType(ethertype)
     except ValueError:
@@ -183,7 +185,8 @@ class Ethernet(Protocol):
     def ethertype_name(self) -> str:
         """Display name of the EtherType, e.g. ``"IPv4"``; falls back to
         the hexadecimal value for types unknown to this library, and
-        for an 802.3 Length."""
+        for an 802.3 Length.
+        """
         return _ethertype_name(self.ethertype)
 
     @property
@@ -191,5 +194,6 @@ class Ethernet(Protocol):
         """The EtherType as an :class:`~netprotocols.EtherType`, or
         ``None`` for a value this library does not enumerate;
         :attr:`ethertype` stays the canonical ``int`` and round-trips
-        regardless (see :attr:`ethertype_name` for the display form)."""
+        regardless (see :attr:`ethertype_name` for the display form).
+        """
         return _ethertype_enum(self.ethertype)

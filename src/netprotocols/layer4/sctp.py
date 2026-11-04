@@ -170,14 +170,16 @@ class SCTPChunk:
     @property
     def length(self) -> int:
         """The chunk length field: the 4-byte chunk header plus the
-        value, not counting the padding (RFC 9260 §3.2)."""
+        value, not counting the padding (RFC 9260 §3.2).
+        """
         return _CHUNK_HEADER.size + len(self.value)
 
     @property
     def type_name(self) -> str:
         """Display name of the chunk type, e.g. ``"INIT ACK"``; falls
         back to ``"unknown (n)"`` for types this library does not
-        name."""
+        name.
+        """
         return _CHUNK_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
@@ -186,7 +188,8 @@ class SCTPChunk:
         types that define any: ``"B E"`` for an unfragmented DATA chunk,
         ``"T"`` for an ABORT that carries the sender's own tag. Empty for
         other types; bits this library does not name are left out (read
-        :attr:`flags` for them)."""
+        :attr:`flags` for them).
+        """
         return " ".join(
             name
             for bit, name in _CHUNK_FLAG_NAMES.get(self.type, ())
@@ -200,7 +203,8 @@ class SCTPChunk:
         processing the packet, discarding this chunk and every chunk
         after it (the chunks before it were already processed), ``1``
         the same and report the chunk in an ERROR chunk, ``2`` skip the
-        chunk and continue, ``3`` skip it, continue, and report it."""
+        chunk and continue, ``3`` skip it, continue, and report it.
+        """
         return self.type >> 6
 
 
@@ -349,7 +353,8 @@ class SCTP(Protocol):
     @property
     def verification_tag_hex_str(self) -> str:
         """The verification tag as a hexadecimal string, e.g.
-        ``"0x7324d044"``."""
+        ``"0x7324d044"``.
+        """
         return hex_str(self.verification_tag, 10)
 
     @property

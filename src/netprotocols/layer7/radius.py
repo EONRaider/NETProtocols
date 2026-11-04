@@ -67,7 +67,6 @@ its options.
 
 Attributes
 ----------
-
 Every attribute is a :class:`RADIUSAttribute` of its type and its raw
 ``data``; :attr:`RADIUSAttribute.type_name` names the types of RFC 2865
 §5, RFC 2866 §5 and RFC 3579 §3, and RFC 2869 §5's Event-Timestamp

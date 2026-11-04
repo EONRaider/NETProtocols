@@ -137,7 +137,8 @@ class IGMP(Protocol):
         """The multicast group in dotted-decimal, for the message types
         that carry it in bytes 4-7 (query, v1/v2 report, leave); ``None``
         for the v3 report, which uses that space for a record count (read
-        its groups via :attr:`group_records`)."""
+        its groups via :attr:`group_records`).
+        """
         if self.type in _GROUP_ADDRESS_TYPES and len(self.body) >= 4:
             return bytes_to_ipv4(self.body[:4])
         return None
@@ -224,14 +225,16 @@ class IGMP(Protocol):
     @property
     def _is_v3_query(self) -> bool:
         """Whether this is an IGMPv3 Membership Query — a query whose body
-        is long enough to carry the v3 fields past the group address."""
+        is long enough to carry the v3 fields past the group address.
+        """
         return self.type == _QUERY_TYPE and len(self.body) >= _V3_QUERY_MIN_BODY
 
     @property
     def s_flag(self) -> int | None:
         """Suppress Router-Side Processing (S) flag of a v3 Membership
         Query (RFC 3376 §4.1.5); ``None`` for other messages and for a
-        v2 query, which carries no such field."""
+        v2 query, which carries no such field.
+        """
         if not self._is_v3_query:
             return None
         return (self.body[4] >> 3) & 1
@@ -239,7 +242,8 @@ class IGMP(Protocol):
     @property
     def qrv(self) -> int | None:
         """Querier's Robustness Variable (QRV) of a v3 query (RFC 3376
-        §4.1.6); ``None`` otherwise."""
+        §4.1.6); ``None`` otherwise.
+        """
         if not self._is_v3_query:
             return None
         return self.body[4] & 0x07
@@ -247,7 +251,8 @@ class IGMP(Protocol):
     @property
     def qqic(self) -> int | None:
         """Querier's Query Interval Code (QQIC) of a v3 query (RFC 3376
-        §4.1.7); ``None`` otherwise."""
+        §4.1.7); ``None`` otherwise.
+        """
         if not self._is_v3_query:
             return None
         return self.body[5]
@@ -255,7 +260,8 @@ class IGMP(Protocol):
     @property
     def num_query_sources(self) -> int | None:
         """Number of source addresses in a v3 query (RFC 3376 §4.1.8),
-        or ``None`` for other messages and a v2 query."""
+        or ``None`` for other messages and a v2 query.
+        """
         if not self._is_v3_query:
             return None
         return int.from_bytes(self.body[6:8], "big")

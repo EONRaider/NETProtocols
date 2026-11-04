@@ -174,7 +174,8 @@ class DNSResourceRecord:
     @property
     def rtype_name(self) -> str:
         """Display name of the record type, e.g. ``"AAAA"``; falls back
-        to the numeric type for records unknown to this library."""
+        to the numeric type for records unknown to this library.
+        """
         return _RR_TYPE_NAMES.get(self.rtype, str(self.rtype))
 
 
@@ -310,7 +311,8 @@ def _decode_rdata_value(
     :func:`_decode_rdata_text`/the raw bytes instead. Names follow
     compression against the whole message, which is why this takes
     ``sections`` and an absolute offset rather than the RDATA bytes
-    alone (RFC 1035 §4.1.4)."""
+    alone (RFC 1035 §4.1.4).
+    """
     rdata = sections[at : at + rdlength]
     if rtype == 1 and rdlength == 4:  # A
         return IPv4Address(bytes_to_ipv4(rdata))
@@ -367,7 +369,8 @@ def _decode_rdata_text(
 ) -> str:
     """The human-readable rendering of RDATA, formatted from its
     already-decoded ``value`` where there is one; the hexadecimal RDATA
-    for the types :func:`_decode_rdata_value` returns ``None`` for."""
+    for the types :func:`_decode_rdata_value` returns ``None`` for.
+    """
     if isinstance(value, MXRecord):
         return f"{value.preference} {value.exchange}"
     if isinstance(value, SOARecord):
@@ -386,7 +389,8 @@ def _decode_rdata_text(
 
 def _parse_rr(sections: bytes, at: int) -> tuple[DNSResourceRecord, int]:
     """Parse the resource record at ``at``; return it and the offset of
-    the next record."""
+    the next record.
+    """
     name = _labels(sections, at)
     cursor = _read_name(sections, at)
     if cursor + 10 > len(sections):
@@ -637,14 +641,16 @@ class DNS(Protocol):
     @property
     def question_type(self) -> int | None:
         """QTYPE of the first question (1 = A, 28 = AAAA, ...), or
-        ``None`` when there is no question."""
+        ``None`` when there is no question.
+        """
         fixed = self._question_fixed()
         return None if fixed is None else fixed[0]
 
     @property
     def question_class(self) -> int | None:
         """QCLASS of the first question (1 = IN), or ``None`` when there
-        is no question."""
+        is no question.
+        """
         fixed = self._question_fixed()
         return None if fixed is None else fixed[1]
 
@@ -671,7 +677,8 @@ class DNS(Protocol):
         tuple[DNSResourceRecord, ...],
     ]:
         """The three record sections, parsed once (see
-        :func:`_parse_records`) and shared by the accessors below."""
+        :func:`_parse_records`) and shared by the accessors below.
+        """
         return _parse_records(
             self.sections,
             self.qdcount,

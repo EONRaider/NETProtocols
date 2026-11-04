@@ -108,7 +108,8 @@ class ARP(Protocol):
         """The operation code as an :class:`~netprotocols.ARPOperation`,
         or ``None`` for a value this library does not enumerate;
         :attr:`oper` stays the canonical ``int`` (see :attr:`oper_name`
-        for the display form)."""
+        for the display form).
+        """
         try:
             return ARPOperation(self.oper)
         except ValueError:
@@ -123,7 +124,8 @@ class ARP(Protocol):
     def ptype_enum(self) -> EtherType | None:
         """The protocol type as an :class:`~netprotocols.EtherType` (see
         :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate."""
+        value this library does not enumerate.
+        """
         return _ethertype_enum(self.ptype)
 
     @property
@@ -135,7 +137,8 @@ class ARP(Protocol):
     def htype_name(self) -> str:
         """Display name of the hardware type, e.g. ``"Ethernet"``; falls
         back to the numeric value for types this library does not
-        name."""
+        name.
+        """
         try:
             return ARPHardwareType(self.htype).display_name
         except ValueError:
@@ -147,7 +150,8 @@ class ARP(Protocol):
         :class:`~netprotocols.ARPHardwareType`, or ``None`` for a value
         this library does not enumerate; :attr:`htype` stays the
         canonical ``int`` (see :attr:`htype_name` for the display
-        form)."""
+        form).
+        """
         try:
             return ARPHardwareType(self.htype)
         except ValueError:
@@ -158,11 +162,13 @@ class ARP(Protocol):
         """The sender protocol address as a stdlib
         :class:`~ipaddress.IPv4Address`, for comparison, subnet
         membership, and arithmetic; :attr:`spa` stays the canonical
-        string form."""
+        string form.
+        """
         return IPv4Address(self.spa)
 
     @property
     def tpa_address(self) -> IPv4Address:
         """The target protocol address as a stdlib
-        :class:`~ipaddress.IPv4Address` (see :attr:`spa_address`)."""
+        :class:`~ipaddress.IPv4Address` (see :attr:`spa_address`).
+        """
         return IPv4Address(self.tpa)

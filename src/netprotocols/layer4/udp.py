@@ -52,7 +52,8 @@ class UDP(Protocol):
         """The application protocol carried by this datagram, chosen by
         well-known port (best-effort — see
         :mod:`netprotocols.layer4._ports`); ``None`` when neither port
-        is recognized."""
+        is recognized.
+        """
         return udp_app_class(self.src_port, self.dst_port, registry)
 
     @property

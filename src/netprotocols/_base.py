@@ -312,7 +312,8 @@ def bytes_to_ipv6(data: bytes) -> str:
 def hex_str(value: int, width: int) -> str:
     """Render `value` as a hexadecimal string zero-padded to `width`
     total characters including the '0x' prefix, e.g.
-    ``hex_str(0x1c2a, 6) == "0x1c2a"``."""
+    ``hex_str(0x1c2a, 6) == "0x1c2a"``.
+    """
     return f"{value:#0{width}x}"
 
 
