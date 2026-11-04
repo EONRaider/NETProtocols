@@ -572,7 +572,7 @@ Development uses [uv](https://docs.astral.sh/uv/): `uv sync`, then
 the six checks CI enforces: `uv run ruff check`,
 `uv run ruff format --check`, `uv run flake8 src` (docstrings, via
 pydoclint), `uv run mypy`, `uv run pytest` and
-`python3 scripts/check_todos.py` (issue-tracked markers). The test
+`python3 scripts/check_markers.py` (no work markers). The test
 suite runs across Python 3.12–3.14; `ruff`, `flake8` and `mypy` run on
 3.12. The test suite is anchored by a 394-frame corpus of real
 captured traffic across 36 scenarios

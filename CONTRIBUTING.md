@@ -24,18 +24,16 @@ Run them locally before you push — one validated push beats three
 red ones:
 
 ```bash
-uv run ruff check              # lint, docstring layout included
-uv run ruff format --check     # formatting (drop --check to apply)
-uv run flake8 src              # docstring fields (pydoclint)
-uv run mypy                    # type checking, strict
-uv run pytest                  # the full suite and the doctests in src/
-python3 scripts/check_todos.py # issue-tracked markers only (offline)
+uv run ruff check                # lint, docstring layout included
+uv run ruff format --check       # formatting (drop --check to apply)
+uv run flake8 src                # docstring fields (pydoclint)
+uv run mypy                      # type checking, strict
+uv run pytest                    # the full suite and the doctests in src/
+python3 scripts/check_markers.py # no work markers (offline)
 ```
 
-CI additionally builds the wheel and imports it, and the
-`todo-issues.yml` workflow checks that every `TODO(#N)` names an open
-issue (see "Docstrings and comments"). `ruff`'s line length is 80;
-Markdown is excluded from linting.
+CI additionally builds the wheel and imports it. `ruff`'s line length
+is 80; Markdown is excluded from linting.
 
 ## Project layout
 
@@ -197,24 +195,17 @@ sections it implements. It never gives:
   alternatives were rejected, who found what.
 
 That material belongs in [`CHANGELOG.md`](CHANGELOG.md) and nowhere
-else. An issue or PR number counts as history, with one exception: a
-`TODO(#123): ...` comment that points at an open issue describing work
-still to do. Delete that comment when the issue closes.
+else. An issue or PR number counts as history.
 
-Write it as a `#` comment, never inside a docstring, in exactly that
-form. A bare `TODO`, `FIXME`, `XXX` or `HACK`, or a `TODO` with no
-issue number or no text, fails `scripts/check_todos.py`, which CI's
-lint job runs and the QA ladder below includes. The
-`todo-issues.yml` workflow runs it again on every pull request, every
-push to `master` and once a week with two more checks: it fails when
-a `TODO(#N)` names an issue that is closed, does not exist or is a
-pull request, and, on a pull request, when it names an issue that the
-pull request body closes (`Fixes #N`, `Closes #N`, `Resolves #N` or
-another of GitHub's closing keywords). A pull request that closes an
-issue deletes that issue's TODOs. An API failure fails the job rather
-than passing it. The check skips binary files, `tests/fixtures/`,
-`CHANGELOG.md`, the checker and its tests, and in Markdown the text
-of inline code spans.
+`TODO`, `FIXME`, `XXX` and `HACK` markers are not used: work still to
+do is filed as an issue, or not done. `scripts/check_markers.py` fails
+CI on any of them; CI's lint job runs it and the QA ladder above
+includes it. It runs offline over the files `git ls-files` lists:
+everywhere it matches the four words in capitals as whole words, and
+in a comment (a Python `#` comment, or a `#` comment in a shell, YAML,
+TOML, `.cfg` or `.flake8` file) it also matches them in any case and
+with a plural `s` or an `_suffix`. It skips files holding a NUL byte,
+`CHANGELOG.md`, and in Markdown the text of inline code spans.
 
 **Configured exceptions.** Each one is set in `pyproject.toml` or
 `.flake8`:
