@@ -5,13 +5,15 @@ decoded header answers two questions — ``header_len`` (how many bytes
 it consumed) and ``next_protocol()`` (which class decodes what follows)
 — and walking the chain is the loop those two answers imply.
 
-That loop used to live in the README, in ARCHITECTURE.md, and in a
-private copy in the test suite, which meant everyone using this library
-maintained their own. It lives here now, with the parts a copy-pasted
-loop never has: a bounded depth, an explicit starting layer, a mode
-that reports partial success instead of raising, and a hook for
-per-call decoder overrides.
+:func:`decode_frame` is that loop, with a bounded depth, an explicit
+starting layer, a mode that reports partial success instead of
+raising, and a hook for per-call decoder overrides.
 
+    >>> frame = bytes.fromhex(
+    ...     "00005e005302" "00005e005301" "0800"
+    ...     "45000028" "00014000" "4006b6cb" "c0000201" "c0000202"
+    ...     "c0000050" "00000000" "00000000" "5002ffff" "6b8e0000"
+    ... )
     >>> packet = decode_frame(frame)
     >>> [type(layer).__name__ for layer in packet]
     ['Ethernet', 'IPv4', 'TCP']

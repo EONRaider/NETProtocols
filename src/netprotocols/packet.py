@@ -77,8 +77,18 @@ def _enclosing_ip(
 class Packet:
     """An ordered stack of protocol headers, outermost first.
 
+    >>> from netprotocols import TCP, decode_frame
+    >>> frame = bytes.fromhex(
+    ...     "00005e005302" "00005e005301" "0800"
+    ...     "45000028" "00014000" "4006b6cb" "c0000201" "c0000202"
+    ...     "c0000050" "00000000" "00000000" "5002ffff" "6b8e0000"
+    ... )
+    >>> ethernet_header, ipv4_header, tcp_header = decode_frame(frame)
     >>> packet = Packet(ethernet_header, ipv4_header, tcp_header)
-    >>> bytes(packet)  # ready to be sent through a raw socket
+    >>> packet[TCP].dst_port
+    80
+    >>> bytes(packet) == frame  # ready to be sent through a raw socket
+    True
 
     Indexing takes either an ``int`` (position on the wire) or a
     protocol class (first layer of that type): ``packet[0]`` is the
@@ -112,20 +122,18 @@ class Packet:
     def _from_decoded(
         cls, layers: list[Protocol], stopped_by: ProtocolError | None
     ) -> Self:
-        """Build a packet from headers :func:`~netprotocols.decode_frame`
-        just decoded, skipping :meth:`__init__`'s per-layer
-        ``isinstance`` check.
+        """Build a packet from headers that ``decode_frame`` decoded.
 
-        Internal only — the public constructor takes arbitrary
-        caller-supplied arguments and has to validate them, but
-        ``decode_frame`` calls this with a list built exclusively from
-        this module's own ``protocol.decode()`` calls, so the
-        invariant ``__init__`` checks already holds. Skipping it
-        matters: profiling showed that check alone, run through
-        :class:`~netprotocols._base.Protocol`'s ABC machinery, as
-        ~7-8% of ``decode_frame``'s total time. Same
-        ``object.__new__`` shortcut :mod:`netprotocols._base` uses for
-        Ethernet/ARP/IPv4 field construction, documented there.
+        This skips :meth:`__init__`'s per-layer ``isinstance`` check.
+        Precondition: every item of ``layers`` is a
+        :class:`~netprotocols._base.Protocol` instance, which holds for
+        :func:`~netprotocols.decode_frame`, the only caller, since it
+        passes only what its ``decode()`` calls returned. It builds the
+        instance with ``object.__new__``, as :mod:`netprotocols._base`
+        does for Ethernet/ARP/IPv4 field construction.
+
+        :param layers: The decoded headers, outermost first.
+        :param stopped_by: The error that ended the walk, or ``None``.
         """
         packet = object.__new__(cls)
         packet.layers = tuple(layers)
@@ -154,11 +162,17 @@ class Packet:
         return hash((self.layers, type(self.stopped_by), str(self.stopped_by)))
 
     def __getitem__(self, key: int | type[Protocol]) -> Protocol:
-        """``packet[0]`` indexes by position; ``packet[TCP]`` returns the
+        """Return the layer at a position, or the first of a type.
+
+        ``packet[0]`` indexes by position; ``packet[TCP]`` returns the
         first layer of that type in wire order.
 
-        :raises KeyError: a type key matches no layer (dict-like
-            convention: ``[key]`` raises, :meth:`get` returns ``None``).
+        :param key: A position on the wire, or a protocol class.
+        :raises IndexError: if ``key`` is a position past the last
+            layer.
+        :raises KeyError: if ``key`` is a type that matches no layer
+            (dict-like convention: ``[key]`` raises, :meth:`get` returns
+            ``None``).
         """
         if isinstance(key, int):
             return self.layers[key]
@@ -168,9 +182,13 @@ class Packet:
         raise KeyError(key)
 
     def get(self, layer_type: type[Protocol]) -> Protocol | None:
-        """The first layer of ``layer_type`` in wire order, or ``None``
-        if the packet has none (see :meth:`__getitem__` for the
-        raising form)."""
+        """Return the first layer of ``layer_type`` in wire order.
+
+        ``None`` if the packet has none (see :meth:`__getitem__` for
+        the raising form).
+
+        :param layer_type: The protocol class to look for.
+        """
         for layer in self.layers:
             if isinstance(layer, layer_type):
                 return layer
@@ -180,10 +198,12 @@ class Packet:
         return len(self.layers)
 
     def flow_key(self) -> FlowKey | None:
-        """The canonical :class:`~netprotocols.flow.FlowKey` for this
-        packet's conversation, found by walking :attr:`layers` for the
-        first TCP/UDP/SCTP layer and the IPv4/IPv6 header nearest
-        before it, and delegating to :func:`~netprotocols.flow.flow_key`.
+        """Return the canonical flow key of this packet's conversation.
+
+        This walks :attr:`layers` for the first TCP/UDP/SCTP layer and
+        the IPv4/IPv6 header nearest before it, and returns
+        :func:`~netprotocols.flow.flow_key` of the two, a
+        :class:`~netprotocols.flow.FlowKey`.
 
         Nearest, not first: a tunnel (IP-in-IP, GRE, IPsec tunnel mode)
         stacks an outer IP header whose addresses are the tunnel's
@@ -228,7 +248,7 @@ class Packet:
         return sum(layer.header_len for layer in self.layers)
 
     def with_checksums(self, payload: bytes = b"") -> Self:
-        """A copy of this packet with every checksum field computed.
+        """Return a copy of this packet with every checksum field computed.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``

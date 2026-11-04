@@ -7,7 +7,17 @@ same key, regardless of which one you feed in, because the two
 ``(address, port)`` endpoints are always emitted in the same
 (lexicographically smaller first) order::
 
-    >>> flow_key(tcp_syn, ip=ip_header) == flow_key(tcp_syn_ack, ip=ip_header)
+    >>> from dataclasses import replace
+    >>> from netprotocols import IPv4, TCP, decode_frame
+    >>> syn = decode_frame(bytes.fromhex(
+    ...     "00005e005302" "00005e005301" "0800"
+    ...     "45000028" "00014000" "4006b6cb" "c0000201" "c0000202"
+    ...     "c0000050" "00000000" "00000000" "5002ffff" "6b8e0000"
+    ... ))
+    >>> ip, tcp = syn[IPv4], syn[TCP]
+    >>> reply_ip = replace(ip, src=ip.dst, dst=ip.src)
+    >>> reply_tcp = replace(tcp, src_port=tcp.dst_port, dst_port=tcp.src_port)
+    >>> flow_key(tcp, ip=ip) == flow_key(reply_tcp, ip=reply_ip)
     True
 
 There is no port-slot convention invented for protocols that don't have
@@ -98,7 +108,7 @@ def flow_key(
     ip: IPv4 | IPv6 | None = None,
     routing: IPv6Routing | None = None,
 ) -> FlowKey | None:
-    """The canonical :class:`FlowKey` for a TCP, UDP or SCTP header.
+    """Return the canonical :class:`FlowKey` for a TCP, UDP or SCTP header.
 
     :param layer: The transport layer. Anything other than
         :class:`~netprotocols.TCP` / :class:`~netprotocols.UDP` /
