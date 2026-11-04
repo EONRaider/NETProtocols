@@ -36,6 +36,7 @@ dev = [
     "hypothesis>=6.100",
     "mutmut>=3.8.1",
     "mypy>=1.14",
+    "pydoclint[flake8]==0.11.1",
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.9",
@@ -63,24 +64,19 @@ select = [
     "C4",        # flake8-comprehensions
     "SIM",       # flake8-simplify
     "RUF",       # ruff-specific
-    "D100", "D101", "D103", # pydocstyle: missing docstring on a
-                             # public module/class/function -- the
-                             # narrow slice of pydocstyle that already
-                             # holds repo-wide (see per-file-ignores)
-                             # without adopting its prose-style rules
-                             # (D2xx/D4xx) or its "public" definition's
-                             # blind spot for underscore-prefixed
-                             # helpers, which this can't catch.
+    "D",         # pydocstyle, PEP 257 convention (see below)
 ]
+# D105: a magic method needs no docstring.
+# D107: an __init__ method needs no docstring.
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
 
 [tool.ruff.lint.per-file-ignores]
-# Tests rely on descriptive names, not docstrings, by established
-# convention (95 classes / 42 functions currently undocumented), and
-# scripts/ is maintainer-only benchmark/fixture tooling, not the
-# shipped package -- scoping the new pydocstyle rules to src/ avoids
-# mandating a sweep unrelated to what they exist to catch.
-"tests/*" = ["D100", "D101", "D103"]
-"scripts/*" = ["D100", "D101", "D103"]
+# pydocstyle applies to src/ only.
+"tests/*" = ["D"]
+"scripts/*" = ["D"]
 
 [tool.mypy]
 strict = true
@@ -88,8 +84,10 @@ python_version = "3.12"
 files = ["src", "tests/conftest.py", "tests/strategies.py"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
+# src/ is collected for the doctests in its docstrings.
+# tests/fuzz/ holds Atheris harnesses, which are not pytest modules.
+testpaths = ["tests", "src"]
+addopts = "-q --doctest-modules --ignore=tests/fuzz"
 
 [tool.coverage.run]
 source = ["netprotocols"]

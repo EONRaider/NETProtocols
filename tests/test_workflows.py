@@ -483,6 +483,46 @@ class TestCIWorkflow:
             "dependency-scan job no longer runs pip-audit"
         )
 
+    def test_lint_runs_pydoclint(self, ci_jobs: dict[str, str]) -> None:
+        """The lint job runs pydoclint through flake8 over src/, and
+        .flake8 limits flake8 to pydoclint's DOC codes.
+        """
+        block = ci_jobs.get("lint")
+        assert block is not None, "ci.yml has no lint job"
+        assert re.search(r"(?m)^ +- run: uv run flake8 src$", block), (
+            "lint job no longer runs pydoclint (`uv run flake8 src`)"
+        )
+        flake8_config = (ROOT / ".flake8").read_text()
+        assert re.search(r"(?m)^select = DOC$", flake8_config), (
+            ".flake8 no longer limits flake8 to pydoclint's DOC codes"
+        )
+        assert re.search(r"(?m)^style = sphinx$", flake8_config), (
+            ".flake8 no longer sets pydoclint's style to sphinx"
+        )
+
+    def test_test_job_runs_the_src_doctests(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The test job's ``pytest`` run collects the doctests in src/.
+
+        pyproject.toml's pytest settings supply ``--doctest-modules``
+        and the ``src`` test path.
+        """
+        block = ci_jobs.get("test")
+        assert block is not None, "ci.yml has no test job"
+        assert "uv run --frozen pytest --cov=netprotocols" in block, (
+            "test job no longer runs the suite under coverage"
+        )
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        pytest_config = pyproject["tool"]["pytest"]["ini_options"]
+        assert "--doctest-modules" in pytest_config["addopts"].split(), (
+            "pytest addopts no longer include --doctest-modules"
+        )
+        assert "src" in pytest_config["testpaths"], (
+            "pytest testpaths no longer include src, so its doctests "
+            "are not collected"
+        )
+
     @classmethod
     def _reproducibility_step_script(cls, build_job: str) -> str:
         """The literal ``run:`` script of the build job's "Verify the

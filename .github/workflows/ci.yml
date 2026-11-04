@@ -38,6 +38,8 @@ jobs:
           python-version: "3.12"
       - run: uv run ruff check
       - run: uv run ruff format --check
+      # pydoclint, run as a flake8 plugin with the settings in .flake8.
+      - run: uv run flake8 src
 
   typecheck:
     runs-on: ubuntu-latest
@@ -58,6 +60,8 @@ jobs:
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           python-version: ${{ matrix.python-version }}
+      # Also runs the doctests in src/: pyproject.toml's pytest
+      # addopts and testpaths include --doctest-modules and src.
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
 
   # Scans the dev dependency group (the only third-party code CI itself

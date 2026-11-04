@@ -19,15 +19,16 @@ uv sync          # create the virtualenv and install dev dependencies
 
 ## The QA ladder
 
-These four checks are enforced by CI on every push and pull request.
+These five checks are enforced by CI on every push and pull request.
 Run them locally before you push — one validated push beats three
 red ones:
 
 ```bash
-uv run ruff check           # lint
+uv run ruff check           # lint, docstring layout included
 uv run ruff format --check  # formatting (drop --check to apply)
+uv run flake8 src           # docstring fields (pydoclint)
 uv run mypy                 # type checking, strict
-uv run pytest               # the full suite
+uv run pytest               # the full suite and the doctests in src/
 ```
 
 CI additionally builds the wheel and imports it. `ruff`'s line length
@@ -101,6 +102,113 @@ Two enforcement points that are easy to miss:
   escapes `ProtocolError`" property covers it.
 - **Enum lockstep.** The display-name completeness tests live in
   `tests/test_enums.py`; new enum members must have display names.
+
+## Docstrings and comments
+
+Docstrings follow [PEP 257](https://peps.python.org/pep-0257/) and
+document with Sphinx's
+[reST field lists](https://www.sphinx-doc.org/en/master/usage/domains/python.html#info-field-lists).
+Two tools check them over `src/`: ruff's pydocstyle rules, under the
+`pep257` convention (`pyproject.toml`), and
+[pydoclint](https://jsh9.github.io/pydoclint/), run as a flake8 plugin
+because only flake8 can switch a single pydoclint code off for the
+whole tree (`.flake8`). `tests/` and `scripts/` are exempt from both.
+
+**Layout.**
+
+- Every public module, package `__init__.py`, class, function and
+  method has a docstring.
+- The first line is a one-line summary ending in a period, followed by
+  a blank line and then the body. A multi-line docstring's closing
+  quotes go on a line of their own.
+- A function's or method's summary is in the imperative mood:
+  "Decode a TCP header." rather than "Decodes ..." or "The ...". A
+  `@property` is exempt and names what it returns: "The MAC of ...".
+
+**Fields.**
+
+- `:param name:` documents a parameter. A docstring with no fields at
+  all is prose only and may describe its parameters in that prose. Once
+  it has any field (`:param:`, `:raises:`, `:returns:`, `:ivar:`), its
+  `:param:` fields cover every parameter in the signature, in order,
+  private helpers included.
+- No types in docstrings: no `:type:`, no `:rtype:`, no
+  `:param int x:`. The annotations hold the types and `mypy --strict`
+  checks them.
+- `:returns:` and `:yields:` are not required; the summary says what
+  comes back. Add a `:returns:` field only where the value needs more
+  than the summary, such as a tuple whose items need naming.
+- `:raises ExcType: if ...` documents each exception a caller can see
+  and the condition that raises it, whether the function raises it
+  itself or a callee does.
+- `:ivar name:` documents an exception's attributes (see
+  `utils/exceptions.py`); a `#:` comment above a module-level constant
+  or an instance attribute documents it.
+- Cross-references use Sphinx roles (`:class:`, `:meth:`, `:attr:`,
+  `:func:`, `:mod:`, `:data:`), with `~` for the short form:
+  ``:class:`~netprotocols.TCP` ``.
+
+**`decode()`.** Every public `decode()` has a docstring listing, with
+`:raises:`, each `ProtocolError` subclass it can raise and when:
+`:raises TruncatedHeaderError: if data is shorter than the 20-byte
+header.` A protocol that decodes everything past a fixed portion says
+so in the docstring: "Past the 12-byte common header, this never
+raises."
+
+**Accessors.** There are two kinds, and the docstring states which
+one it is:
+
+- Display helpers (`*_name`, `*_str`) and typed views of a field (an
+  enum-or-`None`, a decoded option value) never raise. On a value they
+  cannot interpret they return `"unknown (n)"` or `None`, and the
+  docstring says so, in the form "``None`` for ... (degrades, never
+  raises)".
+- Accessors that parse a raw `bytes` attribute on demand
+  (`parsed_options`, `parsed_chunks`, `parsed_attributes`, ...) can
+  raise a `ProtocolError`. They list it with `:raises:`, and the
+  error's `offset` counts from the start of that attribute.
+
+**Spec citations.** Cite the section that defines the behaviour, with
+the section sign: `RFC 791 §3.1`, `RFC 2328 §A.3.1`,
+`IEEE 802.1AB §8`. In running prose put it in parentheses,
+"(RFC 8200 §8.1)", and separate several with commas,
+"(RFC 2865 §5, RFC 2866 §5)". Never write "Section 3.1" or "sec. 3.1".
+
+**Examples.** A `>>>` example in `src/` is a doctest, and the test job
+runs it: `pyproject.toml` gives pytest `--doctest-modules` and the
+`src` test path, so `uv run pytest` collects them. Keep each example
+self-contained, building its input inline (`bytes.fromhex(...)`).
+Write an example that cannot run as a literal block (`::`) without
+`>>>` prompts.
+
+**What comments and docstrings say.** Every comment and every
+docstring states only what the code is or does: its behaviour, its
+invariants, its preconditions and postconditions, and the spec
+sections it implements. It never gives:
+
+- history: what the code used to be, which issue or PR changed it,
+  "was", "previously", "now", "no longer", "used to", dates;
+- decision-making: why one approach was chosen over another, which
+  alternatives were rejected, who found what.
+
+That material belongs in [`CHANGELOG.md`](CHANGELOG.md) and nowhere
+else. An issue or PR number counts as history, with one exception: a
+`TODO(#123): ...` comment that points at an open issue describing work
+still to do. Delete that comment when the issue closes.
+
+**Configured exceptions.** Each one is set in `pyproject.toml` or
+`.flake8`:
+
+| Exception | Where | Why |
+|---|---|---|
+| ruff `D105`: magic methods need no docstring | `pyproject.toml` | Their contract is Python's data model; the class docstring and the decode contract cover what is specific to a class, such as what `__bytes__` encodes. |
+| ruff `D107`: `__init__` needs no docstring | `pyproject.toml` | The class docstring documents construction, and dataclasses generate their own `__init__`. |
+| ruff `D` in `tests/` and `scripts/` | `pyproject.toml` | Tests are named for what they check; `scripts/` is maintainer tooling, not the shipped package. |
+| pydoclint `DOC201`, `DOC402`: no `:returns:` or `:yields:` required | `.flake8` | The summary says what comes back, and the annotation gives its type. |
+| pydoclint `DOC502`, `DOC503`: `:raises:` may name exceptions the body does not raise itself | `.flake8` | `decode()` documents what its callees raise (`_unpack_fixed`, a `raise _malformed(...)` factory), which pydoclint cannot see. `DOC501` still requires a `:raises:` field when the body raises. |
+| pydoclint `arg-type-hints-in-docstring`, `check-return-types`, `check-yield-types` off | `.flake8` | Types live in the annotations only. |
+| pydoclint `skip-checking-short-docstrings` on | `.flake8` | A docstring with no fields at all is not checked against the signature. |
+| pydoclint `check-class-attributes` off | `.flake8` | A class docstring describes its dataclass fields in prose, not as one field per attribute. |
 
 ## Tests and the fixture corpus
 
