@@ -68,6 +68,16 @@ class GRE(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the GRE header at the start of ``data``.
+
+        No flag or version value is rejected: the header is the 4 fixed
+        bytes and the optional fields the flags announce.
+
+        :param data: The buffer, starting at the flags/version word.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the 4
+            fixed bytes, or than the optional fields the flags announce
+            (``field="fields"``).
+        """
         flags, protocol_type = cls._unpack_fixed(data)
         optional_len = cls._optional_len(flags)
         end = cls._struct.size + optional_len
@@ -91,14 +101,16 @@ class GRE(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The 4 fixed bytes plus the optional fields present."""
         return self._struct.size + len(self.fields)
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class that decodes the encapsulated payload, chosen by
-        ``protocol_type`` (an EtherType); ``None`` when it is not one
-        this library decodes.
+        """Return the class that decodes the encapsulated payload.
+
+        Chosen by ``protocol_type`` (an EtherType); ``None`` when it is
+        not one this library decodes.
         """
         return _ethertype_class(self.protocol_type, registry)
 
@@ -124,24 +136,29 @@ class GRE(Protocol):
 
     @property
     def protocol_name(self) -> str:
-        """Display name of ``protocol_type``, e.g. ``"IPv4"``; falls back
-        to the hexadecimal value for EtherTypes unknown to this library.
+        """Display name of ``protocol_type``, e.g. ``"IPv4"``.
+
+        The hexadecimal value for an EtherType unknown to this library
+        (degrades, never raises).
         """
         return _ethertype_name(self.protocol_type)
 
     @property
     def protocol_enum(self) -> EtherType | None:
-        """``protocol_type`` as an :class:`~netprotocols.EtherType` (see
-        :attr:`~netprotocols.Ethernet.ethertype_enum`); ``None`` for a
-        value this library does not enumerate.
+        """``protocol_type`` as an :class:`~netprotocols.EtherType`.
+
+        See :attr:`~netprotocols.Ethernet.ethertype_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
         """
         return _ethertype_enum(self.protocol_type)
 
     @property
     def checksum(self) -> int | None:
-        """The header checksum, carried verbatim, or ``None`` when the
-        checksum-present bit is clear (compute/verify via
-        :mod:`netprotocols.checksum`).
+        """The header checksum, carried verbatim, or ``None``.
+
+        ``None`` when the checksum-present bit is clear, or
+        :attr:`fields` is too short to hold the checksum (degrades, never
+        raises). Compute and verify it via :mod:`netprotocols.checksum`.
         """
         if not self.checksum_present or len(self.fields) < 2:
             return None
@@ -149,7 +166,11 @@ class GRE(Protocol):
 
     @property
     def key(self) -> int | None:
-        """The 32-bit key (RFC 2890), or ``None`` when its bit is clear."""
+        """The 32-bit key (RFC 2890), or ``None`` when its bit is clear.
+
+        ``None`` too when :attr:`fields` is too short to hold the key
+        (degrades, never raises).
+        """
         if not self.key_present:
             return None
         offset = 4 if self.checksum_present else 0
@@ -159,8 +180,10 @@ class GRE(Protocol):
 
     @property
     def sequence_number(self) -> int | None:
-        """The 32-bit sequence number (RFC 2890), or ``None`` when its
-        bit is clear.
+        """The 32-bit sequence number (RFC 2890), or ``None``.
+
+        ``None`` when its bit is clear, or :attr:`fields` is too short to
+        hold it (degrades, never raises).
         """
         if not self.sequence_present:
             return None
@@ -173,8 +196,9 @@ class GRE(Protocol):
 
     @property
     def checksum_hex_str(self) -> str | None:
-        """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``, or
-        ``None`` when no checksum is present.
+        """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``.
+
+        ``None`` when :attr:`checksum` is ``None``.
         """
         checksum = self.checksum
         return None if checksum is None else hex_str(checksum, 6)

@@ -21,7 +21,8 @@ Where an LLDPDU ends
 --------------------
 There is no length for the whole LLDPDU, and Ethernet's zero padding or
 a captured FCS can follow it in the buffer :meth:`LLDP.decode` is handed
-(the walk does not trim a frame). An LLDPDU's own End of LLDPDU TLV
+(an EtherType bounds nothing, so the walk hands it the rest of the
+frame). An LLDPDU's own End of LLDPDU TLV
 (type 0, length 0) marks its end, and is what bounds it here:
 
 * ``decode`` walks the TLVs from the start of the buffer and stops after
@@ -60,30 +61,15 @@ buffer too short for a header's fixed part does (offset 0, no
 ``field``).
 
 The mandatory order is not framing, and ``decode`` does not enforce it:
-lldpd's receiver discards an LLDPDU whose first three TLVs are not
-Chassis ID, Port ID and Time To Live, in that order (it rejects each of
-them found at another position, and an LLDPDU missing one), but a
-decoder of captured traffic should still show one. The accessors report it
-instead: each reads its own position only and is ``None`` when the TLV
-there is of another type or too short (or, for the two IDs, too long)
-to hold its value, so none of them raises. A Chassis ID or Port ID TLV
+it decodes an LLDPDU whose first three TLVs are not Chassis ID, Port ID
+and Time To Live, in that order, which lldpd's receiver discards (it
+rejects each of them found at another position, and an LLDPDU missing
+one). The accessors report the order instead: each reads its own
+position only and is ``None`` when the TLV there is of another type or
+too short (or, for the two IDs, too long) to hold its value, so none of
+them raises. A Chassis ID or Port ID TLV
 later in the LLDPDU, a duplicate that lldpd rejects and Wireshark
-flags, is kept in :attr:`LLDP.tlvs` like any other TLV. Dispatch is by
-EtherType, which says outright what follows, so there is no wrong guess
-for ``decode`` to guard against as there is for a port.
-
-The walk is local to this module rather than
-:func:`~netprotocols._tlv.walk_kind_length_value`, the TLV walker TCP,
-IPv4, IPv6 and PIM share. LLDP's Type and Length are bitfields of one
-16-bit word, not two fields of a byte width that walker could be told;
-its End of LLDPDU is a whole TLV whose Length must be checked, not a
-lone terminator byte; and ``decode`` must know where the walk stopped,
-to bound :attr:`LLDP.header_len`, and must raise
-:class:`~netprotocols.TruncatedHeaderError` with an offset into its own
-buffer for a lying Length, where that walker yields no offsets and
-raises :class:`~netprotocols.InvalidFieldError`. Extending it for all of
-that would change a function in the mutation-tested scope that four
-other callers rely on, for a walk of a dozen lines.
+flags, is kept in :attr:`LLDP.tlvs` like any other TLV.
 
 ``bytes(LLDP.decode(x)) == x[:header_len]`` holds by construction: each
 TLV is packed back from its type and its value, carried verbatim.
@@ -174,7 +160,13 @@ def _check_range(
 ) -> None:
     """Reject ``value`` outside ``low``-``high``.
 
-    :raises InvalidFieldError: naming ``owner`` and ``field``.
+    :param owner: The class to attach to a raised error.
+    :param field: The field name to attach to a raised error.
+    :param value: The value to check.
+    :param low: The smallest value allowed.
+    :param high: The largest value allowed.
+    :raises InvalidFieldError: if ``value`` is outside ``low``-``high``,
+        naming ``owner`` and ``field``.
     """
     if not low <= value <= high:
         raise InvalidFieldError(
@@ -204,8 +196,8 @@ class LLDPTLV:
     def __post_init__(self) -> None:
         """Validate the fields (see the class docstring).
 
-        :raises InvalidFieldError: a type that overflows its 7 bits, or
-            a value too long for the 9-bit Length.
+        :raises InvalidFieldError: if the type overflows its 7 bits, or
+            the value is too long for the 9-bit Length.
         """
         _check_range(type(self), "type", self.type, 0, _MAX_TYPE)
         _check_range(type(self), "value", len(self.value), 0, _MAX_LENGTH)
@@ -223,7 +215,7 @@ class LLDPTLV:
     def type_name(self) -> str:
         """Name the TLV type, e.g. ``"System Name"``.
 
-        Reserved types read ``"unknown (n)"``.
+        Reserved types read ``"unknown (n)"`` (degrades, never raises).
         """
         return _TLV_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
@@ -247,8 +239,8 @@ class _LLDPIdentifier:
     def __post_init__(self) -> None:
         """Validate the fields (see the class docstring).
 
-        :raises InvalidFieldError: a subtype that overflows its byte, or
-            an identifier that is empty or longer than 255 bytes.
+        :raises InvalidFieldError: if the subtype overflows its byte, or
+            the identifier is empty or longer than 255 bytes.
         """
         _check_range(type(self), "subtype", self.subtype, 0, 0xFF)
         _check_range(type(self), "id", len(self.id), 1, _MAX_ID_LENGTH)
@@ -257,6 +249,7 @@ class _LLDPIdentifier:
     def _from_tlv(cls, tlv: LLDPTLV) -> Self | None:
         """Read the identifier ``tlv`` carries.
 
+        :param tlv: The TLV to read.
         :returns: ``None`` when ``tlv`` is of another type, or its value
             is too short or too long to hold a subtype and an identifier
             of 1 to 255 bytes.
@@ -279,7 +272,8 @@ class _LLDPIdentifier:
     def subtype_name(self) -> str:
         """Name the subtype, e.g. ``"MAC address"``.
 
-        Reserved subtypes read ``"unknown (n)"``.
+        Reserved subtypes read ``"unknown (n)"`` (degrades, never
+        raises).
         """
         return self._SUBTYPE_NAMES.get(
             self.subtype, f"unknown ({self.subtype})"
@@ -336,9 +330,9 @@ class LLDP(Protocol):
     def __post_init__(self) -> None:
         """Validate the TLVs as :meth:`decode` would read them back.
 
-        :raises InvalidFieldError: no TLVs, one that is not an
-            :class:`LLDPTLV`, an End of LLDPDU TLV before the last, or
-            one with a value.
+        :raises InvalidFieldError: if there are no TLVs, one is not an
+            :class:`LLDPTLV`, or an End of LLDPDU TLV comes before the
+            last or has a value.
         """
         if not self.tlvs:
             raise InvalidFieldError(
@@ -375,11 +369,12 @@ class LLDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the LLDPDU at the start of ``data``; see the module.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than one TLV
+        :param data: The buffer, starting at the first TLV's header.
+        :raises TruncatedHeaderError: if ``data`` is shorter than one TLV
             header, 2 bytes (no ``field``, as for any fixed header); or
             a later TLV's header, or any TLV's value, runs past it
             (``field="tlvs"``, the offset of that TLV).
-        :raises InvalidFieldError: an End of LLDPDU TLV has a nonzero
+        :raises InvalidFieldError: if an End of LLDPDU TLV has a nonzero
             Length (``field="tlvs"``).
         """
         cls._unpack_fixed(data)
@@ -479,11 +474,14 @@ def _read_tlv(
 ) -> tuple[LLDPTLV, int]:
     """Read the TLV whose header starts at ``cursor``.
 
+    :param cls: The class to attach to a raised error.
+    :param data: The buffer being decoded.
+    :param cursor: Where in ``data`` the TLV's header starts.
     :returns: The TLV, and the offset just past it.
-    :raises TruncatedHeaderError: the header or the value runs past
+    :raises TruncatedHeaderError: if the header or the value runs past
         ``data``.
-    :raises InvalidFieldError: an End of LLDPDU TLV with a nonzero
-        Length.
+    :raises InvalidFieldError: if the TLV is an End of LLDPDU TLV with
+        a nonzero Length.
     """
     size = len(data)
     if cursor + 2 > size:

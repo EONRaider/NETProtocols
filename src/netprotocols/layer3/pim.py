@@ -28,10 +28,10 @@ and encoding, so their width comes from the message, not from the IP
 header carrying it. Native IPv4 (family ``1``) and IPv6 (family ``2``)
 encodings are decoded. Any other family, or an encoding type no RFC
 defines, cannot be sized, and the parser raises
-:class:`InvalidFieldError` there. RFC 5384's type 1 Encoded-Source could
-be sized — its join attributes are TLVs (``F``, ``E``, a 6-bit type, a
-length byte, the value) ending at the one with the E bit set (§3.4.1) —
-but is not supported, and the parser raises there too.
+:class:`InvalidFieldError` there. RFC 5384's type 1 Encoded-Source, whose
+join attributes are TLVs (``F``, ``E``, a 6-bit type, a length byte, the
+value) ending at the one with the E bit set (§3.4.1), is not supported,
+and the parser raises there too.
 
 PIM has no length field of its own: like ICMP, IGMP and SCTP, the
 message is the whole IP payload, and the chain walk does not trim a
@@ -162,9 +162,13 @@ def _check_range(
 ) -> None:
     """Raise unless ``0 <= value <= maximum``.
 
+    :param owner: The class to attach to a raised error.
     :param name: What ``value`` is, for the message.
+    :param value: The value to check.
+    :param maximum: The largest value allowed.
     :param field: The attribute at fault, when it is not ``name`` (a
         count or length derived from it).
+    :raises InvalidFieldError: if ``value`` is outside 0-``maximum``.
     """
     if not 0 <= value <= maximum:
         raise InvalidFieldError(
@@ -184,6 +188,10 @@ def _pack_address(
     The family, the encoding and the address string are validated
     against each other.
 
+    :param owner: The class to attach to a raised error.
+    :param family: The PIM address family: ``1`` IPv4, ``2`` IPv6.
+    :param encoding: The encoding type; only native, ``0``, packs.
+    :param address: The address string to pack.
     :raises InvalidFieldError: if the family is not IPv4 (1) or IPv6
         (2), the encoding is not native (0), or ``address`` is not an
         address of that family.
@@ -361,10 +369,11 @@ def _read_encoded(
 ) -> tuple[int, int, bytes, str, int]:
     """Read the encoded address at ``body[cursor:]``.
 
-    Its address follows ``fixed`` bytes of fixed fields, the family and
-    encoding bytes first: 2 for Encoded-Unicast, 4 for Encoded-Group and
-    Encoded-Source.
-
+    :param body: The buffer holding the encoded address.
+    :param cursor: Where in ``body`` the encoded address starts.
+    :param fixed: How many bytes of fixed fields precede the address,
+        the family and encoding bytes first: 2 for Encoded-Unicast, 4
+        for Encoded-Group and Encoded-Source.
     :returns: ``(family, encoding, the fixed bytes after those two, the
         address string, where the address ends)``.
     :raises TruncatedHeaderError: if the address runs past ``body``.
@@ -468,7 +477,8 @@ class PIMHelloOption:
     def type_name(self) -> str:
         """Name the option type, e.g. ``"Generation ID"``.
 
-        Types this library does not name read ``"unknown (n)"``.
+        Types this library does not name read ``"unknown (n)"``
+        (degrades, never raises).
         """
         return _OPTION_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
@@ -585,9 +595,8 @@ def _parse_hello(body: bytes) -> tuple[PIMHello, int]:
 
     A remainder of zero bytes where an option would start ends the
     message there (see the module docstring). Where the zero tail starts
-    is found once, up front: testing the remainder at every option
-    instead would rescan it for each empty type-0 option, quadratic in
-    a Hello made of them.
+    is found once, up front, so the walk stays linear however many
+    empty type-0 options a Hello holds.
     """
     options: list[PIMHelloOption] = []
     end = 0
@@ -930,6 +939,7 @@ class PIM(Protocol):
         one (see the module docstring); a body its parser cannot read is
         kept whole, so past the header this never raises.
 
+        :param data: The buffer, starting at the version/type byte.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             4-byte header.
         :raises InvalidFieldError: if the version is not 2.
@@ -972,7 +982,8 @@ class PIM(Protocol):
     def type_name(self) -> str:
         """Name the message type, e.g. ``"Join/Prune"``.
 
-        Types this library does not name read ``"unknown (n)"``.
+        Types this library does not name read ``"unknown (n)"``
+        (degrades, never raises).
         """
         return self.type_names.get(self.type, f"unknown ({self.type})")
 

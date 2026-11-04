@@ -185,7 +185,7 @@ class MPLSLabel:
     :param bottom_of_stack: The S bit, ``1`` on the last entry of a
         stack and ``0`` on every other.
     :param ttl: Time to Live (RFC 3032 §2.4).
-    :raises InvalidFieldError: a field does not fit its width.
+    :raises InvalidFieldError: if a field does not fit its width.
 
     ``bytes(entry)`` is the 4-byte on-wire entry.
     """
@@ -264,7 +264,7 @@ class MPLS(Protocol):
 
     :param labels: The label stack entries, top of the stack first; any
         iterable of them, kept as a tuple.
-    :raises InvalidFieldError: the stack is empty or its S bits are not
+    :raises InvalidFieldError: if the stack is empty or its S bits are not
         set on the last entry alone (``field`` ``"labels"``).
     """
 
@@ -282,7 +282,8 @@ class MPLS(Protocol):
     def __post_init__(self) -> None:
         """Check the stack is non-empty and ends, alone, at its S bit.
 
-        :raises InvalidFieldError: it is empty, or an S bit is misplaced.
+        :raises InvalidFieldError: if it is empty, or an S bit is
+            misplaced.
         """
         # Any iterable of entries is accepted and kept as a tuple, so a
         # stack built from a list still compares equal to its decode and
@@ -316,7 +317,8 @@ class MPLS(Protocol):
         after it, if any, is where the labelled packet starts (see the
         module docstring's *What the stack carries*).
 
-        :raises TruncatedHeaderError: ``data`` ends before an entry with
+        :param data: The buffer, starting at the top label stack entry.
+        :raises TruncatedHeaderError: if ``data`` ends before an entry with
             the S bit set (``field`` ``"labels"``, ``offset`` where the
             missing entry would start).
         """

@@ -5,7 +5,7 @@ encrypts nothing, so every field decodes in the clear (RFC 4302 §2):
 Next Header, Payload Len, a reserved word, the Security Parameters
 Index, the anti-replay Sequence Number, and the Integrity Check Value.
 The ICV is a keyed MAC computed with the Security Association's shared
-key, which this library will never hold, so it is kept as raw bytes and
+key, which this library does not hold, so it is kept as raw bytes and
 never verified.
 
 Payload Len counts the whole header in 4-octet units, minus 2 — so
@@ -15,7 +15,7 @@ integrity algorithm (16 bytes for HMAC-SHA-256-128, 12 for
 HMAC-SHA1-96), which the packet does not name; Payload Len is what
 says where AH ends.
 
-Because AH protects without hiding, its payload is worth decoding, and
+AH hides nothing, so its payload decodes too:
 ``next_protocol()`` chains onward through ``next_header`` the way the
 IPv6 extension headers do. What may follow AH depends on the IP family
 around it, though, so there are two classes:
@@ -62,8 +62,9 @@ __all__ = ["AH", "AHv6"]
 
 @dataclass(frozen=True, slots=True)
 class AH(Protocol):
-    """An Authentication Header (RFC 4302 §2) in an IPv4 chain; see
-    :class:`AHv6` for IPv6.
+    """An Authentication Header (RFC 4302 §2) in an IPv4 chain.
+
+    See :class:`AHv6` for IPv6.
 
     :param next_header: Protocol number of what AH protects — the
         upper-layer protocol in transport mode, ``4`` or ``41`` (a whole
@@ -123,11 +124,16 @@ class AH(Protocol):
     def _check_payload_len(
         cls, payload_len: int, *, offset: int | None
     ) -> None:
-        """Reject a Payload Len that cannot describe this header:
-        shorter than its own fixed part, or (IPv6) misaligned.
+        """Reject a Payload Len that cannot describe this header.
 
-        :raises InvalidFieldError: ``offset`` is passed through — ``0``
-            from :meth:`decode`, ``None`` from construction.
+        That is one shorter than its own fixed part, or (IPv6)
+        misaligned.
+
+        :param payload_len: The Payload Len to check.
+        :param offset: The offset a raised error carries: ``0`` from
+            :meth:`decode`, ``None`` from construction.
+        :raises InvalidFieldError: if ``payload_len`` is below 1, or
+            gives a header that is not a multiple of the alignment.
         """
         if payload_len < 1:
             raise InvalidFieldError(
@@ -154,6 +160,16 @@ class AH(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the Authentication Header at the start of ``data``.
+
+        :param data: The buffer, starting at the Next Header byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            12-byte fixed part, or than the ``(payload_len + 2) * 4``
+            bytes Payload Len declares (``field="payload_len"``).
+        :raises InvalidFieldError: if Payload Len is below 1, or, for
+            :class:`AHv6`, gives a header that is not a multiple of 8
+            octets (``field="payload_len"``).
+        """
         next_header, payload_len, reserved, spi, sequence_number = (
             cls._unpack_fixed(data)
         )
@@ -192,17 +208,19 @@ class AH(Protocol):
 
     @property
     def header_len(self) -> int:
+        """The header's length in bytes: ``(payload_len + 2) * 4``."""
         return (self.payload_len + 2) * 4
 
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
-        """The class that decodes what AH protects, chosen by
-        ``next_header`` from the dispatch table of this header's IP
-        family — ``ip.proto`` for :class:`AH`, ``ip.proto.v6`` for
-        :class:`AHv6` — so an AH-wrapped TCP segment keeps decoding into
-        :class:`~netprotocols.TCP`, and an IPv6 extension header can
-        follow AH only inside an IPv6 chain.
+        """Return the class that decodes what AH protects.
+
+        Chosen by ``next_header`` from the dispatch table of this
+        header's IP family — ``ip.proto`` for :class:`AH`,
+        ``ip.proto.v6`` for :class:`AHv6` — so an AH-wrapped TCP segment
+        keeps decoding into :class:`~netprotocols.TCP`, and an IPv6
+        extension header can follow AH only inside an IPv6 chain.
         """
         return _ip_protocol_class(
             self.next_header, ipv6=self._ipv6, registry=registry
@@ -215,17 +233,19 @@ class AH(Protocol):
 
     @property
     def next_header_enum(self) -> IPProtocol | None:
-        """What follows this header as an
-        :class:`~netprotocols.IPProtocol` (see
-        :attr:`~netprotocols.IPv4.protocol_enum`); ``None`` for a value
-        this library does not enumerate.
+        """What follows this header as an :class:`~netprotocols.IPProtocol`.
+
+        See :attr:`~netprotocols.IPv4.protocol_enum`. ``None`` for a
+        value this library does not enumerate (degrades, never raises).
         """
         return _ip_protocol_enum(self.next_header)
 
     @property
     def spi_hex_str(self) -> str:
-        """The SPI as a hexadecimal string, e.g. ``"0x20000001"`` — the
-        form IPsec tooling (``ip xfrm``, tcpdump) prints it in.
+        """The SPI as a hexadecimal string, e.g. ``"0x20000001"``.
+
+        That is the form IPsec tooling (``ip xfrm``, tcpdump) prints it
+        in.
         """
         return hex_str(self.spi, 10)
 

@@ -77,9 +77,9 @@ A Bridge Identifier is two priority octets and the bridge's 6-octet
 MAC address. 802.1D-1998 made all 16 bits a settable priority;
 802.1t, folded into 802.1D-2004, keeps the four high bits as the
 settable priority, in steps of 4096, and makes the other twelve a
-system ID extension (the MSTID under MSTP, 0 for the CIST). Bridges
-of both kinds are on the wire, so the two octets are a field of their
-own (:attr:`STP.root_priority`, :attr:`STP.bridge_priority`) and the
+system ID extension (the MSTID under MSTP, 0 for the CIST). The two
+octets are a field of their own (:attr:`STP.root_priority`,
+:attr:`STP.bridge_priority`), whichever form a bridge sends, and the
 802.1t split is read through accessors, as Wireshark reads it:
 :attr:`STP.root_priority_component` (``& 0xF000``) and
 :attr:`STP.root_system_id_extension` (``& 0x0FFF``). A Port Identifier
@@ -150,31 +150,26 @@ Configuration Identifier, the CIST's internal fields and up to 64 MSTI
 Configuration Messages. :class:`STP` decodes its first 36 octets, the
 RST BPDU an 802.1w bridge would read from it, carries its version (3)
 verbatim, and leaves the Version 3 information after ``header_len``,
-undecoded and not kept in the layer. The draft backs that reading.
-Under §14.6 i), an implementation of version 2 interprets a PDU of
+undecoded and not kept in the layer. That is the draft's reading for
+an implementation of version 2: under §14.6 i), it interprets a PDU of
 version 3 as if it carried version 2, ignoring the parameters and
 octets version 2 does not define; and even an MST bridge decodes a
 version 3 BPDU as MST only when §14.5 e) holds (102 or more octets, a
 Version 1 Length of 0, a Version 3 Length of a whole number of MSTI
 messages), and otherwise, by §14.5 d), as an RST BPDU.
 
-Keeping the Version 3 information raw in the layer would need an end
-for it. In a walk the 802.3 Length already gives one, but a direct
-:meth:`STP.decode` has nothing but the Version 3 Length, and that field
-is unreliable on the wire: Wireshark's ``packet-bpdu.c`` notes a Cisco
-C3550 IOS release that appears to send it as a count of MSTI messages
-rather than of octets, and MST BPDUs whose Version 3 Length is 0 and
-whose format selector octet holds the length instead. Read to the end
-of the buffer instead, it would take in Ethernet's padding and an FCS,
-which ``header_len`` would then cover. In a walk, a caller recovers the
+The Version 3 Length is not read. On the wire it is unreliable:
+Wireshark's ``packet-bpdu.c`` notes a Cisco C3550 IOS release that
+appears to send it as a count of MSTI messages rather than of octets,
+and MST BPDUs whose Version 3 Length is 0 and whose format selector
+octet holds the length instead. In a walk, a caller recovers the
 Version 3 information from the frame, after the layer and up to where
 the 802.3 Length ends the PDU::
 
     v3 = frame[packet.consumed : 14 + packet[Ethernet].length]
 
 Behind one VLAN tag the Length is the tag's, 4 bytes later:
-``frame[packet.consumed : 18 + packet[VLAN].length]``. Decoding MSTP
-properly is later work.
+``frame[packet.consumed : 18 + packet[VLAN].length]``.
 """
 
 from __future__ import annotations
@@ -316,10 +311,12 @@ class STP(Protocol):
     def __post_init__(self) -> None:
         """Check the prefix, which fields the type carries, and widths.
 
-        :raises InvalidFieldError: a nonzero Protocol Identifier, an
-            unknown BPDU Type, a field present that the type does not
-            carry or absent that it does, a value too wide for its
-            octets, or a MAC address that is not one.
+        :raises InvalidFieldError: if the Protocol Identifier is nonzero,
+            the BPDU Type is unknown, a field is present that the type
+            does not carry or absent that it does, or a value is too wide
+            for its octets.
+        :raises InvalidMACAddressError: if ``root_mac`` or ``bridge_mac``
+            is not a MAC address.
         """
         self._check_prefix(self.protocol_id, self.bpdu_type, offset=None)
         self._check_octets("version", self.version, 0xFF)
@@ -338,11 +335,11 @@ class STP(Protocol):
     def _check_presence(self, name: str, index: int) -> None:
         """Check that field ``name`` is set iff the type carries it.
 
-        ``index`` is the field's position after the prefix: a
-        Configuration BPDU carries the first nine, an RST BPDU all ten
-        and a TCN none.
-
-        :raises InvalidFieldError: the field is set and the type does
+        :param name: The field to check.
+        :param index: The field's position after the prefix: a
+            Configuration BPDU carries the first nine, an RST BPDU all
+            ten and a TCN none.
+        :raises InvalidFieldError: if the field is set and the type does
             not carry it, or the other way round.
         """
         expected = index < _CARRIED[self.bpdu_type]
@@ -360,7 +357,10 @@ class STP(Protocol):
     def _check_octets(cls, name: str, value: int, limit: int) -> None:
         """Check that ``value`` fits in 0 to ``limit``.
 
-        :raises InvalidFieldError: it does not.
+        :param name: The field name to attach to a raised error.
+        :param value: The value to check.
+        :param limit: The largest value allowed.
+        :raises InvalidFieldError: if ``value`` is outside 0-``limit``.
         """
         if not 0 <= value <= limit:
             raise InvalidFieldError(
@@ -377,10 +377,13 @@ class STP(Protocol):
     ) -> None:
         """Reject a Protocol Identifier or BPDU Type with no layout.
 
-        :raises InvalidFieldError: the Protocol Identifier is not 0, or
-            the type is not 0x00, 0x02 or 0x80. ``offset`` is ``0``
-            from :meth:`decode` (``3`` for the type) and ``None`` from
-            construction.
+        :param protocol_id: The Protocol Identifier to check.
+        :param bpdu_type: The BPDU Type to check.
+        :param offset: ``0`` from :meth:`decode`, where a raised error
+            carries offset 0 for the Protocol Identifier and 3 for the
+            type; ``None`` from construction, where it carries none.
+        :raises InvalidFieldError: if the Protocol Identifier is not 0,
+            or the type is not 0x00, 0x02 or 0x80.
         """
         if protocol_id != 0:
             raise InvalidFieldError(
@@ -405,9 +408,10 @@ class STP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the BPDU at the start of ``data``; see the module.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than 4 bytes,
+        :param data: The buffer, starting at the Protocol Identifier.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 4 bytes,
             or than the 35 or 36 its type needs (``field="bpdu_type"``).
-        :raises InvalidFieldError: the Protocol Identifier is not 0
+        :raises InvalidFieldError: if the Protocol Identifier is not 0
             (``field="protocol_id"``) or the type is unknown
             (``field="bpdu_type"``).
         """
@@ -483,7 +487,8 @@ class STP(Protocol):
     def version_name(self) -> str:
         """Display name of the version, e.g. ``"Rapid Spanning Tree"``.
 
-        ``"unknown (n)"`` for a version Wireshark does not name.
+        ``"unknown (n)"`` for a version Wireshark does not name
+        (degrades, never raises).
         """
         return _VERSION_NAMES.get(self.version, f"unknown ({self.version})")
 

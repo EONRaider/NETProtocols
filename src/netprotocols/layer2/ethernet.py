@@ -34,7 +34,7 @@ _ETHERTYPE_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_ETHERTYPE)
 def _ethertype_class(
     ethertype: int, registry: Registry | None = None
 ) -> type[Protocol] | None:
-    """The class that decodes the payload of an Ethernet/VLAN header.
+    """Return the class that decodes the payload of an Ethernet/VLAN header.
 
     VLAN tag types dispatch to :class:`~netprotocols.VLAN`, whose own
     ``next_protocol`` calls back here with the inner EtherType — so
@@ -83,8 +83,10 @@ def _length(value: int) -> int | None:
 
 
 def _ethertype_name(ethertype: int) -> str:
-    """Display name of an EtherType, e.g. ``"IPv4"``; falls back to the
-    hexadecimal value for types unknown to this library.
+    """Return the display name of an EtherType, e.g. ``"IPv4"``.
+
+    Falls back to the hexadecimal value for types unknown to this
+    library.
     """
     try:
         return EtherType(ethertype).display_name
@@ -93,8 +95,9 @@ def _ethertype_name(ethertype: int) -> str:
 
 
 def _ethertype_enum(ethertype: int) -> EtherType | None:
-    """The ``EtherType`` member for a numeric value, or ``None`` if it
-    isn't one this library recognizes.
+    """Return the ``EtherType`` member for a numeric value, or ``None``.
+
+    ``None`` when the value is not one this library recognizes.
     """
     try:
         return EtherType(ethertype)
@@ -129,11 +132,18 @@ class Ethernet(Protocol):
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the Ethernet header at the start of ``data``.
+
+        Past the 14-byte header, this never raises.
+
+        :param data: The frame, starting at the destination address.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            14-byte header.
+        """
         dst, src, ethertype = cls._unpack_fixed(data)
-        # The addresses below are generated here, from raw bytes, by
-        # bytes_to_mac()/bytes_to_ipv4() — they cannot fail the
-        # validators the constructor runs, so this builds the instance
-        # directly instead (see "Decode-path construction" in _base.py).
+        # bytes_to_mac() produces addresses that pass the constructor's
+        # validators, so the instance is built directly, without
+        # __post_init__ (see "Decode-path construction" in _base.py).
         header = object.__new__(cls)
         set_field = object.__setattr__
         set_field(header, "dst", bytes_to_mac(dst))
@@ -183,17 +193,20 @@ class Ethernet(Protocol):
 
     @property
     def ethertype_name(self) -> str:
-        """Display name of the EtherType, e.g. ``"IPv4"``; falls back to
-        the hexadecimal value for types unknown to this library, and
-        for an 802.3 Length.
+        """Display name of the EtherType, e.g. ``"IPv4"``.
+
+        The hexadecimal value for a type unknown to this library and for
+        an 802.3 Length (degrades, never raises).
         """
         return _ethertype_name(self.ethertype)
 
     @property
     def ethertype_enum(self) -> EtherType | None:
-        """The EtherType as an :class:`~netprotocols.EtherType`, or
-        ``None`` for a value this library does not enumerate;
-        :attr:`ethertype` stays the canonical ``int`` and round-trips
-        regardless (see :attr:`ethertype_name` for the display form).
+        """The EtherType as an :class:`~netprotocols.EtherType`.
+
+        ``None`` for a value this library does not enumerate (degrades,
+        never raises); :attr:`ethertype` stays the canonical ``int`` and
+        round-trips regardless (see :attr:`ethertype_name` for the
+        display form).
         """
         return _ethertype_enum(self.ethertype)

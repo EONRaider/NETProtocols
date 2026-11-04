@@ -30,9 +30,7 @@ authentication type or where the message ends. Everything else is
 carried verbatim — an unknown Type, a Priority of ``0`` (the master
 resigning, RFC 5798 §5.2.4), a Count of ``0`` (below RFC 5798
 §5.2.5's minimum of 1), the reserved bits —
-because none of it changes the layout. Dispatch is by IP protocol
-number, which says outright what follows, so there is no wrong guess to
-guard against as there is for a port. The word is kept raw, as ICMP
+because none of it changes the layout. The word is kept raw, as ICMP
 keeps its rest-of-header word, and read through per-version accessors
 (:attr:`VRRP.auth_type`, :attr:`VRRP.adver_int`,
 :attr:`VRRP.max_adver_int`, :attr:`VRRP.reserved`) that return
@@ -151,8 +149,8 @@ class VRRP(Protocol):
     def __post_init__(self) -> None:
         """Validate the fields :meth:`__bytes__` could not pack faithfully.
 
-        :raises InvalidFieldError: a version with no layout, a type that
-            overflows its nibble, or a count or authentication data that
+        :raises InvalidFieldError: if the version has no layout, the type
+            overflows its nibble, or the count or authentication data
             disagrees with the addresses and the version.
         """
         self._check_version(self.version, offset=None)
@@ -173,7 +171,7 @@ class VRRP(Protocol):
         The count must be the number of addresses, and the
         authentication data 8 bytes in VRRPv2 and none in VRRPv3.
 
-        :raises InvalidFieldError: on either disagreement.
+        :raises InvalidFieldError: if either disagrees.
         """
         if self.count_ip_addrs != len(self.addresses):
             raise InvalidFieldError(
@@ -200,8 +198,11 @@ class VRRP(Protocol):
     def _check_version(cls, version: int, *, offset: int | None) -> None:
         """Reject a version this class cannot lay out.
 
-        :raises InvalidFieldError: ``offset`` is passed through — ``0``
-            from :meth:`decode`, ``None`` from construction.
+        :param version: The version to check.
+        :param offset: The offset a raised error carries: ``0`` from
+            :meth:`decode`, ``None`` from construction.
+        :raises InvalidFieldError: if ``version`` is not one this
+            class's IP family carries.
         """
         if version not in cls._versions:
             allowed = " or ".join(str(v) for v in sorted(cls._versions))
@@ -218,10 +219,11 @@ class VRRP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the advert at the start of ``data``; see the module.
 
-        :raises TruncatedHeaderError: ``data`` is shorter than the fixed
+        :param data: The buffer, starting at the version/type byte.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the fixed
             header, or than the addresses (``field="count_ip_addrs"``)
             or authentication data (``field="auth_data"``) it declares.
-        :raises InvalidFieldError: the version is not one this class's
+        :raises InvalidFieldError: if the version is not one this class's
             IP family carries (``field="version"``).
         """
         ver_type, vrid, priority, count, adver_word, checksum = (
@@ -294,7 +296,10 @@ class VRRP(Protocol):
 
     @property
     def type_name(self) -> str:
-        """Display name of the message type, e.g. ``"Advertisement"``."""
+        """Display name of the message type, e.g. ``"Advertisement"``.
+
+        ``"unknown (n)"`` for any other type (degrades, never raises).
+        """
         return _TYPE_NAMES.get(self.type, f"unknown ({self.type})")
 
     @property
@@ -310,7 +315,8 @@ class VRRP(Protocol):
     def auth_type_name(self) -> str | None:
         """Display name of :attr:`auth_type`, or ``None`` in VRRPv3.
 
-        E.g. ``"Simple Text Password"``, or ``"unknown (7)"``.
+        E.g. ``"Simple Text Password"``, or ``"unknown (7)"`` for a type
+        RFC 2338 does not define (degrades, never raises).
         """
         auth_type = self.auth_type
         if auth_type is None:
