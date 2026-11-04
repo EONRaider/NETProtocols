@@ -14,13 +14,12 @@ import copy
 import dataclasses
 import importlib.util
 import struct
-import tracemalloc
 from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from conftest import FIXTURES, pcap_frames
+from conftest import FIXTURES, allocation_peak, pcap_frames
 from netprotocols import (
     LLC,
     SNAP,
@@ -637,27 +636,17 @@ class TestHostileInput:
     def test_decode_never_copies_the_buffer_tail(self, wrap, bpdu):
         """Allocate at peak under half the megabyte after the BPDU.
 
-        Traced with :mod:`tracemalloc`, as tests/test_lldp.py does: a
-        copy of the whole buffer takes over a megabyte. ``bytes(data)``
+        Traced with :func:`conftest.allocation_peak`: a copy of the
+        whole buffer takes over a megabyte. ``bytes(data)``
         of a :class:`bytes` returns the object itself, so only the
-        bytearray and memoryview cases see such a copy. If tracemalloc
-        is already tracing it is left on, else stopped.
+        bytearray and memoryview cases see such a copy.
         """
         trailer = bytes(1 << 20)
         data = wrap(bpdu + trailer)
-        started = not tracemalloc.is_tracing()
-        if started:
-            tracemalloc.start()
-        try:
-            tracemalloc.reset_peak()
-            base, _ = tracemalloc.get_traced_memory()
+        with allocation_peak() as traced:
             stp = STP.decode(data)
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            if started:
-                tracemalloc.stop()
         assert stp == STP.decode(bpdu)
-        assert peak - base < len(trailer) // 2, peak - base
+        assert traced.peak < len(trailer) // 2, traced.peak
 
     def test_a_memoryview_is_not_retained(self):
         """Test a memoryview is not retained."""
