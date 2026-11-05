@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from netprotocols import (
@@ -176,15 +178,13 @@ class TestPacketTrailer:
         assert packet.with_checksums().trailer == self.FCS
         assert ip_tcp_packet.with_checksums().trailer == b""
 
-    def test_pickles_with_its_trailer(self, eth_arp_packet):
-        import pickle
-
+    def test_copies_with_its_trailer(self, eth_arp_packet):
         stop = TruncatedHeaderError("cut")
         packet = Packet(
             *eth_arp_packet.layers, stopped_by=stop, trailer=self.FCS
         )
-        for protocol in range(2, pickle.HIGHEST_PROTOCOL + 1):
-            copy = pickle.loads(pickle.dumps(packet, protocol=protocol))
-            assert copy == packet
-            assert copy.trailer == self.FCS
-            assert type(copy.stopped_by) is TruncatedHeaderError
+        for duplicate in (copy.copy(packet), copy.deepcopy(packet)):
+            assert duplicate == packet
+            assert duplicate.trailer == self.FCS
+            assert type(duplicate.stopped_by) is TruncatedHeaderError
+        assert type(copy.deepcopy(packet).trailer) is bytes
