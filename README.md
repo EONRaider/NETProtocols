@@ -470,9 +470,10 @@ raw = bytes(frame)  # ready for a raw socket
 
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
-checksum, VRRP's with or without its pseudo-header by version, PIM's,
-CDP's with its odd final byte summed as Cisco does, and SCTP's CRC32c
-via `crc32c()`; OSPF's LSA checksums via
+checksum, VRRP's — the message alone in VRRPv2, behind the IP
+pseudo-header in VRRPv3, with VRRPv3 over IPv4 verified in either
+form — PIM's, CDP's with its odd final byte summed as Cisco does, and
+SCTP's CRC32c via `crc32c()`; OSPF's LSA checksums via
 `lsa_checksum()`/`verify_lsa()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 

@@ -637,6 +637,20 @@ class TestVRRPChecksum:
         assert filled.checksum == vrrp.checksum
         assert filled.checksum == v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
 
+    def test_the_rfc_9568_form_verifies_with_nonzero_padding(self):
+        """An RFC 9568-form advert padded to 60 bytes with nonzero
+        bytes verifies, the padding passed as ``payload``."""
+        vrrp, _ = self.advert(9)
+        frame = self.FRAMES[9]
+        checksum = struct.pack("!H", self.without_pseudo_header(vrrp))
+        padding = bytes(range(1, 61 - len(frame)))
+        padded = frame[:40] + checksum + frame[42:] + padding
+        assert len(padded) == 60
+        packet = decode_frame(padded)
+        assert packet.consumed == len(frame)
+        assert packet[VRRP].checksum != vrrp.checksum
+        assert verify(packet[VRRP], ip=packet[IPv4], payload=padding)
+
     def test_vrrpv2_accepts_no_pseudo_header_form(self):
         """VRRPv2's sum never has a pseudo-header, so the IPv4
         pseudo-header form of its message fails, with or without

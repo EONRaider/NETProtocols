@@ -20,10 +20,9 @@ scenarios. Addresses are as-captured from the capture host's network.
 Twenty-six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
-`vrrp_rfc9568.pcap`,
-`rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`, `mpls.pcap`,
-`lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`, `stun.pcap`,
-`ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
+`vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`,
+`mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`,
+`stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
 captured
 separately by
 their own `scripts/capture_fixtures_*.sh` over
@@ -329,14 +328,17 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   then keeps a fixed selection: each router's first two adverts with a
   nonzero priority in each segment, and its priority-0 advert; the gaps
   this leaves in the identification counters are adverts it dropped.
-  It asserts the kept frames' composition exactly. `check_fixtures`
-  verifies every VRRP checksum: the message alone for VRRPv2 (RFC 3768
-  §5.3.8), behind the IPv4 pseudo-header for VRRPv3 — with the real
-  destination, so for VRID 54 the unicast peer's address rather than
-  `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
-  only RFC 2460's pseudo-header, which is IPv6's. keepalived's
-  `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
-  leave the IPv4 pseudo-header out: see `vrrp_rfc9568.pcap` below.
+  It asserts the kept frames' composition exactly. Every VRRPv3
+  frame here carries its checksum behind the IPv4 pseudo-header, with
+  the real destination, so for VRID 54 the unicast peer's address
+  rather than `224.0.0.18`. `check_fixtures` verifies every VRRP
+  checksum: the message alone for VRRPv2 (RFC 3768 §5.3.8), and for
+  VRRPv3 over IPv4 either form, behind the IPv4 pseudo-header or over
+  the message alone. The pseudo-header form is keepalived's default;
+  RFC 5798 §5.2.8 cites only RFC 2460's pseudo-header, which is
+  IPv6's. keepalived's `v3_checksum_as_v2` option, and RFC 9568,
+  which obsoletes RFC 5798, leave the IPv4 pseudo-header out: see
+  `vrrp_rfc9568.pcap` below.
   It also requires each message's length, from its version and count,
   to be the IP payload's exactly.
   veth does not pad a short frame, so none of these frames carries
