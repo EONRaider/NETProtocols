@@ -368,7 +368,7 @@ class ICMPv6(_ICMP):
         :class:`NDPOption` per option, in wire order; ``None`` for
         non-NDP message types and empty for an NDP message carrying no
         options. A raised error's ``offset`` counts from the start of
-        :attr:`body`.
+        :attr:`~netprotocols.layer3.icmp._ICMP.body`.
 
         :raises InvalidFieldError: if the body ends before the message's
             fixed fields, an option's length is zero (lengths count in

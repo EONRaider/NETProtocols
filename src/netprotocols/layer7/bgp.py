@@ -103,7 +103,7 @@ cut message and raise; that is one value in 2**32.
 
 Each message is one layer, so a segment of many small messages makes a
 deep chain: Ethernet, IPv4 and TCP are three layers, and the walk's
-default ``max_depth`` of :data:`~netprotocols.MAX_DEPTH` (32) leaves
+default ``max_depth`` of :data:`~netprotocols.walk.MAX_DEPTH` (32) leaves
 room for 29 messages. Valid traffic carries more. A 1460-byte MSS
 segment with TCP timestamps carries 1448 bytes: 76 KEEPALIVEs (19
 bytes each) and the start of a 77th, or 30 of the 47-byte UPDATEs that

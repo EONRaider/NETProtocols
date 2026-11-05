@@ -129,7 +129,7 @@ answer.
 
 Each record being a layer, a segment of many is a deep chain: Ethernet,
 IPv4 and TCP are three layers, and the walk's default ``max_depth`` of
-:data:`~netprotocols.MAX_DEPTH` (32) leaves room for 29 records. The
+:data:`~netprotocols.walk.MAX_DEPTH` (32) leaves room for 29 records. The
 decoder's worst case is a bare 5-byte header, a zero-length fragment,
 which it accepts for every content type: a 1,448-byte segment holds 289
 (1,448 / 5 = 289.6). Real records are longer, but not by enough. RFC

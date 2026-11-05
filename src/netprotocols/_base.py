@@ -13,7 +13,9 @@ and must:
    layer's buffer where that Length puts the end of the LLC PDU, never
    past the end of the frame (see "Payload extent" below).
 2. For variable-length headers (IPv4, TCP), validate the declared
-   length (raising :class:`InvalidFieldError` for nonsense values and
+   length (raising
+   :class:`~netprotocols.utils.exceptions.InvalidFieldError` for
+   nonsense values and
    :class:`TruncatedHeaderError` when the declared length exceeds the
    buffer) and materialize the options as ``bytes``.
 3. Tolerate trailing bytes: whatever follows the header is the next
@@ -229,7 +231,7 @@ def bytes_to_ipv6(data: bytes) -> str:
     The output matches glibc's ``inet_ntop`` byte for byte, including
     its two dotted-quad forms, ``::a.b.c.d`` and ``::ffff:a.b.c.d``. It
     is the same on every supported Python version: it depends neither
-    on ``socket`` (see :func:`ipv6_to_bytes`) nor on :func:`str` of an
+    on ``socket`` (see :func:`ipv6_to_bytes`) nor on :class:`str` of an
     :class:`ipaddress.IPv6Address`, whose rendering of
     ``::ffff:a.b.c.d`` addresses differs between CPython versions.
 
