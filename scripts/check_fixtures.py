@@ -681,7 +681,7 @@ _VXLAN_PORT = 4789
 _RIP_PORT = 520
 
 #: RADIUS's authentication and accounting ports (RFC 2865 §3, RFC 2866
-#: §3) and Dynamic Authorization's (RFC 5176 §3).
+#: §3) and Dynamic Authorization's (RFC 5176 §2.3).
 _RADIUS_PORTS = (1812, 1813, 3799)
 
 #: STUN's port, over UDP and TCP alike (RFC 8489 §6).
@@ -1159,7 +1159,7 @@ _RADIUS_MESSAGE_AUTHENTICATOR = 80
 
 #: RADIUS request codes: Access-Request (RFC 2865 §3),
 #: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §3),
-#: Disconnect-Request and CoA-Request (RFC 5176 §3).
+#: Disconnect-Request and CoA-Request (RFC 5176 §2.3).
 _RADIUS_REQUESTS = (1, 4, 12, 40, 43)
 
 #: RADIUS reply codes, whose Response Authenticator and
@@ -1168,8 +1168,12 @@ _RADIUS_REQUESTS = (1, 4, 12, 40, 43)
 #: Access-Accept, Access-Reject and Access-Challenge an Access-Request
 #: (RFC 2865 §3), Accounting-Response an Accounting-Request (RFC 2866
 #: §3), Disconnect-ACK and Disconnect-NAK a Disconnect-Request, CoA-ACK
-#: and CoA-NAK a CoA-Request (RFC 5176 §3), and Access-Accept,
-#: Access-Reject and Accounting-Response a Status-Server (RFC 5997 §2).
+#: and CoA-NAK a CoA-Request (RFC 5176 §2.3), and Access-Accept,
+#: Access-Reject and Accounting-Response a Status-Server, which RFC 5997
+#: §2 says a server answers with Access-Accept on an authentication port
+#: or Accounting-Response on an accounting port and MAY answer with
+#: Access-Reject; it does not recommend Access-Challenge, which is not
+#: mapped to Status-Server.
 _RADIUS_ANSWERS = {
     2: (1, 12),
     3: (1, 12),
@@ -1333,7 +1337,7 @@ def _check_radius_reply(
 
     Its Response Authenticator must be MD5 over the reply with
     ``request`` in place of the Authenticator, then the secret (RFC 2865
-    §3, RFC 2866 §3, RFC 5176 §3), and its Message-Authenticator, when
+    §3, RFC 2866 §3, RFC 5176 §2.3), and its Message-Authenticator, when
     it carries one, HMAC-MD5 under the secret over the reply with
     ``request`` in place of the Authenticator and that attribute's value
     zeroed (RFC 3579 §3.2). Each is reported on its own. A reply with no

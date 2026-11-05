@@ -1382,7 +1382,7 @@ def test_a_tampered_exchange_fails(
 
 
 #: The RADIUS request Codes: Access-Request (RFC 2865 §3),
-#: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §2),
+#: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §3),
 #: Disconnect-Request and CoA-Request (RFC 5176 §2.3).
 RADIUS_REQUEST_CODES = (1, 4, 12, 40, 43)
 
@@ -1618,7 +1618,7 @@ def radius_exchange(
     if request_code == 1:
         authenticator = bytes(range(16))
     else:
-        # RFC 5176 §3: computed as an Accounting-Request's is.
+        # RFC 5176 §2.3: computed as an Accounting-Request's is.
         authenticator = hashlib.md5(
             head + bytes(16) + user_name + checker._RADIUS_SECRET,
             usedforsecurity=False,
