@@ -1668,6 +1668,212 @@ class TestGREChecksum:
         assert internet_checksum(bytes.fromhex("0001f203f4f5f6f7")) == 0x220D
 
 
+GRE6_FRAMES = pcap_frames(FIXTURES / "gre6.pcap")
+GRE6_TEMPLATE = GRE6_FRAMES[0]
+
+
+def ipv6_frame(template: bytes, next_header: int, payload: bytes) -> bytes:
+    """``payload`` as Next Header ``next_header`` in ``template``'s
+    Ethernet and IPv6 headers, Payload Length recomputed."""
+    header = put(
+        template[14:54], 4, struct.pack("!HB", len(payload), next_header)
+    )
+    return template[:14] + header + payload
+
+
+def encap_limit(next_header: int) -> bytes:
+    """An IPv6 Destination Options header followed by ``next_header``,
+    holding a Tunnel Encapsulation Limit option of 4 (RFC 2473 §5.1)
+    and a PadN option filling it to 8 bytes."""
+    return bytes([next_header, 0, 4, 1, 4, 1, 1, 0])
+
+
+class TestGREOverIPv6:
+    def test_every_committed_frame_is_checked_through_gre(self) -> None:
+        """gre6.pcap's four frames carry GRE, flags all clear, as IPv6's
+        Next Header with no extension header; each passes with its GRE
+        and inner ICMPv4 echo counted, and no GRE Checksum summed."""
+        assert len(GRE6_FRAMES) == 4
+        for gre_frame in GRE6_FRAMES:
+            assert gre_frame[14 + 6] == 47
+            assert struct.unpack_from("!H", gre_frame, 54)[0] == 0
+            stats: Counter[str] = Counter()
+            assert checker.check_frame(gre_frame, stats) == []
+            assert stats["ipv6"] == 1
+            assert stats["gre"] == 1
+            assert stats["gre-checksum"] == 0
+            assert stats["ipv4"] == 1
+            assert stats["icmpv4"] == 1
+
+    def test_the_inner_packet_of_a_committed_frame_is_checked(self) -> None:
+        bad = flip(GRE6_TEMPLATE, 54 + 4 + 20 + 2)
+        assert checker.check_frame(bad, Counter()) == ["icmpv4-checksum"]
+
+    @pytest.mark.parametrize("key", [False, True], ids=["c", "c-k-s"])
+    def test_a_correct_checksum_passes(self, key: bool) -> None:
+        packet = gre_with_checksum(ECHO_PACKET, key=key)
+        stats: Counter[str] = Counter()
+        good = ipv6_frame(GRE6_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-checksum"] == 1
+        assert stats["icmpv4"] == 1
+
+    @pytest.mark.parametrize("offset", [5, 6], ids=["checksum", "reserved1"])
+    def test_a_tampered_packet_fails(self, offset: int) -> None:
+        packet = gre_with_checksum(ECHO_PACKET)
+        bad = ipv6_frame(GRE6_TEMPLATE, 47, flip(packet, offset))
+        assert checker.check_frame(bad, Counter()) == ["gre-checksum"]
+
+    @pytest.mark.parametrize(
+        "trailer",
+        [bytes.fromhex("deadbeef"), bytes(6) + bytes.fromhex("1d2c3b4a")],
+        ids=["fcs", "padding-and-fcs"],
+    )
+    def test_bytes_after_the_ip_datagram_are_not_summed(
+        self, trailer: bytes
+    ) -> None:
+        """The sum ends where the IPv6 Payload Length ends the datagram:
+        bytes after it, which would change the sum, change nothing,
+        whether the Checksum is right or wrong."""
+        good = ipv6_frame(GRE6_TEMPLATE, 47, gre_with_checksum(ECHO_PACKET))
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(good + trailer, stats) == []
+        assert stats["gre-checksum"] == 1
+        bad = flip(good, 54 + 5)
+        assert checker.check_frame(bad + trailer, Counter()) == ["gre-checksum"]
+
+    def test_a_checksum_over_the_trailer_too_fails(self) -> None:
+        """A Checksum computed over the bytes past the IPv6 Payload
+        Length as well does not verify."""
+        trailer = bytes.fromhex("12345678")
+        summed = gre_with_checksum(ECHO_PACKET + trailer)
+        packet = summed[: -len(trailer)]
+        bad = ipv6_frame(GRE6_TEMPLATE, 47, packet) + trailer
+        assert checker.check_frame(bad, Counter()) == ["gre-checksum"]
+
+    def test_gre_after_a_destination_options_header_is_checked(
+        self,
+    ) -> None:
+        """Behind a Destination Options header carrying the Tunnel
+        Encapsulation Limit, GRE is checked over the bytes after the
+        extension header, up to the Payload Length."""
+        packet = gre_with_checksum(ECHO_PACKET)
+        good = ipv6_frame(GRE6_TEMPLATE, 60, encap_limit(47) + packet)
+        trailer = bytes.fromhex("deadbeef")
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(good + trailer, stats) == []
+        assert stats["ipv6-ext-header"] == 1
+        assert stats["gre"] == 1
+        assert stats["gre-checksum"] == 1
+        assert stats["icmpv4"] == 1
+        bad = flip(good, 54 + 8 + 5)
+        assert checker.check_frame(bad, Counter()) == ["gre-checksum"]
+
+    def test_a_first_fragment_is_not_summed(self) -> None:
+        """The GRE Checksum spans the reassembled datagram, so a first
+        fragment carrying GRE is counted as one and not checked."""
+        fragment = struct.pack("!BBHI", 47, 0, 0x0001, 1)
+        packet = flip(gre_with_checksum(ECHO_PACKET), 5)
+        bad = ipv6_frame(GRE6_TEMPLATE, 44, fragment + packet)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(bad, stats) == []
+        assert stats["ipv6-first-fragment"] == 1
+        assert stats["gre"] == 0
+
+    @pytest.mark.parametrize(
+        ("cut", "expected"),
+        [(None, []), (5, ["unchecked-gre-truncated"])],
+        ids=["whole", "cut"],
+    )
+    def test_gre_in_esp_over_ipv6_is_checked_under_strict(
+        self, cut: int | None, expected: list[str]
+    ) -> None:
+        """In ESP's transport mode over IPv6, whose ICV vouches for its
+        payload, GRE is checked, and a header cut short fails."""
+        packet = gre_with_checksum(ECHO_PACKET)[:cut]
+        protected = esp(47, packet)[l4(ESP_TEMPLATE) :]
+        stats: Counter[str] = Counter()
+        sealed = ipv6_frame(GRE6_TEMPLATE, 50, protected)
+        assert checker.check_frame(sealed, stats) == expected
+        assert stats["gre"] == 1
+
+    def test_a_cut_header_passes_unread_outside_strict(self) -> None:
+        packet = gre_with_checksum(ECHO_PACKET)[:5]
+        stats: Counter[str] = Counter()
+        cut = ipv6_frame(GRE6_TEMPLATE, 47, packet)
+        assert checker.check_frame(cut, stats) == []
+        assert stats["gre-truncated"] == 1
+
+
+def gre_chain_v4(times: int) -> bytes:
+    """``ECHO_PACKET`` wrapped ``times`` times in GRE over IPv4, in
+    ``ECHO``'s Ethernet header."""
+    packet = ECHO_PACKET
+    for _ in range(times):
+        packet = ipv4_packet(47, gre(0x0800, packet))
+    return ECHO[:14] + packet
+
+
+def gre_chain_v6(times: int) -> bytes:
+    """``ECHO6_PACKET`` wrapped ``times`` times in GRE over IPv6, in
+    ``GRE6_TEMPLATE``'s Ethernet header."""
+    packet = ECHO6_PACKET
+    for _ in range(times):
+        packet = ipv6_frame(GRE6_TEMPLATE, 47, gre(0x86DD, packet))[14:]
+    return GRE6_TEMPLATE[:14] + packet
+
+
+#: Fewer bytes than GRE's 4-byte flags word and Protocol Type.
+SHORT_GRE = bytes.fromhex("000008")
+
+
+def short_gre_v4(*, sealed: bool) -> bytes:
+    """A 3-byte GRE payload over IPv4, inside ESP when ``sealed``."""
+    if sealed:
+        return esp(47, SHORT_GRE)
+    return ipv4_frame(GRE_TEMPLATE, 47, SHORT_GRE)
+
+
+def short_gre_v6(*, sealed: bool) -> bytes:
+    """A 3-byte GRE payload over IPv6, inside ESP when ``sealed``."""
+    if sealed:
+        protected = esp(47, SHORT_GRE)[l4(ESP_TEMPLATE) :]
+        return ipv6_frame(GRE6_TEMPLATE, 50, protected)
+    return ipv6_frame(GRE6_TEMPLATE, 47, SHORT_GRE)
+
+
+class TestGREOnEitherIP:
+    @pytest.mark.parametrize(
+        "chain", [gre_chain_v4, gre_chain_v6], ids=["ipv4", "ipv6"]
+    )
+    def test_nesting_is_bounded(self, chain: Callable[[int], bytes]) -> None:
+        """Each GRE header is one level of nesting: ``_MAX_DEPTH`` of
+        them pass with the inner echo checked, and one more fails."""
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(chain(checker._MAX_DEPTH), stats) == []
+        assert stats["gre"] == checker._MAX_DEPTH
+        assert stats["icmpv4"] + stats["icmpv6"] == 1
+        too_deep = chain(checker._MAX_DEPTH + 1)
+        assert checker.check_frame(too_deep, Counter()) == ["nesting-too-deep"]
+
+    @pytest.mark.parametrize(
+        "build", [short_gre_v4, short_gre_v6], ids=["ipv4", "ipv6"]
+    )
+    def test_a_payload_shorter_than_the_header_is_not_read(
+        self, build: Callable[..., bytes]
+    ) -> None:
+        """A GRE payload too short for its first 4 bytes is not taken
+        for GRE: it passes unread, and under strict fails as an
+        unchecked protocol 47."""
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(build(sealed=False), stats) == []
+        assert stats["gre"] == 0
+        sealed = build(sealed=True)
+        assert checker.check_frame(sealed, Counter()) == [
+            "unchecked-protocol-47"
+        ]
+
+
 # The pcap file and the command line.
 
 
@@ -1795,6 +2001,19 @@ class TestMain:
         assert (
             "[OK  ] gre_csum.pcap: 4 frames (grex4, gre-checksumx4, "
             "icmpv4x4, ipv4x8)\n"
+        ) in out
+
+    def test_the_report_counts_gre_carried_over_ipv6(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        (tmp_path / "gre6.pcap").write_bytes(pcap_file(list(GRE6_FRAMES)))
+        status, out = run_main(tmp_path, monkeypatch, capsys)
+        assert status == 0
+        assert (
+            "[OK  ] gre6.pcap: 4 frames (grex4, icmpv4x4, ipv4x4, ipv6x4)\n"
         ) in out
 
     def test_an_unpaired_reply_is_reported_and_passes(

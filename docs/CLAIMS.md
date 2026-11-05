@@ -1529,15 +1529,12 @@ PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's where its
 Checksum field is present included), every ESP and AH ICV, every RIPv2
 and OSPF keyed-MD5 digest, every RADIUS authenticator the corpus
 holds (a reply's against its request's), every STUN MESSAGE-INTEGRITY
-and FINGERPRINT, and every NTP MAC verify internally (`scripts/check_fixtures.py`), except that the
-checker reads `gre6.pcap`'s four frames no further than their IPv6
-header, which carries no checksum, since it does not decode GRE over
-IPv6 ([#326](https://github.com/EONRaider/NETProtocols/issues/326)); HSRP,
-which carries no checksum of its own, has every message's fields
-checked instead, and TLS, which has none beyond TCP's, every record:
-each segment on port 443 that carries data must hold whole records,
-every ClientHello's fields must tile it, and every server_name must be
-a host name.
+and FINGERPRINT, and every NTP MAC verify internally
+(`scripts/check_fixtures.py`); HSRP, which carries no checksum of its
+own, has every message's fields checked instead, and TLS, which has
+none beyond TCP's, every record: each segment on port 443 that carries
+data must hold whole records, every ClientHello's fields must tile it,
+and every server_name must be a host name.
 
 ### 5.2 "Property-based fuzzing of every decoder"
 **Status: VERIFIED**
