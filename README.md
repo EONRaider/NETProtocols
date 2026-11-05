@@ -470,9 +470,10 @@ raw = bytes(frame)  # ready for a raw socket
 
 Checksums are computed and verified on request — never silently:
 `compute()`/`verify()` in `netprotocols.checksum` (the internet
-checksum, VRRP's with or without its pseudo-header by version, PIM's,
-CDP's with its odd final byte summed as Cisco does, and SCTP's CRC32c
-via `crc32c()`; OSPF's LSA checksums via
+checksum, VRRP's — the message alone in VRRPv2, behind the IP
+pseudo-header in VRRPv3, with VRRPv3 over IPv4 verified in either
+form — PIM's, CDP's with its odd final byte summed as Cisco does, and
+SCTP's CRC32c via `crc32c()`; OSPF's LSA checksums via
 `lsa_checksum()`/`verify_lsa()`), and
 `Packet.with_checksums()` to fill a whole stack before sending.
 
@@ -578,8 +579,8 @@ pydoclint), `uv run mypy`, `uv run pytest`,
 `uv run sphinx-build -W -n -b dummy docs <outdir>` (docstring
 cross-references). The test suite runs across Python 3.12–3.14;
 `ruff`, `flake8`, `mypy` and Sphinx run on 3.12. The test suite is
-anchored by a 402-frame corpus of real captured traffic
-across 38 scenarios
+anchored by a 411-frame corpus of real captured traffic
+across 39 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

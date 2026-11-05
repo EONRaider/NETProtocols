@@ -1162,8 +1162,16 @@ VRRP's checksum is the internet checksum of the message alone in
 VRRPv2 and behind the IP pseudo-header in VRRPv3. RFC 5798 §5.2.8
 cites only IPv6's pseudo-header; adding IPv4's too is keepalived's
 default, and `compute()`'s. RFC 9568, which obsoletes RFC 5798, leaves
-it out over IPv4, and `verify()` returns `False` for an advert
-checksummed that way.
+it out over IPv4 (§5.2.8), as keepalived does under
+`v3_checksum_as_v2`. Both forms are deployed, so `verify()` accepts a
+VRRPv3-over-IPv4 advert in either, and `with_checksums()`, which
+returns `compute()`'s form, rewrites an RFC 9568-form advert into the
+pseudo-header form, as it rewrites a whole-message PIM Register to the
+8-byte form. VRRPv2, which has no pseudo-header, and VRRPv3 over IPv6,
+whose pseudo-header both RFCs require, verify only in `compute()`'s
+form. `check_fixtures.py` checks both forms with its own sum and
+counts an advert that matched only RFC 9568's as
+`vrrpv3-no-pseudo-header`.
 
 Behind an IPv6 Routing header with segments left, RFC 8200 §8.1 puts
 the route's *final* destination in the pseudo-header, while `ip.dst`

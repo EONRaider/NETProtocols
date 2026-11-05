@@ -306,16 +306,16 @@ def _check_vrrp(
     Returns ``None`` when it is too short for the 8-byte fixed header.
 
     The checksum covers the VRRP message, checksum field (bytes 6-7)
-    zeroed: alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
-    pseudo-header with protocol 112 in VRRPv3, over IPv4 as over IPv6.
-    RFC 5798 §5.2.8 cites only RFC 2460's pseudo-header, IPv6's; the
-    IPv4 one is keepalived's default. RFC 9568 §5.2.8's IPv4 form,
-    without the pseudo-header, is not accepted: the corpus's VRRPv3
-    adverts are all keepalived's default form. The message's length
-    follows from its version and address count (RFC 3768 §5.1: 8
-    bytes, the addresses, and 8 bytes of authentication data; RFC 5798
-    §5.1: no authentication data), and must be the IP payload's
-    exactly. VRRPv2 is defined for IPv4 alone.
+    zeroed: alone in VRRPv2 (RFC 3768 §5.3.8), behind the IPv6
+    pseudo-header with protocol 112 in VRRPv3 over IPv6 (RFC 9568
+    §5.2.8). VRRPv3 over IPv4 is accepted in two forms: behind the IPv4
+    pseudo-header with protocol 112, keepalived's default, or over the
+    message alone, as RFC 9568 §5.2.8 computes it; a frame that matches
+    only the second is counted as ``vrrpv3-no-pseudo-header``. The
+    message's length follows from its version and address count (RFC
+    3768 §5.1: 8 bytes, the addresses, and 8 bytes of authentication
+    data; RFC 5798 §5.1: no authentication data), and must be the IP
+    payload's exactly. VRRPv2 is defined for IPv4 alone.
     """
     if len(upper) < 8:
         return None
@@ -326,13 +326,17 @@ def _check_vrrp(
     width = 16 if ipv6 else 4
     if len(upper) != 8 + count * width + (8 if version == 2 else 0):
         return ["vrrp-length"]
-    covered = upper[:6] + b"\x00\x00" + upper[8:]
-    if version == 3:
-        pseudo = pseudo_v6 if ipv6 else pseudo_v4
-        covered = pseudo(src, dst, _VRRP, len(upper)) + covered
-    if internet_checksum(covered) != struct.unpack_from("!H", upper, 6)[0]:
-        return ["vrrp-checksum"]
-    return []
+    wire = struct.unpack_from("!H", upper, 6)[0]
+    message = upper[:6] + b"\x00\x00" + upper[8:]
+    if version == 2:
+        return [] if internet_checksum(message) == wire else ["vrrp-checksum"]
+    pseudo = pseudo_v6 if ipv6 else pseudo_v4
+    if internet_checksum(pseudo(src, dst, _VRRP, len(upper)) + message) == wire:
+        return []
+    if not ipv6 and internet_checksum(message) == wire:
+        stats["vrrpv3-no-pseudo-header"] += 1
+        return []
+    return ["vrrp-checksum"]
 
 
 #: The GRE flags word's C, R, K and S bits (RFC 1701, RFC 2784 §2,
