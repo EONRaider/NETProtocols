@@ -381,10 +381,6 @@ class Protocol(ABC):
         if it carries none, or one whose value bounds nothing. Read by
         the chain walk only for a class that sets ``_BOUNDS_PAYLOAD``
         (see "Payload extent" in this module's docstring).
-
-        :raises InvalidFieldError: if the length field declares fewer
-            bytes than the header itself (in the classes that override
-            this).
         """
         return None
 

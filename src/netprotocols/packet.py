@@ -145,11 +145,11 @@ class Packet:
 
     The constructor takes the headers, outermost first, then two
     keyword-only arguments: ``stopped_by``, the error that ended a lax
-    walk, and ``trailer``, the frame's bytes past its declared end, any
-    bytes-like object, stored as ``bytes``. It raises
-    :class:`~netprotocols.InvalidFieldError` for a layer that is not a
-    :class:`~netprotocols._base.Protocol` instance, and for a
-    ``trailer`` that is not bytes-like (``field="trailer"``).
+    walk, and ``trailer``, the frame's bytes past its declared end, a
+    ``bytes``, ``bytearray`` or ``memoryview``, stored as ``bytes``. It
+    raises :class:`~netprotocols.InvalidFieldError` for a layer that is
+    not a :class:`~netprotocols._base.Protocol` instance, and for a
+    ``trailer`` of any other type (``field="trailer"``).
     """
 
     __slots__ = ("layers", "stopped_by", "trailer")
@@ -170,7 +170,8 @@ class Packet:
                 )
         if not isinstance(trailer, (bytes, bytearray, memoryview)):
             raise InvalidFieldError(
-                f"Cannot build packet: trailer {trailer!r} is not bytes-like",
+                f"Cannot build packet: trailer {trailer!r} is not bytes, "
+                "bytearray or memoryview",
                 protocol=type(trailer),
                 field="trailer",
                 expected=bytes,

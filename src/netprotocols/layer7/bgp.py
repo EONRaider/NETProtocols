@@ -126,10 +126,10 @@ them, which then raises :class:`~netprotocols.TruncatedHeaderError`
 instead; so ``max_depth=79`` decodes 76 whole KEEPALIVEs. The other,
 which needs no bound on the segment, is to carry on where the walk
 stopped. The error's ``protocol`` is :class:`BGP` when the next layer
-is another message, and ``packet.consumed`` in lax mode, or the
-error's ``frame_offset`` in strict mode, is where that message starts.
-The walk on covers ``frame[packet.consumed : len(frame) -
-len(packet.trailer)]``, the segment's bytes without the trailer::
+is another message. A lax walk returns the packet, whose
+``packet.consumed`` is where that message starts, and the walk on
+covers ``frame[packet.consumed : len(frame) - len(packet.trailer)]``,
+the segment's bytes without the trailer::
 
     packet = decode_frame(frame, lax=True)
     messages = [layer for layer in packet if isinstance(layer, BGP)]
@@ -142,11 +142,14 @@ len(packet.trailer)]``, the segment's bytes without the trailer::
         messages.extend(packet)
         rest = rest[packet.consumed :]
 
-Only the lax walk keeps what it decoded: a strict walk's
-:class:`~netprotocols.MaxDepthExceededError` carries no layers, so
-walking on from its ``frame_offset`` yields the messages after the
-limit but not those before it. Use the lax loop above, or a larger
-``max_depth``, when every message is wanted.
+Only the lax walk keeps what it decoded. A strict walk raises
+:class:`~netprotocols.MaxDepthExceededError` and returns no packet, so
+there is no ``packet.trailer`` to subtract: the error carries no
+layers, its ``frame_offset`` is where the next message starts, and
+``frame[error.frame_offset :]`` runs on to the end of the frame, the
+bytes past the IP datagram included. Walking on from there yields the
+messages after the limit but not those before it. Use the lax loop
+above, or a larger ``max_depth``, when every message is wanted.
 
 Out of scope
 ------------

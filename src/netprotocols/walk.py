@@ -73,7 +73,8 @@ the 29; one captured with GRO or TSO on, over loopback or on a
 jumbo-frame link is larger still. A strict walk of a segment past the
 limit raises :class:`~netprotocols.MaxDepthExceededError` and a lax one
 stops short with ``stopped_by`` set. A larger ``max_depth`` decodes the
-rest, and so does walking on from ``packet.consumed`` with ``start=BGP``
+rest, and so does walking on from the lax walk's ``packet.consumed``
+with ``start=BGP``
 (or ``start=STUN``, ``start=TLS``) over
 ``frame[packet.consumed : len(frame) - len(packet.trailer)]``, as many
 times as it takes: a walk that starts there has room for 32 messages

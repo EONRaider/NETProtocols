@@ -390,9 +390,11 @@ over TCP and `TLS`. `decode_frame()`'s `max_depth` counts each of those
 layers as it counts any header, so a valid segment of many small
 messages can exceed it: a strict walk raises `MaxDepthExceededError`,
 and a lax one stops with `stopped_by` set and `consumed` short of the
-frame. The caller passes a larger `max_depth`, or walks on over
+frame. The caller passes a larger `max_depth`, or walks on from the
+lax walk's packet over
 `frame[packet.consumed : len(frame) - len(packet.trailer)]` with
-`start=` set to that class as many times as it takes. Each protocol's segment arithmetic is under *Port-based dispatch
+`start=` set to that class as many times as it takes. Each protocol's
+segment arithmetic is under *Port-based dispatch
 is best-effort* below and in the "Bounded depth" section of
 [`walk.py`](src/netprotocols/walk.py)'s module docstring.
 
@@ -834,7 +836,8 @@ noise, and for most formats that is little. DNS needs only its 12-byte
 header and DHCP its 236-byte fixed part; past that, almost any bytes
 decode cleanly as either. A datagram to port 53 with no payload at all,
 padded to Ethernet's 60-byte minimum, raises `TruncatedHeaderError` as
-its unpadded form does: the padding is the packet's trailer. VXLAN can reject more, because its header has
+its unpadded form does: the padding is the packet's trailer. VXLAN can
+reject more, because its header has
 one bit it requires: the I flag, which random bytes leave clear half the
 time. Over 10,000 random 300-byte UDP payloads per port, decoded with
 `decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
@@ -843,8 +846,8 @@ With lengths drawn uniformly from 0-600 bytes instead, in frames not
 padded to Ethernet's minimum, the figures are about 52%, 2% and 39%,
 and every DNS and DHCP rejection is a payload too short for the fixed
 header. Padding a frame to the minimum, as on the wire, leaves the
-layers as they are unpadded, since the padding is the trailer, so the
-padded walks give the unpadded figures. The VXLAN
+layers as they are unpadded, since the padding is the trailer, so a
+padded walk decodes as its unpadded form does. The VXLAN
 header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
@@ -996,7 +999,8 @@ one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
 loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
 strict walk raises `MaxDepthExceededError` on valid traffic and a lax
 one stops with `stopped_by` set and `consumed` short of the frame. A
-larger `max_depth` decodes the rest, and so does walking on over
+larger `max_depth` decodes the rest, and so does walking on from the
+lax walk's packet over
 `frame[packet.consumed : len(frame) - len(packet.trailer)]` with
 `start=BGP` as many times as it takes (a walk
 that starts there has room for 32 messages, so the 76 KEEPALIVEs take

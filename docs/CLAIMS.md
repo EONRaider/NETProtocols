@@ -1716,7 +1716,7 @@ eight lines:
   in a 1448-byte segment, and GRO, TSO, loopback and jumbo frames
   make segments far larger — exceeds the default, and the strict walk
   raises on valid traffic (lax stops short). There the caller raises
-  `max_depth` or walks on over
+  `max_depth` or walks on from the lax walk's packet over
   `frame[packet.consumed : len(frame) - len(packet.trailer)]` with
   `start=BGP` (or `start=STUN`, `start=TLS`) as many times as it takes,
   each such walk taking up to 32 more (`layer7/bgp.py`'s, `layer7/stun.py`'s and

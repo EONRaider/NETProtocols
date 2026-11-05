@@ -141,8 +141,8 @@ the former (1,448 / 22 = 65.8) and 103 of the latter (1,448 / 14 =
 Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic and a lax
 one stops with ``packet.stopped_by`` set. A larger ``max_depth``
-decodes the rest, and so does walking on over
-``frame[packet.consumed : len(frame) - len(packet.trailer)]`` with
+decodes the rest, and so does walking on from the lax walk's packet
+over ``frame[packet.consumed : len(frame) - len(packet.trailer)]`` with
 ``start=TLS`` as many times as it takes, as for BGP: a walk that starts
 there has room for 32 records, so the 65 take three walks and the 103
 four.
