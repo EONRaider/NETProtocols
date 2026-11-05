@@ -61,23 +61,21 @@ sum. ``ip`` is then the IP header directly before the layer, and the
 end is ``ip._payload_extent()`` bytes after the layer's start, the
 arithmetic :func:`~netprotocols.decode_frame` bounds its walk with: an
 IPv4 ``total_length - ihl * 4`` or an IPv6 ``payload_length``. With
-headers between ``ip`` and the layer (AH, IPv6 extension headers, the
-headers ``routing`` describes), the bound is looser by their length
-and never cuts the message, so some padding may still be summed;
-:meth:`~netprotocols.Packet.with_checksums` counts them exactly. An
-IPv4 fragment's header, with More Fragments set or a nonzero Fragment
-Offset (RFC 791 §3.1), an IPv4 Total Length or IPv6 Payload Length of
-0, an IPv4 Total Length shorter than its header, or an end before the
-layer's required bytes (IGMP's 4-byte header, ICMPv4's 8-byte header,
-GRE's whole header) leaves the input unbounded, as it is without
-``ip``. ``ip``'s length must cover the whole message: an IPv6 header
-alone does not show a Fragment header after it, so a message
-reassembled from IPv6 fragments needs a header whose Payload Length
-covers the reassembled datagram, or no ``ip``.
-:meth:`~netprotocols.Packet.with_checksums`, which sees the headers
-between, also leaves the input unbounded behind an IPv6 Fragment
-header with its M flag set or a nonzero Fragment Offset (RFC 8200
-§4.5).
+headers between ``ip`` and the layer (AH, or IPv6 extension headers
+such as a Routing header passed as ``routing``), the bound is looser
+by their length and never cuts the message, so some padding may still
+be summed; :meth:`~netprotocols.Packet.with_checksums` counts them
+exactly. An IPv4 fragment's header, with More Fragments set or a
+nonzero Fragment Offset (RFC 791 §3.1), an IPv4 Total Length or IPv6
+Payload Length of 0, an IPv4 Total Length shorter than its header, or
+an end before the layer's required bytes (IGMP's 4-byte header,
+ICMPv4's 8-byte header, GRE's whole header) leaves the input
+unbounded, as it is without ``ip``. ``ip``'s length must cover the
+whole message: for a message reassembled from IPv6 fragments, that is
+a header whose Payload Length covers the reassembled datagram, or no
+``ip``. :meth:`~netprotocols.Packet.with_checksums` also leaves the
+input unbounded behind an IPv6 Fragment header with its M flag set or
+a nonzero Fragment Offset (RFC 8200 §4.5).
 :meth:`~netprotocols.Packet.with_checksums` applies the same bound
 with the same helper, from the nearest IP header before the layer and
 counting the headers between.
@@ -364,10 +362,9 @@ def _datagram_extent(ip: IPv4 | IPv6, offset: int, minimum: int) -> int | None:
     The payload ends where ``ip._payload_extent()`` says, the
     arithmetic :func:`~netprotocols.decode_frame` bounds its walk with.
     ``None`` when ``ip`` is an IPv4 fragment, with More Fragments set
-    or a nonzero Fragment Offset (RFC 791 §3.1), whose length covers
-    one fragment and not the message, when that length is zero, an
-    IPv4 Total Length is shorter than its header, or the bytes left
-    fall short of ``minimum``.
+    or a nonzero Fragment Offset (RFC 791 §3.1), when ``ip``'s length
+    is zero, an IPv4 Total Length is shorter than its header, or the
+    bytes left fall short of ``minimum``.
 
     :param ip: The IPv4 or IPv6 header whose datagram bounds the input.
     :param offset: The bytes between the end of ``ip`` and the layer's
@@ -733,9 +730,9 @@ def compute(
         before the layer's required bytes (see the module docstring),
         and without it the input runs to the end of ``bytes(layer)``
         and ``payload``. With headers between ``ip`` and the layer
-        (AH, IPv6 extension headers, the headers ``routing``
-        describes), the bound is looser by their length and never cuts
-        the message, so some padding may still be summed;
+        (AH, or IPv6 extension headers such as a Routing header passed
+        as ``routing``), the bound is looser by their length and never
+        cuts the message, so some padding may still be summed;
         :meth:`~netprotocols.Packet.with_checksums` counts them
         exactly. ``ip``'s length must cover the whole message, so a
         message reassembled from IPv6 fragments takes a header whose
@@ -771,13 +768,13 @@ def compute(
         part of it. For ``GRE`` with ``ip`` the IP header directly
         before it, :func:`compute` returns what
         :meth:`~netprotocols.Packet.with_checksums` writes when
-        ``payload`` is the bytes after GRE that the packet holds (its
-        inner layers and the ``payload`` passed to ``with_checksums``),
-        followed by the packet's ``trailer`` when ``ip`` bounds the
-        input; when ``ip`` leaves it unbounded (a fragment's header, a
-        length of 0, an IPv4 Total Length shorter than its header, an
-        end inside GRE's header), ``payload`` is those bytes without
-        the ``trailer``.
+        ``payload`` is the returned packet's inner layers after GRE,
+        whose checksums it has refilled, and the ``payload`` passed to
+        ``with_checksums``, followed by the packet's ``trailer`` when
+        ``ip`` bounds the input; when ``ip`` leaves it unbounded (a
+        fragment's header, a length of 0, an IPv4 Total Length shorter
+        than its header, an end inside GRE's header), ``payload`` is
+        those bytes without the ``trailer``.
     :raises InvalidFieldError: if ``layer`` has no checksum field to
         compute, or ``ip`` is missing where the checksum needs it.
     """

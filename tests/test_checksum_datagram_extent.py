@@ -229,13 +229,13 @@ def fragment_header(total_length, flags, fragment_offset):
 FRAGMENT_HEADERS = {
     "first": (1500, 0b001, 0),
     "last": (20 + 2056 - 1480, 0b000, 1480 // 8),
+    "offset-1": (20 + 2056 - 8, 0b000, 1),
 }
 
 
 @pytest.mark.parametrize("fragment", FRAGMENT_HEADERS)
 def test_a_fragment_header_leaves_a_reassembled_icmpv4_unbounded(fragment):
-    """A fragment's Total Length covers that fragment alone, so the
-    reassembled message is summed whole."""
+    """A fragment's Total Length covers that fragment alone."""
     ip = fragment_header(*FRAGMENT_HEADERS[fragment])
     assert int.from_bytes(REASSEMBLED_ECHO[2:4], "big") == 0xE3CC
     layer = ICMPv4.decode(REASSEMBLED_ECHO)
@@ -248,6 +248,41 @@ def test_a_fragment_header_leaves_a_reassembled_icmpv4_unbounded(fragment):
     stale = replace(layer, checksum=0xE3CC ^ 1)
     filled = Packet(ip, stale).with_checksums()[ICMPv4]
     assert filled.checksum == 0xE3CC == compute(stale, ip=ip)
+
+
+@pytest.mark.parametrize("flags", [0b010, 0b100], ids=["df", "reserved"])
+def test_a_flag_other_than_more_fragments_keeps_the_bound(flags):
+    """Don't Fragment (``0x4000`` in the flags and offset word) or the
+    reserved bit (``0x8000``) alone leaves the padding out of the sum."""
+    message = checksummed(ICMP_MESSAGES["echo-request"])
+    wire = int.from_bytes(message[2:4], "big")
+    ip = replace(IPv4.decode(ipv4(message, 1)), flags=flags)
+    assert bytes(ip)[6:8] == (flags << 13).to_bytes(2, "big")
+    layer = ICMPv4.decode(message + PADDING)
+    assert zeroed_sum(message + PADDING) != wire
+    assert compute(layer, ip=ip) == wire
+    assert verify(layer, ip=ip)
+    stale = replace(layer, checksum=wire ^ 1)
+    filled = Packet(ip, stale).with_checksums()[ICMPv4]
+    assert filled.checksum == wire
+
+
+def test_a_fragment_header_outside_the_nearest_ip_keeps_the_bound():
+    """The inner IPv4 header is the nearest IP header, so an M-flagged
+    Fragment header before it leaves the inner bound in place."""
+    message = checksummed(ICMP_MESSAGES["echo-request"])
+    wire = int.from_bytes(message[2:4], "big")
+    inner = ipv4(message, 1)
+    fragment = struct.pack("!BBHI", 4, 0, 1, 0x01020304)
+    outer = IPv6.decode(ipv6(fragment + inner, 44))
+    header = IPv6Fragment.decode(fragment)
+    assert header.m_flag == 1
+    layer = ICMPv4.decode(message + PADDING)
+    stale = replace(layer, checksum=wire ^ 1)
+    packet = Packet(outer, header, IPv4.decode(inner), stale)
+    filled = packet.with_checksums()[ICMPv4]
+    assert zeroed_sum(message + PADDING) != wire
+    assert filled.checksum == wire
 
 
 def test_a_routing_header_loosens_gre_bound_by_its_length():
@@ -272,8 +307,8 @@ def test_a_routing_header_loosens_gre_bound_by_its_length():
 
 @pytest.mark.parametrize(
     "m_flag,fragment_offset,bounded",
-    [(1, 0, False), (0, 185, False), (0, 0, True)],
-    ids=["more-fragments", "offset", "atomic"],
+    [(1, 0, False), (0, 185, False), (0, 1, False), (0, 0, True)],
+    ids=["more-fragments", "offset", "offset-1", "atomic"],
 )
 def test_with_checksums_leaves_gre_unbounded_behind_an_ipv6_fragment(
     m_flag, fragment_offset, bounded

@@ -370,10 +370,9 @@ class Packet:
         the IP header and the layer with its M flag set or a nonzero
         Fragment Offset (RFC 8200 §4.5), or a declared end before the
         layer's required bytes leaves the input unbounded. The bound is
-        the one
-        :func:`~netprotocols.checksum.compute` applies given ``ip``,
-        computed by the same helper, with the headers between the IP
-        header and the layer counted in the offset.
+        the one :func:`~netprotocols.checksum.compute` applies given
+        ``ip``, computed by the same helper, with the headers between
+        the IP header and the layer counted in the offset.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
@@ -386,8 +385,7 @@ class Packet:
         there; with no declared end, it is the bytes after GRE that the
         layers and ``payload`` hold, without the trailer. No other
         checksum covers the trailer, and the returned packet carries it
-        unchanged. Instances
-        are frozen, so layers are rebuilt with
+        unchanged. Instances are frozen, so layers are rebuilt with
         :func:`dataclasses.replace`, and the decode context a layer
         records outside its ``__init__`` fields, such as whether another
         STUN message follows it in a TCP segment, is copied across.
