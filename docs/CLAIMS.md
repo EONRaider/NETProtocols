@@ -1527,9 +1527,9 @@ Chromium, curl, gnutls-cli, `openssl s_client` and curl capped at TLS
 1.2) across another. Every frame's checksums (SCTP's CRC32c, VRRP's,
 PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's where its
 Checksum field is present included), every ESP and AH ICV, every RIPv2
-and OSPF keyed-MD5 digest, every RADIUS authenticator a frame holds
-alone, every STUN MESSAGE-INTEGRITY and FINGERPRINT, and every NTP MAC
-verify internally (`scripts/check_fixtures.py`), except that the
+and OSPF keyed-MD5 digest, every RADIUS authenticator the corpus
+holds (a reply's against its request's), every STUN MESSAGE-INTEGRITY
+and FINGERPRINT, and every NTP MAC verify internally (`scripts/check_fixtures.py`), except that the
 checker reads `gre6.pcap`'s four frames no further than their IPv6
 header, which carries no checksum, since it does not decode GRE over
 IPv6 ([#326](https://github.com/EONRaider/NETProtocols/issues/326)); HSRP,
