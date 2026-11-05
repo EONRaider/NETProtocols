@@ -451,6 +451,18 @@ capture — say so per call instead of registering globally:
 decode_frame(frame, decode_as={"udp.port": {6969: DNS}})
 ```
 
+To stop a key from dispatching at all, map it to `WITHHELD`: it then
+dispatches to nothing, as a port nothing is registered on does, so the
+walk ends at UDP unless the other port names a class. `None` there
+raises `TypeError`. The same value withholds a key globally:
+
+```python
+from netprotocols.registry import WITHHELD, register
+
+decode_frame(frame, decode_as={"udp.port": {1812: WITHHELD}})
+register("udp.port", 1812, WITHHELD, override=True)  # every walk
+```
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how the tables fit together
 and how `ip.proto.v6` inherits `ip.proto`.
 
