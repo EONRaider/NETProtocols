@@ -335,6 +335,48 @@ def _check_vrrp(
     return []
 
 
+#: The GRE flags word's C, R, K and S bits (RFC 1701, RFC 2784 §2,
+#: RFC 2890 §2) and enhanced GRE's A bit (RFC 2637 §4.1).
+_GRE_C, _GRE_R, _GRE_K, _GRE_S, _GRE_A = 0x8000, 0x4000, 0x2000, 0x1000, 0x80
+
+#: Version 0's flags bits 8-12, which RFC 1701 and RFC 2784 §2.3 both
+#: reserve; bits 1-7, RFC 1701's R, K, S, s and Recursion Control, are
+#: read as RFC 1701 defines them.
+_GRE_RESERVED_FLAGS = 0x00F8
+
+#: Enhanced GRE's bits that RFC 2637 §4.1 sets to zero: C, R, s,
+#: Recursion Control and Flags bits 9-12.
+_GRE_V1_ZERO = 0xCF78
+
+#: Enhanced GRE's one Protocol Type, PPP (RFC 2637 §4.1).
+_GRE_V1_PPP = 0x880B
+
+
+def _gre_routing(
+    upper: bytes, start: int
+) -> tuple[list[int], int, bool] | None:
+    """Walk the Source Route Entries of a GRE Routing field from
+    ``start`` to the first of them whose SRE Length is ``0``, the last
+    (RFC 1701).
+
+    Each SRE is a 2-byte Address Family, a 1-byte SRE Offset and a
+    1-byte SRE Length, then that many bytes of Routing Information.
+    Returns each SRE's offset from ``start``, the offset in ``upper``
+    after the last one, and whether that one is the NULL SRE (Address
+    Family ``0`` as well), or ``None`` when an SRE runs past ``upper``
+    or the bytes end before the last.
+    """
+    starts: list[int] = []
+    cursor = start
+    while cursor + 4 <= len(upper):
+        starts.append(cursor - start)
+        family, _, length = struct.unpack_from("!HBB", upper, cursor)
+        cursor += 4 + length
+        if length == 0:
+            return starts, cursor, family == 0
+    return None
+
+
 def _check_gre(
     upper: bytes,
     stats: Counter[str],
@@ -346,35 +388,102 @@ def _check_gre(
     IPv4 Total Length or the IPv6 Payload Length declares it, after any
     IPv6 extension headers; Ethernet padding is not read.
 
-    A 4-byte header (flags word and inner EtherType) is followed by the
-    optional Checksum, Key and Sequence Number words its C, K and S
-    bits announce (RFC 2784 §2, RFC 2890 §2), then the tunnelled
-    packet, validated in turn. With the C bit set, the Checksum must be
-    the internet checksum of the GRE header and payload, every byte of
-    ``upper``, with the Checksum field zeroed (RFC 2784 §2.5); with it
-    clear, no checksum is read. A packet shorter than the words its flags
-    announce cannot be checked: it passes unread, or fails under
-    ``strict``.
+    A 4-byte header (flags word and Protocol Type) is followed by the
+    optional words its flags announce, then the tunnelled packet. The
+    Version, the flags word's last 3 bits, selects the layout: ``0``
+    for GRE (RFC 1701, RFC 2784, RFC 2890), ``1`` for enhanced GRE
+    (see :func:`_check_gre_v1`); any other fails. In version 0, the C
+    or R bit announces the Checksum and Offset words, the K bit the
+    Key, the S bit the Sequence Number, and the R bit, after them, a
+    Routing field: Source Route Entries ending in the NULL SRE (see
+    :func:`_gre_routing`), whose last SRE must be the NULL SRE and
+    whose Offset must point to the first byte of one of them. The s
+    bit and Recursion Control are read and not checked; flags bits
+    8-12 must be zero. The tunnelled packet, named by the Protocol
+    Type, is validated in turn. With the C bit set, the Checksum must
+    be the internet checksum of the GRE header and payload, every byte
+    of ``upper``, with the Checksum field zeroed (RFC 2784 §2.5); with
+    it clear, no checksum is read. A packet shorter than the header
+    its flags announce cannot be checked: it passes unread, or fails
+    under ``strict``.
     """
     stats["gre"] += 1
     gre_flags, inner_ethertype = struct.unpack_from("!HH", upper, 0)
-    optional = (
-        (4 if gre_flags & 0x8000 else 0)
-        + (4 if gre_flags & 0x2000 else 0)
-        + (4 if gre_flags & 0x1000 else 0)
+    version = gre_flags & 0x7
+    if version == 1:
+        return _check_gre_v1(upper, gre_flags, stats, strict=strict)
+    if version != 0:
+        return ["gre-version"]
+    end = (
+        4
+        + (4 if gre_flags & (_GRE_C | _GRE_R) else 0)
+        + (4 if gre_flags & _GRE_K else 0)
+        + (4 if gre_flags & _GRE_S else 0)
     )
-    if len(upper) < 4 + optional:
+    routing = _gre_routing(upper, end) if gre_flags & _GRE_R else None
+    if end > len(upper) or (gre_flags & _GRE_R and routing is None):
         stats["gre-truncated"] += 1
         return ["unchecked-gre-truncated"] if strict else []
     failures: list[str] = []
-    if gre_flags & 0x8000:
+    if gre_flags & _GRE_RESERVED_FLAGS:
+        failures.append("gre-reserved-flags")
+    if routing is not None:
+        stats["gre-routing"] += 1
+        starts, end, terminated = routing
+        if not terminated:
+            failures.append("gre-routing-null")
+            return failures
+        if struct.unpack_from("!H", upper, 6)[0] not in starts:
+            failures.append("gre-routing-offset")
+    if gre_flags & _GRE_C:
         stats["gre-checksum"] += 1
         covered = upper[:4] + b"\x00\x00" + upper[6:]
         if internet_checksum(covered) != struct.unpack_from("!H", upper, 4)[0]:
             failures.append("gre-checksum")
     return failures + _check_l3(
-        inner_ethertype, upper[4 + optional :], stats, depth + 1, strict=strict
+        inner_ethertype, upper[end:], stats, depth + 1, strict=strict
     )
+
+
+def _check_gre_v1(
+    upper: bytes, gre_flags: int, stats: Counter[str], *, strict: bool
+) -> list[str]:
+    """Validate an enhanced GRE packet (RFC 2637 §4.1), ``upper``, whose
+    flags word is ``gre_flags``.
+
+    The K bit must be set and the C, R and s bits, Recursion Control
+    and Flags bits 9-12 clear, and the Protocol Type must be PPP's
+    ``0x880B``. The Key, always present, holds the Payload Length and
+    Call ID; the S bit announces the Sequence Number and the A bit, after
+    it, the Acknowledgment Number. The Payload Length must count the
+    bytes after the header exactly, and the S bit must be set exactly
+    when there are any. The PPP payload is not read: it passes, or
+    fails under ``strict``. A packet shorter than the header its flags
+    announce cannot be checked: it passes unread, or fails under
+    ``strict``.
+    """
+    stats["gre-v1"] += 1
+    if not gre_flags & _GRE_K:
+        return ["gre-v1-key"]
+    if gre_flags & _GRE_V1_ZERO:
+        return ["gre-v1-flags"]
+    if struct.unpack_from("!H", upper, 2)[0] != _GRE_V1_PPP:
+        return ["gre-v1-protocol"]
+    end = (
+        8 + (4 if gre_flags & _GRE_S else 0) + (4 if gre_flags & _GRE_A else 0)
+    )
+    if end > len(upper):
+        stats["gre-truncated"] += 1
+        return ["unchecked-gre-truncated"] if strict else []
+    payload = len(upper) - end
+    if struct.unpack_from("!H", upper, 4)[0] != payload:
+        return ["gre-v1-payload-length"]
+    if bool(gre_flags & _GRE_S) != bool(payload):
+        return ["gre-v1-sequence"]
+    if not payload:
+        return []
+    stats["gre-v1-ppp"] += 1
+    return ["unchecked-gre-ppp"] if strict else []
 
 
 def _check_ipv4(
@@ -1154,7 +1263,19 @@ _RADIUS_SECRET = b"np193-radius-secret"
 #: Message-Authenticator in them is computed over it as sent:
 #: Access-Request (RFC 3579 §3.2) and Status-Server (RFC 5997 §3).
 _RADIUS_RANDOM_AUTHENTICATOR = (1, 12)
-_RADIUS_ACCOUNTING_REQUEST = 4
+
+#: RADIUS request codes whose Request Authenticator is MD5 over the
+#: packet with a zero Authenticator and then the secret, each mapped to
+#: the name its check is counted and reported under:
+#: Accounting-Request (RFC 2866 §3), and Disconnect-Request and
+#: CoA-Request, whose Request Authenticator is computed as an
+#: Accounting-Request's (RFC 5176 §2.3).
+_RADIUS_HASHED_AUTHENTICATOR = {4: "accounting", 40: "disconnect", 43: "coa"}
+
+#: RADIUS codes whose Message-Authenticator is computed with the
+#: Authenticator field zeroed, before the Request Authenticator, which
+#: then covers it: Disconnect-Request and CoA-Request (RFC 5176 §3.4).
+_RADIUS_ZEROED_AUTHENTICATOR = (40, 43)
 _RADIUS_MESSAGE_AUTHENTICATOR = 80
 
 #: RADIUS request codes: Access-Request (RFC 2865 §3),
@@ -1257,12 +1378,17 @@ def _check_radius(
 
     The UDP checksum already covers every RADIUS byte. On top of it,
     the Length must fit the datagram and the attributes tile the packet,
-    and, with the published secret: an Accounting-Request's Request
-    Authenticator, MD5 over the packet with a zero Authenticator and
-    then the secret (RFC 2866 §3); the Message-Authenticator of an
-    Access-Request or a Status-Server, HMAC-MD5 under the secret over
-    the packet with that attribute's value zeroed (RFC 3579 §3.2); and
-    a reply's authenticators, against the request it answers (see
+    and, with the published secret: the Request Authenticator of an
+    Accounting-Request, a Disconnect-Request or a CoA-Request, MD5 over
+    the packet with a zero Authenticator and then the secret (RFC 2866
+    §3, RFC 5176 §2.3), counted and reported under that request's name
+    (see :data:`_RADIUS_HASHED_AUTHENTICATOR`); the Message-Authenticator
+    of an Access-Request or a Status-Server, HMAC-MD5 under the secret
+    over the packet with that attribute's value zeroed (RFC 3579 §3.2),
+    and of a Disconnect-Request or a CoA-Request, the same over the
+    packet with its Authenticator zeroed as well (RFC 5176 §3.4), each
+    of a request's two reported on its own; and a reply's
+    authenticators, against the request it answers (see
     :func:`_check_radius_reply`). Each request is recorded in the
     capture's :class:`RadiusExchanges` under its exchange (see
     :data:`RadiusExchange`), from which a reply takes the most recent
@@ -1303,25 +1429,31 @@ def _check_radius(
         exchanges.ask(
             (src, src_port, dst, dst_port, identifier), code, radius[4:20]
         )
-    if code == _RADIUS_ACCOUNTING_REQUEST:
-        stats["radius-accounting-authenticator"] += 1
+    failures: list[str] = []
+    zeroed = radius[:4] + bytes(16) + radius[20:]
+    name = _RADIUS_HASHED_AUTHENTICATOR.get(code)
+    if name is not None:
+        stats[f"radius-{name}-authenticator"] += 1
         # MD5 is what RFC 2866 §3 mandates; this only checks the hash
         # the client sent, so it is not a security use.
         digest = hashlib.md5(
-            radius[:4] + bytes(16) + radius[20:] + _RADIUS_SECRET,
-            usedforsecurity=False,
+            zeroed + _RADIUS_SECRET, usedforsecurity=False
         ).digest()
         if not hmac.compare_digest(digest, radius[4:20]):
-            return ["radius-accounting-authenticator"]
-    if code not in _RADIUS_RANDOM_AUTHENTICATOR:
-        return []
+            failures.append(f"radius-{name}-authenticator")
+    if code in _RADIUS_RANDOM_AUTHENTICATOR:
+        signed = radius
+    elif code in _RADIUS_ZEROED_AUTHENTICATOR:
+        signed = zeroed
+    else:
+        return failures
     for kind, offset in attributes:
         if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
             stats["radius-message-authenticator"] += 1
-            if not _radius_message_authenticator_verifies(radius, offset):
-                return ["radius-message-authenticator"]
-            return []
-    return []
+            if not _radius_message_authenticator_verifies(signed, offset):
+                failures.append("radius-message-authenticator")
+            break
+    return failures
 
 
 def _check_radius_reply(

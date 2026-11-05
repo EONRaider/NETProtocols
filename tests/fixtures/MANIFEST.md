@@ -786,13 +786,22 @@ hard-coded, independently, in `scripts/check_fixtures.py` and
 ### RADIUS test secrets
 
 Published so anyone can verify the captures: these values protect
-nothing. `check_fixtures` verifies, with the shared secret, every
-Accounting-Request's Request Authenticator (MD5 over the packet with a
-zero Authenticator, then the secret, RFC 2866 §3,
-`radius-accounting-authenticator`) and the Message-Authenticator of
-every Access-Request and Status-Server (HMAC-MD5 under the secret over
-the packet with the attribute's value zeroed, RFC 3579 §3.2,
-`radius-message-authenticator`). A reply's Response Authenticator and
+nothing. `check_fixtures` verifies, with the shared secret, the Request
+Authenticator of every Accounting-Request (Code 4), Disconnect-Request
+(Code 40) and CoA-Request (Code 43): MD5 over the packet with a zero
+Authenticator, then the secret (RFC 2866 §3; RFC 5176 §2.3 computes a
+Disconnect-Request's and a CoA-Request's as an Accounting-Request's),
+counted and failed as `radius-accounting-authenticator`,
+`radius-disconnect-authenticator` and `radius-coa-authenticator`
+respectively. It verifies the Message-Authenticator of every
+Access-Request (Code 1) and Status-Server (Code 12), HMAC-MD5 under the
+secret over the packet with the attribute's value zeroed (RFC 3579
+§3.2), and of every Disconnect-Request and CoA-Request that carries
+one, the same over the packet with its Authenticator zeroed too (RFC
+5176 §3.4: the Message-Authenticator is computed first and the Request
+Authenticator then covers it), all as `radius-message-authenticator`;
+a request's Request Authenticator and Message-Authenticator fail on
+their own. A reply's Response Authenticator and
 Message-Authenticator are computed over its request's Authenticator, in
 another frame, so `check_fixtures` pairs each reply with a request of
 the same pcap: one from the reply's destination address and port to
