@@ -286,7 +286,8 @@ class LLDPChassisID(_LLDPIdentifier):
 
     :param subtype: What the identifier is: ``4``
         a MAC address, ``5`` a network address, ``6`` an interface
-        name, ``7`` locally assigned, ... (see :attr:`subtype_name`).
+        name, ``7`` locally assigned, ... (see
+        :attr:`~netprotocols.layer2.lldp._LLDPIdentifier.subtype_name`).
     :param id: The chassis identifier, 1 to 255 bytes, kept raw.
 
     ``bytes(chassis_id)`` is the whole Chassis ID TLV, header included.
@@ -302,7 +303,8 @@ class LLDPPortID(_LLDPIdentifier):
 
     :param subtype: What the identifier is: ``3``
         a MAC address, ``5`` an interface name, ``7`` locally assigned,
-        ... (see :attr:`subtype_name`).
+        ... (see
+        :attr:`~netprotocols.layer2.lldp._LLDPIdentifier.subtype_name`).
     :param id: The port identifier, 1 to 255 bytes, kept raw.
 
     ``bytes(port_id)`` is the whole Port ID TLV, header included.

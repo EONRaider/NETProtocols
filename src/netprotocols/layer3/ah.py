@@ -262,10 +262,11 @@ class AHv6(AH):
     two differences IPv6 makes: ``next_header`` dispatches through the
     ``ip.proto.v6`` table, so a Destination Options header may follow,
     and the header must be a multiple of 8 octets — an even
-    ``payload_len`` — or construction and :meth:`decode` raise
+    ``payload_len`` — or construction and
+    :meth:`~netprotocols.layer3.ah.AH.decode` raise
     :class:`~netprotocols.InvalidFieldError`. HMAC-SHA-256-128's
     16-byte ICV therefore travels with 4 bytes of padding here
-    (``payload_len`` 6), all of it in :attr:`icv`.
+    (``payload_len`` 6), all of it in :attr:`~netprotocols.layer3.ah.AH.icv`.
     """
 
     _ipv6: ClassVar[bool] = True

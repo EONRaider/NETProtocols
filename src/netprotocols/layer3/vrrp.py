@@ -370,7 +370,8 @@ class VRRPv6(VRRP):
     """A VRRP advertisement carried over IPv6 (RFC 5798 §5.1).
 
     The same layout as :class:`VRRP`, which it subclasses, with 16-byte
-    IPv6 addresses, written in :attr:`addresses` as
+    IPv6 addresses, written in
+    :attr:`~netprotocols.layer3.vrrp.VRRP.addresses` as
     :class:`~netprotocols.IPv6` writes its own (RFC 5952). VRRPv2 is
     defined for IPv4 alone (RFC 3768 §1.2), so a version other than
     ``3`` raises :class:`~netprotocols.InvalidFieldError` here. The

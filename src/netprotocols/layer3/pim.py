@@ -5,8 +5,9 @@ onward in a frame walk. Every message starts with the same 4-byte header
 (RFC 7761 §4.9): a version nibble (always 2), a type nibble, a reserved
 byte (RFC 9436's Flag Bits) and the checksum. :class:`PIM` models that
 header as fields and keeps the rest of the message raw in ``body``, the
-shape :class:`IGMP` uses; :attr:`PIM.message` dispatches on ``type`` to
-a parser that reads ``body`` into a typed message:
+shape :class:`~netprotocols.layer3.igmp.IGMP` uses; :attr:`PIM.message`
+dispatches on ``type`` to a parser that reads ``body`` into a typed
+message:
 
 * ``0`` Hello: :class:`PIMHello`, its option TLVs (§4.9.2) walked by the
   shared :func:`~netprotocols._tlv.walk_kind_length_value`;
@@ -322,8 +323,8 @@ class PIMEncodedSource:
         :attr:`sparse`, :attr:`wildcard` and :attr:`rpt`.
     :param mask_len: The source's mask length in bits, the address
         length (32 or 128) by RFC 7761.
-    :param address: The source address — for a (*,G) entry, the RP's —
-        dotted-decimal or IPv6 text form.
+    :param address: The source address — for a ``(*,G)`` entry, the
+        RP's — dotted-decimal or IPv6 text form.
 
     :raises InvalidFieldError: if the family, the encoding or the
         address is not one of the above, or ``flags`` or ``mask_len`` is
@@ -355,7 +356,7 @@ class PIMEncodedSource:
 
     @property
     def wildcard(self) -> bool:
-        """Report the W (WC) bit: the entry is a (*,G) entry for the RP."""
+        """Report the W (WC) bit: the entry is a ``(*,G)`` entry for the RP."""
         return bool(self.flags & 0x02)
 
     @property
@@ -809,9 +810,9 @@ class PIMAssert:
     It resolves which router forwards onto a link.
 
     :param group: The group under contention.
-    :param source: The source; zero for an Assert(*,G).
-    :param rpt: The RPT bit: set for Assert(*,G), clear for
-        Assert(S,G).
+    :param source: The source; zero for an ``Assert(*,G)``.
+    :param rpt: The RPT bit: set for ``Assert(*,G)``, clear for
+        ``Assert(S,G)``.
     :param metric_preference: The unicast routing protocol's preference
         for the route (31 bits).
     :param metric: The route's metric (32 bits).

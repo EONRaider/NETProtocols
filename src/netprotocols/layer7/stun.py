@@ -40,8 +40,9 @@ type, among the method's twelve (RFC 8489 §5, Figure 3)::
    |11|10|9|8|7|1|6|5|4|0|3|2|1|0|
    +--+--+-+-+-+-+-+-+-+-+-+-+-+-+
 
-It is kept as the one field it is on the wire, :attr:`STUN.
-message_type`, and split only by accessors: :attr:`STUN.message_class`
+It is kept as the one field it is on the wire,
+:attr:`STUN.message_type`, and split only by accessors:
+:attr:`STUN.message_class`
 (``0`` Request, ``1`` Indication, ``2`` Success Response, ``3`` Error
 Response) and :attr:`STUN.method` (``1`` Binding, and TURN's methods),
 with :attr:`STUN.message_type_name` naming the pair, e.g. ``"Binding
@@ -78,8 +79,8 @@ it be any value, and RFC 8489 §14 says to send zeros and ignore them on
 receipt. Either way it is kept, verbatim, in :attr:`STUN.attributes`,
 so a message padded with spaces, as RFC 5769's IPv4 test vector is,
 re-encodes exactly. Types below ``0x8000`` are comprehension-required,
-the rest comprehension-optional (:attr:`STUNAttribute.
-comprehension_required`).
+the rest comprehension-optional
+(:attr:`STUNAttribute.comprehension_required`).
 
 Addresses, and the XOR
 ----------------------
@@ -89,9 +90,9 @@ carries them obscured, so that a NAT rewriting addresses it finds in
 payloads cannot corrupt them (RFC 8489 §14.2, RFC 5389 §15.2): the port
 is XORed with the cookie's top 16 bits, an IPv4 address with the
 cookie, and an IPv6 address with the cookie followed by the 12-byte
-transaction ID. The un-XOR is an accessor, :attr:`STUN.
-xor_mapped_address`, like the library's other display helpers, so the
-wire bytes stay untouched in :attr:`STUN.attributes`; it is on
+transaction ID. The un-XOR is an accessor,
+:attr:`STUN.xor_mapped_address`, like the library's other display
+helpers, so the wire bytes stay untouched in :attr:`STUN.attributes`; it is on
 :class:`STUN`, which holds the cookie and transaction ID it needs.
 :meth:`STUN.xor_address` reads any attribute in that encoding, such as
 TURN's XOR-PEER-ADDRESS and XOR-RELAYED-ADDRESS, and
@@ -132,7 +133,7 @@ TCP connection with STUN, end the walk at their first byte.
 
 Each message being a layer, a segment of many is a deep chain, as it is
 for BGP: Ethernet, IPv4 and TCP are three layers, and the walk's
-default ``max_depth`` of :data:`~netprotocols.MAX_DEPTH` (32) leaves
+default ``max_depth`` of :data:`~netprotocols.walk.MAX_DEPTH` (32) leaves
 room for 29 messages. A message can be a bare 20-byte header, so a
 1448-byte segment can hold 72, and a strict walk of it raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic while a

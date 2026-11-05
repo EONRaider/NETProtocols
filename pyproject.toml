@@ -40,6 +40,7 @@ dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.9",
+    "sphinx==9.1.1",
 ]
 
 [build-system]

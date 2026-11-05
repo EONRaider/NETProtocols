@@ -128,7 +128,7 @@ class Packet:
     outermost header, ``packet[TCP]`` is the first ``TCP`` layer —
     raising ``KeyError`` if there isn't one, where :meth:`get` returns
     ``None`` instead. A ``Packet`` is hashable and usable as a dict key
-    or set member, consistent with :meth:`__eq__`.
+    or set member, consistent with ``__eq__``.
     """
 
     __slots__ = ("layers", "stopped_by")
@@ -157,7 +157,7 @@ class Packet:
     ) -> Self:
         """Build a packet from headers that ``decode_frame`` decoded.
 
-        This skips :meth:`__init__`'s per-layer ``isinstance`` check.
+        This skips ``__init__``'s per-layer ``isinstance`` check.
         Precondition: every item of ``layers`` is a
         :class:`~netprotocols._base.Protocol` instance, which holds for
         :func:`~netprotocols.decode_frame`, the only caller, since it
@@ -216,7 +216,7 @@ class Packet:
     def get(self, layer_type: type[Protocol]) -> Protocol | None:
         """Return the first layer of ``layer_type`` in wire order.
 
-        ``None`` if the packet has none (see :meth:`__getitem__` for
+        ``None`` if the packet has none (see ``__getitem__`` for
         the raising form).
 
         :param layer_type: The protocol class to look for.
