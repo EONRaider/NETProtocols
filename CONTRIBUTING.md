@@ -19,7 +19,7 @@ uv sync          # create the virtualenv and install dev dependencies
 
 ## The QA ladder
 
-These six checks are enforced by CI on every push and pull request.
+These seven checks are enforced by CI on every push and pull request.
 Run them locally before you push — one validated push beats three
 red ones:
 
@@ -30,7 +30,13 @@ uv run flake8 src                # docstring fields (pydoclint)
 uv run mypy                      # type checking, strict
 uv run pytest                    # the full suite and the doctests in src/
 python3 scripts/check_markers.py # no work markers (offline)
+uv run sphinx-build -W -n -b dummy docs "$(mktemp -d)"
+                                 # docstring cross-references resolve
 ```
+
+The Sphinx build fetches the Python standard library's inventory from
+docs.python.org, so it needs network access; see "Cross-reference
+check" below.
 
 CI additionally builds the wheel and imports it. `ruff`'s line length
 is 80; Markdown is excluded from linting.
@@ -149,6 +155,48 @@ whole tree (`.flake8`). `tests/` and `scripts/` are exempt from both.
   `:func:`, `:mod:`, `:data:`), with `~` for the short form:
   ``:class:`~netprotocols.TCP` ``.
 
+**Cross-reference check.** CI's lint job runs
+`sphinx-build -W -n -b dummy docs`: `docs/conf.py` renders every
+docstring in `src/` through autodoc with `nitpicky = True`, and `-W`
+turns every warning into a failure, so a role that names no documented
+object, a standard-library role of the wrong kind (`:func:` on
+`str`), and malformed reST such as an unclosed `*` all fail CI. Sphinx
+does not check the kind of a role that names a documented
+`netprotocols` object: ``:func:`~netprotocols.TCP` `` resolves. The
+dummy builder writes no output; the check is the build itself.
+
+- Every module is documented, private ones (`_base`, `_tlv`, ...) and
+  private and undocumented members included, each object once, under
+  the module that defines it. A role resolves against those entries.
+- A reference spelt through a module that imports the object, such as
+  ``:class:`~netprotocols.TCP` `` for `netprotocols.layer4.tcp.TCP`,
+  resolves to the defining module: `docs/conf.py`'s `resolve_import`
+  follows the import and hands the defining name back to the Python
+  domain, so it resolves only if that object is documented. A name
+  that does not exist still fails. It follows classes and functions
+  only, so a module-level constant is referenced under its defining
+  module: ``:data:`~netprotocols.walk.MAX_DEPTH` ``.
+- An inherited member is documented only on the class that defines
+  it. Reference it there:
+  ``:attr:`~netprotocols.layer3.ah.AH.icv` `` from `AHv6`, or with an
+  explicit title,
+  ``:attr:`HSRP.header_len <netprotocols._base.Protocol.header_len>` ``.
+- Special methods (`__eq__`, `__getitem__`, ...) are not documented, so
+  write them as literals: ``` ``__eq__`` ```.
+- A role must not wrap across a line break: write
+  ``:attr:`STUN.message_type` `` on one line.
+- Standard-library references (``:class:`ipaddress.IPv4Address` ``,
+  ``:func:`dataclasses.replace` ``) resolve through intersphinx against
+  the inventory of Python 3.12, the oldest version `requires-python`
+  admits. The build fetches it from docs.python.org, with a 30-second
+  timeout; a failed fetch is a warning, so it fails the build rather
+  than letting the standard-library references go unchecked. Nothing is
+  suppressed: `docs/conf.py` has no `nitpick_ignore`,
+  `nitpick_ignore_regex` or `suppress_warnings`, and
+  `tests/test_workflows.py` fails if it gains either of the last two.
+  Intersphinx checks that each standard-library target exists and has
+  the role's kind; an ignore list would accept whatever it names.
+
 **`decode()`.** Every public `decode()` has a docstring listing, with
 `:raises:`, each `ProtocolError` subclass it can raise and when:
 `:raises TruncatedHeaderError: if data is shorter than the 20-byte
@@ -212,8 +260,8 @@ markup line in an `.rst` file. It skips anything that is not a regular
 file (a symlink, a submodule), files holding a NUL byte, the root
 `CHANGELOG.md`, and in Markdown the text of inline code spans.
 
-**Configured exceptions.** Each one is set in `pyproject.toml` or
-`.flake8`:
+**Configured exceptions.** Each one is set in `pyproject.toml`,
+`.flake8` or `docs/conf.py`:
 
 | Exception | Where | Why |
 |---|---|---|
@@ -225,6 +273,7 @@ file (a symlink, a submodule), files holding a NUL byte, the root
 | pydoclint `arg-type-hints-in-docstring`, `check-return-types`, `check-yield-types` off | `.flake8` | Types live in the annotations only. |
 | pydoclint `skip-checking-short-docstrings` on | `.flake8` | A docstring with no fields at all is not checked against the signature. |
 | pydoclint `check-class-attributes` off | `.flake8` | A class docstring describes its dataclass fields in prose, not as one field per attribute. |
+| Sphinx renders signatures without annotations (`autodoc_typehints = "none"`) | `docs/conf.py` | The cross-reference check covers the roles written in docstrings; `mypy --strict` checks the annotations. |
 
 ## Tests and the fixture corpus
 
