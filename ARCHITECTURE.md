@@ -739,11 +739,12 @@ registered directly in `ip.proto.v6` fills it. `OSPF.decode()` also
 rejects any version but 2, for a caller who sends it OSPFv3 on purpose
 (`start=` or `decode_as`).
 
-The defaults withhold the key through the public path,
-`register("ip.proto.v6", 89, WITHHELD)`: `netprotocols.registry.WITHHELD`
-stands in for a class wherever one is registered, so a caller withholds a
-key the same way, globally or for one walk with
-`decode_as={"udp.port": {1812: WITHHELD}}`. A withheld key is stored as
+The defaults withhold the key through the public path, registering
+`WITHHELD` at `ip.proto.v6` 89 before OSPF is registered at `ip.proto`
+89: `netprotocols.registry.WITHHELD` stands in for a class wherever one
+is registered, so a caller withholds a key the same way, globally with
+`register("udp.port", 1812, WITHHELD, override=True)` or for one walk
+with `decode_as={"udp.port": {1812: WITHHELD}}`. A withheld key is stored as
 the table's own entry and is absent from the flat lookup table, so
 dispatch reads it exactly as a key that was never registered: the walk
 ends at the header that named it, and a port table still tries the other
@@ -753,9 +754,9 @@ registered directly in the same table in place, unless `override=True`
 says otherwise, which `decode_as` and `Registry.derive()` always pass, so
 a per-walk withhold beats a global entry and a per-walk class beats a
 global withhold, for that walk only. A later registration of a class
-fills a withheld key without `override=True`, a global withhold
-included. `None` is not a decoder: registered anywhere, `decode_as`
-included, it raises `TypeError` naming the key.
+directly in the same table fills a withheld key without `override=True`,
+a global withhold included. `None` is not a decoder: registered anywhere,
+`decode_as` included, it raises `TypeError` naming the key.
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its

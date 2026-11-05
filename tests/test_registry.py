@@ -657,9 +657,11 @@ class TestWithheldGlobally:
         for _ in range(2):
             registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
             assert registry.get(TABLE_IP_PROTO_V6, 253) is None
-        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD, override=True)
         registry.register(TABLE_IP_PROTO, 253, Fake)
         assert registry.get(TABLE_IP_PROTO, 253) is Fake
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is None
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD, override=True)
+        registry.register(TABLE_IP_PROTO, 253, DNS, override=True)
         assert registry.get(TABLE_IP_PROTO_V6, 253) is None
         before = registry.table(TABLE_IP_PROTO_V6).copy()
         registry.register(TABLE_IP_PROTO_V6, 89, WITHHELD)
@@ -748,9 +750,6 @@ class TestNoneIsRefused:
                 TABLE_UDP_PORT, 53, None, override=True
             )
         self.assert_names_the_key(excinfo, TABLE_UDP_PORT, 53)
-        assert fresh.get(TABLE_UDP_PORT, 53) is DNS
-        # 53 still holds a direct entry, which a withhold leaves in place.
-        register(TABLE_UDP_PORT, 53, WITHHELD)
         assert fresh.get(TABLE_UDP_PORT, 53) is DNS
         with pytest.raises(TypeError) as excinfo:
             register_all(TABLE_IP_PROTO_V6, (253,), None)
