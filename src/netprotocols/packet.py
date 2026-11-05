@@ -81,9 +81,9 @@ def _ip_checksum_extent(
 
     The datagram is the nearest IPv4 or IPv6 header before
     ``layers[index]``, and every header between the two counts in the
-    offset. ``None`` leaves the input unbounded when no IP header
-    encloses the layer, IPv6's payload length is zero, or the declared
-    end falls short of ``minimum``.
+    offset. Return ``None`` when no IP header encloses the layer,
+    IPv6's payload length is zero, or the declared end falls short of
+    ``minimum``.
 
     :param layers: The packet's headers, outermost first.
     :param index: The position of the layer whose checksum input is
