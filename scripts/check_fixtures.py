@@ -336,16 +336,15 @@ def _check_vrrp(
 
 
 def _check_gre(
-    src: bytes,
-    dst: bytes,
     upper: bytes,
     stats: Counter[str],
     depth: int,
     *,
     strict: bool = False,
 ) -> list[str]:
-    """Validate a GRE packet, ``upper``: the IPv4 payload, as far as the
-    IPv4 Total Length declares it; Ethernet padding is not read.
+    """Validate a GRE packet, ``upper``: the IP payload, as far as the
+    IPv4 Total Length or the IPv6 Payload Length declares it, after any
+    IPv6 extension headers; Ethernet padding is not read.
 
     A 4-byte header (flags word and inner EtherType) is followed by the
     optional Checksum, Key and Sequence Number words its C, K and S
@@ -474,7 +473,7 @@ def _check_upper_v4(
     if transport is not None:
         return transport
     if proto == 47 and len(upper) >= 4:
-        return _check_gre(src, dst, upper, stats, depth, strict=strict)
+        return _check_gre(upper, stats, depth, strict=strict)
     if proto in _IP_IN_IP:
         return _check_ip_in_ip(proto, upper, stats, depth, strict=strict)
     if proto == 50:
@@ -1770,6 +1769,8 @@ def _check_upper_v6(
     )
     if transport is not None:
         return transport
+    if next_header == 47 and len(upper) >= 4:
+        return _check_gre(upper, stats, depth, strict=strict)
     if next_header in _IP_IN_IP:
         return _check_ip_in_ip(next_header, upper, stats, depth, strict=strict)
     if next_header == 50:
