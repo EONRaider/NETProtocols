@@ -263,10 +263,17 @@ def test_missing_or_impossible_extents_keep_unbounded_checksums(
         assert filled.fields[2:] == layer.fields[2:]
 
 
-def test_zero_length_ipv6_does_not_use_an_outer_ipv4_extent():
+@pytest.mark.parametrize("family", [4, 6])
+def test_a_zero_inner_length_does_not_use_an_outer_ipv4_extent(family):
+    """The nearest IP header's zero length leaves the input unbounded,
+    though the outer datagram's end falls inside ``payload``."""
     layer = GRE(flags=0x8000, protocol_type=0x88B5, fields=bytes(4))
-    payload = b"trailing"
-    outer = IPv4.decode(ipv4(bytes(40 + layer.header_len), 41))
-    inner = IPv6.decode(ipv6(b"", 47))
+    payload = b"trailing" * 8
+    if family == 4:
+        inner = replace(IPv4.decode(ipv4(b"", 47)), total_length=0)
+        outer = IPv4.decode(ipv4(bytes(20 + layer.header_len), 4))
+    else:
+        inner = IPv6.decode(ipv6(b"", 47))
+        outer = IPv4.decode(ipv4(bytes(40 + layer.header_len), 41))
     filled = Packet(outer, inner, layer).with_checksums(payload)[GRE]
     assert filled.checksum == compute(layer, payload=payload)
