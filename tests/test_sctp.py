@@ -174,6 +174,20 @@ class TestLinkLayerPadding:
         assert bytes(sctp) == packet_bytes(3)
         assert verify(sctp)  # CRC32c is not blind to trailing zeros
 
+    def test_an_unbounded_walk_stops_before_the_padding(self):
+        """An IP length of 0 bounds nothing, so the walk hands SCTP the
+        padding and its zero-tail scan leaves it undecoded."""
+        frame = bytearray(FRAMES[3] + bytes(60 - len(FRAMES[3])))
+        if decode_frame(bytes(frame))[1].version == 4:
+            frame[16:18] = bytes(2)
+        else:
+            frame[18:20] = bytes(2)
+        packet = decode_frame(bytes(frame))
+        assert packet.trailer == b""
+        assert packet.consumed == len(FRAMES[3])
+        assert bytes(packet[SCTP]) == packet_bytes(3)
+        assert verify(packet[SCTP])
+
     def test_a_padded_packet_decoded_alone_stops_before_the_padding(self):
         raw = packet_bytes(3)
         sctp = SCTP.decode(raw + bytes(10))

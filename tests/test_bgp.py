@@ -625,9 +625,11 @@ class TestHeader:
 
 
 class TestTrailingBytes:
-    """Bytes after the last message, which reach the decoder.
+    """Bytes after the last message.
 
-    The walker does not trim a frame to the IP length.
+    In a walk the IP length ends the segment, so bytes past the
+    datagram are the packet's trailer; decoded on their own, they reach
+    the decoder.
     """
 
     @pytest.mark.parametrize(
@@ -636,12 +638,13 @@ class TestTrailingBytes:
         ids=["pad-6", "pad-46", "fcs", "fcs-ff"],
     )
     def test_a_trailer_ends_the_walk_cleanly(self, trailer):
-        """Padding or an FCS after the last message is left undecoded."""
+        """Padding or an FCS after the last message is the trailer."""
         raw = frame(KEEPALIVE * 2) + trailer
         packet = decode_frame(raw)
         assert [type(layer) for layer in packet][3:] == [BGP, BGP]
         assert packet.stopped_by is None
         assert packet.consumed == len(raw) - len(trailer)
+        assert packet.trailer == trailer
 
     def test_zero_padding_after_one_message(self):
         """Zero bytes after a message do not start another."""
