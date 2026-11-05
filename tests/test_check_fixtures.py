@@ -1719,6 +1719,23 @@ class TestRadiusDispatch:
         ) == ["ntp-md5"]
 
     @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_ntp_from_a_radius_port_with_a_reply_code_is_read_as_ntp(
+        self, port: int
+    ) -> None:
+        """An NTP message whose first byte is Access-Challenge's Code,
+        sent from a RADIUS port to NTP's, is checked as NTP."""
+        moved = with_ports(
+            put(NTP_PLAIN, udp_data(NTP_PLAIN), b"\x0b"), port, 123
+        )
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["ntp"] == 1
+        assert checker.check_frame(udp_length(moved, 8 + 47), stats) == [
+            "ntp-truncated"
+        ]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
     @pytest.mark.parametrize("source", [True, False])
     def test_hsrp_with_a_radius_port_is_read_as_hsrp(
         self, port: int, source: bool
