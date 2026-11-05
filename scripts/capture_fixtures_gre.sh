@@ -41,14 +41,14 @@
 # verified.
 #
 # It then runs scripts/check_fixtures.py over tests/fixtures/staging/
-# and stops unless that run passes and reports 4 GRE checksums for
-# gre_csum.pcap. For gre.pcap and gre_csum.pcap, check_fixtures.py
-# verifies the outer IPv4 header checksum, the GRE Checksum of every
-# frame with the C bit set, and, past the GRE header, the inner IPv4
-# header and ICMPv4 checksums. For gre6.pcap it decodes each frame only
-# as far as the IPv6 header, which carries no checksum, so the inline
-# assertions above are what verify that file's GRE header and inner
-# checksums.
+# and stops unless that run passes, reports 4 GRE checksums for
+# gre_csum.pcap and reports 4 GRE packets for gre6.pcap. For gre.pcap
+# and gre_csum.pcap, check_fixtures.py verifies the outer IPv4 header
+# checksum, the GRE Checksum of every frame with the C bit set, and,
+# past the GRE header, the inner IPv4 header and ICMPv4 checksums. For
+# gre6.pcap, whose IPv6 header carries no checksum and whose GRE
+# headers carry none either, it verifies, past the GRE header, the
+# inner IPv4 header and ICMPv4 checksums.
 #
 # tx/rx checksum offload is disabled on each veth end first
 # (ethtool -K), so the kernel computes every outer checksum. The gre
@@ -442,12 +442,12 @@ printf '%s\n' "$report"
 grep -Eq '^\[OK  \] gre_csum\.pcap: 4 frames \((.*, )?gre-checksumx4[,)]' \
     <<<"$report" ||
     fail "check_fixtures.py did not verify 4 GRE checksums in gre_csum.pcap."
+grep -Eq '^\[OK  \] gre6\.pcap: 4 frames \((.*, )?grex4[,)]' <<<"$report" ||
+    fail "check_fixtures.py did not check 4 GRE packets in gre6.pcap."
 
 echo
-echo "[i] Expect gre and inner ipv4/icmpv4 counts for the IPv4 captures,"
+echo "[i] Expect gre and inner ipv4/icmpv4 counts for every capture,"
 echo "    gre-checksum for gre_csum.pcap alone, and zero checksum failures."
-echo "    check_fixtures decodes gre6.pcap only as far as IPv6; the gre6.pcap"
-echo "    assertions above verify its GRE header and inner checksums."
 echo "    Fold tests/fixtures/staging/gre_csum.pcap and gre6.pcap into"
 echo "    tests/fixtures/;"
 echo "    tests/fixtures/staging/gre.pcap re-captures tests/fixtures/gre.pcap."
