@@ -20,16 +20,18 @@ frames routinely leave checksums to NIC offload. 402 frames across 38
 scenarios. Addresses are as-captured from the capture host's network.
 
 Twenty-five scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
-`sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
-`bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
-`radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
+`gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
+`vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
+`rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`, `mpls.pcap`,
+`lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`, `stun.pcap`,
+`ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
 captured
 separately by
 their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
-server/client, kernel GRE tunnels over IPv4 and IPv6, a DNS server queried over TCP, kernel
-IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
+server/client, kernel GRE tunnels over IPv4 and IPv6, a DNS server
+queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN
+tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
 two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
@@ -151,8 +153,10 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   ([#326](https://github.com/EONRaider/NETProtocols/issues/326)): it
   counts these frames as IPv6 and verifies nothing past that header,
   which carries no checksum. The capture script asserts the frames
-  listed here with the standard library, and the corpus tests walk
-  them `Ethernet→IPv6→GRE→IPv4→ICMPv4` and round-trip every layer.
+  listed here with the standard library, among them that each frame's
+  inner IPv4 header and ICMPv4 checksums verify, and the corpus tests
+  walk them `Ethernet→IPv6→GRE→IPv4→ICMPv4` and round-trip every
+  layer.
 - `dns_tcp.pcap` was produced by `scripts/capture_fixtures_dns_tcp.sh`:
   a real DNS exchange over TCP — `dig +tcp` querying an A and a TXT
   record against `dnsmasq` answering from its own records — over a veth
