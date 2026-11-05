@@ -577,10 +577,10 @@ pydoclint), `uv run mypy`, `uv run pytest`,
 `python3 scripts/check_markers.py` (no work markers) and
 `uv run sphinx-build -W -n -b dummy docs <outdir>` (docstring
 cross-references). The test suite runs across Python 3.12–3.14;
-`ruff`, `flake8`, `mypy` and Sphinx run on 3.12. The test suite is anchored by a 394-frame corpus of real
-captured traffic across 36 scenarios
-([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
-which layers a script built rather than the kernel) plus
+`ruff`, `flake8`, `mypy` and Sphinx run on 3.12. The test suite is
+anchored by a 394-frame corpus of real captured traffic across 36
+scenarios ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md),
+which says which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the design and the

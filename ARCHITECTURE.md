@@ -1266,9 +1266,11 @@ tests/              one file per protocol + test_contract.py
 Tooling: [uv](https://docs.astral.sh/uv/) manages the environment
 (`uv sync`); `uv run ruff check`, `uv run ruff format --check`,
 `uv run flake8 src` (pydoclint), `uv run mypy` (strict),
-`uv run pytest` and `python3 scripts/check_markers.py` are the six gates
-CI enforces, with `uv run pytest` on Python 3.12–3.14 and `ruff`,
-`flake8` and `mypy` on 3.12.
+`uv run pytest`, `python3 scripts/check_markers.py` (no work markers)
+and `uv run sphinx-build -W -n -b dummy docs <outdir>` (docstring
+cross-references) are the seven checks CI enforces, with
+`uv run pytest` on Python 3.12–3.14 and `ruff`, `flake8`, `mypy` and
+Sphinx on 3.12.
 
 ## Cookbook: adding a protocol
 
