@@ -4,20 +4,22 @@ Captured 2026-08-29 with `scripts/capture_fixtures.sh` and
 `scripts/capture_fixtures_supplement.sh` (tcpdump on `lo` and the
 default interface) and validated by `scripts/check_fixtures.py`:
 **every frame's checksums verify internally** (IPv4 header, TCP/UDP
-pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
-checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
-verifiable upper-layer checksum — it spans the reassembled datagram),
+pseudo-header, ICMPv4/v6, GRE where its Checksum field is present,
+VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet checksum and every OSPF
+LSA's Fletcher checksum; fragment slices carry no verifiable
+upper-layer checksum — it spans the reassembled datagram; `gre6.pcap`'s
+frames are read no further than their IPv6 header, see the GRE note),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
 digest, every RADIUS authenticator a frame holds alone, every STUN
 MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
 below, and every STUN FINGERPRINT; every TCP segment on port 443
 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 394 frames across 36
+frames routinely leave checksums to NIC offload. 402 frames across 38
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-three scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
-`dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
+Twenty-five scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+`gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`, `vxlan.pcap`, `esp.pcap`, `ah.pcap`,
 `sctp.pcap`, `vrrp.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`,
 `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`,
 `radius.pcap`, `stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
@@ -25,7 +27,7 @@ captured
 separately by
 their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
-server/client, a GRE tunnel, a DNS server queried over TCP, kernel
+server/client, kernel GRE tunnels over IPv4 and IPv6, a DNS server queried over TCP, kernel
 IP-in-IP encapsulation, a kernel VXLAN tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
@@ -58,6 +60,8 @@ rows and the notes below.
 | `vlan_icmp.pcap` | 12 | 802.1Q single-tag (VID 100) and 802.1ad QinQ (S-VID 200 / C-VID 30) frames carrying ARP + ICMPv4 echo — **direct capture** of real kernel-tagged traffic (see VLAN note) |
 | `dhcp.pcap` | 4 | DHCP DORA exchange (DISCOVER / OFFER / REQUEST / ACK) over IPv4/UDP — **direct capture** via dnsmasq + dhclient over a veth pair (see DHCP note) |
 | `gre.pcap` | 8 | IPv4-in-GRE ICMPv4 echo over a plain and a keyed (RFC 2890) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
+| `gre_csum.pcap` | 4 | IPv4-in-GRE ICMPv4 echo over a checksummed (RFC 2784 §2.5, C bit set) kernel GRE tunnel — `Ethernet→IPv4→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
+| `gre6.pcap` | 4 | IPv4-in-GRE ICMPv4 echo over a kernel ip6gre tunnel (GRE over IPv6, RFC 7676, flags all clear) — `Ethernet→IPv6→GRE→IPv4→ICMPv4`; **direct capture** (see GRE note) |
 | `dns_tcp.pcap` | 4 | DNS over TCP (RFC 1035 §4.2.2): A and TXT queries + responses from `dig +tcp` against `dnsmasq` — `Ethernet→IPv4→TCP→DNSOverTCP→DNS`; **direct capture** (see DNS-over-TCP note) |
 | `ipip.pcap` | 4 | IP-in-IP ICMP echo requests: IPv4 in IPv4 (protocol 4, RFC 2003) ×2 and IPv6 in IPv4 (protocol 41, 6in4, RFC 4213) ×2 — `Ethernet→IPv4→IPv4→ICMPv4` and `Ethernet→IPv4→IPv6→ICMPv6`; **direct capture** (see IP-in-IP note) |
 | `vxlan.pcap` | 11 | VXLAN (RFC 7348) over a kernel tunnel on UDP 4789, two segments: VNI 1193046 (`0x123456`) with the outer UDP checksum computed — ARP request/reply, two echo request/reply pairs, one UDP datagram — then VNI 100 with a zero (`noudpcsum`) outer checksum — ARP request/reply, one echo pair — `Ethernet→IPv4→UDP→VXLAN→Ethernet→ARP` / `→IPv4→ICMPv4` / `→IPv4→UDP`; **direct capture** (see VXLAN note) |
@@ -119,6 +123,35 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   ICMPv4`. Half the frames ride a plain tunnel (GRE flags all clear) and
   half a keyed tunnel (the RFC 2890 key field). `check_fixtures` peels
   the GRE header and verifies the inner IPv4/ICMP checksums.
+- `gre_csum.pcap` was produced by the same script, over a checksummed
+  (`csum`) tunnel in its own netns pair, `npgrecsa` and `npgrecsb`,
+  joined by the veth pair `npgvcsa`/`npgvcsb` with tx/rx checksum
+  offload off: underlay 10.9.197.1 <-> 10.9.197.2 (10.9.197.0/25),
+  overlay 10.9.197.129 <-> 10.9.197.130 (10.9.197.128/25), captured on
+  `npgvcsa`. Its four frames are two echo requests from .129 to .130,
+  each followed by its reply, ICMP sequence numbers 1 and 2 under one
+  identifier, every GRE flags word `0x8000` (the C bit alone, version
+  0) with Protocol Type `0x0800`. `check_fixtures` verifies each
+  frame's GRE Checksum (RFC 2784 §2.5: the GRE header with the field
+  zeroed and its payload, up to the outer IPv4 Total Length), then
+  peels the GRE header and verifies the inner IPv4/ICMP checksums.
+- `gre6.pcap` was produced by the same script, over an `ip6gre`
+  tunnel with `encaplimit none`, so no Tunnel Encapsulation Limit
+  option sits between the IPv6 header and GRE: next header 47. Netns
+  `npgre6a` and `npgre6b`, joined by the veth pair `npgv6a`/`npgv6b`
+  with tx/rx checksum offload off; underlay fd09:326:1::1 <->
+  fd09:326:1::2 (the ULA fd09:326:1::/64), overlay 10.9.197.193 <->
+  10.9.197.194 (10.9.197.192/30), IPv6 off on the tunnel device;
+  captured on `npgv6a`. Its four frames are two echo requests from .193
+  to .194, each followed by its reply, ICMP sequence numbers 1 and 2
+  under one identifier, every GRE flags word `0x0000` with Protocol
+  Type `0x0800`, each IPv6 Payload Length ending its frame.
+  `check_fixtures` does not decode GRE over IPv6
+  ([#326](https://github.com/EONRaider/NETProtocols/issues/326)): it
+  counts these frames as IPv6 and verifies nothing past that header,
+  which carries no checksum. The capture script asserts the frames
+  listed here with the standard library, and the corpus tests walk
+  them `Ethernet→IPv6→GRE→IPv4→ICMPv4` and round-trip every layer.
 - `dns_tcp.pcap` was produced by `scripts/capture_fixtures_dns_tcp.sh`:
   a real DNS exchange over TCP — `dig +tcp` querying an A and a TXT
   record against `dnsmasq` answering from its own records — over a veth
