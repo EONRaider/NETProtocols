@@ -342,7 +342,7 @@ def _check_gre(
     strict: bool = False,
 ) -> list[str]:
     """Validate a GRE packet, ``upper``: the IPv4 payload, as far as the
-    IPv4 Total Length declares it, so Ethernet padding is not read.
+    IPv4 Total Length declares it; Ethernet padding is not read.
 
     A 4-byte header (flags word and inner EtherType) is followed by the
     optional Checksum, Key and Sequence Number words its C, K and S

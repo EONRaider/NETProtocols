@@ -31,10 +31,9 @@
 # IPv4/ICMP checksums, and stops unless that run passes and reports 4
 # GRE checksums for gre_csum.pcap.
 #
-# veth is a purely local link, so tx/rx checksum offload is disabled on
-# each end first (ethtool -K): otherwise the outer checksums are left
-# to "offload" and never computed. The gre kernel module autoloads when
-# the first tunnel device is created.
+# tx/rx checksum offload is disabled on each veth end first
+# (ethtool -K), so the kernel computes every outer checksum. The gre
+# kernel module autoloads when the first tunnel device is created.
 
 set -euo pipefail
 

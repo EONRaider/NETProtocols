@@ -1,6 +1,6 @@
 """Tests for scripts/check_fixtures.py, the corpus's checksum oracle.
 
-The checker is loaded by path, so it stays independent of netprotocols.
+The checker is loaded by path and imports nothing from netprotocols.
 It runs over every directory of committed captures and must pass them
 all. Each failure string it can emit is then produced by a minimally
 tampered copy of a frame it accepts, a committed fixture frame wherever
