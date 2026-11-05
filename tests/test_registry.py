@@ -1,16 +1,25 @@
 """The public dispatch registry: registration, conflicts, table
 inheritance, and isolation from the process-wide default."""
 
+import copy
+import tomllib
+from pathlib import Path
+
 import pytest
 
+import netprotocols
+import netprotocols.registry as registry_module
 from netprotocols import (
+    AH,
     CDP,
     DNS,
+    OSPF,
     SCTP,
     SNAP,
     STP,
     TCP,
     UDP,
+    AHv6,
     Ethernet,
     InvalidRegistryKeyError,
     IPv4,
@@ -35,9 +44,11 @@ from netprotocols.registry import (
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
     TABLES,
+    WITHHELD,
     Registry,
     RegistryConflictError,
     UnknownTableError,
+    WithheldType,
     register,
     register_all,
 )
@@ -194,7 +205,7 @@ class TestTableInheritance:
     def test_a_withheld_key_is_not_inherited(self, registry):
         """A withheld key owns no class: a parent write skips it, as it
         skips an override, and a direct registration fills it."""
-        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
         registry.register(TABLE_IP_PROTO, 253, Fake)
         assert registry.get(TABLE_IP_PROTO, 253) is Fake
         assert registry.get(TABLE_IP_PROTO_V6, 253) is None
@@ -203,25 +214,25 @@ class TestTableInheritance:
 
     def test_withholding_removes_an_inherited_entry(self, registry):
         registry.register(TABLE_IP_PROTO, 253, Fake)
-        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
         assert registry.get(TABLE_IP_PROTO_V6, 253) is None
         assert registry.get(TABLE_IP_PROTO, 253) is Fake
 
     def test_withholding_leaves_a_direct_registration_alone(self, registry):
         registry.register(TABLE_IP_PROTO_V6, 253, OtherFake)
-        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
         assert registry.get(TABLE_IP_PROTO_V6, 253) is OtherFake
 
     def test_withholding_an_unknown_table_raises(self, registry):
         with pytest.raises(UnknownTableError):
-            registry._withhold("ip.proto.v7", 89)
+            registry.register("ip.proto.v7", 89, WITHHELD)
 
     def test_a_derived_registry_copies_what_is_withheld(self, registry):
-        registry._withhold(TABLE_IP_PROTO_V6, 253)
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
         child = registry.derive({TABLE_IP_PROTO: {253: Fake}})
         assert child.get(TABLE_IP_PROTO_V6, 253) is None
         # ...independently: withholding in the child leaves the parent.
-        child._withhold(TABLE_IP_PROTO_V6, 254)
+        child.register(TABLE_IP_PROTO_V6, 254, WITHHELD)
         registry.register(TABLE_IP_PROTO, 254, Fake)
         assert registry.get(TABLE_IP_PROTO_V6, 254) is Fake
 
@@ -472,3 +483,273 @@ class TestKeyRanges:
         registry.register(TABLE_IP_PROTO, 300, Fake)
         assert registry.get(TABLE_UDP_PORT, 0x10000) is Fake
         assert registry.get(TABLE_IP_PROTO, 300) is Fake
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def dns_frame(*, src_port=50000, dst_port=53, v6=False):
+    """An ``Ethernet → IP → UDP → DNS`` query with no questions."""
+    dns = bytes.fromhex("123401000000000000000000")
+    udp = (
+        src_port.to_bytes(2, "big")
+        + dst_port.to_bytes(2, "big")
+        + (8 + len(dns)).to_bytes(2, "big")
+        + bytes(2)
+    )
+    if v6:
+        ethertype = "86dd"
+        ip = (
+            bytes.fromhex("60000000")
+            + len(udp + dns).to_bytes(2, "big")
+            + bytes.fromhex("1140")
+            + bytes.fromhex("20010db8" + "0" * 23 + "1")
+            + bytes.fromhex("20010db8" + "0" * 23 + "2")
+        )
+    else:
+        ethertype = "0800"
+        ip = (
+            bytes.fromhex("4500")
+            + (20 + len(udp + dns)).to_bytes(2, "big")
+            + bytes.fromhex("0000400040110000c0000201c0000202")
+        )
+    eth = bytes.fromhex("020000000002020000000001" + ethertype)
+    return eth + ip + udp + dns
+
+
+def layer_types(packet):
+    return [type(layer) for layer in packet]
+
+
+class TestWithheldSentinel:
+    def test_withheld_is_the_only_member_of_its_type(self):
+        assert list(WithheldType) == [WITHHELD]
+        assert WITHHELD is WithheldType.WITHHELD
+        assert repr(WITHHELD) == "WITHHELD"
+
+    def test_withheld_survives_copying_as_the_same_object(self):
+        decode_as = {TABLE_UDP_PORT: {53: WITHHELD}}
+        assert copy.copy(WITHHELD) is WITHHELD
+        assert copy.deepcopy(decode_as)[TABLE_UDP_PORT][53] is WITHHELD
+
+    def test_withheld_is_exported_by_the_registry_module(self):
+        assert "WITHHELD" in registry_module.__all__
+        assert "WithheldType" in registry_module.__all__
+
+    def test_withheld_stays_out_of_the_top_level_package(self):
+        """The top level re-exports the registry's functions and errors,
+        not its values, like the table-name constants."""
+        assert "WITHHELD" not in netprotocols.__all__
+        assert "TABLE_UDP_PORT" not in netprotocols.__all__
+
+    def test_mypy_checks_the_typed_call_sites(self):
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        assert "tests/typecheck" in pyproject["tool"]["mypy"]["files"]
+        assert (ROOT / "tests" / "typecheck" / "withheld.py").is_file()
+
+
+class TestWithheldPerWalk:
+    def test_the_frame_decodes_dns_without_an_override(self):
+        packet = decode_frame(dns_frame())
+        assert layer_types(packet) == [Ethernet, IPv4, UDP, DNS]
+
+    def test_decode_as_withholds_a_key_for_one_walk(self):
+        frame = dns_frame()
+        packet = decode_frame(frame, decode_as={TABLE_UDP_PORT: {53: WITHHELD}})
+        assert layer_types(packet) == [Ethernet, IPv4, UDP]
+        assert packet.stopped_by is None
+        assert packet.consumed == 42
+        assert DEFAULT.get(TABLE_UDP_PORT, 53) is DNS
+        assert layer_types(decode_frame(frame))[-1] is DNS
+
+    def test_a_withheld_key_ends_the_walk_like_an_unregistered_one(self):
+        withheld = decode_frame(
+            dns_frame(), decode_as={TABLE_UDP_PORT: {53: WITHHELD}}
+        )
+        unregistered = decode_frame(dns_frame(dst_port=6969))
+        assert DEFAULT.get(TABLE_UDP_PORT, 6969) is None
+        assert layer_types(withheld) == layer_types(unregistered)
+        assert withheld.consumed == unregistered.consumed
+        assert withheld.trailer == unregistered.trailer == b""
+        assert withheld.stopped_by is unregistered.stopped_by is None
+
+    def test_a_withheld_port_falls_back_to_the_other_port(self, registry):
+        """As for an unregistered destination, the source port is tried."""
+        child = registry.derive({TABLE_UDP_PORT: {6969: WITHHELD}})
+        assert child.get_port(TABLE_UDP_PORT, 53, 6969) is DNS
+        packet = decode_frame(
+            dns_frame(src_port=53, dst_port=6969),
+            decode_as={TABLE_UDP_PORT: {6969: WITHHELD}},
+        )
+        assert layer_types(packet) == [Ethernet, IPv4, UDP, DNS]
+
+    def test_decode_as_withholding_a_parent_key_reaches_the_child(self):
+        frame = dns_frame(v6=True)
+        assert layer_types(decode_frame(frame))[-1] is DNS
+        packet = decode_frame(frame, decode_as={TABLE_IP_PROTO: {17: WITHHELD}})
+        assert layer_types(packet) == [Ethernet, IPv6]
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 17) is UDP
+
+    def test_a_per_walk_withhold_overrides_a_global_entry(self, registry):
+        assert registry.get(TABLE_UDP_PORT, 53) is DNS
+        packet = decode_frame(
+            dns_frame(),
+            registry=registry,
+            decode_as={TABLE_UDP_PORT: {53: WITHHELD}},
+        )
+        assert layer_types(packet) == [Ethernet, IPv4, UDP]
+        assert registry.get(TABLE_UDP_PORT, 53) is DNS
+        assert (
+            layer_types(decode_frame(dns_frame(), registry=registry))[-1] is DNS
+        )
+
+    def test_a_per_walk_class_overrides_a_global_withhold(self, registry):
+        registry.register(TABLE_UDP_PORT, 53, WITHHELD, override=True)
+        packet = decode_frame(
+            dns_frame(),
+            registry=registry,
+            decode_as={TABLE_UDP_PORT: {53: DNS}},
+        )
+        assert layer_types(packet) == [Ethernet, IPv4, UDP, DNS]
+        assert registry.get(TABLE_UDP_PORT, 53) is None
+        packet = decode_frame(dns_frame(), registry=registry)
+        assert layer_types(packet) == [Ethernet, IPv4, UDP]
+
+    def test_derive_withholds_whatever_the_parent_holds(self, registry):
+        child = registry.derive(
+            {TABLE_UDP_PORT: {53: WITHHELD}, TABLE_IP_PROTO_V6: {51: WITHHELD}}
+        )
+        assert child.get(TABLE_UDP_PORT, 53) is None
+        assert child.get(TABLE_IP_PROTO_V6, 51) is None
+        assert registry.get(TABLE_UDP_PORT, 53) is DNS
+        assert registry.get(TABLE_IP_PROTO_V6, 51) is AHv6
+
+
+class TestWithheldGlobally:
+    def test_register_withholds_on_the_default_registry(self, monkeypatch):
+        fresh = DEFAULT.derive()
+        monkeypatch.setattr(registry_module, "DEFAULT", fresh)
+        assert register(TABLE_IP_PROTO_V6, 253, WITHHELD) is None
+        register(TABLE_IP_PROTO, 253, Fake)
+        assert fresh.get(TABLE_IP_PROTO, 253) is Fake
+        assert fresh.get(TABLE_IP_PROTO_V6, 253) is None
+        assert DEFAULT.get(TABLE_IP_PROTO, 253) is None
+
+    def test_register_all_withholds_every_key(self, registry):
+        register_all(
+            TABLE_UDP_PORT,
+            (53, 67, 6969),
+            WITHHELD,
+            override=True,
+            registry=registry,
+        )
+        for port in (53, 67, 6969):
+            assert registry.get(TABLE_UDP_PORT, port) is None
+        assert registry.get(TABLE_UDP_PORT, 68).__name__ == "DHCP"
+
+    def test_a_global_withhold_ends_every_walk_through_it(self, registry):
+        register(TABLE_UDP_PORT, 53, WITHHELD, override=True, registry=registry)
+        packet = decode_frame(dns_frame(), registry=registry)
+        assert layer_types(packet) == [Ethernet, IPv4, UDP]
+        assert packet.stopped_by is None
+
+    def test_withholding_is_idempotent(self, registry):
+        for _ in range(2):
+            registry.register(TABLE_UDP_PORT, 6969, WITHHELD)
+            assert registry.get(TABLE_UDP_PORT, 6969) is None
+            assert registry._own[TABLE_UDP_PORT][6969] is WITHHELD
+        registry.register(TABLE_UDP_PORT, 6969, WITHHELD, override=True)
+        assert registry._own[TABLE_UDP_PORT][6969] is WITHHELD
+        before = registry.table(TABLE_IP_PROTO_V6).copy()
+        registry.register(TABLE_IP_PROTO_V6, 89, WITHHELD)
+        assert registry.table(TABLE_IP_PROTO_V6) == before
+
+    def test_withholding_never_undoes_a_direct_entry(self, registry):
+        registry.register(TABLE_UDP_PORT, 6969, Fake)
+        registry.register(TABLE_UDP_PORT, 6969, WITHHELD)
+        assert registry.get(TABLE_UDP_PORT, 6969) is Fake
+        registry.register(TABLE_UDP_PORT, 53, WITHHELD)
+        assert registry.get(TABLE_UDP_PORT, 53) is DNS
+        assert (
+            layer_types(decode_frame(dns_frame(), registry=registry))[-1] is DNS
+        )
+
+    def test_override_lets_a_withhold_replace_a_direct_entry(self, registry):
+        registry.register(TABLE_UDP_PORT, 6969, Fake)
+        registry.register(TABLE_UDP_PORT, 6969, WITHHELD, override=True)
+        assert registry.get(TABLE_UDP_PORT, 6969) is None
+
+    def test_a_class_registered_after_a_withhold_fills_the_key(self, registry):
+        """No override is needed: a withheld key holds no class."""
+        registry.register(TABLE_UDP_PORT, 6969, WITHHELD)
+        registry.register(TABLE_UDP_PORT, 6969, Fake)
+        assert registry.get(TABLE_UDP_PORT, 6969) is Fake
+        # ...and is the deliberate entry a later withhold leaves alone.
+        registry.register(TABLE_UDP_PORT, 6969, WITHHELD)
+        assert registry.get(TABLE_UDP_PORT, 6969) is Fake
+
+    def test_withholding_a_parent_key_reaches_an_inheriting_child(
+        self, registry
+    ):
+        registry.register(TABLE_IP_PROTO, 17, WITHHELD, override=True)
+        assert registry.get(TABLE_IP_PROTO, 17) is None
+        assert registry.get(TABLE_IP_PROTO_V6, 17) is None
+        # A later class in the parent is inherited again.
+        registry.register(TABLE_IP_PROTO, 17, Fake)
+        assert registry.get(TABLE_IP_PROTO_V6, 17) is Fake
+
+    def test_withholding_a_parent_key_spares_a_child_override(self, registry):
+        registry.register(TABLE_IP_PROTO, 51, WITHHELD, override=True)
+        assert registry.get(TABLE_IP_PROTO, 51) is None
+        assert registry.get(TABLE_IP_PROTO_V6, 51) is AHv6
+        registry.register(TABLE_IP_PROTO, 51, AH)
+        assert registry.get(TABLE_IP_PROTO_V6, 51) is AHv6
+
+    def test_withholding_checks_the_key_range(self, registry):
+        with pytest.raises(InvalidRegistryKeyError):
+            registry.register(TABLE_LLC_DSAP, 0x100, WITHHELD)
+
+    def test_the_defaults_withhold_ospf_from_ipv6(self):
+        assert DEFAULT._own[TABLE_IP_PROTO_V6][89] is WITHHELD
+        assert DEFAULT.get(TABLE_IP_PROTO, 89) is OSPF
+        assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
+
+
+class TestNoneIsRefused:
+    def assert_names_the_key(self, excinfo, table, key):
+        message = str(excinfo.value)
+        assert f"{table} {key}" in message
+        assert "None" in message
+        assert "WITHHELD" in message
+
+    @pytest.mark.parametrize("lax", [False, True])
+    def test_decode_as_refuses_none(self, lax):
+        with pytest.raises(TypeError) as excinfo:
+            decode_frame(
+                dns_frame(), lax=lax, decode_as={TABLE_UDP_PORT: {1812: None}}
+            )
+        self.assert_names_the_key(excinfo, TABLE_UDP_PORT, 1812)
+        assert DEFAULT.get(TABLE_UDP_PORT, 1812).__name__ == "RADIUS"
+
+    def test_derive_refuses_none(self, registry):
+        with pytest.raises(TypeError) as excinfo:
+            registry.derive({TABLE_IP_PROTO_V6: {89: None}})
+        self.assert_names_the_key(excinfo, TABLE_IP_PROTO_V6, 89)
+
+    def test_registering_none_globally_is_refused(self, registry):
+        with pytest.raises(TypeError) as excinfo:
+            registry.register(TABLE_UDP_PORT, 53, None, override=True)
+        self.assert_names_the_key(excinfo, TABLE_UDP_PORT, 53)
+        assert registry.get(TABLE_UDP_PORT, 53) is DNS
+        assert registry._own[TABLE_UDP_PORT][53] is DNS
+        with pytest.raises(TypeError):
+            register_all(TABLE_UDP_PORT, (6969,), None, registry=registry)
+        assert 6969 not in registry._own[TABLE_UDP_PORT]
+
+    def test_none_is_refused_after_the_table_and_key_are_checked(
+        self, registry
+    ):
+        with pytest.raises(UnknownTableError):
+            registry.register("udp.ports", 53, None)
+        with pytest.raises(InvalidRegistryKeyError):
+            registry.register(TABLE_LLC_DSAP, 0x100, None)

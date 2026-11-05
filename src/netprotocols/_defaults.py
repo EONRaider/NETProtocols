@@ -22,6 +22,7 @@ from netprotocols.registry import (
     TABLE_LLC_SNAP,
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
+    WITHHELD,
     Registry,
     register_all,
 )
@@ -191,7 +192,7 @@ def install(registry: Registry) -> None:
 
     # IPv4 chain only — see IPV4_ONLY_NUMBERS. Withheld from the v6
     # table first, so the ip.proto entry is not inherited into it.
-    registry._withhold(TABLE_IP_PROTO_V6, IPProtocol.OSPF)
+    add(TABLE_IP_PROTO_V6, IPProtocol.OSPF, WITHHELD)
     add(TABLE_IP_PROTO, IPProtocol.OSPF, OSPF)
 
     # VRRP (RFC 3768, RFC 5798) — see FAMILY_SPECIFIC_NUMBERS. Wired the

@@ -38,7 +38,12 @@ from netprotocols import (
 )
 from netprotocols._defaults import IPV4_ONLY_NUMBERS, install
 from netprotocols.checksum import verify
-from netprotocols.registry import DEFAULT, TABLE_IP_PROTO, TABLE_IP_PROTO_V6
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_IP_PROTO,
+    TABLE_IP_PROTO_V6,
+    WITHHELD,
+)
 from test_ipip import ethernet, make_ipv4, make_ipv6
 
 FRAMES = pcap_frames(FIXTURES / "ospf.pcap")
@@ -203,7 +208,7 @@ class TestWiring:
         child = DEFAULT.derive()
         child.register(TABLE_IP_PROTO, 89, OSPF)
         assert child.get(TABLE_IP_PROTO_V6, 89) is None
-        assert child._withheld[TABLE_IP_PROTO_V6] == {89}
+        assert child._own[TABLE_IP_PROTO_V6][89] is WITHHELD
 
     def test_installing_twice_keeps_the_key_withheld(self):
         """Keep 89 withheld across a second install()."""
