@@ -421,14 +421,26 @@ class TestAuthenticators:
         for value in (SECRET, PASSWORD, WRONG_PASSWORD):
             assert value.decode() in manifest
 
-    def test_check_fixtures_verifies_the_requests(self, check_fixtures):
-        """The checker verifies what one frame holds, and nothing fails."""
+    def test_check_fixtures_verifies_every_authenticator(self, check_fixtures):
+        """The checker verifies each request alone and each reply against
+        its request, and nothing fails."""
         stats = check_fixtures.Counter()
+        exchanges = check_fixtures.RadiusExchanges()
         for frame in FRAMES:
-            assert check_fixtures.check_frame(frame, stats) == []
+            assert check_fixtures.check_frame(frame, stats, exchanges) == []
         assert stats["radius"] == 12
         assert stats["radius-accounting-authenticator"] == 2
         assert stats["radius-message-authenticator"] == 4
+        assert stats["radius-response-authenticator"] == 6
+        assert stats["radius-reply-message-authenticator"] == 4
+        assert stats["radius-reply-unpaired"] == 0
+
+    def test_check_fixtures_leaves_a_reply_alone_unpaired(self, check_fixtures):
+        """A reply checked without its request is counted, not verified."""
+        stats = check_fixtures.Counter()
+        assert check_fixtures.check_frame(FRAMES[PAP_ACCEPT + 1], stats) == []
+        assert stats["radius-reply-unpaired"] == 1
+        assert stats["radius-response-authenticator"] == 0
 
     @pytest.mark.parametrize(
         "index,failure",

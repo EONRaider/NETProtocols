@@ -18,6 +18,7 @@ import struct
 import sys
 from collections import Counter
 from collections.abc import Iterator
+from contextvars import ContextVar
 from pathlib import Path
 
 
@@ -277,7 +278,9 @@ def _check_udp(
         )
         if computed != wire:
             failures.append("udp-checksum")
-    return failures + _check_udp_payload(upper, stats, depth, strict=strict)
+    return failures + _check_udp_payload(
+        src, dst, upper, stats, depth, strict=strict
+    )
 
 
 def _check_sctp(upper: bytes, stats: Counter[str]) -> list[str]:
@@ -550,7 +553,9 @@ def _check_udp6(
     failures: list[str] = []
     if computed != struct.unpack_from("!H", upper, 6)[0]:
         failures.append("udp6-checksum")
-    return failures + _check_udp_payload(upper, stats, depth, strict=strict)
+    return failures + _check_udp_payload(
+        src, dst, upper, stats, depth, strict=strict
+    )
 
 
 #: PIM's IP protocol number (RFC 7761 §4.9) and its Register type, the
@@ -677,8 +682,8 @@ _VXLAN_PORT = 4789
 _RIP_PORT = 520
 
 #: RADIUS's authentication and accounting ports (RFC 2865 §3, RFC 2866
-#: §3).
-_RADIUS_PORTS = (1812, 1813)
+#: §3) and Dynamic Authorization's (RFC 5176 §3).
+_RADIUS_PORTS = (1812, 1813, 3799)
 
 #: STUN's port, over UDP and TCP alike (RFC 8489 §6).
 _STUN_PORT = 3478
@@ -691,23 +696,29 @@ _HSRP_PORT = 1985
 
 
 def _check_udp_payload(
-    datagram: bytes, stats: Counter[str], depth: int, *, strict: bool = False
+    src: bytes,
+    dst: bytes,
+    datagram: bytes,
+    stats: Counter[str],
+    depth: int,
+    *,
+    strict: bool = False,
 ) -> list[str]:
-    """Validate what a UDP datagram carries, where it is something this
-    checker can verify past the UDP checksum: a VXLAN tunnel (see
-    :func:`_check_vxlan`), a RIPv2 message's keyed digest (see
-    :func:`_check_rip`), a RADIUS packet's keyed authenticators (see
-    :func:`_check_radius`), a STUN message's FINGERPRINT and
-    MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP message's
-    MAC (see :func:`_check_ntp`) or an HSRP message's fields (see
-    :func:`_check_hsrp`)."""
+    """Validate what a UDP datagram from ``src`` to ``dst`` carries,
+    where it is something this checker can verify past the UDP
+    checksum: a VXLAN tunnel (see :func:`_check_vxlan`), a RIPv2
+    message's keyed digest (see :func:`_check_rip`), a RADIUS packet's
+    keyed authenticators (see :func:`_check_radius`), a STUN message's
+    FINGERPRINT and MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP
+    message's MAC (see :func:`_check_ntp`) or an HSRP message's fields
+    (see :func:`_check_hsrp`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
     if src_port in _RADIUS_PORTS or dst_port in _RADIUS_PORTS:
-        return _check_radius(datagram, stats)
+        return _check_radius(src, dst, datagram, stats, strict=strict)
     if _STUN_PORT in (src_port, dst_port):
         end = struct.unpack_from("!H", datagram, 4)[0]
         return _check_stun(datagram[8:end], stats, stream=False)
@@ -1125,6 +1136,51 @@ _RADIUS_RANDOM_AUTHENTICATOR = (1, 12)
 _RADIUS_ACCOUNTING_REQUEST = 4
 _RADIUS_MESSAGE_AUTHENTICATOR = 80
 
+#: RADIUS request codes: Access-Request (RFC 2865 §3),
+#: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §3),
+#: Disconnect-Request and CoA-Request (RFC 5176 §3).
+_RADIUS_REQUESTS = (1, 4, 12, 40, 43)
+
+#: RADIUS reply codes, whose Response Authenticator and
+#: Message-Authenticator are computed over their request's
+#: Authenticator: Access-Accept, Access-Reject and Access-Challenge
+#: (RFC 2865 §3), Accounting-Response (RFC 2866 §3), Disconnect-ACK,
+#: Disconnect-NAK, CoA-ACK and CoA-NAK (RFC 5176 §3).
+_RADIUS_REPLIES = (2, 3, 5, 11, 41, 42, 44, 45)
+
+#: A RADIUS exchange: the client's address and port, the server's
+#: address and port, and the Identifier (RFC 2865 §3).
+RadiusExchange = tuple[bytes, int, bytes, int, int]
+
+
+class RadiusExchanges:
+    """The Authenticators of one capture's RADIUS requests that no reply
+    has answered yet, by exchange (see :data:`RadiusExchange`), in
+    capture order."""
+
+    def __init__(self) -> None:
+        self._pending: dict[RadiusExchange, list[bytes]] = {}
+
+    def ask(self, exchange: RadiusExchange, authenticator: bytes) -> None:
+        """Record a request of ``exchange`` as unanswered."""
+        self._pending.setdefault(exchange, []).append(authenticator)
+
+    def answer(self, exchange: RadiusExchange) -> bytes | None:
+        """Remove and return the Authenticator of the most recent
+        unanswered request of ``exchange``, or ``None`` when every
+        request of it is answered or none was seen."""
+        pending = self._pending.get(exchange)
+        return pending.pop() if pending else None
+
+
+#: The :class:`RadiusExchanges` of the capture whose frame
+#: :func:`check_frame` is checking, set for that call alone; ``None``
+#: when it was given none, so that no request is recorded and every
+#: reply is unpaired.
+_RADIUS_EXCHANGES: ContextVar[RadiusExchanges | None] = ContextVar(
+    "radius_exchanges", default=None
+)
+
 
 def _radius_attributes(radius: bytes) -> list[tuple[int, int]] | None:
     """The (type, offset) of each attribute of a RADIUS packet, or
@@ -1140,21 +1196,29 @@ def _radius_attributes(radius: bytes) -> list[tuple[int, int]] | None:
     return found if offset == len(radius) else None
 
 
-def _check_radius(datagram: bytes, stats: Counter[str]) -> list[str]:
-    """Verify what a RADIUS packet's own bytes let this checker verify.
+def _check_radius(
+    src: bytes,
+    dst: bytes,
+    datagram: bytes,
+    stats: Counter[str],
+    *,
+    strict: bool = False,
+) -> list[str]:
+    """Verify a RADIUS packet sent from ``src`` to ``dst``.
 
     The UDP checksum already covers every RADIUS byte. On top of it,
     the Length must fit the datagram and the attributes tile the packet,
     and, with the published secret: an Accounting-Request's Request
     Authenticator, MD5 over the packet with a zero Authenticator and
-    then the secret (RFC 2866 §3); and the Message-Authenticator of an
+    then the secret (RFC 2866 §3); the Message-Authenticator of an
     Access-Request or a Status-Server, HMAC-MD5 under the secret over
-    the packet with that attribute's value zeroed (RFC 3579 §3.2). A
-    reply's Response Authenticator and Message-Authenticator are
-    computed over its request's Authenticator, which is in another
-    frame, so they are not checked here: tests/test_radius.py pairs and
-    verifies them. Bytes after the Length are padding (RFC 2865 §3) and
-    are not checked."""
+    the packet with that attribute's value zeroed (RFC 3579 §3.2); and
+    a reply's authenticators, against the request it answers (see
+    :func:`_check_radius_reply`). Each request is recorded in the
+    capture's :class:`RadiusExchanges` under its exchange (see
+    :data:`RadiusExchange`), from which a reply takes the most recent
+    unanswered request of the same exchange. Bytes after the Length are
+    padding (RFC 2865 §3) and are not checked."""
     radius = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["radius"] += 1
     if len(radius) < 20:
@@ -1166,7 +1230,20 @@ def _check_radius(datagram: bytes, stats: Counter[str]) -> list[str]:
     attributes = _radius_attributes(radius)
     if attributes is None:
         return ["radius-attributes"]
-    code = radius[0]
+    code, identifier = radius[0], radius[1]
+    src_port, dst_port = struct.unpack_from("!HH", datagram)
+    exchanges = _RADIUS_EXCHANGES.get()
+    if code in _RADIUS_REPLIES:
+        request = None
+        if exchanges is not None:
+            request = exchanges.answer(
+                (dst, dst_port, src, src_port, identifier)
+            )
+        return _check_radius_reply(
+            radius, attributes, request, stats, strict=strict
+        )
+    if code in _RADIUS_REQUESTS and exchanges is not None:
+        exchanges.ask((src, src_port, dst, dst_port, identifier), radius[4:20])
     if code == _RADIUS_ACCOUNTING_REQUEST:
         stats["radius-accounting-authenticator"] += 1
         # MD5 is what RFC 2866 §3 mandates; this only checks the hash
@@ -1181,23 +1258,62 @@ def _check_radius(datagram: bytes, stats: Counter[str]) -> list[str]:
         return []
     for kind, offset in attributes:
         if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
-            return _check_radius_message_authenticator(radius, offset, stats)
+            stats["radius-message-authenticator"] += 1
+            if not _radius_message_authenticator_verifies(radius, offset):
+                return ["radius-message-authenticator"]
+            return []
     return []
 
 
-def _check_radius_message_authenticator(
-    radius: bytes, offset: int, stats: Counter[str]
+def _check_radius_reply(
+    radius: bytes,
+    attributes: list[tuple[int, int]],
+    request: bytes | None,
+    stats: Counter[str],
+    *,
+    strict: bool,
 ) -> list[str]:
-    """Verify the Message-Authenticator at ``offset`` in a request whose
-    Authenticator is random (see :func:`_check_radius`)."""
-    stats["radius-message-authenticator"] += 1
-    if radius[offset + 1] != 18:
-        return ["radius-message-authenticator"]
-    zeroed = radius[: offset + 2] + bytes(16) + radius[offset + 18 :]
+    """Verify a RADIUS reply against ``request``, the Authenticator of
+    the request it answers.
+
+    Its Response Authenticator must be MD5 over the reply with
+    ``request`` in place of the Authenticator, then the secret (RFC 2865
+    §3, RFC 2866 §3, RFC 5176 §3), and its Message-Authenticator, when
+    it carries one, HMAC-MD5 under the secret over the reply with
+    ``request`` in place of the Authenticator and that attribute's value
+    zeroed (RFC 3579 §3.2). Each is reported on its own. A reply with no
+    ``request`` is counted ``radius-reply-unpaired`` and not checked,
+    and fails under ``strict``."""
+    if request is None:
+        stats["radius-reply-unpaired"] += 1
+        return ["unchecked-radius-reply-unpaired"] if strict else []
+    signed = radius[:4] + request + radius[20:]
+    failures: list[str] = []
+    stats["radius-response-authenticator"] += 1
+    # MD5 is what RFC 2865 §3 mandates; this only checks the hash the
+    # server sent, so it is not a security use.
+    digest = hashlib.md5(signed + _RADIUS_SECRET, usedforsecurity=False)
+    if not hmac.compare_digest(digest.digest(), radius[4:20]):
+        failures.append("radius-response-authenticator")
+    for kind, offset in attributes:
+        if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
+            stats["radius-reply-message-authenticator"] += 1
+            if not _radius_message_authenticator_verifies(signed, offset):
+                failures.append("radius-reply-message-authenticator")
+            break
+    return failures
+
+
+def _radius_message_authenticator_verifies(signed: bytes, offset: int) -> bool:
+    """Whether the Message-Authenticator at ``offset`` in ``signed``, a
+    RADIUS packet holding the Authenticator the attribute is computed
+    over, is 18 bytes long and its HMAC-MD5 under the secret over
+    ``signed`` with the attribute's value zeroed (RFC 3579 §3.2)."""
+    if signed[offset + 1] != 18:
+        return False
+    zeroed = signed[: offset + 2] + bytes(16) + signed[offset + 18 :]
     digest = hmac.new(_RADIUS_SECRET, zeroed, hashlib.md5).digest()
-    if not hmac.compare_digest(digest, radius[offset + 2 : offset + 18]):
-        return ["radius-message-authenticator"]
-    return []
+    return hmac.compare_digest(digest, signed[offset + 2 : offset + 18])
 
 
 #: The symmetric keys of the corpus's NTP MACs, by Key ID: the test
@@ -1865,9 +1981,22 @@ def _check_lldp(payload: bytes, stats: Counter[str]) -> list[str]:
     return []
 
 
-def check_frame(frame: bytes, stats: Counter[str]) -> list[str]:
-    """Validate one Ethernet frame; returns a list of failure strings."""
-    return _check_ethernet(frame, stats, 0)
+def check_frame(
+    frame: bytes,
+    stats: Counter[str],
+    exchanges: RadiusExchanges | None = None,
+) -> list[str]:
+    """Validate one Ethernet frame; returns a list of failure strings.
+
+    ``exchanges`` holds the RADIUS requests of the capture the frame is
+    from, seen in its earlier frames; this frame's are added to it, and
+    its replies are verified against it (see :func:`_check_radius`).
+    Without it, the frame's RADIUS replies are unpaired."""
+    token = _RADIUS_EXCHANGES.set(exchanges)
+    try:
+        return _check_ethernet(frame, stats, 0)
+    finally:
+        _RADIUS_EXCHANGES.reset(token)
 
 
 #: The name a session capture ends with: every frame of a few
@@ -1879,17 +2008,21 @@ SESSION_SUFFIX = "_session.pcap"
 
 
 def check_capture_frame(
-    frame: bytes, stats: Counter[str], *, session: bool
+    frame: bytes,
+    stats: Counter[str],
+    *,
+    session: bool,
+    exchanges: RadiusExchanges | None = None,
 ) -> list[str]:
-    """Validate one frame of a capture, as :func:`check_frame` does, and
-    in a capture that is not a session one (``session``, see
-    :data:`SESSION_SUFFIX`) fail a TCP segment on port 443 that carries
-    data but not whole TLS records (``tls-split``), which
-    :func:`_check_tls` only counts as ``tls-unchecked``: every corpus
-    segment on 443 must be whole records, while a session capture keeps
-    the segments a record spans."""
+    """Validate one frame of a capture, as :func:`check_frame` does with
+    ``exchanges``, and in a capture that is not a session one
+    (``session``, see :data:`SESSION_SUFFIX`) fail a TCP segment on port
+    443 that carries data but not whole TLS records (``tls-split``),
+    which :func:`_check_tls` only counts as ``tls-unchecked``: every
+    corpus segment on 443 must be whole records, while a session capture
+    keeps the segments a record spans."""
     before = stats["tls-unchecked"]
-    failures = check_frame(frame, stats)
+    failures = check_frame(frame, stats, exchanges)
     if not session and stats["tls-unchecked"] > before:
         failures.append("tls-split")
     return failures
@@ -2143,11 +2276,12 @@ def main() -> int:
         failures: Counter[str] = Counter()
         frames = 0
         session = pcap.name.endswith(SESSION_SUFFIX)
+        exchanges = RadiusExchanges()
         try:
             for frame in read_pcap(pcap):
                 frames += 1
                 for failure in check_capture_frame(
-                    frame, stats, session=session
+                    frame, stats, session=session, exchanges=exchanges
                 ):
                     failures[failure] += 1
         except ValueError as e:
