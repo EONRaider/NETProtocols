@@ -36,6 +36,11 @@ jobs:
       # Fails on any work-marker word in tracked text (see
       # scripts/check_markers.py). Offline.
       - run: python3 scripts/check_markers.py
+      # Renders every docstring in src/ through Sphinx autodoc
+      # (docs/conf.py) and fails on any warning, an unresolved
+      # cross-reference role included. Fetches the Python inventory from
+      # docs.python.org; the dummy builder writes no output.
+      - run: uv run --frozen sphinx-build -W -n -b dummy docs "$RUNNER_TEMP/sphinx"
 
   typecheck:
     runs-on: ubuntu-latest
