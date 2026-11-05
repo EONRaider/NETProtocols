@@ -186,5 +186,5 @@ class TestPacketTrailer:
         for duplicate in (copy.copy(packet), copy.deepcopy(packet)):
             assert duplicate == packet
             assert duplicate.trailer == self.FCS
+            assert type(duplicate.trailer) is bytes
             assert type(duplicate.stopped_by) is TruncatedHeaderError
-        assert type(copy.deepcopy(packet).trailer) is bytes
