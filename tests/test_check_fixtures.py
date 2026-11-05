@@ -1805,6 +1805,75 @@ class TestGREOverIPv6:
         assert stats["gre-truncated"] == 1
 
 
+def gre_chain_v4(times: int) -> bytes:
+    """``ECHO_PACKET`` wrapped ``times`` times in GRE over IPv4, in
+    ``ECHO``'s Ethernet header."""
+    packet = ECHO_PACKET
+    for _ in range(times):
+        packet = ipv4_packet(47, gre(0x0800, packet))
+    return ECHO[:14] + packet
+
+
+def gre_chain_v6(times: int) -> bytes:
+    """``ECHO6_PACKET`` wrapped ``times`` times in GRE over IPv6, in
+    ``GRE6_TEMPLATE``'s Ethernet header."""
+    packet = ECHO6_PACKET
+    for _ in range(times):
+        packet = ipv6_frame(GRE6_TEMPLATE, 47, gre(0x86DD, packet))[14:]
+    return GRE6_TEMPLATE[:14] + packet
+
+
+#: Fewer bytes than GRE's 4-byte flags word and Protocol Type.
+SHORT_GRE = bytes.fromhex("000008")
+
+
+def short_gre_v4(*, sealed: bool) -> bytes:
+    """A 3-byte GRE payload over IPv4, inside ESP when ``sealed``."""
+    if sealed:
+        return esp(47, SHORT_GRE)
+    return ipv4_frame(GRE_TEMPLATE, 47, SHORT_GRE)
+
+
+def short_gre_v6(*, sealed: bool) -> bytes:
+    """A 3-byte GRE payload over IPv6, inside ESP when ``sealed``."""
+    if sealed:
+        protected = esp(47, SHORT_GRE)[l4(ESP_TEMPLATE) :]
+        return ipv6_frame(GRE6_TEMPLATE, 50, protected)
+    return ipv6_frame(GRE6_TEMPLATE, 47, SHORT_GRE)
+
+
+class TestGREOnEitherIP:
+    @pytest.mark.parametrize(
+        "chain", [gre_chain_v4, gre_chain_v6], ids=["ipv4", "ipv6"]
+    )
+    def test_nesting_is_bounded(self, chain: Callable[[int], bytes]) -> None:
+        """Each GRE header is one level of nesting: ``_MAX_DEPTH`` of
+        them pass with the inner echo checked, and one more fails."""
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(chain(checker._MAX_DEPTH), stats) == []
+        assert stats["gre"] == checker._MAX_DEPTH
+        assert stats["icmpv4"] + stats["icmpv6"] == 1
+        too_deep = chain(checker._MAX_DEPTH + 1)
+        assert checker.check_frame(too_deep, Counter()) == ["nesting-too-deep"]
+
+    @pytest.mark.parametrize(
+        "build", [short_gre_v4, short_gre_v6], ids=["ipv4", "ipv6"]
+    )
+    def test_a_payload_shorter_than_the_header_is_not_read(
+        self, build: Callable[..., bytes]
+    ) -> None:
+        """A GRE payload too short for its first 4 bytes is not taken
+        for GRE: it passes unread, and under strict fails as an
+        unchecked protocol 47."""
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(build(sealed=False), stats) == []
+        assert stats["gre"] == 0
+        sealed = build(sealed=True)
+        assert checker.check_frame(sealed, Counter()) == [
+            "unchecked-protocol-47"
+        ]
+
+
 # The pcap file and the command line.
 
 
