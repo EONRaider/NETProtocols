@@ -24,20 +24,14 @@ is not a layer, so that one has functions of its own:
 :func:`lsa_checksum` and :func:`verify_lsa`.
 
 VRRP's internet checksum depends on its version: VRRPv2's covers the
-message alone (RFC 3768 §5.3.8), VRRPv3's adds an IP pseudo-header.
-Over IPv6 that is RFC 5798 §5.2.8's rule. Over IPv4 it is a reading,
-not the text: §5.2.8 cites only the pseudo-header of RFC 2460 §8.1,
-which is IPv6's, and RFC 9568 §5.2.8, which obsoletes RFC 5798 without
-otherwise changing the wire format, has the IPv4 sum cover the message
-alone (its §1.1 calls that a clarification). :func:`compute` adds the
-IPv4 pseudo-header too, as keepalived does by default: keepalived
-2.2.8 sends it, multicast and unicast alike
-(``tests/fixtures/vrrp.pcap``). keepalived 2.2.8's keepalived.conf(5)
-says some manufacturers (e.g. Cisco) read §5.2.8 as IPv6-only, and
-its ``v3_checksum_as_v2`` option leaves the IPv4 pseudo-header out;
-keepalived 2.3.0's adds Juniper, and says most open-source
-implementations, tcpdump and Wireshark among them, include it.
-:func:`verify` returns ``False`` for an advert checksummed without it.
+message alone (RFC 3768 §5.3.8), VRRPv3's over IPv6 adds the IPv6
+pseudo-header (RFC 9568 §5.2.8, RFC 5798 §5.2.8). VRRPv3 over IPv4 has
+two forms. :func:`compute` returns the one with the IPv4 pseudo-header
+(protocol 112, the message's length) in front, keepalived's default;
+RFC 9568 §5.2.8 covers the message alone, which keepalived's
+``v3_checksum_as_v2`` option sends. :func:`verify` accepts either, so
+:meth:`~netprotocols.Packet.with_checksums` rewrites an advert of the
+RFC 9568 form into the pseudo-header form.
 
 CDP's checksum is the internet checksum but for an odd final byte,
 which it does not pad into the high byte of a last word as RFC 1071
@@ -479,10 +473,9 @@ def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
 
     VRRPv2 sums the message alone (RFC 3768 §5.3.8). VRRPv3 puts the
     pseudo-header of ``ip``, with protocol 112 and the message's
-    length, in front of it, over IPv4 as over IPv6: RFC 5798 §5.2.8
-    gives the IPv6 one, the IPv4 one is keepalived's default, and RFC
-    9568 §5.2.8 leaves it out (see the module docstring). The message
-    is ``bytes(layer)``, never what follows it, so Ethernet padding
+    length, in front of it, over IPv4 as over IPv6 (see the module
+    docstring for the IPv4 form RFC 9568 §5.2.8 gives). The message is
+    ``bytes(layer)``, never what follows it, so Ethernet padding
     cannot reach the sum.
     """
     message = _zeroed(bytes(layer), 6)
@@ -492,6 +485,20 @@ def _vrrp_checksum(layer: VRRP, ip: IPv4 | IPv6 | None) -> int:
     return internet_checksum(
         _pseudo_header(enclosing, IPProtocol.VRRP, len(message)) + message
     )
+
+
+def _verify_vrrp(layer: VRRP, ip: IPv4 | IPv6 | None) -> bool:
+    """Verify a VRRP checksum.
+
+    A VRRPv3 advert over IPv4 is also accepted summed over the message
+    alone, without the IPv4 pseudo-header, as RFC 9568 §5.2.8 computes
+    it.
+    """
+    if layer.checksum == _vrrp_checksum(layer, ip):
+        return True
+    if layer.version != 3 or not isinstance(ip, IPv4):
+        return False
+    return layer.checksum == internet_checksum(_zeroed(bytes(layer), 6))
 
 
 def _stun_fingerprint(layer: STUN) -> int:
@@ -609,9 +616,9 @@ def compute(
         returned as the field's big-endian reading of the CRC's
         little-endian wire bytes (RFC 9260 §A); ``VRRP`` covers
         the message alone in VRRPv2 and prepends the pseudo-header in
-        VRRPv3, over IPv4 too as keepalived does by default, though RFC
-        9568 §5.2.8 leaves it out there (see the module docstring),
-        with ``payload`` ignored either way; ``OSPF`` covers its own
+        VRRPv3, over IPv4 too, keepalived's default form rather than RFC
+        9568 §5.2.8's (see the module docstring), with ``payload``
+        ignored either way; ``OSPF`` covers its own
         Packet Length bytes but the Authentication field, with no
         pseudo-header (``ip`` and ``payload`` ignored, so an LLS block
         after the packet never enters it), and raises under
@@ -715,8 +722,9 @@ def verify(
 
     It accepts what the governing RFC tells a receiver to accept, which
     can be more than :func:`compute` produces: a UDP-over-IPv4 checksum
-    of ``0``, a GRE header without the C bit, and a PIM Register summed
-    over the whole message, each described below.
+    of ``0``, a GRE header without the C bit, a PIM Register summed
+    over the whole message, and a VRRPv3-over-IPv4 advert summed
+    without the IPv4 pseudo-header, each described below.
 
     A UDP-over-IPv4 checksum of ``0`` means "no checksum in use" and
     verifies as True (over IPv6 the checksum is mandatory and ``0`` is
@@ -739,6 +747,14 @@ def verify(
     :meth:`~netprotocols.Packet.with_checksums` rewrites its checksum to
     the 8-byte form :func:`compute` returns.
 
+    A VRRPv3 advert over IPv4 verifies with its checksum behind the
+    IPv4 pseudo-header, as :func:`compute` returns it, or over the
+    message alone, as RFC 9568 §5.2.8 computes it.
+    :meth:`~netprotocols.Packet.with_checksums` rewrites the second to
+    the first. A VRRPv2 advert, whose sum never has a pseudo-header,
+    and a VRRPv3 advert over IPv6, whose sum always has one, verify
+    only in :func:`compute`'s form.
+
     ``routing`` is :func:`compute`'s: behind a Routing header with
     segments left, the pseudo-header uses the route's final destination
     (RFC 8200 §8.1).
@@ -748,6 +764,8 @@ def verify(
         return True
     if isinstance(layer, PIM):
         return _verify_pim(layer, ip)
+    if isinstance(layer, VRRP):
+        return _verify_vrrp(layer, ip)
     if isinstance(layer, STUN):
         return layer.fingerprint is not None and (
             _stun_fingerprint(layer) == layer.fingerprint

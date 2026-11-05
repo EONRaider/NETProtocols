@@ -520,7 +520,8 @@ class TestVRRPChecksum:
     """The VRRP arm: the whole message, checksum field (bytes 6-7)
     zeroed — alone in VRRPv2 (RFC 3768 §5.3.8), behind the IP
     pseudo-header in VRRPv3 (over IPv6 RFC 5798 §5.2.8, over IPv4
-    keepalived's default). Every expected value is
+    keepalived's default), verify() also accepting RFC 9568 §5.2.8's
+    message-alone sum over IPv4. Every expected value is
     the wire's (keepalived computed the corpus's) or this suite's own
     sum (``test_vrrp.ones_complement``)."""
 
@@ -587,15 +588,94 @@ class TestVRRPChecksum:
         assert verify(vrrp, ip=ip)
         assert not verify(vrrp, ip=replace(ip, src="fe80::2"))
 
-    def test_the_rfc_9568_ipv4_form_does_not_verify(self):
-        """RFC 9568 §5.2.8 leaves the pseudo-header out over IPv4;
-        compute() follows keepalived's default, so such an advert fails
-        verify()."""
-        vrrp, ip = self.advert(9)
+    def without_pseudo_header(self, vrrp: VRRP) -> int:
+        """The message's sum alone, as RFC 9568 §5.2.8 gives it over
+        IPv4."""
         raw = bytes(vrrp)
-        without = ones_complement(raw[:6] + b"\x00\x00" + raw[8:])
+        return ones_complement(raw[:6] + b"\x00\x00" + raw[8:])
+
+    @pytest.mark.parametrize("index", [9, 15])
+    def test_the_rfc_9568_ipv4_form_verifies(self, index):
+        """Multicast (9) and unicast (15) adverts verify summed over
+        the message alone, as RFC 9568 §5.2.8 gives it."""
+        vrrp, ip = self.advert(index)
+        without = self.without_pseudo_header(vrrp)
+        assert without != vrrp.checksum
+        assert verify(replace(vrrp, checksum=without), ip=ip)
+
+    @pytest.mark.parametrize("index", [9, 15])
+    def test_the_pseudo_header_ipv4_form_still_verifies(self, index):
+        vrrp, ip = self.advert(index)
+        assert vrrp.checksum == v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+        assert verify(vrrp, ip=ip)
+
+    def test_an_ipv4_checksum_of_neither_form_fails(self):
+        vrrp, ip = self.advert(9)
+        forms = {vrrp.checksum, self.without_pseudo_header(vrrp)}
+        other = next(c for c in (0, 1, 2) if c not in forms)
+        assert not verify(replace(vrrp, checksum=other), ip=ip)
+
+    def test_the_rfc_9568_form_is_checked_against_the_message(self):
+        """The message-alone sum is recomputed: a changed address fails
+        it."""
+        vrrp, ip = self.advert(9)
+        rfc = replace(vrrp, checksum=self.without_pseudo_header(vrrp))
+        assert not verify(replace(rfc, addresses=("10.9.20.71",)), ip=ip)
+
+    def test_compute_keeps_the_pseudo_header_form(self):
+        """compute() returns the pseudo-header form for an advert that
+        carries the RFC 9568 form."""
+        vrrp, ip = self.advert(9)
+        rfc = replace(vrrp, checksum=self.without_pseudo_header(vrrp))
+        expected = v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+        assert compute(rfc, ip=ip) == expected == vrrp.checksum
+
+    def test_with_checksums_rewrites_the_rfc_9568_form(self):
+        vrrp, ip = self.advert(15)
+        rfc = replace(vrrp, checksum=self.without_pseudo_header(vrrp))
+        (_, filled) = Packet(ip, rfc).with_checksums().layers
+        assert filled.checksum == vrrp.checksum
+        assert filled.checksum == v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+
+    def test_the_rfc_9568_form_verifies_with_nonzero_padding(self):
+        """An RFC 9568-form advert padded to 60 bytes with nonzero
+        bytes verifies, the padding passed as ``payload``."""
+        vrrp, _ = self.advert(9)
+        frame = self.FRAMES[9]
+        checksum = struct.pack("!H", self.without_pseudo_header(vrrp))
+        padding = bytes(range(1, 61 - len(frame)))
+        padded = frame[:40] + checksum + frame[42:] + padding
+        assert len(padded) == 60
+        packet = decode_frame(padded)
+        assert packet.consumed == len(frame)
+        assert packet[VRRP].checksum != vrrp.checksum
+        assert verify(packet[VRRP], ip=packet[IPv4], payload=padding)
+
+    def test_vrrpv2_accepts_no_pseudo_header_form(self):
+        """VRRPv2's sum never has a pseudo-header, so the IPv4
+        pseudo-header form of its message fails, with or without
+        ``ip``."""
+        vrrp, ip = self.advert(0)
+        pseudo = v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+        assert pseudo != vrrp.checksum
+        assert verify(vrrp, ip=ip)
+        assert verify(vrrp)
+        assert not verify(replace(vrrp, checksum=pseudo), ip=ip)
+        assert not verify(replace(vrrp, checksum=pseudo))
+
+    def test_vrrpv3_over_ipv6_needs_its_pseudo_header(self):
+        vrrp, ip = self.v6()
+        without = self.without_pseudo_header(vrrp)
         assert without != vrrp.checksum
         assert not verify(replace(vrrp, checksum=without), ip=ip)
+
+    def test_verify_of_vrrpv3_needs_the_ip_layer(self):
+        vrrp, _ = self.advert(9)
+        rfc = replace(vrrp, checksum=self.without_pseudo_header(vrrp))
+        for advert in (vrrp, rfc):
+            with pytest.raises(InvalidFieldError) as excinfo:
+                verify(advert)
+            assert excinfo.value.field == "checksum"
 
     def test_the_checksum_field_is_excluded(self):
         for index in (0, 9):

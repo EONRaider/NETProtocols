@@ -348,6 +348,12 @@ class Packet:
         authentication. The LS checksums of the LSAs an OSPF packet
         carries are carried over unchanged.
 
+        Each field gets :func:`~netprotocols.checksum.compute`'s form:
+        a VRRPv3-over-IPv4 advert summed without the IPv4
+        pseudo-header, as RFC 9568 §5.2.8 gives it, comes back summed
+        with it, and a PIM Register summed over the whole message comes
+        back summed over its first 8 bytes.
+
         IGMP's and GRE's checksum inputs end at the declared end of the
         nearest enclosing IPv4 or IPv6 datagram, so Ethernet padding and
         a captured FCS stay out of them; those bytes are kept in the
