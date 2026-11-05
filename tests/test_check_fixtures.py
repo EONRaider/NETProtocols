@@ -974,6 +974,89 @@ def asked(request: bytes, authenticator: bytes) -> bytes:
     )
 
 
+def request_authenticator(packet: bytes) -> bytes:
+    """The Request Authenticator of ``packet``, an Accounting-Request,
+    a Disconnect-Request or a CoA-Request: MD5 over it with a zero
+    Authenticator and then the secret (RFC 2866 §3, RFC 5176 §2.3)."""
+    return hashlib.md5(
+        packet[:4] + bytes(16) + packet[20:] + checker._RADIUS_SECRET,
+        usedforsecurity=False,
+    ).digest()
+
+
+def signed_request(packet: bytes) -> bytes:
+    """``packet``, a Disconnect-Request or a CoA-Request, with its
+    Message-Authenticator, if any, recomputed over a zero Authenticator
+    and then its Request Authenticator over the result (RFC 5176
+    §3.4)."""
+    packet = sign_message_authenticator(packet, bytes(16))
+    return put(packet, 4, request_authenticator(packet))
+
+
+def dynamic_request(code: int, *, message_authenticator: bool = False) -> bytes:
+    """A signed request of ``code``, a Disconnect-Request or a
+    CoA-Request, from ``RADIUS_REQUEST``'s client to its server's port
+    3799, carrying a User-Name and, with ``message_authenticator``, a
+    Message-Authenticator."""
+    attributes = b"\x01\x0cnp193-user"
+    if message_authenticator:
+        attributes += b"\x50\x12" + bytes(16)
+    head = struct.pack("!BBH", code, 7, 20 + len(attributes))
+    packet = signed_request(head + bytes(16) + attributes)
+    client, server = RADIUS_REQUEST[26:30], RADIUS_REQUEST[30:34]
+    return radius_frame(client, server, 50000, 3799, packet)
+
+
+def flipped_request_authenticator(request: bytes) -> bytes:
+    """``request``, a signed Disconnect-Request or CoA-Request frame,
+    with one byte of its Request Authenticator flipped, resealed."""
+    return reseal(flip(request, udp_data(request) + 4))
+
+
+def flipped_message_authenticator(request: bytes) -> bytes:
+    """``request``, a signed Disconnect-Request or CoA-Request frame,
+    with one byte of its Message-Authenticator flipped and its Request
+    Authenticator recomputed over the flipped bytes, resealed."""
+    packet = radius_packet(flip(request, radius_attribute(request, 80) + 2))
+    return with_radius(request, put(packet, 4, request_authenticator(packet)))
+
+
+@case("radius-disconnect-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(40)
+    return request, flipped_request_authenticator(request)
+
+
+@case("radius-coa-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(43)
+    return request, flipped_request_authenticator(request)
+
+
+@case("radius-message-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(40, message_authenticator=True)
+    return request, flipped_message_authenticator(request)
+
+
+@case("radius-message-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(43, message_authenticator=True)
+    return request, flipped_message_authenticator(request)
+
+
+@case(
+    "radius-message-authenticator",
+    expected=["radius-coa-authenticator", "radius-message-authenticator"],
+)
+def _() -> tuple[bytes, bytes]:
+    # The Request Authenticator covers the Message-Authenticator, so
+    # a flipped Message-Authenticator byte fails both.
+    request = dynamic_request(43, message_authenticator=True)
+    at = radius_attribute(request, 80) + 2
+    return request, reseal(flip(request, at))
+
+
 def udp_datagram(frame: bytes) -> bytes:
     """The UDP datagram of an Ethernet/IPv4/UDP frame, its checksum
     zeroed."""
@@ -1768,6 +1851,114 @@ def radius_frame(
 def with_ports(frame: bytes, src_port: int, dst_port: int) -> bytes:
     """An Ethernet/IPv4/UDP frame with its UDP ports set, resealed."""
     return reseal(put(frame, l4(frame), struct.pack("!HH", src_port, dst_port)))
+
+
+#: Each RADIUS request Code verified like an Accounting-Request, and
+#: the name its check is counted under.
+RADIUS_HASHED = {40: "disconnect", 43: "coa"}
+
+#: Each of those request Codes, the Code of a reply answering it.
+RADIUS_HASHED_ANSWERS = {40: 41, 43: 44}
+
+
+class TestRadiusDynamicRequests:
+    """A Disconnect-Request's and a CoA-Request's Request Authenticator
+    is MD5 over the packet with a zero Authenticator and then the secret
+    (RFC 5176 §2.3), and their Message-Authenticator, computed first,
+    HMAC-MD5 under the secret over the packet with both the
+    Authenticator and its own value zeroed (RFC 5176 §3.4)."""
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_the_helpers_build_the_requests_radius_exchange_does(
+        self, code: int
+    ) -> None:
+        request, _ = radius_exchange(code, RADIUS_HASHED_ANSWERS[code], 3799)
+        assert dynamic_request(code) == request
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_a_signed_request_is_verified(self, code: int) -> None:
+        stats: Counter[str] = Counter()
+        assert check(dynamic_request(code)) == []
+        assert check_capture([dynamic_request(code)], stats) == []
+        assert stats[f"radius-{RADIUS_HASHED[code]}-authenticator"] == 1
+        assert stats["radius-accounting-authenticator"] == 0
+        assert stats["radius-message-authenticator"] == 0
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_a_signed_message_authenticator_is_verified(
+        self, code: int
+    ) -> None:
+        stats: Counter[str] = Counter()
+        request = dynamic_request(code, message_authenticator=True)
+        assert check_capture([request], stats) == []
+        assert stats[f"radius-{RADIUS_HASHED[code]}-authenticator"] == 1
+        assert stats["radius-message-authenticator"] == 1
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    @pytest.mark.parametrize("offset", [4, 11, 19])
+    def test_a_changed_request_authenticator_byte_fails(
+        self, code: int, offset: int
+    ) -> None:
+        request = dynamic_request(code, message_authenticator=True)
+        tampered = reseal(flip(request, udp_data(request) + offset))
+        assert check(tampered) == [
+            f"radius-{RADIUS_HASHED[code]}-authenticator"
+        ]
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_a_message_authenticator_over_the_sent_authenticator_fails(
+        self, code: int
+    ) -> None:
+        """A Message-Authenticator computed as an Access-Request's, over
+        the Request Authenticator as sent, fails."""
+        request = dynamic_request(code, message_authenticator=True)
+        good = radius_packet(request)
+        packet = sign_message_authenticator(good, good[4:20])
+        packet = put(packet, 4, request_authenticator(packet))
+        assert check(with_radius(request, packet)) == [
+            "radius-message-authenticator"
+        ]
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_a_message_authenticator_computed_last_fails(
+        self, code: int
+    ) -> None:
+        """A Request Authenticator computed before the
+        Message-Authenticator, over a zero one, fails."""
+        request = dynamic_request(code, message_authenticator=True)
+        value = radius_attribute(request, 80) + 2 - udp_data(request)
+        blank = put(radius_packet(request), value, bytes(16))
+        packet = put(blank, 4, request_authenticator(blank))
+        packet = sign_message_authenticator(packet, bytes(16))
+        assert check(with_radius(request, packet)) == [
+            f"radius-{RADIUS_HASHED[code]}-authenticator"
+        ]
+
+    @pytest.mark.parametrize("code", RADIUS_HASHED)
+    def test_a_request_and_its_reply_are_both_verified(self, code: int) -> None:
+        request = dynamic_request(code, message_authenticator=True)
+        client, server = RADIUS_REQUEST[26:30], RADIUS_REQUEST[30:34]
+        head = struct.pack("!BBH", RADIUS_HASHED_ANSWERS[code], 7, 38)
+        unsigned = head + bytes(16) + b"\x50\x12" + bytes(16)
+        reply = answered(
+            radius_frame(server, client, 3799, 50000, unsigned),
+            radius_authenticator(request),
+        )
+        stats: Counter[str] = Counter()
+        assert check_capture([request, reply], stats) == []
+        assert stats[f"radius-{RADIUS_HASHED[code]}-authenticator"] == 1
+        assert stats["radius-message-authenticator"] == 1
+        assert stats["radius-response-authenticator"] == 1
+        assert stats["radius-reply-message-authenticator"] == 1
+        assert stats["radius-reply-unpaired"] == 0
+        # A tampered request still pairs with its reply, which is
+        # verified over the Authenticator the request carries.
+        tampered = flipped_request_authenticator(request)
+        assert check_capture([tampered, reply]) == [
+            f"radius-{RADIUS_HASHED[code]}-authenticator",
+            "radius-response-authenticator",
+            "radius-reply-message-authenticator",
+        ]
 
 
 class TestRadiusDispatch:
@@ -2855,6 +3046,9 @@ FIELD_VALUES: dict[Field, list[str]] = {
     ("_check_bpdu", "name"): [
         name for name, _, unused in checker._BPDU_TYPES.values() if unused
     ],
+    ("_check_radius", "name"): list(
+        checker._RADIUS_HASHED_AUTHENTICATOR.values()
+    ),
 }
 
 
@@ -3180,6 +3374,9 @@ def test_the_scan_finds_known_failures() -> None:
         "ntp-sha1",
         "stp-config-unused-flags",
         "stp-rst-unused-flags",
+        "radius-accounting-authenticator",
+        "radius-disconnect-authenticator",
+        "radius-coa-authenticator",
     ):
         assert re.escape(member) in patterns
     assert re.escape("stp-tcn-unused-flags") not in patterns
@@ -3190,6 +3387,7 @@ def test_the_scan_finds_known_failures() -> None:
             "rip\\-.+",
             "ntp\\-.+",
             "stp\\-.+\\-unused\\-flags",
+            "radius\\-.+\\-authenticator",
         }
         & patterns
     )
