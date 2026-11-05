@@ -192,7 +192,8 @@ def decode_frame(
     layers: list[Protocol] = []
     cursor = 0
     # Where the buffers handed to decode() end: the frame's end, until an
-    # 802.3 Length bounds the PDU (see "802.3 Length" above).
+    # 802.3 Length bounds the PDU (see "802.3 Length" above). The bytes
+    # past it are the packet's trailer.
     end = len(data)
     protocol: type[Protocol] | None = start
     stopped_by: ProtocolError | None = None
@@ -221,7 +222,8 @@ def decode_frame(
             raise
         stopped_by = error
 
-    return Packet._from_decoded(layers, stopped_by)
+    trailer = b"" if end == len(data) else bytes(data[end:])
+    return Packet._from_decoded(layers, stopped_by, trailer)
 
 
 def _too_deep(

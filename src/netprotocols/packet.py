@@ -128,13 +128,33 @@ class Packet:
     outermost header, ``packet[TCP]`` is the first ``TCP`` layer —
     raising ``KeyError`` if there isn't one, where :meth:`get` returns
     ``None`` instead. A ``Packet`` is hashable and usable as a dict key
-    or set member, consistent with ``__eq__``.
+    or set member, consistent with ``__eq__``, which compares the
+    layers, :attr:`stopped_by` and :attr:`trailer`.
+
+    ``bytes(packet)`` is the layers alone. A frame
+    :func:`~netprotocols.decode_frame` walked is those bytes, then what
+    the last layer carries that no decoder read, then the
+    :attr:`trailer`::
+
+        undecoded = frame[packet.consumed : len(frame) - len(packet.trailer)]
+        assert frame == bytes(packet) + undecoded + packet.trailer
+
+    The constructor takes the headers, outermost first, then two
+    keyword-only arguments: ``stopped_by``, the error that ended a lax
+    walk, and ``trailer``, the frame's bytes past its declared end, any
+    bytes-like object, stored as ``bytes``. It raises
+    :class:`~netprotocols.InvalidFieldError` for a layer that is not a
+    :class:`~netprotocols._base.Protocol` instance, and for a
+    ``trailer`` that is not bytes-like (``field="trailer"``).
     """
 
-    __slots__ = ("layers", "stopped_by")
+    __slots__ = ("layers", "stopped_by", "trailer")
 
     def __init__(
-        self, *layers: Protocol, stopped_by: ProtocolError | None = None
+        self,
+        *layers: Protocol,
+        stopped_by: ProtocolError | None = None,
+        trailer: bytes | bytearray | memoryview = b"",
     ) -> None:
         for layer in layers:
             if not isinstance(layer, Protocol):
@@ -144,16 +164,34 @@ class Packet:
                     expected=Protocol,
                     actual=type(layer),
                 )
+        if not isinstance(trailer, (bytes, bytearray, memoryview)):
+            raise InvalidFieldError(
+                f"Cannot build packet: trailer {trailer!r} is not bytes-like",
+                protocol=type(trailer),
+                field="trailer",
+                expected=bytes,
+                actual=type(trailer),
+            )
         self.layers: tuple[Protocol, ...] = layers
         #: Why the chain walk stopped early, or ``None`` when it ran to
         #: a clean end. Only :func:`~netprotocols.decode_frame` in lax
         #: mode ever sets this; a packet you built yourself has nothing
         #: to report.
         self.stopped_by: ProtocolError | None = stopped_by
+        #: The frame's bytes past the end its declared length gives:
+        #: an Ethernet or VLAN 802.3 Length, whichever ends first among
+        #: the headers the walk decoded. Ethernet's padding of a short
+        #: frame and a captured FCS land here. Empty
+        #: when no declared end falls short of the frame. Never part of
+        #: ``bytes(packet)``, of a layer, or of :attr:`consumed`.
+        self.trailer: bytes = bytes(trailer)
 
     @classmethod
     def _from_decoded(
-        cls, layers: list[Protocol], stopped_by: ProtocolError | None
+        cls,
+        layers: list[Protocol],
+        stopped_by: ProtocolError | None,
+        trailer: bytes,
     ) -> Self:
         """Build a packet from headers that ``decode_frame`` decoded.
 
@@ -167,20 +205,25 @@ class Packet:
 
         :param layers: The decoded headers, outermost first.
         :param stopped_by: The error that ended the walk, or ``None``.
+        :param trailer: The frame's bytes past the walk's bound, as
+            ``bytes``.
         """
         packet = object.__new__(cls)
         packet.layers = tuple(layers)
         packet.stopped_by = stopped_by
+        packet.trailer = trailer
         return packet
 
     def __bytes__(self) -> bytes:
         return b"".join(bytes(layer) for layer in self.layers)
 
     def __repr__(self) -> str:
-        name = self.__class__.__name__
-        if self.stopped_by is None:
-            return f"{name}{self.layers!r}"
-        return f"{name}{self.layers!r} stopped_by={self.stopped_by!r}"
+        text = f"{self.__class__.__name__}{self.layers!r}"
+        if self.stopped_by is not None:
+            text += f" stopped_by={self.stopped_by!r}"
+        if self.trailer:
+            text += f" trailer={self.trailer!r}"
+        return text
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Packet):
@@ -189,10 +232,18 @@ class Packet:
             self.layers == other.layers
             and type(self.stopped_by) is type(other.stopped_by)
             and str(self.stopped_by) == str(other.stopped_by)
+            and self.trailer == other.trailer
         )
 
     def __hash__(self) -> int:
-        return hash((self.layers, type(self.stopped_by), str(self.stopped_by)))
+        return hash(
+            (
+                self.layers,
+                type(self.stopped_by),
+                str(self.stopped_by),
+                self.trailer,
+            )
+        )
 
     def __getitem__(self, key: int | type[Protocol]) -> Protocol:
         """Return the layer at a position, or the first of a type.
@@ -275,7 +326,9 @@ class Packet:
 
         After :func:`~netprotocols.decode_frame`, this is the offset at
         which the walk stopped — so ``frame[packet.consumed:]`` is
-        whatever the chain did not decode.
+        whatever the chain did not decode, :attr:`trailer` included, and
+        ``frame[packet.consumed : len(frame) - len(packet.trailer)]`` is
+        the same without the trailer.
         """
         return sum(layer.header_len for layer in self.layers)
 
@@ -299,7 +352,12 @@ class Packet:
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
-        is whatever comes after the last layer on the wire. Instances
+        is whatever comes after the last layer on the wire up to the
+        :attr:`trailer`, which for a packet
+        :func:`~netprotocols.decode_frame` returned is
+        ``frame[packet.consumed : len(frame) - len(packet.trailer)]``.
+        No checksum covers the trailer, and the returned packet carries
+        it unchanged. Instances
         are frozen, so layers are rebuilt with
         :func:`dataclasses.replace`, and the decode context a layer
         records outside its ``__init__`` fields, such as whether another
@@ -367,4 +425,8 @@ class Packet:
                 )
             rebuilt.append(layer)
             trailing = bytes(layer) + trailing
-        return type(self)(*reversed(rebuilt), stopped_by=self.stopped_by)
+        return type(self)(
+            *reversed(rebuilt),
+            stopped_by=self.stopped_by,
+            trailer=self.trailer,
+        )
