@@ -1660,8 +1660,8 @@ def with_ports(frame: bytes, src_port: int, dst_port: int) -> bytes:
 
 class TestRadiusDispatch:
     """A UDP datagram is read as RADIUS when its server's port is 1812,
-    1813 or 3799: the source port of a reply, the destination port of
-    anything else."""
+    1813 or 3799, the source port of a reply and the destination port of
+    anything else, and neither port is STUN's, NTP's or HSRP's."""
 
     @pytest.mark.parametrize("port", [1812, 1813, 3799])
     def test_stun_from_a_radius_port_is_read_as_stun(self, port: int) -> None:
@@ -1683,6 +1683,52 @@ class TestRadiusDispatch:
         assert checker.check_frame(moved, stats) == []
         assert stats["radius"] == 0
         assert stats["ntp-md5"] == 1
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_a_stun_response_to_a_radius_port_is_read_as_stun(
+        self, port: int
+    ) -> None:
+        """A STUN success response, whose first byte is
+        Access-Request's Code, sent back to a client whose ephemeral
+        port is a RADIUS one, is checked as STUN."""
+        response = frame("stun.pcap", 11)
+        assert response[udp_data(response)] == 1
+        moved = with_ports(response, 3478, port)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["stun-message-integrity"] == 1
+        assert stats["stun-fingerprint"] == 1
+        at = stun_attribute(moved, 0x0008) + 4
+        assert checker.check_frame(stun_resealed(flip(moved, at)), stats) == [
+            "stun-message-integrity"
+        ]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_an_ntp_reply_to_a_radius_port_is_read_as_ntp(
+        self, port: int
+    ) -> None:
+        reply = frame("ntp.pcap", 3)
+        moved = with_ports(reply, 123, port)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["ntp-md5"] == 1
+        assert checker.check_frame(
+            reseal(flip(moved, len(moved) - 1)), stats
+        ) == ["ntp-md5"]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    @pytest.mark.parametrize("source", [True, False])
+    def test_hsrp_with_a_radius_port_is_read_as_hsrp(
+        self, port: int, source: bool
+    ) -> None:
+        ports = (port, 1985) if source else (1985, port)
+        moved = with_ports(HSRP_HELLO, *ports)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == ["hsrp-port"]
+        assert stats["radius"] == 0
+        assert stats["hsrp"] == 1
 
     @pytest.mark.parametrize("port", [1812, 1813, 3799])
     @pytest.mark.parametrize("code", [0, 1, 4, 12, 40, 43, 255])

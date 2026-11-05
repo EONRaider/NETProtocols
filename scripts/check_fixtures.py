@@ -693,6 +693,12 @@ _NTP_PORT = 123
 #: HSRP's port (RFC 2281 §5.1).
 _HSRP_PORT = 1985
 
+#: The ports :func:`_check_udp_payload` dispatches on after RADIUS's: a
+#: datagram from or to one of them is not read as RADIUS, whatever its
+#: other port, so a reply of one of these protocols sent to a client
+#: whose ephemeral port is 1812, 1813 or 3799 is read as that protocol.
+_NON_RADIUS_PORTS = frozenset((_STUN_PORT, _NTP_PORT, _HSRP_PORT))
+
 
 def _check_udp_payload(
     src: bytes,
@@ -711,13 +717,15 @@ def _check_udp_payload(
     FINGERPRINT and MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP
     message's MAC (see :func:`_check_ntp`) or an HSRP message's fields
     (see :func:`_check_hsrp`). A datagram is RADIUS when its server's
-    port (see :func:`_radius_server_port`) is a RADIUS port."""
+    port (see :func:`_radius_server_port`) is a RADIUS port and neither
+    port is a STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
-    if _radius_server_port(datagram) in _RADIUS_PORTS:
+    other = _NON_RADIUS_PORTS.intersection((src_port, dst_port))
+    if _radius_server_port(datagram) in _RADIUS_PORTS and not other:
         return _check_radius(src, dst, datagram, stats, strict=strict)
     if _STUN_PORT in (src_port, dst_port):
         end = struct.unpack_from("!H", datagram, 4)[0]
