@@ -1791,6 +1791,99 @@ _VRRP_ACCESSORS = (
 
 #: The 802.3 frames of the LLC fixture (BPDUs, CDP, RFC 1042, 802.1H,
 #: a tagged frame, Novell raw 802.3, the 1501 frame).
+def _length_fields(frame: bytes) -> list[int]:
+    """Return the frame offsets of the IPv4 Total Length, IPv6 Payload
+    Length and UDP Length fields a walk of ``frame`` reads."""
+    offsets = []
+    at = 0
+    for layer in decode_frame(frame, lax=True):
+        if isinstance(layer, IPv4):
+            offsets.append(at + 2)
+        elif isinstance(layer, (IPv6, UDP)):
+            offsets.append(at + 4)
+        at += layer.header_len
+    return offsets
+
+
+_LENGTH_FIELD_FRAMES = [
+    (frame, offsets)
+    for frame in CORPUS_FRAMES
+    if (offsets := _length_fields(frame))
+]
+
+
+@st.composite
+def relengthed_frames(draw: st.DrawFn) -> bytes:
+    """A captured frame with IPv4, IPv6 or UDP lengths redrawn: zero,
+    inside the header, near the true value or anything, then a trailer
+    and sometimes a snap-length cut."""
+    frame, offsets = draw(st.sampled_from(_LENGTH_FIELD_FRAMES))
+    out = bytearray(frame)
+    for at in offsets:
+        if draw(st.booleans()):
+            (current,) = struct.unpack_from("!H", out, at)
+            value = draw(
+                st.one_of(
+                    st.integers(0, 8),
+                    st.integers(0, 64),
+                    st.integers(max(0, current - 16), current + 16),
+                    st.integers(0, 0xFFFF),
+                )
+            )
+            struct.pack_into("!H", out, at, value)
+    out += draw(st.one_of(st.binary(max_size=24), st.just(bytes(18))))
+    if draw(st.booleans()):
+        del out[draw(st.integers(0, len(out))) :]
+    return bytes(out)
+
+
+class TestDeclaredLengthBounds:
+    """The walk splits a frame into its layers, the bytes the last
+    layer carries that no decoder read, and the trailer, whatever the
+    IPv4, IPv6 and UDP lengths say."""
+
+    @given(frame=st.one_of(relengthed_frames(), fuzz_input))
+    def test_frame_is_layers_then_undecoded_then_trailer(
+        self, frame: bytes
+    ) -> None:
+        packet = decode_frame(frame, lax=True)
+        trailer = packet.trailer
+        assert type(trailer) is bytes
+        assert packet.consumed + len(trailer) <= len(frame)
+        assert frame.endswith(trailer)
+        undecoded = frame[packet.consumed : len(frame) - len(trailer)]
+        assert frame == bytes(packet) + undecoded + trailer
+        stop = packet.stopped_by
+        if isinstance(stop, InvalidFieldError) and (
+            stop.protocol,
+            stop.field,
+        ) in {
+            (IPv4, "total_length"),
+            (UDP, "length"),
+        }:
+            event(f"lying {stop.protocol.__name__} {stop.field}")
+            assert stop.frame_offset is not None
+            field = frame[stop.frame_offset : stop.frame_offset + 2]
+            assert field == struct.pack("!H", stop.actual)
+            assert type(packet.layers[-1]) is stop.protocol
+        event(f"trailer: {bool(trailer)}")
+
+    @given(frame=relengthed_frames())
+    def test_strict_and_lax_agree(self, frame: bytes) -> None:
+        """A strict walk raises only ProtocolError, the one that stopped
+        the lax walk, or returns the lax walk's packet."""
+        lax = decode_frame(frame, lax=True)
+        try:
+            strict = decode_frame(frame)
+        except ProtocolError as error:
+            assert type(error) is type(lax.stopped_by)
+            assert str(error) == str(lax.stopped_by)
+            assert error.frame_offset == lax.stopped_by.frame_offset
+        else:
+            assert strict == lax
+            assert lax.stopped_by is None
+
+
 _LLC_FRAMES = pcap_frames(FIXTURES / "llc.pcap")
 
 
