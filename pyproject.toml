@@ -82,7 +82,13 @@ convention = "pep257"
 [tool.mypy]
 strict = true
 python_version = "3.12"
-files = ["src", "tests/conftest.py", "tests/strategies.py", "scripts"]
+files = [
+    "src",
+    "tests/conftest.py",
+    "tests/strategies.py",
+    "tests/typecheck",
+    "scripts",
+]
 exclude = ["^scripts/pyodide/node_modules/"]
 
 [[tool.mypy.overrides]]

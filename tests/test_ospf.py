@@ -200,10 +200,15 @@ class TestWiring:
 
     def test_derived_registries_keep_withholding(self):
         """Carry the withheld key into a derived registry."""
+
+        class OSPFVariant(OSPF):
+            pass
+
         child = DEFAULT.derive()
-        child.register(TABLE_IP_PROTO, 89, OSPF)
         assert child.get(TABLE_IP_PROTO_V6, 89) is None
-        assert child._withheld[TABLE_IP_PROTO_V6] == {89}
+        child.register(TABLE_IP_PROTO, 89, OSPFVariant, override=True)
+        assert child.get(TABLE_IP_PROTO, 89) is OSPFVariant
+        assert child.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_installing_twice_keeps_the_key_withheld(self):
         """Keep 89 withheld across a second install()."""

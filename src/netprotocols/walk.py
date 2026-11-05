@@ -137,7 +137,7 @@ from collections.abc import Mapping
 from netprotocols._base import Protocol
 from netprotocols.layer2.ethernet import Ethernet
 from netprotocols.packet import Packet
-from netprotocols.registry import DEFAULT, Registry
+from netprotocols.registry import DEFAULT, Registry, WithheldType
 from netprotocols.utils.exceptions import (
     MaxDepthExceededError,
     ProtocolError,
@@ -169,7 +169,8 @@ def decode_frame(
     max_depth: int = MAX_DEPTH,
     lax: bool = False,
     registry: Registry | None = None,
-    decode_as: Mapping[str, Mapping[int, type[Protocol]]] | None = None,
+    decode_as: Mapping[str, Mapping[int, type[Protocol] | WithheldType]]
+    | None = None,
 ) -> Packet:
     """Decode a frame's whole header chain into a :class:`Packet`.
 
@@ -199,6 +200,11 @@ def decode_frame(
     :param decode_as: Per-call decoder overrides, keyed by table then by
         wire value — ``{"udp.port": {6969: DNS}}`` reads DNS on port
         6969 for this call alone. Applied on top of ``registry``.
+        :data:`~netprotocols.registry.WITHHELD` in place of a class
+        makes the key dispatch to nothing for this call, as if it were
+        never registered: ``{"udp.port": {1812: WITHHELD}}`` ends the
+        walk at UDP for a datagram to or from port 1812 whose other port
+        names no class.
 
     :raises MaxDepthExceededError: if the chain is longer than
         ``max_depth`` (strict mode only).
@@ -212,6 +218,8 @@ def decode_frame(
         ``llc.dsap`` or ``llc.snap`` key outside the range that table
         accepts, such as a DSAP above 0xFF (see "Key ranges" in
         :mod:`netprotocols.registry`), whatever ``lax`` says.
+    :raises TypeError: if ``decode_as`` maps a key to ``None``, whatever
+        ``lax`` says.
     :raises ValueError: if ``max_depth`` is below 1.
     """
     if max_depth < 1:

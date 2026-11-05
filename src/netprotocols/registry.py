@@ -91,6 +91,30 @@ write to a parent table is copied into every child that has not
 overridden the key. Dispatch is therefore a single ``dict.get`` on a
 flat table.
 
+Withholding
+-----------
+
+:data:`WITHHELD` in place of a class withholds a key. It reads the same
+on the global registry and for one walk::
+
+    from netprotocols import decode_frame
+    from netprotocols.registry import WITHHELD, register
+
+    register("udp.port", 1812, WITHHELD, override=True)  # every walk
+    decode_frame(frame, decode_as={"udp.port": {1812: WITHHELD}})
+
+A withheld key dispatches to nothing, exactly like a key that was never
+registered: the walk ends at the header that named it, with the payload
+left undecoded, and a port table still tries the other port of the
+pair. Withholding in a parent table reaches every child that inherits
+the key, as a registration does. Withholding is idempotent, and it never
+undoes a class registered directly in the same table unless it is
+passed ``override=True``, which ``decode_as`` and :meth:`Registry.derive`
+always pass; a key inherited from a parent is withheld either way. A
+later registration of a class directly in the same table fills a withheld
+key without ``override=True``, a global withhold included.
+``None`` is not a decoder and is refused with :class:`TypeError`.
+
 Global and isolated registries
 ------------------------------
 
@@ -131,8 +155,9 @@ what a port carries says so with :meth:`Registry.derive` or
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, Final, TypeVar, overload
 
 from netprotocols.utils.exceptions import ProtocolError
 
@@ -149,10 +174,12 @@ __all__ = [
     "TABLE_LLC_SNAP",
     "TABLE_TCP_PORT",
     "TABLE_UDP_PORT",
+    "WITHHELD",
     "InvalidRegistryKeyError",
     "Registry",
     "RegistryConflictError",
     "UnknownTableError",
+    "WithheldType",
     "register",
     "register_all",
 ]
@@ -196,6 +223,21 @@ _KEY_RANGES: Mapping[str, range] = {
 _C = TypeVar("_C", bound="type[Protocol]")
 
 
+class WithheldType(enum.Enum):
+    """The type of :data:`WITHHELD`, whose only member it is."""
+
+    WITHHELD = "WITHHELD"
+
+    def __repr__(self) -> str:
+        return "WITHHELD"
+
+
+#: The value registered in place of a class to withhold a key: a
+#: withheld key dispatches to nothing (see "Withholding" in the module
+#: docstring).
+WITHHELD: Final = WithheldType.WITHHELD
+
+
 class UnknownTableError(ProtocolError):
     """A registration or lookup named a table that does not exist.
 
@@ -235,25 +277,23 @@ class Registry:
     ``Registry()`` starts empty.
     """
 
-    __slots__ = ("_own", "_tables", "_withheld")
+    __slots__ = ("_own", "_tables")
 
     def __init__(self) -> None:
         #: Flattened lookup tables — inherited entries already merged in.
         #: This is what dispatch reads, and the layer modules hold these
         #: dict objects directly, so they are mutated in place and never
-        #: rebound.
+        #: rebound. A withheld key is absent from them.
         self._tables: dict[str, dict[int, type[Protocol]]] = {
             name: {} for name in TABLES
         }
         #: Registrations made *directly* on each table, as opposed to
         #: inherited into it, so that a later write to a parent
-        #: cannot clobber an override in a child.
-        self._own: dict[str, dict[int, type[Protocol]]] = {
+        #: cannot clobber an override in a child. A withheld key maps to
+        #: :data:`WITHHELD`.
+        self._own: dict[str, dict[int, type[Protocol] | WithheldType]] = {
             name: {} for name in TABLES
         }
-        #: Keys each table owns with no class: inheritance skips them
-        #: as it skips an override (see :meth:`_withhold`).
-        self._withheld: dict[str, set[int]] = {name: set() for name in TABLES}
 
     @classmethod
     def from_defaults(cls) -> Registry:
@@ -267,10 +307,11 @@ class Registry:
     def table(self, name: str) -> dict[int, type[Protocol]]:
         """Return the flattened lookup table ``name``.
 
-        Inherited entries are included. This is the live dict the
-        registry dispatches through, not a copy: the layer modules bind
-        it once at import so that a lookup is a bare ``dict.get``. Treat
-        it as read-only and go through :meth:`register` to change it.
+        Inherited entries are included and withheld keys are absent. This
+        is the live dict the registry dispatches through, not a copy: the
+        layer modules bind it once at import so that a lookup is a bare
+        ``dict.get``. Treat it as read-only and go through
+        :meth:`register` to change it.
         """
         try:
             return self._tables[name]
@@ -281,8 +322,9 @@ class Registry:
         """Return the class registered for ``key`` in ``table``, or ``None``.
 
         ``None`` is an ordinary answer rather than an error: the chain
-        ends here, either because nothing is encapsulated or because
-        this library does not implement what is.
+        ends here, either because nothing is encapsulated, because
+        this library does not implement what is, or because the key is
+        withheld.
         """
         return self.table(table).get(key)
 
@@ -302,78 +344,87 @@ class Registry:
         self,
         table: str,
         key: int,
-        protocol: type[Protocol],
+        protocol: type[Protocol] | WithheldType,
         *,
         override: bool = False,
     ) -> None:
         """Register ``protocol`` as the decoder for ``key`` in ``table``.
 
+        :data:`WITHHELD` in place of a class withholds ``key``: it
+        dispatches to nothing, and a later write to a parent table does
+        not reach it (see "Withholding" in the module docstring).
+
         :param table: The dispatch table's name, one of :data:`TABLES`.
         :param key: The wire value to dispatch on.
-        :param protocol: The class that decodes what that value names.
+        :param protocol: The class that decodes what that value names, or
+            :data:`WITHHELD`.
         :param override: Replace a different class already holding
-            ``key``, instead of raising.
+            ``key``, instead of raising. With :data:`WITHHELD`, replace a
+            class registered directly in ``table``, instead of leaving it
+            in place.
         :raises UnknownTableError: if ``table`` is not one of
             :data:`TABLES`.
         :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
             ``llc.snap`` and ``key`` is outside the range it accepts (see
             "Key ranges" in the module docstring).
+        :raises TypeError: if ``protocol`` is ``None``.
         :raises RegistryConflictError: if ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
-            class to the same key succeeds and changes nothing.
+            class to the same key succeeds and changes nothing, and so
+            does withholding a key that is withheld already or that
+            holds a class registered directly in ``table``.
         """
         entries = self.table(table)
         _check_key(table, key)
-        incumbent = entries.get(key)
-        if incumbent is not None and incumbent is not protocol and not override:
-            raise RegistryConflictError(
-                f"{table} {key!r} is already registered to "
-                f"{_qualname(incumbent)}; pass override=True to replace it "
-                f"with {_qualname(protocol)}"
+        own = self._own[table]
+        if protocol is WITHHELD:
+            if key in own and not override:
+                return
+        elif protocol is None:
+            raise TypeError(
+                f"{table} {key!r} maps to None, which is not a decoder; "
+                f"use netprotocols.registry.WITHHELD to make the key "
+                f"dispatch to nothing"
             )
-        self._own[table][key] = protocol
+        else:
+            incumbent = entries.get(key)
+            if (
+                incumbent is not None
+                and incumbent is not protocol
+                and not override
+            ):
+                raise RegistryConflictError(
+                    f"{table} {key!r} is already registered to "
+                    f"{_qualname(incumbent)}; pass override=True to "
+                    f"replace it with {_qualname(protocol)}"
+                )
+        own[key] = protocol
         self._publish(table, key, protocol)
 
-    def _publish(self, table: str, key: int, protocol: type[Protocol]) -> None:
+    def _publish(
+        self, table: str, key: int, protocol: type[Protocol] | WithheldType
+    ) -> None:
         """Write an entry into ``table`` and every child not overriding it.
 
-        A child that holds ``key`` itself, or withholds it, is skipped.
+        :data:`WITHHELD` removes the entry instead. A child that holds
+        ``key`` itself, or withholds it, is skipped.
 
         Entries are written in place rather than rebuilt, so the flat
         dicts the layer modules hold stay valid and are never observed
         empty by a concurrent reader.
         """
-        self._tables[table][key] = protocol
+        if protocol is WITHHELD:
+            self._tables[table].pop(key, None)
+        else:
+            self._tables[table][key] = protocol
         for child in _CHILDREN[table]:
-            if key not in self._own[child] and key not in self._withheld[child]:
+            if key not in self._own[child]:
                 self._publish(child, key, protocol)
-
-    def _withhold(self, table: str, key: int) -> None:
-        """Make ``key`` in ``table`` dispatch to nothing, inherited or not.
-
-        It stays that way when the parent table registers the key. This
-        is for a protocol number that one IP family must not inherit
-        from the other: the defaults withhold OSPF's 89 from
-        ``ip.proto.v6``, where it means OSPFv3. A registration made
-        directly in ``table`` still fills the key.
-        A class already registered directly in ``table`` stands, so
-        withholding is idempotent and never undoes a direct entry.
-        Private: the defaults are its only caller.
-
-        :param table: The dispatch table's name, one of :data:`TABLES`.
-        :param key: The wire value to withhold.
-        :raises UnknownTableError: if ``table`` is not one of
-            :data:`TABLES`.
-        """
-        entries = self.table(table)
-        if key in self._own[table]:
-            return
-        entries.pop(key, None)
-        self._withheld[table].add(key)
 
     def derive(
         self,
-        overrides: Mapping[str, Mapping[int, type[Protocol]]] | None = None,
+        overrides: Mapping[str, Mapping[int, type[Protocol] | WithheldType]]
+        | None = None,
     ) -> Registry:
         """Return a child registry: this one's entries, plus ``overrides``.
 
@@ -386,7 +437,9 @@ class Registry:
             reg = DEFAULT.derive({"udp.port": {6969: DNS}})
 
         Overrides replace whatever they land on, so no conflict is
-        raised.
+        raised. :data:`WITHHELD` as an override withholds the key in the
+        child, whatever this registry holds there, and a class as an
+        override fills a key this registry withholds.
 
         :param overrides: Entries to register on the child with
             ``override=True``, keyed by table name and then by key.
@@ -395,12 +448,12 @@ class Registry:
         :raises InvalidRegistryKeyError: if an override names an
             ``llc.dsap`` or ``llc.snap`` key outside the range that table
             accepts (see "Key ranges" in the module docstring).
+        :raises TypeError: if an override maps a key to ``None``.
         """
         child = Registry()
         for name in TABLES:
             child._tables[name] = dict(self._tables[name])
             child._own[name] = dict(self._own[name])
-            child._withheld[name] = set(self._withheld[name])
         for table, entries in (overrides or {}).items():
             for key, protocol in entries.items():
                 child.register(table, key, protocol, override=True)
@@ -460,7 +513,7 @@ def register(
 def register(
     table: str,
     key: int,
-    protocol: type[Protocol],
+    protocol: type[Protocol] | WithheldType,
     *,
     override: bool = ...,
     registry: Registry | None = ...,
@@ -470,7 +523,7 @@ def register(
 def register(
     table: str,
     key: int,
-    protocol: type[Protocol] | None = None,
+    protocol: type[Protocol] | WithheldType | None = None,
     *,
     override: bool = False,
     registry: Registry | None = None,
@@ -487,9 +540,13 @@ def register(
 
         register("ip.proto", 253, Experiment)
 
+    or is :data:`WITHHELD`, to make the key dispatch to nothing::
+
+        register("udp.port", 1812, WITHHELD, override=True)
+
     Registrations land in :data:`DEFAULT` — process-wide — unless
     ``registry`` names another. See :meth:`Registry.register` for the
-    conflict rules.
+    conflict rules and for withholding.
     """
     target = DEFAULT if registry is None else registry
     if protocol is not None:
@@ -506,7 +563,7 @@ def register(
 def register_all(
     table: str,
     keys: Iterable[int],
-    protocol: type[Protocol],
+    protocol: type[Protocol] | WithheldType,
     *,
     override: bool = False,
     registry: Registry | None = None,
@@ -522,9 +579,11 @@ def register_all(
 
     :param table: The dispatch table's name, one of :data:`TABLES`.
     :param keys: The wire values to register ``protocol`` against.
-    :param protocol: The class that decodes what those values name.
+    :param protocol: The class that decodes what those values name, or
+        :data:`WITHHELD` to withhold every key.
     :param override: Replace a different class already holding a key,
-        instead of raising.
+        instead of raising; with :data:`WITHHELD`, as
+        :meth:`Registry.register` describes.
     :param registry: The registry to register on; :data:`DEFAULT` when
         ``None``.
     :raises UnknownTableError: if ``table`` is not one of
@@ -532,6 +591,8 @@ def register_all(
     :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
         ``llc.snap`` and a key is outside the range it accepts (see "Key
         ranges" in the module docstring).
+    :raises TypeError: if ``protocol`` is ``None`` and ``keys`` is not
+        empty.
     :raises RegistryConflictError: if a key is held by a different
         class and ``override`` is false.
     """
