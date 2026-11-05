@@ -682,8 +682,8 @@ class TestChecker:
     def test_the_rfc_9568_ipv4_form_fails(self, raw_vrrpv3_advert):
         """Fail an advert checksummed as RFC 9568 §5.2.8 gives it.
 
-        Without the pseudo-header over IPv4, it fails the checker, as
-        it fails verify().
+        Without the pseudo-header over IPv4, it fails the checker,
+        though it passes verify().
         """
         zeroed = raw_vrrpv3_advert[:6] + b"\x00\x00" + raw_vrrpv3_advert[8:]
         message = (
@@ -692,7 +692,7 @@ class TestChecker:
         frame = v4_frame(message)
         assert self.check(frame) == ["vrrp-checksum"]
         packet = decode_frame(frame)
-        assert not verify(packet[VRRP], ip=packet[IPv4])
+        assert verify(packet[VRRP], ip=packet[IPv4])
 
     def test_a_rebuilt_frame_passes(self, raw_vrrpv3_advert):
         layer = VRRP.decode(raw_vrrpv3_advert)

@@ -334,8 +334,8 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
   only RFC 2460's pseudo-header, which is IPv6's. keepalived's
   `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
-  leave the IPv4 pseudo-header out, and such an advert fails both
-  `check_fixtures` and `verify()`. It also requires each message's
+  leave the IPv4 pseudo-header out; `verify()` accepts such an advert,
+  and `check_fixtures` fails it. It also requires each message's
   length, from its version and count, to be the IP payload's exactly.
   veth does not pad a short frame, so none of these frames carries
   Ethernet padding (they are 46-58 bytes); `tests/test_vrrp.py` pads
