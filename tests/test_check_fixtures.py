@@ -497,6 +497,128 @@ def _() -> tuple[bytes, bytes]:
     return esp(47, packet), esp(47, packet[:5])
 
 
+#: An RFC 1702 IP source route SRE of two addresses, its SRE Offset at
+#: the second.
+IP_SRE = struct.pack("!HBB", 0x0800, 4, 8) + bytes([192, 0, 2, 1, 192, 0, 2, 2])
+
+#: The NULL SRE that ends a Routing field (RFC 1701).
+NULL_SRE = bytes(4)
+
+
+def gre_routed(
+    payload: bytes,
+    *,
+    routing: bytes = IP_SRE + NULL_SRE,
+    offset: int = 0,
+    checksum: bool = True,
+    key: bool = False,
+) -> bytes:
+    """A GRE packet with the R bit set, Offset ``offset`` and Routing
+    field ``routing`` (RFC 1701), with the C bit and a correct Checksum
+    when ``checksum``, and with the K and S bits and their words when
+    ``key``."""
+    flags = 0x4000 | (0x8000 if checksum else 0) | (0x3000 if key else 0)
+    optional = struct.pack("!II", 42, 7) if key else b""
+    header = struct.pack("!HHHH", flags, 0x0800, 0, offset) + optional
+    packet = header + routing + payload
+    if not checksum:
+        return packet
+    return put(packet, 4, internet_checksum(packet).to_bytes(2, "big"))
+
+
+#: A PPP frame for enhanced GRE to carry: Address, Control and the IPv4
+#: Protocol, then an IPv4 packet.
+PPP_FRAME = bytes.fromhex("ff030021") + ECHO_PACKET
+
+#: Enhanced GRE's K, S and A bits and Version 1 (RFC 2637 §4.1).
+GRE_V1_FLAGS = 0x3081
+
+
+def gre_v1(
+    payload: bytes,
+    *,
+    flags: int = GRE_V1_FLAGS,
+    protocol: int = 0x880B,
+    length: int | None = None,
+) -> bytes:
+    """An enhanced GRE packet (RFC 2637 §4.1) with flags word ``flags``,
+    carrying ``payload``, its Key's Payload Length ``length`` or else
+    the payload's, then Call ID ``0x1234``, followed by a Sequence
+    Number when the S bit is set and an Acknowledgment Number when the
+    A bit is."""
+    payload_length = len(payload) if length is None else length
+    words = struct.pack("!HHHH", flags, protocol, payload_length, 0x1234)
+    words += struct.pack("!I", 5) if flags & 0x1000 else b""
+    words += struct.pack("!I", 4) if flags & 0x0080 else b""
+    return words + payload
+
+
+@case("gre-version")
+def _() -> tuple[bytes, bytes]:
+    return GRE_TEMPLATE, put(GRE_TEMPLATE, l4(GRE_TEMPLATE) + 1, b"\x02")
+
+
+@case("gre-reserved-flags")
+def _() -> tuple[bytes, bytes]:
+    return GRE_TEMPLATE, put(GRE_TEMPLATE, l4(GRE_TEMPLATE) + 1, b"\x08")
+
+
+@case("gre-routing-null")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_routed(ECHO_PACKET))
+    last = struct.pack("!HBB", 0x0800, 0, 0)
+    bad = gre_routed(ECHO_PACKET, routing=IP_SRE + last)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-routing-offset")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_routed(ECHO_PACKET))
+    bad = gre_routed(ECHO_PACKET, offset=4)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-key")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS & ~0x2000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-flags")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS | 0x8000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-protocol")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, protocol=0x0800)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-payload-length")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, length=len(PPP_FRAME) + 1)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-sequence")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS & ~0x1000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("unchecked-gre-ppp")
+def _() -> tuple[bytes, bytes]:
+    acknowledgment = gre_v1(b"", flags=GRE_V1_FLAGS & ~0x1000)
+    return esp(47, acknowledgment), esp(47, gre_v1(PPP_FRAME))
+
+
 # OSPF.
 
 
@@ -1850,14 +1972,14 @@ class TestGREChecksum:
     @pytest.mark.parametrize("key", [False, True], ids=["c", "c-k-s"])
     @pytest.mark.parametrize(
         ("offset", "bits"),
-        [(0, 0x40), (4, 0xFF), (5, 0x01), (6, 0x80)],
-        ids=["routing-bit", "checksum-high", "checksum-low", "reserved1"],
+        [(0, 0x08), (4, 0xFF), (5, 0x01), (6, 0x80)],
+        ids=["strict-route-bit", "checksum-high", "checksum-low", "reserved1"],
     )
     def test_a_tampered_header_byte_fails(
         self, key: bool, offset: int, bits: int
     ) -> None:
         """The checksum covers the whole header: the flags word (here
-        its Routing Present bit, which nothing else reads), the
+        its Strict Source Route bit, which nothing else checks), the
         Checksum itself and Reserved1."""
         packet = gre_with_checksum(ECHO_PACKET, key=key)
         tampered = put(packet, offset, bytes([packet[offset] ^ bits]))
