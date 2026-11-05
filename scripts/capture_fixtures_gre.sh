@@ -36,12 +36,19 @@
 # 0x86DD, IPv6 next header 47 with Payload Length ending the packet,
 # underlay fd09:326:1::1 <-> ::2, GRE flags word 0x0000 with Protocol
 # Type 0x0800, then the inner echo from 10.9.197.193 to .194 and its
-# reply, twice, seq 1 and 2, one identifier. It then runs
-# scripts/check_fixtures.py over
-# tests/fixtures/staging/, which verifies the GRE Checksum of every
-# frame with the C bit set, peels the GRE header and verifies the inner
-# IPv4/ICMP checksums, and stops unless that run passes and reports 4
-# GRE checksums for gre_csum.pcap.
+# reply, twice, seq 1 and 2, one identifier, with the inner IPv4 header
+# checksum and the ICMPv4 checksum (over the whole ICMP message) both
+# verified.
+#
+# It then runs scripts/check_fixtures.py over tests/fixtures/staging/
+# and stops unless that run passes and reports 4 GRE checksums for
+# gre_csum.pcap. For gre.pcap and gre_csum.pcap, check_fixtures.py
+# verifies the outer IPv4 header checksum, the GRE Checksum of every
+# frame with the C bit set, and, past the GRE header, the inner IPv4
+# header and ICMPv4 checksums. For gre6.pcap it decodes each frame only
+# as far as the IPv6 header, which carries no checksum, so the inline
+# assertions above are what verify that file's GRE header and inner
+# checksums.
 #
 # tx/rx checksum offload is disabled on each veth end first
 # (ethtool -K), so the kernel computes every outer checksum. The gre
@@ -355,13 +362,27 @@ def ipv6_gre(packet):
     )
 
 
+def checksum_ok(octets):
+    """Whether the ones' complement sum of ``octets``, the checksum
+    field among them, is 0xFFFF (RFC 1071)."""
+    if len(octets) % 2:
+        octets += b"\x00"
+    total = sum(struct.unpack(f"!{len(octets) // 2}H", octets))
+    while total > 0xFFFF:
+        total = (total & 0xFFFF) + (total >> 16)
+    return total == 0xFFFF
+
+
 def ipv4(packet, proto):
     """The source, destination and payload of the option-free IPv4
-    packet of protocol ``proto`` that ``packet`` holds exactly."""
+    packet of protocol ``proto`` that ``packet`` holds exactly, its
+    header checksum verified."""
     if len(packet) < 20 or packet[0] != 0x45 or packet[9] != proto:
         raise ValueError(f"not an option-free IPv4 packet of protocol {proto}")
     if struct.unpack_from("!H", packet, 2)[0] != len(packet):
         raise ValueError("its Total Length does not end the packet")
+    if not checksum_ok(packet[:20]):
+        raise ValueError("its IPv4 header checksum does not verify")
     return (
         socket.inet_ntoa(packet[12:16]),
         socket.inet_ntoa(packet[16:20]),
@@ -391,12 +412,14 @@ for index, frame in enumerate(frames):
             raise ValueError(f"ICMP type {kind} code {code}")
         if sequence != index // 2 + 1:
             raise ValueError(f"ICMP sequence {sequence}")
+        if not checksum_ok(icmp):
+            raise ValueError("its ICMP checksum does not verify")
     except (ValueError, struct.error) as e:
         sys.exit(f"[!] frame {index}: {e}")
     echo_ids.append(echo_id)
 if len(set(echo_ids)) != 1:
     sys.exit(f"[!] the echoes carry identifiers {echo_ids}, expected one")
-print("[+] 4 frames, as expected: IPv4 over GRE over IPv6.")
+print("[+] 4 frames, as expected: IPv4 over GRE over IPv6, checksums valid.")
 PY
 
 echo
@@ -419,14 +442,12 @@ printf '%s\n' "$report"
 grep -Eq '^\[OK  \] gre_csum\.pcap: 4 frames \((.*, )?gre-checksumx4[,)]' \
     <<<"$report" ||
     fail "check_fixtures.py did not verify 4 GRE checksums in gre_csum.pcap."
-grep -Eq '^\[OK  \] gre6\.pcap: 4 frames' <<<"$report" ||
-    fail "check_fixtures.py did not pass gre6.pcap with 4 frames."
 
 echo
 echo "[i] Expect gre and inner ipv4/icmpv4 counts for the IPv4 captures,"
 echo "    gre-checksum for gre_csum.pcap alone, and zero checksum failures."
-echo "    gre6.pcap's GRE-over-IPv6 frames are not verified by check_fixtures"
-echo "    yet (#326); the inline assertions above are their check."
+echo "    check_fixtures decodes gre6.pcap only as far as IPv6; the gre6.pcap"
+echo "    assertions above verify its GRE header and inner checksums."
 echo "    Fold tests/fixtures/staging/gre_csum.pcap and gre6.pcap into"
 echo "    tests/fixtures/;"
 echo "    tests/fixtures/staging/gre.pcap re-captures tests/fixtures/gre.pcap."
