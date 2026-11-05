@@ -517,68 +517,151 @@ class TestCIWorkflow:
         ), "lint job no longer runs `python3 scripts/check_markers.py`"
         assert (ROOT / "scripts" / "check_markers.py").is_file()
 
-    @staticmethod
-    def _assert_runs_strict_sphinx_build(block: str) -> None:
-        """``block``, a :func:`job_blocks` job, has exactly one step whose
-        executed one-line ``run:`` command is ``uv run --frozen
-        sphinx-build`` with ``-W`` and ``-n`` over ``docs``, and the step
-        is neither conditional nor allowed to fail.
+    # The Sphinx step's command, word for word, up to its output
+    # directory. Any other word (an operator, a -D or -C override, a
+    # second command) makes the argv differ, so the check accepts this
+    # one command and nothing else.
+    SPHINX_ARGV = (
+        "uv",
+        "run",
+        "--frozen",
+        "sphinx-build",
+        "-W",
+        "-n",
+        "-b",
+        "dummy",
+        "docs",
+    )
+    # The output directory: a literal path, optionally under
+    # $RUNNER_TEMP. No other expansion, quoting or shell punctuation.
+    SPHINX_OUTDIR = re.compile(r"(?:\$RUNNER_TEMP/)?[A-Za-z0-9_./-]+")
+    # Every other job-level key (if, continue-on-error, defaults, env,
+    # strategy, needs, container, ...) can skip the job, let it fail
+    # green or change the shell or the variables the step runs with.
+    SPHINX_JOB_KEYS = frozenset({"name", "runs-on", "permissions", "steps"})
+    # A step's ``if``, ``continue-on-error``, ``shell``, ``env`` or
+    # ``working-directory`` can likewise skip it, let it fail green or
+    # change what its command does.
+    SPHINX_STEP_KEYS = frozenset({"name", "run"})
 
-        The command is read from the step's ``run:`` key and split with
-        :func:`shlex.split`, so a step that names those words anywhere
-        else (its ``name:``, a comment, an ``echo``) does not count.
+    @classmethod
+    def _assert_runs_strict_sphinx_build(cls, block: str) -> None:
+        """``block``, a :func:`job_blocks` job, has exactly one step
+        whose ``run:`` names ``sphinx-build``, and that step runs
+        :attr:`SPHINX_ARGV` and an output directory and nothing else.
+
+        The job sets no key outside :attr:`SPHINX_JOB_KEYS`, and no step
+        or job sets ``continue-on-error``. The step sets no key outside
+        :attr:`SPHINX_STEP_KEYS`, and every line of it is one of those
+        keys, so its ``run:`` is a single line. That line, split with
+        :func:`shlex.split`, must equal :attr:`SPHINX_ARGV` plus one
+        word matching :attr:`SPHINX_OUTDIR`.
         """
-        steps = []
-        for step in job_steps(block):
-            run = step_key(step, "run")
-            if run is None:
-                continue
-            argv = shlex.split(run)
-            if "sphinx-build" in argv:
-                steps.append((step, argv))
+        job_keys = set(re.findall(r"(?m)^    ([A-Za-z0-9_-]+):", block))
+        extra = sorted(job_keys - cls.SPHINX_JOB_KEYS)
+        assert not extra, f"the job sets job-level keys {extra}"
+        assert step_key(block, "continue-on-error") is None, (
+            "the job or one of its steps sets continue-on-error"
+        )
+        steps = [
+            step
+            for step in job_steps(block)
+            if "sphinx-build" in (step_key(step, "run") or "")
+        ]
         assert len(steps) == 1, (
             f"expected one step running sphinx-build, found {len(steps)}"
         )
-        step, argv = steps[0]
-        assert argv[:3] == ["uv", "run", "--frozen"], (
-            f"sphinx-build does not run through `uv run --frozen`: {argv}"
+        step = steps[0]
+        lines = step.splitlines()
+        step_keys = [
+            match.group(1)
+            for line in lines
+            if (match := re.match(r" {6}(?:- | {2})([A-Za-z0-9_-]+):", line))
+        ]
+        extra = sorted(set(step_keys) - cls.SPHINX_STEP_KEYS)
+        assert not extra, f"the step sets step keys {extra}"
+        assert len(step_keys) == len(lines), (
+            f"the step's run: spans more than one line: {step!r}"
         )
-        assert argv[3] == "sphinx-build", (
-            f"the step's command is not sphinx-build itself: {argv}"
+        run = step_key(step, "run")
+        assert run is not None
+        argv = shlex.split(run)
+        expected = f"{shlex.join(cls.SPHINX_ARGV)} <outdir>"
+        assert (
+            tuple(argv[:-1]) == cls.SPHINX_ARGV
+            and cls.SPHINX_OUTDIR.fullmatch(argv[-1]) is not None
+        ), f"the step's command is not {expected}: {argv}"
+
+    @staticmethod
+    def _assert_conf_is_strict(source: str) -> None:
+        """``source``, a Sphinx conf.py, sets ``nitpicky = True`` at
+        module level, assigns ``nitpicky`` nothing else anywhere, and
+        assigns no ``nitpick_ignore``, ``nitpick_ignore_regex`` or
+        ``suppress_warnings`` anywhere: not as a module-level name, not
+        as an attribute (``app.config.nitpicky``) and not as a
+        subscript key (``app.config["nitpicky"]``), inside ``setup()``
+        or any other function included.
+        """
+        tree = ast.parse(source)
+        top_level_true = any(
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "nitpicky"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is True
+            for node in tree.body
         )
-        options = argv[4:]
-        assert "-W" in options, "sphinx-build runs without -W"
-        assert "-n" in options, "sphinx-build runs without -n"
-        assert "docs" in options, "sphinx-build does not read docs/"
-        assert step_key(step, "if") is None, "the step is conditional"
-        assert step_key(step, "continue-on-error") is None, (
-            "a failure in the step does not fail the job"
-        )
+        assert top_level_true, "docs/conf.py does not set nitpicky = True"
+        for node in ast.walk(tree):
+            # An augmented assignment's result is not a constant True.
+            value: ast.expr | None = None
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            elif isinstance(node, ast.AugAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    name = target.id
+                elif isinstance(target, ast.Attribute):
+                    name = target.attr
+                elif isinstance(target, ast.Subscript) and isinstance(
+                    target.slice, ast.Constant
+                ):
+                    name = target.slice.value
+                else:
+                    continue
+                assert name not in (
+                    "nitpick_ignore",
+                    "nitpick_ignore_regex",
+                    "suppress_warnings",
+                ), f"docs/conf.py sets {name}"
+                if name == "nitpicky":
+                    assert (
+                        isinstance(value, ast.Constant) and value.value is True
+                    ), "docs/conf.py sets nitpicky to something other than True"
 
     def test_lint_runs_a_nitpicky_sphinx_build(
         self, ci_jobs: dict[str, str]
     ) -> None:
         """The lint job builds the docstrings with ``sphinx-build -W -n``
         over docs/, whose conf.py turns on ``nitpicky`` and holds no
-        blanket suppression, and Sphinx is pinned in the dev group."""
+        suppression, and Sphinx is pinned in the dev group. ci.yml sets
+        no workflow-level ``defaults`` or ``env``, which would reach the
+        step's shell or its variables."""
         block = ci_jobs.get("lint")
         assert block is not None, "ci.yml has no lint job"
         self._assert_runs_strict_sphinx_build(block)
-
-        tree = ast.parse((ROOT / "docs" / "conf.py").read_text())
-        assigned = {
-            target.id: node.value
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            for target in node.targets
-            if isinstance(target, ast.Name)
-        }
-        nitpicky = assigned.get("nitpicky")
-        assert isinstance(nitpicky, ast.Constant) and nitpicky.value is True, (
-            "docs/conf.py does not set nitpicky = True"
+        assert not re.search(r"(?m)^(?:defaults|env):", CI.read_text()), (
+            "ci.yml sets workflow-level defaults or env"
         )
-        for name in ("nitpick_ignore_regex", "suppress_warnings"):
-            assert name not in assigned, f"docs/conf.py sets {name}"
+
+        self._assert_conf_is_strict((ROOT / "docs" / "conf.py").read_text())
 
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
         dev = pyproject["dependency-groups"]["dev"]
@@ -586,28 +669,193 @@ class TestCIWorkflow:
             "Sphinx is not pinned with == in the dev dependency group"
         )
 
-    def test_sphinx_check_rejects_a_step_that_only_names_the_command(
-        self,
+    # The strict command and a step running it, for the cases below.
+    SPHINX_CMD = "uv run --frozen sphinx-build -W -n -b dummy docs"
+    SPHINX_STEP = f'      - run: {SPHINX_CMD} "$RUNNER_TEMP/sphinx"\n'
+
+    @pytest.mark.parametrize(
+        ("step", "message"),
+        [
+            pytest.param(
+                f"      - name: {SPHINX_CMD} out\n        run: echo skip\n",
+                "found 0",
+                id="only-in-name",
+            ),
+            pytest.param(
+                f"      - run: echo {SPHINX_CMD} out\n", "is not", id="echo"
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD.replace(' -W', '')} out\n",
+                "is not",
+                id="without-W",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD.replace(' -n', '')} out\n",
+                "is not",
+                id="without-n",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out || true\n",
+                "is not",
+                id="or-true",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out; exit 0\n",
+                "is not",
+                id="exit-0",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out | cat\n", "is not", id="pipe"
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out|cat\n",
+                "is not",
+                id="pipe-unspaced",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out &\n",
+                "is not",
+                id="background",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out > /dev/null\n",
+                "is not",
+                id="redirect",
+            ),
+            pytest.param(
+                f"      - run: true && {SPHINX_CMD} out\n",
+                "is not",
+                id="and-prefix",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD.replace(' docs', '')}"
+                " -D nitpicky=0 docs out\n",
+                "is not",
+                id="define-override",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} $(true)\n",
+                "is not",
+                id="command-substitution",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} out\n          || true\n",
+                "more than one line",
+                id="continued-plain-scalar",
+            ),
+            pytest.param(
+                f"      - run: >-\n          {SPHINX_CMD} out\n",
+                "found 0",
+                id="folded-scalar",
+            ),
+            pytest.param(
+                SPHINX_STEP + "        continue-on-error: true\n",
+                "continue-on-error",
+                id="step-continue-on-error",
+            ),
+            pytest.param(
+                SPHINX_STEP + "        if: false\n",
+                "step keys",
+                id="step-if",
+            ),
+            pytest.param(
+                SPHINX_STEP + "        shell: true {0}\n",
+                "step keys",
+                id="step-shell",
+            ),
+        ],
+    )
+    def test_sphinx_check_rejects_a_weakened_step(
+        self, step: str, message: str
     ) -> None:
-        """A step whose ``name:`` holds the command but whose ``run:``
-        does something else is not a Sphinx build."""
-        block = (
-            "    steps:\n"
-            "      - name: uv run --frozen sphinx-build -W -n docs out\n"
-            "        run: echo skipped\n"
-        )
-        with pytest.raises(AssertionError, match="found 0"):
+        """A step that does not run the strict build, or runs it in a
+        way that can pass while it fails, is rejected."""
+        block = "    runs-on: ubuntu-latest\n    steps:\n" + step
+        with pytest.raises(AssertionError, match=message):
             self._assert_runs_strict_sphinx_build(block)
 
-    def test_sphinx_check_rejects_a_build_without_w(self) -> None:
-        """A build that runs without ``-W`` reports broken references as
-        warnings and passes."""
+    @pytest.mark.parametrize(
+        ("job_key", "message"),
+        [
+            pytest.param(
+                "    continue-on-error: true\n",
+                "job-level",
+                id="continue-on-error",
+            ),
+            pytest.param("    if: false\n", "job-level", id="if"),
+            pytest.param(
+                "    defaults:\n      run:\n        shell: true {0}\n",
+                "job-level",
+                id="defaults-shell",
+            ),
+            pytest.param(
+                "    env:\n      RUNNER_TEMP: x\n", "job-level", id="env"
+            ),
+        ],
+    )
+    def test_sphinx_check_rejects_a_weakened_job(
+        self, job_key: str, message: str
+    ) -> None:
+        """A job-level key that can skip the job, let it fail green or
+        change how its steps run is rejected."""
         block = (
-            "    steps:\n"
-            "      - run: uv run --frozen sphinx-build -n -b dummy docs out\n"
+            "    runs-on: ubuntu-latest\n"
+            + job_key
+            + "    steps:\n"
+            + self.SPHINX_STEP
         )
-        with pytest.raises(AssertionError, match="without -W"):
+        with pytest.raises(AssertionError, match=message):
             self._assert_runs_strict_sphinx_build(block)
+
+    def test_sphinx_check_accepts_the_strict_step(self) -> None:
+        """The negative cases above fail for their own reason: the same
+        job with the strict step alone passes."""
+        self._assert_runs_strict_sphinx_build(
+            "    runs-on: ubuntu-latest\n    steps:\n" + self.SPHINX_STEP
+        )
+
+    @pytest.mark.parametrize(
+        ("source", "message"),
+        [
+            pytest.param("nitpicky = False\n", "does not set", id="false"),
+            pytest.param(
+                "nitpicky = True\nnitpicky = 0\n", "other than True", id="reset"
+            ),
+            pytest.param(
+                "nitpicky = True\nsuppress_warnings = ['ref.python']\n",
+                "sets suppress_warnings",
+                id="suppress-warnings",
+            ),
+            pytest.param(
+                "nitpicky = True\n"
+                "def setup(app):\n"
+                "    app.config.nitpick_ignore_regex = [('py:.*', '.*')]\n",
+                "sets nitpick_ignore_regex",
+                id="setup-attribute",
+            ),
+            pytest.param(
+                "nitpicky = True\n"
+                "def setup(app):\n"
+                "    app.config['nitpick_ignore'] = [('py:class', 'X')]\n",
+                "sets nitpick_ignore",
+                id="setup-subscript",
+            ),
+            pytest.param(
+                "nitpicky = True\n"
+                "def setup(app):\n"
+                "    app.config.nitpicky = False\n",
+                "other than True",
+                id="setup-nitpicky",
+            ),
+        ],
+    )
+    def test_conf_check_rejects_a_weakened_conf(
+        self, source: str, message: str
+    ) -> None:
+        """A conf.py that turns ``nitpicky`` off or suppresses a warning,
+        at module level or inside a function, is rejected."""
+        with pytest.raises(AssertionError, match=message):
+            self._assert_conf_is_strict(source)
 
     def test_test_job_runs_the_src_doctests(
         self, ci_jobs: dict[str, str]
