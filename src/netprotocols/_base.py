@@ -13,11 +13,12 @@ and must:
    layer's buffer where that Length puts the end of the LLC PDU, never
    past the end of the frame (see "Payload extent" below).
 2. For variable-length headers (IPv4, TCP), validate the declared
-   length (raising
+   length, raising
    :class:`~netprotocols.utils.exceptions.InvalidFieldError` for
    nonsense values and
-   :class:`TruncatedHeaderError` when the declared length exceeds the
-   buffer) and materialize the options as ``bytes``.
+   :class:`~netprotocols.utils.exceptions.TruncatedHeaderError` when
+   the declared length exceeds the buffer, and materialize the options
+   as ``bytes``.
 3. Tolerate trailing bytes: whatever follows the header is the next
    layer's problem, reachable via ``instance.header_len``.
 
