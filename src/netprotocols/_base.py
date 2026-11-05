@@ -149,7 +149,7 @@ it. A length shorter than its own header cannot bound anything:
 ``_payload_extent()`` raises
 :class:`~netprotocols.utils.exceptions.InvalidFieldError` for an IPv4
 Total Length below ``ihl * 4`` and a UDP Length of 1 to 7, and the walk
-reports it at that field's offset in the frame. A positive length too
+sets its ``frame_offset`` to the start of that header. A positive length too
 short for what follows is the next decoder's
 :class:`TruncatedHeaderError`. ``decode()`` reads none of these
 extents, so a header decoded on its own is never judged by them. Both

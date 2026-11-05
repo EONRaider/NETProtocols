@@ -59,11 +59,10 @@ class UDP(Protocol):
     def _payload_extent(self) -> int | None:
         """Return the payload's length, ``length - 8``.
 
-        ``None`` for a ``length`` of 0, which bounds nothing (a UDP
-        Jumbogram, RFC 2675 §4, carries 0).
+        ``None`` for a ``length`` of 0, which bounds nothing.
 
         :raises InvalidFieldError: if ``length`` is 1 to 7, shorter than
-            the 8-byte header (``field="length"``, ``offset=4``).
+            the 8-byte header (``field="length"``).
         """
         if self.length == 0:
             return None
@@ -71,7 +70,6 @@ class UDP(Protocol):
             raise InvalidFieldError(
                 f"UDP length {self.length} is shorter than its 8-byte header",
                 protocol=type(self),
-                offset=4,
                 field="length",
                 expected=">=8",
                 actual=self.length,

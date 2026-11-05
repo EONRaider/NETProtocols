@@ -104,6 +104,34 @@ def frames_of(name: str) -> list[bytes]:
     return pcap_frames(FIXTURES / name)
 
 
+ETHERNET_IPV4 = bytes.fromhex("00005e00530200005e0053010800")
+
+
+def ipv4(payload: bytes, protocol: int) -> bytes:
+    """An IPv4 datagram holding ``payload``, its Total Length exact."""
+    return (
+        struct.pack(
+            "!BBHHHBBH4s4s",
+            0x45,
+            0,
+            20 + len(payload),
+            1,
+            0,
+            64,
+            protocol,
+            0,
+            bytes.fromhex("c0000201"),
+            bytes.fromhex("c0000202"),
+        )
+        + payload
+    )
+
+
+def udp(payload: bytes) -> bytes:
+    """A UDP datagram to the discard port, its Length exact."""
+    return struct.pack("!HHHH", 40000, 9, 8 + len(payload), 0) + payload
+
+
 def with_lengths(frame: bytes, ip_at: int, extra: int) -> bytes:
     """Grow the IPv4 Total Length at ``ip_at``, and the UDP Length after
     it, by ``extra`` bytes."""
@@ -156,6 +184,23 @@ class TestTheCorpus:
             assert packet.consumed + len(trailer) <= len(frames[name])
 
 
+class Test8023Length:
+    """An Ethernet 802.3 Length bounds the walk by itself, with every IP
+    and UDP bound switched off, and its padding and an FCS after it are
+    the trailer."""
+
+    @pytest.mark.parametrize(
+        "name", [name for name in FRAMES_WITH_A_TRAILER if "llc" in name]
+    )
+    def test_the_padding_and_an_fcs_are_the_trailer(self, name):
+        frame = dict(ALL_FRAMES)[name]
+        wire = frame + fcs(frame)
+        packet = walk_without_ip_bounds(wire)
+        assert packet.trailer == FRAMES_WITH_A_TRAILER[name] + fcs(frame)
+        assert packet.layers == decode_frame(frame).layers
+        assert holds_the_round_trip(wire, packet)
+
+
 class TestSnapLength:
     """A frame cut anywhere before its declared end decodes, in lax
     mode, exactly as the walk with no IP or UDP bound decodes it, and
@@ -185,7 +230,16 @@ class TestAppendedFCS:
 
     CASES = tuple(
         (name, index)
-        for name in ("esp.pcap", "sctp.pcap", "vxlan.pcap")
+        for name in (
+            "esp.pcap",
+            "sctp.pcap",
+            "vxlan.pcap",
+            "ntp.pcap",
+            "icmpv6_echo_lo.pcap",
+            "gre.pcap",
+            "ipip.pcap",
+            "pim.pcap",
+        )
         for index in range(len(frames_of(name)))
     )
 
@@ -402,6 +456,36 @@ class TestNestedBounds:
         with pytest.raises(MaxDepthExceededError):
             decode_frame(padded, max_depth=2)
 
+    @pytest.mark.parametrize(
+        "encapsulate",
+        [
+            lambda inner: ipv4(inner, protocol=4),
+            lambda inner: ipv4(b"\x00\x00\x08\x00" + inner, protocol=47),
+        ],
+        ids=["ip-in-ip", "gre"],
+    )
+    def test_an_encapsulation_gives_one_combined_trailer(self, encapsulate):
+        """The inner datagram's padding, inside the outer datagram, and
+        the bytes past the outer datagram form one trailer."""
+        inner = ipv4(udp(b"data"), protocol=17)
+        inner_padding = b"\x11" * 6
+        outer_tail = b"\x22" * 4
+        frame = ETHERNET_IPV4 + encapsulate(inner + inner_padding)
+        frame += outer_tail
+        packet = decode_frame(frame)
+        assert packet.stopped_by is None
+        assert type(packet.layers[-1]) is UDP
+        assert packet.trailer == inner_padding + outer_tail
+        assert packet.consumed == len(frame) - len(packet.trailer) - 4
+        assert holds_the_round_trip(frame, packet)
+
+    def test_the_trailer_is_a_copy(self):
+        """Changing the frame after the walk changes no trailer."""
+        frame = bytearray(frames_of("igmp.pcap")[0] + b"\xde\xad\xbe\xef")
+        packet = decode_frame(memoryview(frame))
+        frame[-4:] = bytes(4)
+        assert packet.trailer == b"\xde\xad\xbe\xef"
+
     def test_a_memoryview_frame_gives_a_bytes_trailer(self):
         frame = frames_of("igmp.pcap")[0] + b"\xde\xad\xbe\xef"
         packet = decode_frame(memoryview(frame))
@@ -422,6 +506,32 @@ class TestICMPErrorQuotes:
         assert [type(layer) for layer in chain] == [IPv4, UDP]
         assert chain.stopped_by is None
         assert chain.trailer == bytes(128 - len(datagram))
+
+    def test_an_icmpv6_quote_past_its_datagram_is_the_quotes_trailer(self):
+        datagram = (
+            bytes(
+                Packet(
+                    IPv6(
+                        version=6,
+                        traffic_class=0,
+                        flow_label=0,
+                        payload_length=12,
+                        next_header=17,
+                        hop_limit=64,
+                        src="2001:db8::1",
+                        dst="2001:db8::2",
+                    ),
+                    UDP(src_port=40000, dst_port=9, length=12, checksum=0),
+                )
+            )
+            + b"data"
+        )
+        quote = datagram + bytes(8)
+        error = ICMPv6(type=1, code=4, checksum=0, rest=bytes(4), body=quote)
+        chain = error.embedded_chain
+        assert chain is not None
+        assert [type(layer) for layer in chain] == [IPv6, UDP]
+        assert chain.trailer == bytes(8)
 
     def test_a_cut_quote_is_not_bounded(self):
         """RFC 792's IP header and 8 bytes: the declared lengths reach
@@ -461,14 +571,21 @@ class TestContinuationWalks:
         assert rest == b""
 
 
-class TestLyingLengthErrorsName:
-    def test_the_frame_offset_points_at_the_field(self):
+class TestLyingLengthErrors:
+    @LAX
+    def test_the_frame_offset_is_the_header_start(self, lax):
         frame = frames_of("udp_dns.pcap")[0]
         out = bytearray(frame)
         ihl = (out[14] & 0x0F) * 4
         struct.pack_into("!H", out, 14 + ihl + 4, 5)
-        with pytest.raises(InvalidFieldError) as caught:
-            decode_frame(bytes(out))
-        error = caught.value
-        assert error.frame_offset == 14 + ihl + 4
-        assert out[error.frame_offset : error.frame_offset + 2] == b"\x00\x05"
+        if lax:
+            error = decode_frame(bytes(out), lax=True).stopped_by
+        else:
+            with pytest.raises(InvalidFieldError) as caught:
+                decode_frame(bytes(out))
+            error = caught.value
+        assert isinstance(error, InvalidFieldError)
+        assert (error.protocol, error.field) == (UDP, "length")
+        assert error.offset is None
+        assert error.frame_offset == 14 + ihl
+        assert UDP.decode(out[error.frame_offset :]).length == 5

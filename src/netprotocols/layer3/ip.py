@@ -410,12 +410,10 @@ class IPv4(Protocol):
     def _payload_extent(self) -> int | None:
         """Return the payload's length, ``total_length - ihl * 4``.
 
-        ``None`` for a ``total_length`` of 0, which bounds nothing (a
-        capture of TCP-segmentation-offloaded traffic can hold 0).
+        ``None`` for a ``total_length`` of 0, which bounds nothing.
 
         :raises InvalidFieldError: if ``total_length`` is 1 or more but
-            shorter than the header itself (``field="total_length"``,
-            ``offset=2``).
+            shorter than the header itself (``field="total_length"``).
         """
         if self.total_length == 0:
             return None
@@ -425,7 +423,6 @@ class IPv4(Protocol):
                 f"IPv4 total length {self.total_length} is shorter than "
                 f"its {self.ihl * 4}-byte header",
                 protocol=type(self),
-                offset=2,
                 field="total_length",
                 expected=f">={self.ihl * 4}",
                 actual=self.total_length,
@@ -597,9 +594,7 @@ class IPv6(Protocol):
     def _payload_extent(self) -> int | None:
         """Return ``payload_length``, extension headers included.
 
-        ``None`` for a ``payload_length`` of 0, which bounds nothing (a
-        Jumbo Payload, RFC 2675 §2, declares its length in a Hop-by-Hop
-        option instead).
+        ``None`` for a ``payload_length`` of 0, which bounds nothing.
         """
         return self.payload_length or None
 

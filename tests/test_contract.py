@@ -223,9 +223,9 @@ def udp(payload=b"\x00" * 4, *, length=None, dst_port=9):
 class TestLyingEnclosingLengths:
     """A declared length shorter than its own header (IPv4 Total
     Length, UDP Length) cannot bound anything after it: the walk
-    raises InvalidFieldError at that field in strict mode, and a lax
-    walk keeps the header and stops. Its trailer is what the bounds
-    accepted before it leave. A positive length too short for what
+    raises InvalidFieldError at that header's start in strict mode,
+    and a lax walk keeps the header and stops. Its trailer is what the
+    bounds accepted before it leave. A positive length too short for what
     follows is the next decoder's truncation, and zero bounds
     nothing."""
 
@@ -235,7 +235,7 @@ class TestLyingEnclosingLengths:
     def check_error(error, protocol, field, frame_offset, expected, actual):
         assert isinstance(error, InvalidFieldError)
         assert (error.protocol, error.field) == (protocol, field)
-        assert error.offset == (2 if protocol is IPv4 else 4)
+        assert error.offset is None
         assert error.frame_offset == frame_offset
         assert (error.expected, error.actual) == (expected, actual)
 
@@ -255,14 +255,14 @@ class TestLyingEnclosingLengths:
             with pytest.raises(InvalidFieldError) as caught:
                 decode_frame(frame)
             self.check_error(
-                caught.value, IPv4, "total_length", 16, expected, total_length
+                caught.value, IPv4, "total_length", 14, expected, total_length
             )
             return
         packet = decode_frame(frame, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4]
         assert packet[IPv4].total_length == total_length
         self.check_error(
-            packet.stopped_by, IPv4, "total_length", 16, expected, total_length
+            packet.stopped_by, IPv4, "total_length", 14, expected, total_length
         )
         assert packet.trailer == b""
 
@@ -273,10 +273,14 @@ class TestLyingEnclosingLengths:
         if not lax:
             with pytest.raises(InvalidFieldError) as caught:
                 decode_frame(frame)
-            self.check_error(caught.value, IPv4, "total_length", 36, ">=20", 12)
+            self.check_error(caught.value, IPv4, "total_length", 34, ">=20", 12)
             return
         packet = decode_frame(frame, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, IPv4]
+        assert packet[2].total_length == 12
+        self.check_error(
+            packet.stopped_by, IPv4, "total_length", 34, ">=20", 12
+        )
         assert packet.trailer == PADDING
 
     @LAX
@@ -288,11 +292,11 @@ class TestLyingEnclosingLengths:
         if not lax:
             with pytest.raises(InvalidFieldError) as caught:
                 decode_frame(frame)
-            self.check_error(caught.value, UDP, "length", 38, ">=8", length)
+            self.check_error(caught.value, UDP, "length", 34, ">=8", length)
             return
         packet = decode_frame(frame, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
-        self.check_error(packet.stopped_by, UDP, "length", 38, ">=8", length)
+        self.check_error(packet.stopped_by, UDP, "length", 34, ">=8", length)
         assert packet.trailer == PADDING
 
     @LAX
@@ -301,11 +305,42 @@ class TestLyingEnclosingLengths:
         if not lax:
             with pytest.raises(InvalidFieldError) as caught:
                 decode_frame(frame)
-            self.check_error(caught.value, UDP, "length", 58, ">=8", 4)
+            self.check_error(caught.value, UDP, "length", 54, ">=8", 4)
             return
         packet = decode_frame(frame, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv6, UDP]
+        self.check_error(packet.stopped_by, UDP, "length", 54, ">=8", 4)
         assert packet.trailer == PADDING
+
+    @LAX
+    @pytest.mark.parametrize("options", [b"", b"\x01" * 4])
+    def test_an_ipv4_total_length_of_just_its_header(self, options, lax):
+        """A Total Length of ``ihl * 4`` is no lie: it bounds an empty
+        payload, which is UDP's truncation."""
+        header_len = 20 + len(options)
+        datagram = ipv4(udp(), total_length=header_len, options=options)
+        frame = ETHERNET_IPV4 + datagram + PADDING
+        if not lax:
+            with pytest.raises(TruncatedHeaderError) as caught:
+                decode_frame(frame)
+            assert caught.value.protocol is UDP
+            assert caught.value.frame_offset == 14 + header_len
+            return
+        packet = decode_frame(frame, lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4]
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
+        assert packet.trailer == frame[14 + header_len :]
+
+    @LAX
+    def test_a_udp_length_of_just_its_header(self, lax):
+        """A UDP Length of 8 is no lie: it bounds an empty payload, and
+        the rest of the datagram joins the trailer."""
+        datagram = ipv4(udp(length=8))
+        frame = ETHERNET_IPV4 + datagram + PADDING
+        packet = decode_frame(frame, lax=lax)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
+        assert packet.stopped_by is None
+        assert packet.trailer == frame[14 + 20 + 8 :]
 
     @LAX
     def test_an_ipv6_payload_length_short_of_the_next_header(self, lax):

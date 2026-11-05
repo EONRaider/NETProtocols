@@ -105,16 +105,16 @@ with ``start=IPv4`` is bounded by that header's Total Length.
 A declared end beyond the end of the frame bounds nothing, so a frame
 cut by a snap length decodes what was captured, and a looser end never
 widens a tighter one: a first fragment's UDP Length, which counts the
-whole datagram, or a quoted packet's lengths in an ICMP error. A Total
-Length of 0, which a capture of TCP-segmentation-offloaded traffic can
-hold, a Payload Length of 0 and a UDP Length of 0 (RFC 2675 §2, §4)
-bound nothing either. A length shorter than its own header, an IPv4
-Total Length below the header's ``ihl * 4`` bytes or a UDP Length of 1
-to 7, raises :class:`~netprotocols.InvalidFieldError` naming that
-field (``"total_length"`` or ``"length"``), its ``frame_offset`` on
-the field; a lax walk keeps the header and stops there, with the
-trailer the earlier ends left. A length long enough for its own header
-but too short for what follows makes the next decoder raise
+whole datagram, or a quoted packet's lengths in an ICMP error. An IPv4
+Total Length, IPv6 Payload Length or UDP Length of 0 bounds nothing
+either. A length shorter than its own header, an IPv4 Total Length
+below the header's ``ihl * 4`` bytes or a UDP Length of 1 to 7, raises
+:class:`~netprotocols.InvalidFieldError` naming that field
+(``"total_length"`` or ``"length"``), its ``offset`` ``None`` and its
+``frame_offset`` the start of that header; a lax walk keeps the header
+and stops there, with the trailer the earlier ends left. A length long
+enough for its own header but too short for what follows makes the
+next decoder raise
 :class:`~netprotocols.TruncatedHeaderError`, as an 802.3 Length
 shorter than the 3-byte LLC header does (see
 :mod:`netprotocols.layer2.llc`).
@@ -283,16 +283,12 @@ def _bounded(header: Protocol, cursor: int, end: int) -> int:
     :param cursor: The frame offset just past ``header``.
     :param end: The frame offset where the current bound ends.
     :raises ProtocolError: if ``header`` declares a length shorter than
-        itself; its ``frame_offset`` is set from the start of
-        ``header``.
+        itself; its ``frame_offset`` is the start of ``header``.
     """
     try:
         extent = header._payload_extent()
     except ProtocolError as error:
-        start = cursor - header.header_len
-        error.frame_offset = (
-            start if error.offset is None else start + error.offset
-        )
+        error.frame_offset = cursor - header.header_len
         raise
     if extent is None:
         return end

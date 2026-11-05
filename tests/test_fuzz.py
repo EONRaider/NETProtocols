@@ -1789,8 +1789,6 @@ _VRRP_ACCESSORS = (
 )
 
 
-#: The 802.3 frames of the LLC fixture (BPDUs, CDP, RFC 1042, 802.1H,
-#: a tagged frame, Novell raw 802.3, the 1501 frame).
 def _length_fields(frame: bytes) -> list[int]:
     """Return the frame offsets of the IPv4 Total Length, IPv6 Payload
     Length and UDP Length fields a walk of ``frame`` reads."""
@@ -1862,9 +1860,12 @@ class TestDeclaredLengthBounds:
             (UDP, "length"),
         }:
             event(f"lying {stop.protocol.__name__} {stop.field}")
-            assert stop.frame_offset is not None
-            field = frame[stop.frame_offset : stop.frame_offset + 2]
-            assert field == struct.pack("!H", stop.actual)
+            assert stop.offset is None
+            assert stop.frame_offset == packet.consumed - (
+                packet.layers[-1].header_len
+            )
+            header = stop.protocol.decode(frame[stop.frame_offset :])
+            assert getattr(header, stop.field) == stop.actual
             assert type(packet.layers[-1]) is stop.protocol
         event(f"trailer: {bool(trailer)}")
 
@@ -1884,6 +1885,8 @@ class TestDeclaredLengthBounds:
             assert lax.stopped_by is None
 
 
+#: The 802.3 frames of the LLC fixture (BPDUs, CDP, RFC 1042, 802.1H,
+#: a tagged frame, Novell raw 802.3, the 1501 frame).
 _LLC_FRAMES = pcap_frames(FIXTURES / "llc.pcap")
 
 
