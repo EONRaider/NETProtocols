@@ -38,12 +38,7 @@ from netprotocols import (
 )
 from netprotocols._defaults import IPV4_ONLY_NUMBERS, install
 from netprotocols.checksum import verify
-from netprotocols.registry import (
-    DEFAULT,
-    TABLE_IP_PROTO,
-    TABLE_IP_PROTO_V6,
-    WITHHELD,
-)
+from netprotocols.registry import DEFAULT, TABLE_IP_PROTO, TABLE_IP_PROTO_V6
 from test_ipip import ethernet, make_ipv4, make_ipv6
 
 FRAMES = pcap_frames(FIXTURES / "ospf.pcap")
@@ -205,10 +200,15 @@ class TestWiring:
 
     def test_derived_registries_keep_withholding(self):
         """Carry the withheld key into a derived registry."""
+
+        class OSPFVariant(OSPF):
+            pass
+
         child = DEFAULT.derive()
-        child.register(TABLE_IP_PROTO, 89, OSPF)
         assert child.get(TABLE_IP_PROTO_V6, 89) is None
-        assert child._own[TABLE_IP_PROTO_V6][89] is WITHHELD
+        child.register(TABLE_IP_PROTO, 89, OSPFVariant, override=True)
+        assert child.get(TABLE_IP_PROTO, 89) is OSPFVariant
+        assert child.get(TABLE_IP_PROTO_V6, 89) is None
 
     def test_installing_twice_keeps_the_key_withheld(self):
         """Keep 89 withheld across a second install()."""

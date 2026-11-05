@@ -2,7 +2,7 @@
 
 ``mypy --strict`` checks this module (see ``[tool.mypy]`` in
 pyproject.toml). The functions are never called: each statement is a
-call site that must type-check, and the one marked ``type: ignore``
+call site that must type-check, and each one marked ``type: ignore``
 must keep failing, or the ignore is reported as unused.
 """
 
@@ -29,9 +29,12 @@ def accepted(frame: bytes, registry: Registry) -> None:
     register_all("udp.port", (1812, 1813), WITHHELD, registry=registry)
 
 
-def rejected(frame: bytes) -> None:
+def rejected(frame: bytes, registry: Registry) -> None:
     """Pass ``None`` where a class or :data:`WITHHELD` belongs."""
     decode_frame(
         frame,
         decode_as={"udp.port": {1812: None}},  # type: ignore[dict-item]
     )
+    registry.derive({"udp.port": {1812: None}})  # type: ignore[dict-item]
+    registry.register("udp.port", 1812, None)  # type: ignore[arg-type]
+    register_all("udp.port", (1812,), None)  # type: ignore[arg-type]

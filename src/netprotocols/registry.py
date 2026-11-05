@@ -100,7 +100,7 @@ on the global registry and for one walk::
     from netprotocols import decode_frame
     from netprotocols.registry import WITHHELD, register
 
-    register("udp.port", 1812, WITHHELD)  # every walk in the process
+    register("udp.port", 1812, WITHHELD, override=True)  # every walk
     decode_frame(frame, decode_as={"udp.port": {1812: WITHHELD}})
 
 A withheld key dispatches to nothing, exactly like a key that was never
@@ -111,7 +111,8 @@ the key, as a registration does. Withholding is idempotent, and it never
 undoes a class registered directly in the same table unless it is
 passed ``override=True``, which ``decode_as`` and :meth:`Registry.derive`
 always pass; a key inherited from a parent is withheld either way. A
-class registered later in the same table fills the key as usual.
+later registration of a class fills a withheld key without
+``override=True``, a global withhold included.
 ``None`` is not a decoder and is refused with :class:`TypeError`.
 
 Global and isolated registries
@@ -231,8 +232,9 @@ class WithheldType(enum.Enum):
         return "WITHHELD"
 
 
-#: Registered in place of a class, makes a key dispatch to nothing (see
-#: "Withholding" in the module docstring).
+#: The value registered in place of a class to withhold a key: a
+#: withheld key dispatches to nothing (see "Withholding" in the module
+#: docstring).
 WITHHELD: Final = WithheldType.WITHHELD
 
 
@@ -540,7 +542,7 @@ def register(
 
     or is :data:`WITHHELD`, to make the key dispatch to nothing::
 
-        register("udp.port", 1812, WITHHELD)
+        register("udp.port", 1812, WITHHELD, override=True)
 
     Registrations land in :data:`DEFAULT` — process-wide — unless
     ``registry`` names another. See :meth:`Registry.register` for the
@@ -589,6 +591,7 @@ def register_all(
     :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
         ``llc.snap`` and a key is outside the range it accepts (see "Key
         ranges" in the module docstring).
+    :raises TypeError: if ``protocol`` is ``None``.
     :raises RegistryConflictError: if a key is held by a different
         class and ``override`` is false.
     """

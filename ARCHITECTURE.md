@@ -752,8 +752,10 @@ key, as a registration does. Withholding is idempotent and leaves a class
 registered directly in the same table in place, unless `override=True`
 says otherwise, which `decode_as` and `Registry.derive()` always pass, so
 a per-walk withhold beats a global entry and a per-walk class beats a
-global withhold, for that walk only. `None` is not a decoder: registered
-anywhere, `decode_as` included, it raises `TypeError` naming the key.
+global withhold, for that walk only. A later registration of a class
+fills a withheld key without `override=True`, a global withhold
+included. `None` is not a decoder: registered anywhere, `decode_as`
+included, it raises `TypeError` naming the key.
 
 A row need not name a class of its own. IP-in-IP (protocols 4 and 41)
 has no header between the outer IP header and the inner one, so its

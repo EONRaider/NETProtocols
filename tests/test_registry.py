@@ -655,11 +655,12 @@ class TestWithheldGlobally:
 
     def test_withholding_is_idempotent(self, registry):
         for _ in range(2):
-            registry.register(TABLE_UDP_PORT, 6969, WITHHELD)
-            assert registry.get(TABLE_UDP_PORT, 6969) is None
-            assert registry._own[TABLE_UDP_PORT][6969] is WITHHELD
-        registry.register(TABLE_UDP_PORT, 6969, WITHHELD, override=True)
-        assert registry._own[TABLE_UDP_PORT][6969] is WITHHELD
+            registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD)
+            assert registry.get(TABLE_IP_PROTO_V6, 253) is None
+        registry.register(TABLE_IP_PROTO_V6, 253, WITHHELD, override=True)
+        registry.register(TABLE_IP_PROTO, 253, Fake)
+        assert registry.get(TABLE_IP_PROTO, 253) is Fake
+        assert registry.get(TABLE_IP_PROTO_V6, 253) is None
         before = registry.table(TABLE_IP_PROTO_V6).copy()
         registry.register(TABLE_IP_PROTO_V6, 89, WITHHELD)
         assert registry.table(TABLE_IP_PROTO_V6) == before
@@ -710,9 +711,12 @@ class TestWithheldGlobally:
             registry.register(TABLE_LLC_DSAP, 0x100, WITHHELD)
 
     def test_the_defaults_withhold_ospf_from_ipv6(self):
-        assert DEFAULT._own[TABLE_IP_PROTO_V6][89] is WITHHELD
         assert DEFAULT.get(TABLE_IP_PROTO, 89) is OSPF
         assert DEFAULT.get(TABLE_IP_PROTO_V6, 89) is None
+        child = DEFAULT.derive()
+        child.register(TABLE_IP_PROTO, 89, Fake, override=True)
+        assert child.get(TABLE_IP_PROTO, 89) is Fake
+        assert child.get(TABLE_IP_PROTO_V6, 89) is None
 
 
 class TestNoneIsRefused:
@@ -736,15 +740,25 @@ class TestNoneIsRefused:
             registry.derive({TABLE_IP_PROTO_V6: {89: None}})
         self.assert_names_the_key(excinfo, TABLE_IP_PROTO_V6, 89)
 
-    def test_registering_none_globally_is_refused(self, registry):
+    def test_registering_none_globally_is_refused(self, monkeypatch):
+        fresh = DEFAULT.derive()
+        monkeypatch.setattr(registry_module, "DEFAULT", fresh)
         with pytest.raises(TypeError) as excinfo:
-            registry.register(TABLE_UDP_PORT, 53, None, override=True)
+            registry_module.DEFAULT.register(
+                TABLE_UDP_PORT, 53, None, override=True
+            )
         self.assert_names_the_key(excinfo, TABLE_UDP_PORT, 53)
-        assert registry.get(TABLE_UDP_PORT, 53) is DNS
-        assert registry._own[TABLE_UDP_PORT][53] is DNS
-        with pytest.raises(TypeError):
-            register_all(TABLE_UDP_PORT, (6969,), None, registry=registry)
-        assert 6969 not in registry._own[TABLE_UDP_PORT]
+        assert fresh.get(TABLE_UDP_PORT, 53) is DNS
+        # 53 still holds a direct entry, which a withhold leaves in place.
+        register(TABLE_UDP_PORT, 53, WITHHELD)
+        assert fresh.get(TABLE_UDP_PORT, 53) is DNS
+        with pytest.raises(TypeError) as excinfo:
+            register_all(TABLE_IP_PROTO_V6, (253,), None)
+        self.assert_names_the_key(excinfo, TABLE_IP_PROTO_V6, 253)
+        # 253 holds no entry of its own, so it inherits from ip.proto.
+        register(TABLE_IP_PROTO, 253, Fake)
+        assert fresh.get(TABLE_IP_PROTO_V6, 253) is Fake
+        assert DEFAULT.get(TABLE_IP_PROTO, 253) is None
 
     def test_none_is_refused_after_the_table_and_key_are_checked(
         self, registry
