@@ -74,6 +74,10 @@ GRE's whole header) leaves the input unbounded, as it is without
 alone does not show a Fragment header after it, so a message
 reassembled from IPv6 fragments needs a header whose Payload Length
 covers the reassembled datagram, or no ``ip``.
+:meth:`~netprotocols.Packet.with_checksums`, which sees the headers
+between, also leaves the input unbounded behind an IPv6 Fragment
+header with its M flag set or a nonzero Fragment Offset (RFC 8200
+§4.5).
 :meth:`~netprotocols.Packet.with_checksums` applies the same bound
 with the same helper, from the nearest IP header before the layer and
 counting the headers between.
@@ -735,7 +739,10 @@ def compute(
         :meth:`~netprotocols.Packet.with_checksums` counts them
         exactly. ``ip``'s length must cover the whole message, so a
         message reassembled from IPv6 fragments takes a header whose
-        Payload Length covers the reassembled datagram, or no ``ip``.
+        Payload Length covers the reassembled datagram, or no ``ip``;
+        :meth:`~netprotocols.Packet.with_checksums` also leaves the
+        input unbounded behind an IPv6 Fragment header in the packet
+        with its M flag set or a nonzero Fragment Offset.
     :param routing: The :class:`~netprotocols.IPv6Routing` header
         between ``ip`` and ``layer``, if there is one. RFC 8200 §8.1
         puts the *final* destination in the pseudo-header behind a

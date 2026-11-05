@@ -88,9 +88,12 @@ def _ip_checksum_extent(
     :func:`~netprotocols.decode_frame` bounds the walk with; this reads
     the nearest IP header alone, where the walk takes the tightest of
     every enclosing bound. Return ``None`` when no IP header encloses
-    the layer, the IP header is an IPv4 fragment's, its length is zero
-    or shorter than the header itself, or the declared end falls short
-    of ``minimum``.
+    the layer, the IP header is an IPv4 fragment's, an IPv6 Fragment
+    header between the two has its M flag set or a nonzero Fragment
+    Offset (RFC 8200 §4.5), the IP header's length is zero or shorter
+    than the header itself, or the declared end falls short of
+    ``minimum``. An atomic fragment, M flag and Fragment Offset both 0
+    (RFC 6946), stays bounded.
 
     :param layers: The packet's headers, outermost first.
     :param index: The position of the layer whose checksum input is
@@ -99,11 +102,16 @@ def _ip_checksum_extent(
     """
     from netprotocols.checksum import _datagram_extent
     from netprotocols.layer3.ip import IPv4, IPv6
+    from netprotocols.layer3.ipv6_ext import IPv6Fragment
 
     offset = 0
     for header in reversed(layers[:index]):
         if isinstance(header, (IPv4, IPv6)):
             return _datagram_extent(header, offset, minimum)
+        if isinstance(header, IPv6Fragment) and (
+            header.m_flag or header.fragment_offset
+        ):
+            return None
         offset += header.header_len
     return None
 
@@ -358,7 +366,9 @@ class Packet:
         kept in the returned packet. An IPv4 Total Length or IPv6
         payload length of zero, an IPv4 Total Length shorter than its
         header, an IPv4 header with More Fragments set or a nonzero
-        Fragment Offset (RFC 791 §3.1), or a declared end before the
+        Fragment Offset (RFC 791 §3.1), an IPv6 Fragment header between
+        the IP header and the layer with its M flag set or a nonzero
+        Fragment Offset (RFC 8200 §4.5), or a declared end before the
         layer's required bytes leaves the input unbounded. The bound is
         the one
         :func:`~netprotocols.checksum.compute` applies given ``ip``,

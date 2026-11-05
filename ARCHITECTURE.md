@@ -1224,10 +1224,14 @@ summed; `with_checksums()` counts them exactly. An IPv4 fragment's
 header (More Fragments set or a nonzero Fragment Offset), a Total
 Length or Payload Length of 0, an IPv4 Total Length shorter than its
 header, or an end before the layer's required bytes leaves the input
-unbounded, as it is without `ip`; `ip`'s length must cover the whole
-message, so a message reassembled from IPv6 fragments needs a header
-whose Payload Length covers the reassembled datagram, or no `ip`. (The RFC 768 subtlety lives where it belongs:
-the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
+unbounded, as it is without `ip`, and `with_checksums()` also leaves it
+unbounded behind an IPv6 Fragment header in the packet with its M flag
+set or a nonzero Fragment Offset, while an atomic fragment (both 0)
+stays bounded; `ip`'s length must cover the whole message, so a
+message reassembled from IPv6 fragments needs a header whose Payload
+Length covers the reassembled datagram, or no `ip`. (The RFC 768
+subtlety lives where it belongs: the `0x0000 → 0xFFFF` substitution
+applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 §A) covers the whole packet with no
 pseudo-header, and goes on the wire least significant byte first, so

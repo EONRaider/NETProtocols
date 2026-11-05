@@ -13,6 +13,7 @@ from netprotocols import (
     ICMPv4,
     IPv4,
     IPv6,
+    IPv6Fragment,
     IPv6Routing,
     Packet,
     compute,
@@ -267,6 +268,34 @@ def test_a_routing_header_loosens_gre_bound_by_its_length():
     assert compute(layer, ip=ip, routing=routing, payload=after) == expected
     filled = Packet(ip, routing, layer).with_checksums(after)[GRE]
     assert filled.checksum == layer.checksum
+
+
+@pytest.mark.parametrize(
+    "m_flag,fragment_offset,bounded",
+    [(1, 0, False), (0, 185, False), (0, 0, True)],
+    ids=["more-fragments", "offset", "atomic"],
+)
+def test_with_checksums_leaves_gre_unbounded_behind_an_ipv6_fragment(
+    m_flag, fragment_offset, bounded
+):
+    """Behind a Fragment header with M set or a nonzero offset, GRE is
+    summed with the padding after it; an atomic fragment (RFC 6946)
+    keeps the bound and the wire checksum."""
+    layer, payload, message = gre_layer(0x8000, b"inner datagram")
+    word = (fragment_offset << 3) | m_flag
+    fragment = struct.pack("!BBHI", 47, 0, word, 0x01020304)
+    ip = IPv6.decode(ipv6(fragment + message, 44))
+    header = IPv6Fragment.decode(fragment)
+    assert (header.m_flag, header.fragment_offset) == (m_flag, fragment_offset)
+    stale = replace(
+        layer,
+        fields=(layer.checksum ^ 1).to_bytes(2, "big") + layer.fields[2:],
+    )
+    after = payload + PADDING
+    filled = Packet(ip, header, stale).with_checksums(after)[GRE]
+    unbounded = zeroed_sum(message + PADDING, 4)
+    assert unbounded != layer.checksum
+    assert filled.checksum == (layer.checksum if bounded else unbounded)
 
 
 def gre_layer(flags, payload):
