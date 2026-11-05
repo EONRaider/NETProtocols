@@ -193,7 +193,9 @@ dummy builder writes no output; the check is the build itself.
   than letting the standard-library references go unchecked. Nothing is
   suppressed: `docs/conf.py` has no `nitpick_ignore`,
   `nitpick_ignore_regex` or `suppress_warnings`, and
-  `tests/test_workflows.py` fails if it gains either of the last two.
+  `tests/test_workflows.py` fails if it gains any of the three, so adding
+  one, even a single `nitpick_ignore` entry, means changing that test
+  too.
   Intersphinx checks that each standard-library target exists and has
   the role's kind; an ignore list would accept whatever it names.
 
