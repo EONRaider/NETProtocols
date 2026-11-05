@@ -8,10 +8,11 @@ pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
-digest, every RADIUS authenticator a frame holds alone, every STUN
-MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
-below, and every STUN FINGERPRINT; every TCP segment on port 443
-that carries data holds whole TLS records. Frames
+digest, every RADIUS authenticator the corpus holds (a reply's
+against its request's), every STUN MESSAGE-INTEGRITY and every NTP
+MAC, with the test keys published below, and every STUN FINGERPRINT;
+every TCP segment on port 443 that carries data holds whole TLS
+records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
 frames routinely leave checksums to NIC offload. 394 frames across 36
 scenarios. Addresses are as-captured from the capture host's network.
@@ -753,16 +754,34 @@ hard-coded, independently, in `scripts/check_fixtures.py` and
 Published so anyone can verify the captures: these values protect
 nothing. `check_fixtures` verifies, with the shared secret, every
 Accounting-Request's Request Authenticator (MD5 over the packet with a
-zero Authenticator, then the secret, RFC 2866 §3) and the
-Message-Authenticator of every Access-Request and Status-Server
-(HMAC-MD5 under the secret over the packet with the attribute's value
-zeroed, RFC 3579 §3.2): what one frame holds. A reply's Response
-Authenticator (RFC 2865 §3) and Message-Authenticator are computed over
-its request's Authenticator, in another frame, so `tests/test_radius.py`
-pairs each reply with its request and verifies those, and unhides each
-User-Password (RFC 2865 §5.2) and checks the CHAP-Password (§5.3). The
-values are also hard-coded, independently, in
-`scripts/check_fixtures.py` and `tests/test_radius.py`.
+zero Authenticator, then the secret, RFC 2866 §3,
+`radius-accounting-authenticator`) and the Message-Authenticator of
+every Access-Request and Status-Server (HMAC-MD5 under the secret over
+the packet with the attribute's value zeroed, RFC 3579 §3.2,
+`radius-message-authenticator`). A reply's Response Authenticator and
+Message-Authenticator are computed over its request's Authenticator, in
+another frame, so `check_fixtures` pairs each reply with a request of
+the same pcap: one from the reply's destination address and port to
+its source address and port with the same Identifier, the most recent
+such request no earlier reply has answered, which handles a reused
+Identifier. It then verifies the reply's Response Authenticator (MD5
+over the reply with the request's Authenticator in its place, then the
+secret, RFC 2865 §3, `radius-response-authenticator`) and its
+Message-Authenticator when it carries one (HMAC-MD5 under the secret
+over the reply with the request's Authenticator in place and the
+attribute's value zeroed, RFC 3579 §3.2,
+`radius-reply-message-authenticator`), for Access-Accept,
+Access-Reject, Access-Challenge, Accounting-Response and the
+Disconnect and CoA ACKs and NAKs (RFC 5176, on UDP 3799). A reply that
+no earlier request of its pcap matches is counted
+`radius-reply-unpaired` and not checked, as an unreadable payload is
+counted and not failed, and fails as `unchecked-radius-reply-unpaired`
+inside a payload an IPsec ICV vouched for. `radius.pcap`'s six replies
+all pair and verify. `tests/test_radius.py` also pairs each reply with
+its request and verifies those, and unhides each User-Password (RFC
+2865 §5.2) and checks the CHAP-Password (§5.3). The values are also
+hard-coded, independently, in `scripts/check_fixtures.py` and
+`tests/test_radius.py`.
 
 | What | Value |
 |---|---|
