@@ -14,12 +14,13 @@ request's), every STUN MESSAGE-INTEGRITY and every NTP MAC, with the
 test keys published below, and every STUN FINGERPRINT; every TCP
 segment on port 443 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 402 frames across 38
+frames routinely leave checksums to NIC offload. 411 frames across 39
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-five scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
+`vrrp_rfc9568.pcap`,
 `rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`, `mpls.pcap`,
 `lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`, `stun.pcap`,
 `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
@@ -75,6 +76,7 @@ rows and the notes below.
 | `mpls.pcap` | 8 | MPLS label stacks (RFC 3032) over Ethernet: one label (`0x12345`) carrying an ICMPv4 echo; two labels (16001, 16002) carrying UDP; three labels (16001-16003, traffic classes 5/3/0) carrying an echo; an Entropy Label Indicator (7) and an entropy label (RFC 6790) carrying an echo; an IPv4 Explicit NULL bottom label (0) carrying a UDP datagram of 2 bytes of payload, zero padded to 60 bytes; an IPv6 Explicit NULL bottom label (2) carrying an IPv6 UDP datagram; EtherType `0x8848` to a multicast MAC carrying an echo; and an Ethernet pseudowire, a control word (RFC 4448 §4.6) and a whole Ethernet frame — `Ethernet→MPLS→IPv4→ICMPv4` / `→IPv4→UDP` / `→IPv6→UDP`, and `Ethernet→MPLS`, where the walk stops at the control word; **script-built label stacks around kernel-built IPv4 datagrams**, the IPv6 datagram script-built (see MPLS note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
 | `vrrp.pcap` | 18 | VRRP adverts from two keepalived 2.2.8 routers, A (`10.9.20.1`, priority 200) and B (`10.9.20.2`, priority 100), four virtual routers: VRID 51, VRRPv2 with `auth_type PASS` (Auth Type 1, password `np-vrrp`) and two addresses — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 52, VRRPv2 without authentication (8 zero bytes of Authentication Data), one address — A ×2 and its resignation; VRID 53, VRRPv3 with one address (the minimal 12-byte message) — the same failover as VRID 51; VRID 54, VRRPv3 unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
+| `vrrp_rfc9568.pcap` | 9 | VRRPv3 adverts from two keepalived 2.2.8 routers with `v3_checksum_as_v2`, A (`10.9.203.1`, priority 200) and B (`10.9.203.2`, priority 100), every checksum the message's alone, without the IPv4 pseudo-header (RFC 9568 §5.2.8), two virtual routers: VRID 61, one address (the minimal 12-byte message), multicast — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 62, unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 | `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST BPDU, which `tests/test_stp.py` builds by hand); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
@@ -334,15 +336,32 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   `224.0.0.18`. That is keepalived's default; RFC 5798 §5.2.8 cites
   only RFC 2460's pseudo-header, which is IPv6's. keepalived's
   `v3_checksum_as_v2` option, and RFC 9568, which obsoletes RFC 5798,
-  leave the IPv4 pseudo-header out; `verify()` accepts such an advert,
-  and `check_fixtures` fails it. It also requires each message's
-  length, from its version and count, to be the IP payload's exactly.
+  leave the IPv4 pseudo-header out: see `vrrp_rfc9568.pcap` below.
+  It also requires each message's length, from its version and count,
+  to be the IP payload's exactly.
   veth does not pad a short frame, so none of these frames carries
   Ethernet padding (they are 46-58 bytes); `tests/test_vrrp.py` pads
   them to 60 bytes, and appends a 4-byte trailer, to show the walk
   leaves both undecoded. The kernel has no IPv6, so VRRPv3 over IPv6
   is covered by constructed frames in `tests/test_vrrp.py`, with
   checksums computed there and checked by `check_fixtures` too.
+
+- `vrrp_rfc9568.pcap` was produced by
+  `scripts/capture_fixtures_vrrp_rfc9568.sh`: keepalived 2.2.8 in two
+  netns (`npvr9-a`, `npvr9-b`) over a veth pair on `10.9.203.0/24`,
+  every `vrrp_instance` configured with `vrrp_version 3` and
+  `v3_checksum_as_v2`, run through two segments (one VRID each, see
+  the row above) and captured on B's side with tcpdump 4.99.4. The
+  script, keepalived's raw-socket sending, the offload caveat and the
+  selection rule are `vrrp.pcap`'s. Its own stdlib assertions require
+  every kept advert's checksum to be the sum of the message alone and
+  not the sum behind the IPv4 pseudo-header, and the composition to
+  be exact. `check_fixtures` verifies both forms independently for
+  VRRPv3 over IPv4 and counts each of these 9 frames as
+  `vrrpv3-no-pseudo-header`; `verify()` accepts them, and
+  `with_checksums()` rewrites each into the pseudo-header form.
+  tcpdump 4.99.4 reports every one as `bad vrrp cksum`: it sums
+  VRRPv3 over IPv4 behind the pseudo-header.
 
 - `ospf.pcap` was produced by `scripts/capture_fixtures_ospf.sh`: FRR
   8.4's `zebra` and `ospfd` in each of two netns over a veth pair, with

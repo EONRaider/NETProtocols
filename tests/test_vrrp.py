@@ -1,6 +1,6 @@
 """VRRP, the Virtual Router Redundancy Protocol, IP protocol 112.
 
-VRRPv2 is RFC 3768, VRRPv3 RFC 5798.
+VRRPv2 is RFC 3768, VRRPv3 RFC 5798 and RFC 9568, which obsoletes it.
 
 One class decodes both versions and branches on the version nibble;
 the address width comes from the IP family, so the class comes as a
@@ -102,6 +102,13 @@ def v3_checksum_v4(src: str, dst: str, message: bytes) -> int:
 V6_SRC = "fe80::1"
 V6_GROUP = "ff02::12"  # RFC 5798 §5.1.2.2
 V6_ADDRESSES = ("fe80::1:1", "2001:db8::100")
+
+
+def rfc_9568_form(message: bytes) -> bytes:
+    """Return ``message`` with its checksum summed over the message
+    alone, as RFC 9568 §5.2.8 gives it over IPv4."""
+    zeroed = message[:6] + b"\x00\x00" + message[8:]
+    return zeroed[:6] + struct.pack("!H", ones_complement(zeroed)) + zeroed[8:]
 
 
 def v6_message(addresses=V6_ADDRESSES, priority: int = 200) -> bytes:
@@ -626,6 +633,64 @@ class TestCorpusVRRP:
             assert (ip.dscp, ip.ttl, ip.protocol) == (48, 255, 112)
 
 
+class TestCorpusRFC9568:
+    """vrrp_rfc9568.pcap: keepalived with ``v3_checksum_as_v2``."""
+
+    FRAMES = pcap_frames(FIXTURES / "vrrp_rfc9568.pcap")
+
+    def test_composition(self):
+        packets = [decode_frame(frame) for frame in self.FRAMES]
+        adverts = [packet[VRRP] for packet in packets]
+        assert [(a.version, a.vrid) for a in adverts] == (
+            [(3, 61)] * 6 + [(3, 62)] * 3
+        )
+        assert [a.priority for a in adverts] == [
+            200, 200, 0, 100, 100, 0,
+            200, 200, 0,
+        ]  # fmt: skip
+        assert [packet[IPv4].src for packet in packets] == (
+            ["10.9.203.1"] * 3 + ["10.9.203.2"] * 3 + ["10.9.203.1"] * 3
+        )
+        assert [packet[IPv4].dst for packet in packets] == (
+            ["224.0.0.18"] * 6 + ["10.9.203.2"] * 3
+        )
+        assert {a.count_ip_addrs for a in adverts if a.vrid == 62} == {3}
+        assert {a.max_adver_int for a in adverts if a.vrid == 62} == {50}
+
+    def test_every_checksum_is_the_message_s_alone(self):
+        for frame in self.FRAMES:
+            packet = decode_frame(frame)
+            ip, vrrp = packet[IPv4], packet[VRRP]
+            raw = bytes(vrrp)
+            assert vrrp.checksum == ones_complement(
+                raw[:6] + b"\x00\x00" + raw[8:]
+            )
+            assert vrrp.checksum != v3_checksum_v4(ip.src, ip.dst, raw)
+
+    def test_every_advert_verifies(self):
+        for frame in self.FRAMES:
+            packet = decode_frame(frame)
+            assert packet.consumed == len(frame)
+            assert verify(packet[VRRP], ip=packet[IPv4])
+
+    def test_with_checksums_rewrites_to_the_pseudo_header_form(self):
+        for frame in self.FRAMES:
+            packet = decode_frame(frame)
+            ip = packet[IPv4]
+            rewritten = packet.with_checksums()
+            assert rewritten != packet
+            vrrp = rewritten[VRRP]
+            assert vrrp.checksum == v3_checksum_v4(ip.src, ip.dst, bytes(vrrp))
+            assert verify(vrrp, ip=rewritten[IPv4])
+            assert rewritten[IPv4] == ip
+
+    def test_the_checker_counts_the_form(self, check_fixtures):
+        stats = check_fixtures.Counter()
+        for frame in self.FRAMES:
+            assert check_fixtures.check_frame(frame, stats) == []
+        assert stats["vrrpv3"] == stats["vrrpv3-no-pseudo-header"] == 9
+
+
 class TestChecker:
     """scripts/check_fixtures.py fails a tampered VRRP frame."""
 
@@ -679,20 +744,65 @@ class TestChecker:
         message[0] = 0x21
         assert self.check(v6_frame(bytes(message))) == ["vrrp-version"]
 
-    def test_the_rfc_9568_ipv4_form_fails(self, raw_vrrpv3_advert):
-        """Fail an advert checksummed as RFC 9568 §5.2.8 gives it.
+    def stats(self, frame: bytes) -> tuple[list[str], dict[str, int]]:
+        stats = self.checker.Counter()
+        return self.checker.check_frame(frame, stats), dict(stats)
 
-        Without the pseudo-header over IPv4, it fails the checker,
-        though it passes verify().
+    def test_the_rfc_9568_ipv4_form_passes(self, raw_vrrpv3_advert):
+        """Pass an advert checksummed as RFC 9568 §5.2.8 gives it.
+
+        Without the pseudo-header over IPv4, it passes the checker,
+        which counts it as ``vrrpv3-no-pseudo-header``, as it passes
+        verify().
         """
-        zeroed = raw_vrrpv3_advert[:6] + b"\x00\x00" + raw_vrrpv3_advert[8:]
-        message = (
-            zeroed[:6] + struct.pack("!H", ones_complement(zeroed)) + zeroed[8:]
-        )
-        frame = v4_frame(message)
-        assert self.check(frame) == ["vrrp-checksum"]
+        frame = v4_frame(rfc_9568_form(raw_vrrpv3_advert))
+        failures, stats = self.stats(frame)
+        assert failures == []
+        assert stats["vrrpv3"] == stats["vrrpv3-no-pseudo-header"] == 1
         packet = decode_frame(frame)
         assert verify(packet[VRRP], ip=packet[IPv4])
+
+    @pytest.mark.parametrize("index", [9, 15])
+    def test_the_pseudo_header_form_is_not_counted_apart(self, index):
+        failures, stats = self.stats(self.FRAMES[index])
+        assert failures == []
+        assert stats["vrrpv3"] == 1
+        assert "vrrpv3-no-pseudo-header" not in stats
+
+    def test_vrrpv2_is_not_counted_apart(self):
+        failures, stats = self.stats(self.FRAMES[0])
+        assert failures == []
+        assert stats["vrrpv2"] == 1
+        assert "vrrpv3-no-pseudo-header" not in stats
+
+    def test_an_ipv4_checksum_of_neither_form_fails(self, raw_vrrpv3_advert):
+        message = rfc_9568_form(raw_vrrpv3_advert)
+        wire = struct.unpack_from("!H", message, 6)[0]
+        pseudo = v3_checksum_v4("10.9.20.1", "224.0.0.18", message)
+        other = next(c for c in (0, 1, 2) if c not in {wire, pseudo})
+        frame = v4_frame(message[:6] + struct.pack("!H", other) + message[8:])
+        failures, stats = self.stats(frame)
+        assert failures == ["vrrp-checksum"]
+        assert "vrrpv3-no-pseudo-header" not in stats
+
+    def test_the_rfc_9568_form_fails_on_a_flipped_address(
+        self, raw_vrrpv3_advert
+    ):
+        frame = bytearray(v4_frame(rfc_9568_form(raw_vrrpv3_advert)))
+        frame[14 + 20 + 8] ^= 0x01
+        assert self.check(bytes(frame)) == ["vrrp-checksum"]
+
+    def test_vrrpv3_over_ipv6_without_its_pseudo_header_fails(self):
+        frame = v6_frame(rfc_9568_form(v6_message()))
+        failures, stats = self.stats(frame)
+        assert failures == ["vrrp-checksum"]
+        assert "vrrpv3-no-pseudo-header" not in stats
+
+    def test_vrrpv2_with_a_pseudo_header_fails(self):
+        message = self.FRAMES[0][14 + 20 :]
+        pseudo = v3_checksum_v4("10.9.20.1", "224.0.0.18", message)
+        frame = v4_frame(message[:6] + struct.pack("!H", pseudo) + message[8:])
+        assert self.check(frame) == ["vrrp-checksum"]
 
     def test_a_rebuilt_frame_passes(self, raw_vrrpv3_advert):
         layer = VRRP.decode(raw_vrrpv3_advert)

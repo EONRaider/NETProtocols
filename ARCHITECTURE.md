@@ -1169,7 +1169,9 @@ returns `compute()`'s form, rewrites an RFC 9568-form advert into the
 pseudo-header form, as it rewrites a whole-message PIM Register to the
 8-byte form. VRRPv2, which has no pseudo-header, and VRRPv3 over IPv6,
 whose pseudo-header both RFCs require, verify only in `compute()`'s
-form.
+form. `check_fixtures.py` checks both forms with its own sum and
+counts an advert that matched only RFC 9568's as
+`vrrpv3-no-pseudo-header`.
 
 Behind an IPv6 Routing header with segments left, RFC 8200 §8.1 puts
 the route's *final* destination in the pseudo-header, while `ip.dst`
