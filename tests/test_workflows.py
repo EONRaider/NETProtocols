@@ -15,7 +15,9 @@ The commit-SHA-pinning check is parametrized over every file a glob of
 as soon as it is added.
 """
 
+import ast
 import re
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -514,6 +516,98 @@ class TestCIWorkflow:
             r"(?m)^ +- run: python3 scripts/check_markers\.py$", block
         ), "lint job no longer runs `python3 scripts/check_markers.py`"
         assert (ROOT / "scripts" / "check_markers.py").is_file()
+
+    @staticmethod
+    def _assert_runs_strict_sphinx_build(block: str) -> None:
+        """``block``, a :func:`job_blocks` job, has exactly one step whose
+        executed one-line ``run:`` command is ``uv run --frozen
+        sphinx-build`` with ``-W`` and ``-n`` over ``docs``, and the step
+        is neither conditional nor allowed to fail.
+
+        The command is read from the step's ``run:`` key and split with
+        :func:`shlex.split`, so a step that names those words anywhere
+        else (its ``name:``, a comment, an ``echo``) does not count.
+        """
+        steps = []
+        for step in job_steps(block):
+            run = step_key(step, "run")
+            if run is None:
+                continue
+            argv = shlex.split(run)
+            if "sphinx-build" in argv:
+                steps.append((step, argv))
+        assert len(steps) == 1, (
+            f"expected one step running sphinx-build, found {len(steps)}"
+        )
+        step, argv = steps[0]
+        assert argv[:3] == ["uv", "run", "--frozen"], (
+            f"sphinx-build does not run through `uv run --frozen`: {argv}"
+        )
+        assert argv[3] == "sphinx-build", (
+            f"the step's command is not sphinx-build itself: {argv}"
+        )
+        options = argv[4:]
+        assert "-W" in options, "sphinx-build runs without -W"
+        assert "-n" in options, "sphinx-build runs without -n"
+        assert "docs" in options, "sphinx-build does not read docs/"
+        assert step_key(step, "if") is None, "the step is conditional"
+        assert step_key(step, "continue-on-error") is None, (
+            "a failure in the step does not fail the job"
+        )
+
+    def test_lint_runs_a_nitpicky_sphinx_build(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The lint job builds the docstrings with ``sphinx-build -W -n``
+        over docs/, whose conf.py turns on ``nitpicky`` and holds no
+        blanket suppression, and Sphinx is pinned in the dev group."""
+        block = ci_jobs.get("lint")
+        assert block is not None, "ci.yml has no lint job"
+        self._assert_runs_strict_sphinx_build(block)
+
+        tree = ast.parse((ROOT / "docs" / "conf.py").read_text())
+        assigned = {
+            target.id: node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        nitpicky = assigned.get("nitpicky")
+        assert isinstance(nitpicky, ast.Constant) and nitpicky.value is True, (
+            "docs/conf.py does not set nitpicky = True"
+        )
+        for name in ("nitpick_ignore_regex", "suppress_warnings"):
+            assert name not in assigned, f"docs/conf.py sets {name}"
+
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        dev = pyproject["dependency-groups"]["dev"]
+        assert any(re.fullmatch(r"sphinx==[\d.]+", dep) for dep in dev), (
+            "Sphinx is not pinned with == in the dev dependency group"
+        )
+
+    def test_sphinx_check_rejects_a_step_that_only_names_the_command(
+        self,
+    ) -> None:
+        """A step whose ``name:`` holds the command but whose ``run:``
+        does something else is not a Sphinx build."""
+        block = (
+            "    steps:\n"
+            "      - name: uv run --frozen sphinx-build -W -n docs out\n"
+            "        run: echo skipped\n"
+        )
+        with pytest.raises(AssertionError, match="found 0"):
+            self._assert_runs_strict_sphinx_build(block)
+
+    def test_sphinx_check_rejects_a_build_without_w(self) -> None:
+        """A build that runs without ``-W`` reports broken references as
+        warnings and passes."""
+        block = (
+            "    steps:\n"
+            "      - run: uv run --frozen sphinx-build -n -b dummy docs out\n"
+        )
+        with pytest.raises(AssertionError, match="without -W"):
+            self._assert_runs_strict_sphinx_build(block)
 
     def test_test_job_runs_the_src_doctests(
         self, ci_jobs: dict[str, str]
