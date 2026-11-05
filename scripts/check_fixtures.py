@@ -681,7 +681,7 @@ _VXLAN_PORT = 4789
 _RIP_PORT = 520
 
 #: RADIUS's authentication and accounting ports (RFC 2865 §3, RFC 2866
-#: §3) and Dynamic Authorization's (RFC 5176 §3).
+#: §3) and Dynamic Authorization's (RFC 5176 §2.3).
 _RADIUS_PORTS = (1812, 1813, 3799)
 
 #: STUN's port, over UDP and TCP alike (RFC 8489 §6).
@@ -692,6 +692,12 @@ _NTP_PORT = 123
 
 #: HSRP's port (RFC 2281 §5.1).
 _HSRP_PORT = 1985
+
+#: The ports :func:`_check_udp_payload` dispatches on after RADIUS's: a
+#: datagram from or to one of them is not read as RADIUS, whatever its
+#: other port, so a reply of one of these protocols sent to a client
+#: whose ephemeral port is 1812, 1813 or 3799 is read as that protocol.
+_NON_RADIUS_PORTS = frozenset((_STUN_PORT, _NTP_PORT, _HSRP_PORT))
 
 
 def _check_udp_payload(
@@ -710,13 +716,16 @@ def _check_udp_payload(
     keyed authenticators (see :func:`_check_radius`), a STUN message's
     FINGERPRINT and MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP
     message's MAC (see :func:`_check_ntp`) or an HSRP message's fields
-    (see :func:`_check_hsrp`)."""
+    (see :func:`_check_hsrp`). A datagram is RADIUS when its server's
+    port (see :func:`_radius_server_port`) is a RADIUS port and neither
+    port is a STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
     if _RIP_PORT in (src_port, dst_port):
         return _check_rip(datagram, stats)
-    if src_port in _RADIUS_PORTS or dst_port in _RADIUS_PORTS:
+    other = _NON_RADIUS_PORTS.intersection((src_port, dst_port))
+    if _radius_server_port(datagram) in _RADIUS_PORTS and not other:
         return _check_radius(src, dst, datagram, stats, strict=strict)
     if _STUN_PORT in (src_port, dst_port):
         end = struct.unpack_from("!H", datagram, 4)[0]
@@ -726,6 +735,19 @@ def _check_udp_payload(
     if _HSRP_PORT in (src_port, dst_port):
         return _check_hsrp(datagram, stats)
     return []
+
+
+def _radius_server_port(datagram: bytes) -> int:
+    """The port of the RADIUS server that ``datagram``, a UDP datagram,
+    would be sent from or to: its source port when its first payload
+    byte is a reply's Code (see :data:`_RADIUS_ANSWERS`), and its
+    destination port otherwise, as for a request or a payload too short
+    to hold a Code."""
+    src_port, dst_port, end = struct.unpack_from("!HHH", datagram)
+    code = datagram[8:end][:1]
+    if code and code[0] in _RADIUS_ANSWERS:
+        return int(src_port)
+    return int(dst_port)
 
 
 def _check_tcp_payload(segment: bytes, stats: Counter[str]) -> list[str]:
@@ -1137,15 +1159,31 @@ _RADIUS_MESSAGE_AUTHENTICATOR = 80
 
 #: RADIUS request codes: Access-Request (RFC 2865 §3),
 #: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §3),
-#: Disconnect-Request and CoA-Request (RFC 5176 §3).
+#: Disconnect-Request and CoA-Request (RFC 5176 §2.3).
 _RADIUS_REQUESTS = (1, 4, 12, 40, 43)
 
 #: RADIUS reply codes, whose Response Authenticator and
 #: Message-Authenticator are computed over their request's
-#: Authenticator: Access-Accept, Access-Reject and Access-Challenge
-#: (RFC 2865 §3), Accounting-Response (RFC 2866 §3), Disconnect-ACK,
-#: Disconnect-NAK, CoA-ACK and CoA-NAK (RFC 5176 §3).
-_RADIUS_REPLIES = (2, 3, 5, 11, 41, 42, 44, 45)
+#: Authenticator, each mapped to the request codes it answers:
+#: Access-Accept, Access-Reject and Access-Challenge an Access-Request
+#: (RFC 2865 §3), Accounting-Response an Accounting-Request (RFC 2866
+#: §3), Disconnect-ACK and Disconnect-NAK a Disconnect-Request, CoA-ACK
+#: and CoA-NAK a CoA-Request (RFC 5176 §2.3), and Access-Accept,
+#: Access-Reject and Accounting-Response a Status-Server, which RFC 5997
+#: §2 says a server answers with Access-Accept on an authentication port
+#: or Accounting-Response on an accounting port and MAY answer with
+#: Access-Reject; it does not recommend Access-Challenge, which is not
+#: mapped to Status-Server.
+_RADIUS_ANSWERS = {
+    2: (1, 12),
+    3: (1, 12),
+    5: (4, 12),
+    11: (1,),
+    41: (40,),
+    42: (40,),
+    44: (43,),
+    45: (43,),
+}
 
 #: A RADIUS exchange: the client's address and port, the server's
 #: address and port, and the Identifier (RFC 2865 §3).
@@ -1153,23 +1191,35 @@ RadiusExchange = tuple[bytes, int, bytes, int, int]
 
 
 class RadiusExchanges:
-    """The Authenticators of one capture's RADIUS requests that no reply
-    has answered yet, by exchange (see :data:`RadiusExchange`), in
-    capture order."""
+    """The Codes and Authenticators of one capture's RADIUS requests
+    that no reply has answered yet, by exchange (see
+    :data:`RadiusExchange`), in capture order."""
 
     def __init__(self) -> None:
-        self._pending: dict[RadiusExchange, list[bytes]] = {}
+        self._pending: dict[RadiusExchange, list[tuple[int, bytes]]] = {}
 
-    def ask(self, exchange: RadiusExchange, authenticator: bytes) -> None:
-        """Record a request of ``exchange`` as unanswered."""
-        self._pending.setdefault(exchange, []).append(authenticator)
+    def ask(
+        self, exchange: RadiusExchange, code: int, authenticator: bytes
+    ) -> None:
+        """Record a request of ``exchange`` and ``code`` as
+        unanswered."""
+        self._pending.setdefault(exchange, []).append((code, authenticator))
 
-    def answer(self, exchange: RadiusExchange) -> bytes | None:
+    def answer(
+        self, exchange: RadiusExchange, codes: tuple[int, ...]
+    ) -> bytes | None:
         """Remove and return the Authenticator of the most recent
-        unanswered request of ``exchange``, or ``None`` when every
-        request of it is answered or none was seen."""
-        pending = self._pending.get(exchange)
-        return pending.pop() if pending else None
+        unanswered request of ``exchange`` whose Code is in ``codes``,
+        or ``None`` when there is none."""
+        pending = self._pending.get(exchange, [])
+        for index in range(len(pending) - 1, -1, -1):
+            if pending[index][0] in codes:
+                return pending.pop(index)[1]
+        return None
+
+    def waiting(self, exchange: RadiusExchange) -> bool:
+        """Whether a request of ``exchange`` is unanswered."""
+        return bool(self._pending.get(exchange))
 
 
 #: The :class:`RadiusExchanges` of the capture whose frame
@@ -1216,8 +1266,12 @@ def _check_radius(
     :func:`_check_radius_reply`). Each request is recorded in the
     capture's :class:`RadiusExchanges` under its exchange (see
     :data:`RadiusExchange`), from which a reply takes the most recent
-    unanswered request of the same exchange. Bytes after the Length are
-    padding (RFC 2865 §3) and are not checked."""
+    unanswered request of the same exchange whose Code it answers (see
+    :data:`_RADIUS_ANSWERS`). A reply whose exchange has unanswered
+    requests of none of those Codes is counted
+    ``radius-reply-code-mismatch`` and not checked, and fails under
+    ``strict``. Bytes after the Length are padding (RFC 2865 §3) and are
+    not checked."""
     radius = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["radius"] += 1
     if len(radius) < 20:
@@ -1232,17 +1286,23 @@ def _check_radius(
     code, identifier = radius[0], radius[1]
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     exchanges = _RADIUS_EXCHANGES.get()
-    if code in _RADIUS_REPLIES:
+    if code in _RADIUS_ANSWERS:
         request = None
         if exchanges is not None:
-            request = exchanges.answer(
-                (dst, dst_port, src, src_port, identifier)
-            )
+            exchange = (dst, dst_port, src, src_port, identifier)
+            request = exchanges.answer(exchange, _RADIUS_ANSWERS[code])
+            if request is None and exchanges.waiting(exchange):
+                stats["radius-reply-code-mismatch"] += 1
+                return (
+                    ["unchecked-radius-reply-code-mismatch"] if strict else []
+                )
         return _check_radius_reply(
             radius, attributes, request, stats, strict=strict
         )
     if code in _RADIUS_REQUESTS and exchanges is not None:
-        exchanges.ask((src, src_port, dst, dst_port, identifier), radius[4:20])
+        exchanges.ask(
+            (src, src_port, dst, dst_port, identifier), code, radius[4:20]
+        )
     if code == _RADIUS_ACCOUNTING_REQUEST:
         stats["radius-accounting-authenticator"] += 1
         # MD5 is what RFC 2866 §3 mandates; this only checks the hash
@@ -1277,7 +1337,7 @@ def _check_radius_reply(
 
     Its Response Authenticator must be MD5 over the reply with
     ``request`` in place of the Authenticator, then the secret (RFC 2865
-    §3, RFC 2866 §3, RFC 5176 §3), and its Message-Authenticator, when
+    §3, RFC 2866 §3, RFC 5176 §2.3), and its Message-Authenticator, when
     it carries one, HMAC-MD5 under the secret over the reply with
     ``request`` in place of the Authenticator and that attribute's value
     zeroed (RFC 3579 §3.2). Each is reported on its own. A reply with no

@@ -1336,6 +1336,36 @@ def _() -> tuple[list[bytes], list[bytes]]:
     return [RADIUS_REQUEST, RADIUS_ACCEPT], [RADIUS_REQUEST, tampered]
 
 
+def recoded(reply: bytes, code: int, request: bytes) -> bytes:
+    """``reply``, a RADIUS reply frame, with ``code`` as its Code and
+    its authenticators recomputed over ``request``, a request's
+    Authenticator, resealed."""
+    return answered(put(reply, udp_data(reply), bytes([code])), request)
+
+
+def strict_exchange(frames: list[bytes]) -> list[bytes]:
+    """``frames``, a RADIUS request and then its replies, each in ESP,
+    the replies from the request's destination to its source."""
+    request, *replies = [esp(17, udp_datagram(data)) for data in frames]
+    client, server = request[26:30], request[30:34]
+    return [
+        request,
+        *(reseal(put(put(r, 26, server), 30, client)) for r in replies),
+    ]
+
+
+@exchange_case("unchecked-radius-reply-code-mismatch")
+def _() -> tuple[list[bytes], list[bytes]]:
+    # An Accounting-Response, signed over the Access-Request it cannot
+    # answer.
+    request = radius_authenticator(RADIUS_REQUEST)
+    mismatched = recoded(RADIUS_ACCEPT, 5, request)
+    return (
+        strict_exchange([RADIUS_REQUEST, RADIUS_ACCEPT]),
+        strict_exchange([RADIUS_REQUEST, mismatched]),
+    )
+
+
 @pytest.mark.parametrize(
     ("failure", "build", "expected"),
     EXCHANGE_CASES,
@@ -1349,6 +1379,44 @@ def test_a_tampered_exchange_fails(
     good, tampered = build()
     assert check_capture(good) == []
     assert check_capture(tampered) == (expected or [failure])
+
+
+#: The RADIUS request Codes: Access-Request (RFC 2865 §3),
+#: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §3),
+#: Disconnect-Request and CoA-Request (RFC 5176 §2.3).
+RADIUS_REQUEST_CODES = (1, 4, 12, 40, 43)
+
+#: The RADIUS reply Codes: Access-Accept, Access-Reject,
+#: Access-Challenge, Accounting-Response, Disconnect-ACK/NAK and
+#: CoA-ACK/NAK.
+RADIUS_REPLY_CODES = (2, 3, 5, 11, 41, 42, 44, 45)
+
+#: Each (request Code, reply Code) pair whose reply answers the
+#: request.
+RADIUS_ANSWERED = [
+    (1, 2),
+    (1, 3),
+    (1, 11),
+    (4, 5),
+    (12, 2),
+    (12, 3),
+    (12, 5),
+    (40, 41),
+    (40, 42),
+    (43, 44),
+    (43, 45),
+]
+
+#: Every other (request Code, reply Code) pair.
+RADIUS_MISMATCHED = [
+    (request, reply)
+    for request in RADIUS_REQUEST_CODES
+    for reply in RADIUS_REPLY_CODES
+    if (request, reply) not in RADIUS_ANSWERED
+]
+
+#: The server port each request Code is sent to in these tests.
+RADIUS_SERVER_PORTS = {1: 1812, 4: 1813, 12: 1812, 40: 3799, 43: 3799}
 
 
 class TestRadiusReplies:
@@ -1463,25 +1531,14 @@ class TestRadiusReplies:
         assert stats["radius-reply-unpaired"] == 1
 
     @pytest.mark.parametrize(
-        ("request_code", "reply_code", "port"),
-        [
-            (1, 11, 1812),
-            (40, 41, 3799),
-            (40, 42, 3799),
-            (43, 44, 3799),
-            (43, 45, 3799),
-        ],
-        ids=[
-            "access-challenge",
-            "disconnect-ack",
-            "disconnect-nak",
-            "coa-ack",
-            "coa-nak",
-        ],
+        ("request_code", "reply_code"),
+        RADIUS_ANSWERED,
+        ids=[f"{request}-{reply}" for request, reply in RADIUS_ANSWERED],
     )
     def test_every_reply_code_is_verified(
-        self, request_code: int, reply_code: int, port: int
+        self, request_code: int, reply_code: int
     ) -> None:
+        port = RADIUS_SERVER_PORTS[request_code]
         request, reply = radius_exchange(request_code, reply_code, port)
         stats: Counter[str] = Counter()
         assert check_capture([request, reply], stats) == []
@@ -1490,6 +1547,63 @@ class TestRadiusReplies:
         assert check_capture([request, tampered]) == [
             "radius-response-authenticator"
         ]
+
+    @pytest.mark.parametrize(
+        ("request_code", "reply_code"),
+        RADIUS_MISMATCHED,
+        ids=[f"{request}-{reply}" for request, reply in RADIUS_MISMATCHED],
+    )
+    def test_a_reply_of_a_code_that_cannot_answer_is_not_verified(
+        self, request_code: int, reply_code: int
+    ) -> None:
+        """A reply signed over the request of its exchange, but of a
+        Code that cannot answer it, is counted as a mismatch and passes,
+        and the request stays unanswered."""
+        port = RADIUS_SERVER_PORTS[request_code]
+        request, reply = radius_exchange(request_code, reply_code, port)
+        stats: Counter[str] = Counter()
+        assert check_capture([request, reply], stats) == []
+        assert stats["radius-reply-code-mismatch"] == 1
+        assert stats["radius-reply-unpaired"] == 0
+        assert stats["radius-response-authenticator"] == 0
+        answering = {1: 2, 4: 5, 12: 2, 40: 41, 43: 44}[request_code]
+        _, answer = radius_exchange(request_code, answering, port)
+        stats = Counter()
+        assert check_capture([request, reply, answer], stats) == []
+        assert stats["radius-response-authenticator"] == 1
+        assert stats["radius-reply-code-mismatch"] == 1
+
+    def test_a_mismatched_reply_fails_under_strict_alone(self) -> None:
+        request = radius_authenticator(RADIUS_REQUEST)
+        mismatched = recoded(RADIUS_ACCEPT, 44, request)
+        frames = [RADIUS_REQUEST, mismatched]
+        assert check_capture(frames) == []
+        assert check_capture(strict_exchange(frames)) == [
+            "unchecked-radius-reply-code-mismatch"
+        ]
+        stats: Counter[str] = Counter()
+        paired = strict_exchange([RADIUS_REQUEST, RADIUS_ACCEPT])
+        assert check_capture(paired, stats) == []
+        assert stats["radius-response-authenticator"] == 1
+
+    def test_a_reply_skips_a_later_request_it_cannot_answer(self) -> None:
+        access, accept = radius_exchange(1, 2, 1812)
+        coa, coa_ack = radius_exchange(43, 44, 1812)
+        stats: Counter[str] = Counter()
+        assert check_capture([access, coa, accept, coa_ack], stats) == []
+        assert stats["radius-response-authenticator"] == 2
+        assert stats["radius-reply-code-mismatch"] == 0
+        assert stats["radius-reply-unpaired"] == 0
+
+    def test_the_captured_status_server_is_answered_by_access_accept(
+        self,
+    ) -> None:
+        frames = list(pcap_frames(FIXTURES / "radius.pcap"))
+        assert radius_packet(frames[10])[0] == 12
+        assert radius_packet(frames[11])[0] == 2
+        stats: Counter[str] = Counter()
+        assert check_capture(frames[10:12], stats) == []
+        assert stats["radius-response-authenticator"] == 1
 
 
 def radius_exchange(
@@ -1504,7 +1618,7 @@ def radius_exchange(
     if request_code == 1:
         authenticator = bytes(range(16))
     else:
-        # RFC 5176 §3: computed as an Accounting-Request's is.
+        # RFC 5176 §2.3: computed as an Accounting-Request's is.
         authenticator = hashlib.md5(
             head + bytes(16) + user_name + checker._RADIUS_SECRET,
             usedforsecurity=False,
@@ -1527,6 +1641,151 @@ def radius_frame(
     template = put(put(RADIUS_REQUEST, 26, src), 30, dst)
     udp = struct.pack("!HHHH", src_port, dst_port, 8 + len(packet), 1)
     return ipv4_frame(template, 17, udp + packet)
+
+
+def with_ports(frame: bytes, src_port: int, dst_port: int) -> bytes:
+    """An Ethernet/IPv4/UDP frame with its UDP ports set, resealed."""
+    return reseal(put(frame, l4(frame), struct.pack("!HH", src_port, dst_port)))
+
+
+class TestRadiusDispatch:
+    """A UDP datagram is read as RADIUS when its server's port is 1812,
+    1813 or 3799, the source port of a reply and the destination port of
+    anything else, and neither port is STUN's, NTP's or HSRP's."""
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_stun_from_a_radius_port_is_read_as_stun(self, port: int) -> None:
+        moved = with_ports(STUN_AUTH, port, 3478)
+        stats: Counter[str] = Counter()
+        assert check(STUN_AUTH) == []
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["stun-fingerprint"] == 1
+        at = stun_attribute(moved, 0x0008) + 4
+        assert checker.check_frame(stun_resealed(flip(moved, at)), stats) == [
+            "stun-message-integrity"
+        ]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_ntp_from_a_radius_port_is_read_as_ntp(self, port: int) -> None:
+        moved = with_ports(NTP_MD5, port, 123)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["ntp-md5"] == 1
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_a_stun_response_to_a_radius_port_is_read_as_stun(
+        self, port: int
+    ) -> None:
+        """A STUN success response, whose first byte is
+        Access-Request's Code, sent back to a client whose ephemeral
+        port is a RADIUS one, is checked as STUN."""
+        response = frame("stun.pcap", 11)
+        assert response[udp_data(response)] == 1
+        moved = with_ports(response, 3478, port)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["stun-message-integrity"] == 1
+        assert stats["stun-fingerprint"] == 1
+        at = stun_attribute(moved, 0x0008) + 4
+        assert checker.check_frame(stun_resealed(flip(moved, at)), stats) == [
+            "stun-message-integrity"
+        ]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_an_ntp_reply_to_a_radius_port_is_read_as_ntp(
+        self, port: int
+    ) -> None:
+        reply = frame("ntp.pcap", 3)
+        moved = with_ports(reply, 123, port)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["ntp-md5"] == 1
+        assert checker.check_frame(
+            reseal(flip(moved, len(moved) - 1)), stats
+        ) == ["ntp-md5"]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_ntp_from_a_radius_port_with_a_reply_code_is_read_as_ntp(
+        self, port: int
+    ) -> None:
+        """An NTP message whose first byte is Access-Challenge's Code,
+        sent from a RADIUS port to NTP's, is checked as NTP."""
+        moved = with_ports(
+            put(NTP_PLAIN, udp_data(NTP_PLAIN), b"\x0b"), port, 123
+        )
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+        assert stats["ntp"] == 1
+        assert checker.check_frame(udp_length(moved, 8 + 47), stats) == [
+            "ntp-truncated"
+        ]
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    @pytest.mark.parametrize("source", [True, False])
+    def test_hsrp_with_a_radius_port_is_read_as_hsrp(
+        self, port: int, source: bool
+    ) -> None:
+        ports = (port, 1985) if source else (1985, port)
+        moved = with_ports(HSRP_HELLO, *ports)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == ["hsrp-port"]
+        assert stats["radius"] == 0
+        assert stats["hsrp"] == 1
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    @pytest.mark.parametrize("code", [0, 1, 4, 12, 40, 43, 255])
+    def test_other_data_from_a_radius_port_is_not_radius(
+        self, port: int, code: int
+    ) -> None:
+        packet = bytes([code]) + bytes(30)
+        data = radius_frame(
+            RADIUS_REQUEST[26:30], RADIUS_REQUEST[30:34], port, 40000, packet
+        )
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(data, stats) == []
+        assert stats["radius"] == 0
+        assert stats["udp"] == 1
+
+    def test_a_reply_to_a_radius_port_from_another_port_is_not_radius(
+        self,
+    ) -> None:
+        moved = with_ports(RADIUS_ACCEPT, 57757, 1812)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 0
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    def test_a_reply_from_a_radius_port_is_radius(self, port: int) -> None:
+        moved = with_ports(RADIUS_ACCEPT, port, 57757)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == []
+        assert stats["radius"] == 1
+        assert stats["radius-reply-unpaired"] == 1
+        assert checker.check_frame(udp_length(moved, 8 + 19), stats) == [
+            "radius-truncated"
+        ]
+
+    def test_an_exchange_between_two_radius_ports_is_verified(self) -> None:
+        request, reply = radius_exchange(1, 2, 1812)
+        request = with_ports(request, 1812, 1812)
+        reply = with_ports(reply, 1812, 1812)
+        stats: Counter[str] = Counter()
+        assert check_capture([request, reply], stats) == []
+        assert stats["radius"] == 2
+        assert stats["radius-response-authenticator"] == 1
+
+    def test_a_datagram_without_a_code_is_read_by_its_destination(
+        self,
+    ) -> None:
+        assert check(udp_length(RADIUS_REQUEST, 8)) == ["radius-truncated"]
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(udp_length(RADIUS_ACCEPT, 8), stats) == []
+        assert stats["radius"] == 0
 
 
 # GRE checksums (RFC 2784 §2.5).

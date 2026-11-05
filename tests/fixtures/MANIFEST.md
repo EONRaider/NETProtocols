@@ -796,26 +796,42 @@ the packet with the attribute's value zeroed, RFC 3579 §3.2,
 Message-Authenticator are computed over its request's Authenticator, in
 another frame, so `check_fixtures` pairs each reply with a request of
 the same pcap: one from the reply's destination address and port to
-its source address and port with the same Identifier, the most recent
-such request no earlier reply has answered, which handles a reused
-Identifier. It then verifies the reply's Response Authenticator (MD5
-over the reply with the request's Authenticator in its place, then the
+its source address and port with the same Identifier and a Code the
+reply's Code answers, the most recent such request no earlier reply has
+answered, which handles a reused Identifier. Access-Accept,
+Access-Reject and Access-Challenge answer an Access-Request (RFC 2865
+§3), Accounting-Response an Accounting-Request (RFC 2866 §3),
+Disconnect-ACK/NAK a Disconnect-Request and CoA-ACK/NAK a CoA-Request
+(RFC 5176 §2.3). A Status-Server is answered by Access-Accept,
+Accounting-Response or Access-Reject: RFC 5997 §2 says a server answers
+it with Access-Accept on an authentication port or Accounting-Response
+on an accounting port, that it MAY answer with Access-Reject and that
+Access-Challenge is NOT RECOMMENDED, so Access-Challenge is not paired
+with one. It then verifies the reply's Response Authenticator (MD5 over
+the reply with the request's Authenticator in its place, then the
 secret, RFC 2865 §3, `radius-response-authenticator`) and its
 Message-Authenticator when it carries one (HMAC-MD5 under the secret
 over the reply with the request's Authenticator in place and the
 attribute's value zeroed, RFC 3579 §3.2,
-`radius-reply-message-authenticator`), for Access-Accept,
-Access-Reject, Access-Challenge, Accounting-Response and the
-Disconnect and CoA ACKs and NAKs (RFC 5176, on UDP 3799). A reply that
-no earlier request of its pcap matches is counted
-`radius-reply-unpaired` and not checked, as an unreadable payload is
-counted and not failed, and fails as `unchecked-radius-reply-unpaired`
-inside a payload an IPsec ICV vouched for. `radius.pcap`'s six replies
-all pair and verify. `tests/test_radius.py` also pairs each reply with
-its request and verifies those, and unhides each User-Password (RFC
-2865 §5.2) and checks the CHAP-Password (§5.3). The values are also
-hard-coded, independently, in `scripts/check_fixtures.py` and
-`tests/test_radius.py`.
+`radius-reply-message-authenticator`), for Access-Accept, Access-Reject,
+Access-Challenge, Accounting-Response and the Disconnect and CoA ACKs
+and NAKs (RFC 5176 §2.3, on UDP 3799). A UDP datagram is read as RADIUS
+when the server's port is 1812, 1813 or 3799, the source port of a reply
+and the destination port of anything else, and neither port is STUN's
+3478, NTP's 123 or HSRP's 1985, the ports the checker reads as those
+protocols, so a STUN or NTP reply sent to a client's ephemeral 1812,
+1813 or 3799 is read as STUN or NTP. A reply that no earlier request of
+its pcap matches is counted `radius-reply-unpaired` and not checked, as
+an unreadable payload is counted and not failed, and fails as
+`unchecked-radius-reply-unpaired` inside a payload an IPsec ICV vouched
+for; one whose exchange has unanswered requests, but none of a Code it
+answers, is counted `radius-reply-code-mismatch` and not checked, and
+fails as `unchecked-radius-reply-code-mismatch` inside such a payload.
+`radius.pcap`'s six replies all pair and verify. `tests/test_radius.py`
+also pairs each reply with its request and verifies those, and unhides
+each User-Password (RFC 2865 §5.2) and checks the CHAP-Password (§5.3).
+The values are also hard-coded, independently, in
+`scripts/check_fixtures.py` and `tests/test_radius.py`.
 
 | What | Value |
 |---|---|
