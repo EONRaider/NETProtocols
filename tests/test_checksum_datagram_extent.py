@@ -13,6 +13,7 @@ from netprotocols import (
     ICMPv4,
     IPv4,
     IPv6,
+    IPv6Routing,
     Packet,
     compute,
     verify,
@@ -188,6 +189,84 @@ def test_with_checksums_counts_an_ipv4_ah_header_before_icmpv4():
     filled = Packet(ip, ah, stale).with_checksums()[ICMPv4]
     assert filled.checksum == int.from_bytes(message[2:4], "big")
     assert compute(stale, ip=ip) != filled.checksum
+
+
+def test_with_checksums_leaves_icmpv4_unbounded_below_its_header_after_ah():
+    """The datagram ends 7 bytes after AH, short of ICMPv4's 8-byte
+    header, so the sum covers the message and the padding after it."""
+    message = checksummed(ICMP_MESSAGES["echo-request"])
+    authentication = struct.pack("!BBHII", 1, 4, 0, 1, 1) + bytes(12)
+    datagram = ipv4(authentication + message, 51)
+    ip = replace(IPv4.decode(datagram), total_length=20 + 24 + 7)
+    ah = AH.decode(datagram[20:])
+    stale = ICMPv4.decode(message + PADDING)
+    stale = replace(stale, checksum=stale.checksum ^ 1)
+    filled = Packet(ip, ah, stale).with_checksums()[ICMPv4]
+    assert filled.checksum == zeroed_sum(message + PADDING)
+    assert filled.checksum != zeroed_sum((message + PADDING)[:7])
+
+
+#: A 2056-byte ICMPv4 echo request, 8 header bytes and 2048 of data;
+#: its sum is ``0800 + 1234 + 0001 + 8 * 3fc000`` folded to ``1c33``,
+#: whose complement is ``e3cc``.
+REASSEMBLED_ECHO = checksummed(
+    struct.pack("!BBHHH", 8, 0, 0, 0x1234, 1) + bytes(range(256)) * 8
+)
+
+
+def fragment_header(total_length, flags, fragment_offset):
+    """Return the IPv4 header of one fragment of an ICMPv4 datagram."""
+    ip = IPv4.decode(ipv4(REASSEMBLED_ECHO, 1))
+    return replace(
+        ip,
+        total_length=total_length,
+        flags=flags,
+        fragment_offset=fragment_offset,
+    )
+
+
+FRAGMENT_HEADERS = {
+    "first": (1500, 0b001, 0),
+    "last": (20 + 2056 - 1480, 0b000, 1480 // 8),
+}
+
+
+@pytest.mark.parametrize("fragment", FRAGMENT_HEADERS)
+def test_a_fragment_header_leaves_a_reassembled_icmpv4_unbounded(fragment):
+    """A fragment's Total Length covers that fragment alone, so the
+    reassembled message is summed whole."""
+    ip = fragment_header(*FRAGMENT_HEADERS[fragment])
+    assert int.from_bytes(REASSEMBLED_ECHO[2:4], "big") == 0xE3CC
+    layer = ICMPv4.decode(REASSEMBLED_ECHO)
+    bound = ip.total_length - 20
+    assert zeroed_sum(REASSEMBLED_ECHO[:bound]) != 0xE3CC
+    assert compute(layer, ip=ip) == 0xE3CC
+    assert verify(layer, ip=ip)
+    header = ICMPv4.decode(REASSEMBLED_ECHO[:8])
+    assert compute(header, ip=ip, payload=REASSEMBLED_ECHO[8:]) == 0xE3CC
+    stale = replace(layer, checksum=0xE3CC ^ 1)
+    filled = Packet(ip, stale).with_checksums()[ICMPv4]
+    assert filled.checksum == 0xE3CC == compute(stale, ip=ip)
+
+
+def test_a_routing_header_loosens_gre_bound_by_its_length():
+    """``ip``'s Payload Length counts the 24-byte Segment Routing header
+    before GRE, so :func:`compute` ends its input 24 bytes past the
+    datagram, where :meth:`Packet.with_checksums` counts the header."""
+    layer, payload, message = gre_layer(0x8000, b"inner datagram")
+    segment = bytes.fromhex("20010db8000000000000000000000002")
+    srh = bytes([47, 2, 4, 1, 0, 0, 0, 0]) + segment
+    routing = IPv6Routing.decode(srh)
+    ip = IPv6.decode(ipv6(srh + message, 43))
+    after = payload + PADDING * 2
+    expected = zeroed_sum((message + PADDING * 2)[: 24 + len(message)], 4)
+    assert expected not in (
+        layer.checksum,
+        zeroed_sum(message + PADDING * 2, 4),
+    )
+    assert compute(layer, ip=ip, routing=routing, payload=after) == expected
+    filled = Packet(ip, routing, layer).with_checksums(after)[GRE]
+    assert filled.checksum == layer.checksum
 
 
 def gre_layer(flags, payload):

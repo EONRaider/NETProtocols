@@ -88,8 +88,9 @@ def _ip_checksum_extent(
     :func:`~netprotocols.decode_frame` bounds the walk with; this reads
     the nearest IP header alone, where the walk takes the tightest of
     every enclosing bound. Return ``None`` when no IP header encloses
-    the layer, the IP header's length is zero or shorter than the
-    header itself, or the declared end falls short of ``minimum``.
+    the layer, the IP header is an IPv4 fragment's, its length is zero
+    or shorter than the header itself, or the declared end falls short
+    of ``minimum``.
 
     :param layers: The packet's headers, outermost first.
     :param index: The position of the layer whose checksum input is
@@ -356,8 +357,10 @@ class Packet:
         padding and a captured FCS stay out of them; those bytes are
         kept in the returned packet. An IPv4 Total Length or IPv6
         payload length of zero, an IPv4 Total Length shorter than its
-        header, or a declared end before the layer's required bytes
-        leaves the input unbounded. The bound is the one
+        header, an IPv4 header with More Fragments set or a nonzero
+        Fragment Offset (RFC 791 §3.1), or a declared end before the
+        layer's required bytes leaves the input unbounded. The bound is
+        the one
         :func:`~netprotocols.checksum.compute` applies given ``ip``,
         computed by the same helper, with the headers between the IP
         header and the layer counted in the offset.
@@ -370,8 +373,10 @@ class Packet:
         ``frame[packet.consumed : len(frame) - len(packet.trailer)]``.
         GRE's input runs on into the trailer as far as its datagram's
         declared end, which an inner datagram's shorter end leaves
-        there; no other checksum covers the trailer, and the returned
-        packet carries it unchanged. Instances
+        there; with no declared end, it is the bytes after GRE that the
+        layers and ``payload`` hold, without the trailer. No other
+        checksum covers the trailer, and the returned packet carries it
+        unchanged. Instances
         are frozen, so layers are rebuilt with
         :func:`dataclasses.replace`, and the decode context a layer
         records outside its ``__init__`` fields, such as whether another

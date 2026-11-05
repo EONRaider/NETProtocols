@@ -177,9 +177,11 @@ FCS are the packet's trailer, and those three keep the whole buffer,
 which is the whole IP payload. Decoded on its own, or in a walk no IP
 length bounds (a Total Length or Payload Length of 0), the buffer can
 run past the packet. ICMPv4's and IGMP's internet checksum is unchanged
-by appended zero bytes, and they keep the whole buffer then too;
-`checksum.compute()` and `verify()` given `ip` end their sum at the
-datagram's declared end (see the checksum paragraph below). SCTP's
+by appended zero bytes, and they keep the whole buffer then too. When
+a message decoded on its own is checksummed, `checksum.compute()` and
+`verify()` given its IP header end their sum at the length that header
+declares (see the checksum paragraph below); a length of 0 declares no
+end, and the sum runs to the end of the buffer. SCTP's
 CRC32c does change when zero bytes are appended, so for that buffer
 `decode()` walks the chunk headers to find where the packet ends and
 leaves a run of zero bytes where the next chunk would start undecoded,
@@ -1208,15 +1210,23 @@ checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
 pseudo-headers, PIM (the pseudo-header over IPv6 only, a Register's
 first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
 stack before sending. IGMP, ICMPv4 and GRE have no length of their
-own, and a message decoded on its own keeps Ethernet padding or an FCS
-in its body, so given `ip`, the IP header directly before the layer,
-`compute()` and `verify()` end their input at that datagram's declared
-end, `_payload_extent()` bytes after the layer's start;
-`with_checksums()` applies the same bound with the same helper from the
-nearest IP header, counting the headers between. A Total Length or
-Payload Length of 0, an IPv4 Total Length shorter than its header, or
-an end before the layer's required bytes leaves the input unbounded, as
-it is without `ip`. (The RFC 768 subtlety lives where it belongs:
+own: an IGMP or ICMPv4 message decoded on its own keeps Ethernet
+padding or an FCS in its body, and for GRE, which has no body, they
+are in the `payload` the caller passes. So given `ip`, the IP header
+directly before the layer, `compute()` and `verify()` end their input
+at that datagram's declared end, `_payload_extent()` bytes after the
+layer's start; `with_checksums()` applies the same bound with the same
+helper from the nearest IP header, counting the headers between. With
+headers between `ip` and the layer (AH, IPv6 extension headers, the
+headers `routing` describes), `compute()`'s bound is looser by their
+length and never cuts the message, so some padding may still be
+summed; `with_checksums()` counts them exactly. An IPv4 fragment's
+header (More Fragments set or a nonzero Fragment Offset), a Total
+Length or Payload Length of 0, an IPv4 Total Length shorter than its
+header, or an end before the layer's required bytes leaves the input
+unbounded, as it is without `ip`; `ip`'s length must cover the whole
+message, so a message reassembled from IPv6 fragments needs a header
+whose Payload Length covers the reassembled datagram, or no `ip`. (The RFC 768 subtlety lives where it belongs:
 the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 §A) covers the whole packet with no
