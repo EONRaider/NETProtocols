@@ -974,6 +974,89 @@ def asked(request: bytes, authenticator: bytes) -> bytes:
     )
 
 
+def request_authenticator(packet: bytes) -> bytes:
+    """The Request Authenticator of ``packet``, an Accounting-Request,
+    a Disconnect-Request or a CoA-Request: MD5 over it with a zero
+    Authenticator and then the secret (RFC 2866 §3, RFC 5176 §2.3)."""
+    return hashlib.md5(
+        packet[:4] + bytes(16) + packet[20:] + checker._RADIUS_SECRET,
+        usedforsecurity=False,
+    ).digest()
+
+
+def signed_request(packet: bytes) -> bytes:
+    """``packet``, a Disconnect-Request or a CoA-Request, with its
+    Message-Authenticator, if any, recomputed over a zero Authenticator
+    and then its Request Authenticator over the result (RFC 5176
+    §3.4)."""
+    packet = sign_message_authenticator(packet, bytes(16))
+    return put(packet, 4, request_authenticator(packet))
+
+
+def dynamic_request(code: int, *, message_authenticator: bool = False) -> bytes:
+    """A signed request of ``code``, a Disconnect-Request or a
+    CoA-Request, from ``RADIUS_REQUEST``'s client to its server's port
+    3799, carrying a User-Name and, with ``message_authenticator``, a
+    Message-Authenticator."""
+    attributes = b"\x01\x0cnp193-user"
+    if message_authenticator:
+        attributes += b"\x50\x12" + bytes(16)
+    head = struct.pack("!BBH", code, 7, 20 + len(attributes))
+    packet = signed_request(head + bytes(16) + attributes)
+    client, server = RADIUS_REQUEST[26:30], RADIUS_REQUEST[30:34]
+    return radius_frame(client, server, 50000, 3799, packet)
+
+
+def flipped_request_authenticator(request: bytes) -> bytes:
+    """``request``, a signed Disconnect-Request or CoA-Request frame,
+    with one byte of its Request Authenticator flipped, resealed."""
+    return reseal(flip(request, udp_data(request) + 4))
+
+
+def flipped_message_authenticator(request: bytes) -> bytes:
+    """``request``, a signed Disconnect-Request or CoA-Request frame,
+    with one byte of its Message-Authenticator flipped and its Request
+    Authenticator recomputed over the flipped bytes, resealed."""
+    packet = radius_packet(flip(request, radius_attribute(request, 80) + 2))
+    return with_radius(request, put(packet, 4, request_authenticator(packet)))
+
+
+@case("radius-disconnect-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(40)
+    return request, flipped_request_authenticator(request)
+
+
+@case("radius-coa-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(43)
+    return request, flipped_request_authenticator(request)
+
+
+@case("radius-message-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(40, message_authenticator=True)
+    return request, flipped_message_authenticator(request)
+
+
+@case("radius-message-authenticator")
+def _() -> tuple[bytes, bytes]:
+    request = dynamic_request(43, message_authenticator=True)
+    return request, flipped_message_authenticator(request)
+
+
+@case(
+    "radius-message-authenticator",
+    expected=["radius-coa-authenticator", "radius-message-authenticator"],
+)
+def _() -> tuple[bytes, bytes]:
+    # The Request Authenticator covers the Message-Authenticator, so
+    # a flipped Message-Authenticator byte fails both.
+    request = dynamic_request(43, message_authenticator=True)
+    at = radius_attribute(request, 80) + 2
+    return request, reseal(flip(request, at))
+
+
 def udp_datagram(frame: bytes) -> bytes:
     """The UDP datagram of an Ethernet/IPv4/UDP frame, its checksum
     zeroed."""
@@ -2855,6 +2938,9 @@ FIELD_VALUES: dict[Field, list[str]] = {
     ("_check_bpdu", "name"): [
         name for name, _, unused in checker._BPDU_TYPES.values() if unused
     ],
+    ("_check_radius", "name"): list(
+        checker._RADIUS_HASHED_AUTHENTICATOR.values()
+    ),
 }
 
 
@@ -3180,6 +3266,9 @@ def test_the_scan_finds_known_failures() -> None:
         "ntp-sha1",
         "stp-config-unused-flags",
         "stp-rst-unused-flags",
+        "radius-accounting-authenticator",
+        "radius-disconnect-authenticator",
+        "radius-coa-authenticator",
     ):
         assert re.escape(member) in patterns
     assert re.escape("stp-tcn-unused-flags") not in patterns
@@ -3190,6 +3279,7 @@ def test_the_scan_finds_known_failures() -> None:
             "rip\\-.+",
             "ntp\\-.+",
             "stp\\-.+\\-unused\\-flags",
+            "radius\\-.+\\-authenticator",
         }
         & patterns
     )

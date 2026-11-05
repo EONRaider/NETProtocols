@@ -1263,7 +1263,19 @@ _RADIUS_SECRET = b"np193-radius-secret"
 #: Message-Authenticator in them is computed over it as sent:
 #: Access-Request (RFC 3579 §3.2) and Status-Server (RFC 5997 §3).
 _RADIUS_RANDOM_AUTHENTICATOR = (1, 12)
-_RADIUS_ACCOUNTING_REQUEST = 4
+
+#: RADIUS request codes whose Request Authenticator is MD5 over the
+#: packet with a zero Authenticator and then the secret, each mapped to
+#: the name its check is counted and reported under:
+#: Accounting-Request (RFC 2866 §3), and Disconnect-Request and
+#: CoA-Request, whose Request Authenticator is computed as an
+#: Accounting-Request's (RFC 5176 §2.3).
+_RADIUS_HASHED_AUTHENTICATOR = {4: "accounting", 40: "disconnect", 43: "coa"}
+
+#: RADIUS codes whose Message-Authenticator is computed with the
+#: Authenticator field zeroed, before the Request Authenticator, which
+#: then covers it: Disconnect-Request and CoA-Request (RFC 5176 §3.4).
+_RADIUS_ZEROED_AUTHENTICATOR = (40, 43)
 _RADIUS_MESSAGE_AUTHENTICATOR = 80
 
 #: RADIUS request codes: Access-Request (RFC 2865 §3),
@@ -1366,12 +1378,17 @@ def _check_radius(
 
     The UDP checksum already covers every RADIUS byte. On top of it,
     the Length must fit the datagram and the attributes tile the packet,
-    and, with the published secret: an Accounting-Request's Request
-    Authenticator, MD5 over the packet with a zero Authenticator and
-    then the secret (RFC 2866 §3); the Message-Authenticator of an
-    Access-Request or a Status-Server, HMAC-MD5 under the secret over
-    the packet with that attribute's value zeroed (RFC 3579 §3.2); and
-    a reply's authenticators, against the request it answers (see
+    and, with the published secret: the Request Authenticator of an
+    Accounting-Request, a Disconnect-Request or a CoA-Request, MD5 over
+    the packet with a zero Authenticator and then the secret (RFC 2866
+    §3, RFC 5176 §2.3), counted and reported under that request's name
+    (see :data:`_RADIUS_HASHED_AUTHENTICATOR`); the Message-Authenticator
+    of an Access-Request or a Status-Server, HMAC-MD5 under the secret
+    over the packet with that attribute's value zeroed (RFC 3579 §3.2),
+    and of a Disconnect-Request or a CoA-Request, the same over the
+    packet with its Authenticator zeroed as well (RFC 5176 §3.4), each
+    of a request's two reported on its own; and a reply's
+    authenticators, against the request it answers (see
     :func:`_check_radius_reply`). Each request is recorded in the
     capture's :class:`RadiusExchanges` under its exchange (see
     :data:`RadiusExchange`), from which a reply takes the most recent
@@ -1412,25 +1429,31 @@ def _check_radius(
         exchanges.ask(
             (src, src_port, dst, dst_port, identifier), code, radius[4:20]
         )
-    if code == _RADIUS_ACCOUNTING_REQUEST:
-        stats["radius-accounting-authenticator"] += 1
+    failures: list[str] = []
+    zeroed = radius[:4] + bytes(16) + radius[20:]
+    name = _RADIUS_HASHED_AUTHENTICATOR.get(code)
+    if name is not None:
+        stats[f"radius-{name}-authenticator"] += 1
         # MD5 is what RFC 2866 §3 mandates; this only checks the hash
         # the client sent, so it is not a security use.
         digest = hashlib.md5(
-            radius[:4] + bytes(16) + radius[20:] + _RADIUS_SECRET,
-            usedforsecurity=False,
+            zeroed + _RADIUS_SECRET, usedforsecurity=False
         ).digest()
         if not hmac.compare_digest(digest, radius[4:20]):
-            return ["radius-accounting-authenticator"]
-    if code not in _RADIUS_RANDOM_AUTHENTICATOR:
-        return []
+            failures.append(f"radius-{name}-authenticator")
+    if code in _RADIUS_RANDOM_AUTHENTICATOR:
+        signed = radius
+    elif code in _RADIUS_ZEROED_AUTHENTICATOR:
+        signed = zeroed
+    else:
+        return failures
     for kind, offset in attributes:
         if kind == _RADIUS_MESSAGE_AUTHENTICATOR:
             stats["radius-message-authenticator"] += 1
-            if not _radius_message_authenticator_verifies(radius, offset):
-                return ["radius-message-authenticator"]
-            return []
-    return []
+            if not _radius_message_authenticator_verifies(signed, offset):
+                failures.append("radius-message-authenticator")
+            break
+    return failures
 
 
 def _check_radius_reply(
