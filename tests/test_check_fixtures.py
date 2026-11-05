@@ -5,8 +5,9 @@ It runs over every directory of committed captures and must pass them
 all. Each failure string it can emit is then produced by a minimally
 tampered copy of a frame it accepts, a committed fixture frame wherever
 one carries the field, or, for a RADIUS reply, of a capture holding the
-request before it, and a test fails when the script gains a failure
-string no case here produces.
+request before it, and a test fails when the script can emit a failure
+string, each value an f-string's replacement field takes from a known
+set counted apart, that no case here produces.
 
 Frames for the strict mode, which applies to whatever an IPsec ICV
 covers, are built inside ESP from esp.pcap's Security Association, its
@@ -25,9 +26,11 @@ import subprocess
 import sys
 import zlib
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import ModuleType
+from typing import NoReturn
 
 import pytest
 
@@ -2058,44 +2061,82 @@ class TestMain:
 # Every failure string in the script has a case above.
 
 
-def _patterns(node: ast.expr, names: dict[str, list[str]]) -> list[str]:
-    """Regexes for the strings ``node``, a str literal or f-string,
-    evaluates to; none for anything else. A replacement field that is a
-    bare name bound in ``names`` takes each of that name's regexes in
-    turn, and any other replacement field matches any text."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return [re.escape(node.value)]
-    if not isinstance(node, ast.JoinedStr):
-        return []
-    choices: list[list[str]] = []
-    for part in node.values:
-        if isinstance(part, ast.Constant):
-            choices.append([re.escape(str(part.value))])
-        elif (
-            isinstance(part, ast.FormattedValue)
-            and isinstance(part.value, ast.Name)
-            and part.format_spec is None
-            and part.value.id in names
-        ):
-            choices.append(names[part.value.id])
+#: A replacement field of a failure string: the name of the function
+#: whose code holds it, ``""`` at module level, and its expression's
+#: source.
+Field = tuple[str, str]
+
+#: The replacement fields of the script's failure strings whose value
+#: is any number or byte string, each matching any text.
+OPEN_FIELDS: frozenset[Field] = frozenset(
+    {
+        ("read_pcap", "magic.hex()"),
+        ("read_pcap", "network"),
+        ("_check_ospf_auth", "au_type"),
+        ("_check_upper_v4", "proto"),
+        ("_check_upper_v6", "next_header"),
+        ("_check_l3", "ethertype"),
+        ("_check_type_or_length", "value"),
+        ("_check_llc", "pdu[0]"),
+        ("_check_sap_0x42", "control"),
+        ("_check_sap_0x42", "body[:2].hex()"),
+        ("_check_snap", "oui.hex()"),
+        ("_check_snap", "pid"),
+    }
+)
+
+#: The values of the replacement fields of the script's failure strings
+#: that take one of a known set: the algorithm of each RIP and NTP key,
+#: and the name of each BPDU Type that leaves Flags bits unused.
+FIELD_VALUES: dict[Field, list[str]] = {
+    ("_check_rip", "algorithm"): [
+        algorithm for algorithm, _ in checker._RIP_SAS.values()
+    ],
+    ("_check_ntp", "algorithm"): [
+        algorithm for algorithm, _ in checker._NTP_KEYS.values()
+    ],
+    ("_check_bpdu", "name"): [
+        name for name, _, unused in checker._BPDU_TYPES.values() if unused
+    ],
+}
+
+
+class UnresolvableFailure(Exception):
+    """A failure string whose values a :class:`FailureScan` cannot
+    enumerate, reported as ``file:line``."""
+
+
+def _is_text(node: ast.expr) -> bool:
+    """Whether ``node`` is a str literal or an f-string."""
+    return isinstance(node, ast.JoinedStr) or (
+        isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+
+
+def _bindings(nodes: Iterable[ast.AST]) -> dict[str, list[ast.expr]]:
+    """The expressions the plain assignments among ``nodes`` bind each
+    name to, a tuple display unpacked into a tuple of names element by
+    element."""
+    names: dict[str, list[ast.expr]] = {}
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            pairs = [(target, node.value) for target in node.targets]
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            pairs = [(node.target, node.value)]
         else:
-            choices.append([".+"])
-    return ["".join(parts) for parts in itertools.product(*choices)]
-
-
-def _local_strings(function: ast.FunctionDef) -> dict[str, list[str]]:
-    """The regexes of the strings each name ``function`` binds, by plain
-    assignments, to a str literal or f-string."""
-    names: dict[str, list[str]] = {}
-    for node in ast.walk(function):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        ):
-            target = node.targets[0].id
-            names.setdefault(target, []).extend(_patterns(node.value, {}))
-    return {name: patterns for name, patterns in names.items() if patterns}
+            continue
+        for target, value in pairs:
+            if isinstance(target, ast.Name):
+                names.setdefault(target.id, []).append(value)
+            elif (
+                isinstance(target, ast.Tuple)
+                and isinstance(value, ast.Tuple)
+                and len(target.elts) == len(value.elts)
+            ):
+                for name, element in zip(target.elts, value.elts, strict=True):
+                    if isinstance(name, ast.Name):
+                        names.setdefault(name.id, []).append(element)
+    return names
 
 
 def _emitted(node: ast.AST) -> list[ast.expr]:
@@ -2115,20 +2156,230 @@ def _emitted(node: ast.AST) -> list[ast.expr]:
     return []
 
 
+#: Where an expression is evaluated: in a function, or at module level.
+Scope = ast.FunctionDef | None
+
+
+class FailureScan:
+    """Regexes for every failure string a module can emit, from an
+    ``ast`` scan of its source.
+
+    A failure is each expression :func:`_emitted` finds in a function.
+    A str literal is its own regex. An f-string takes, for each
+    replacement field, each value ``fields`` lists for it, any text
+    when ``open_fields`` holds it, and otherwise each string the name
+    it consists of is bound to. A conditional expression, a tuple, list
+    or set display and a starred item stand for the strings in them.
+    A name stands for the strings it is bound to: by an assignment in
+    its function; when it is a parameter of a module-level function,
+    by every call of that function by name, as an argument or as the
+    parameter's default; and by an assignment at module level.
+    Anything else that is not a string stands for none.
+
+    A string built by ``+``, ``%``, ``str.format`` or ``str.join``, and
+    a replacement field these rules leave without a value, raise
+    :class:`UnresolvableFailure`.
+
+    :param source: The module's source.
+    :param filename: The name its failures are reported under.
+    :param fields: The values of each enumerable replacement field.
+    :param open_fields: The replacement fields that match any text.
+    """
+
+    def __init__(
+        self,
+        source: str,
+        filename: str,
+        fields: Mapping[Field, Sequence[str]],
+        open_fields: AbstractSet[Field],
+    ) -> None:
+        tree = ast.parse(source)
+        self._filename = filename
+        self._fields = fields
+        self._open_fields = open_fields
+        #: The entries of ``fields`` and ``open_fields`` a failure holds.
+        self.used: set[Field] = set()
+        self._module = _bindings(tree.body)
+        functions = [
+            node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        self._local = {
+            function: _bindings(ast.walk(function)) for function in functions
+        }
+        self._defs = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        caller: dict[ast.Call, ast.FunctionDef] = {}
+        for function in functions:
+            for node in ast.walk(function):
+                if isinstance(node, ast.Call):
+                    caller[node] = function
+        self._calls: dict[str, list[tuple[ast.Call, Scope]]] = {}
+        for call in ast.walk(tree):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name):
+                self._calls.setdefault(call.func.id, []).append(
+                    (call, caller.get(call))
+                )
+        #: The regexes of every failure string the module can emit.
+        self.patterns: set[str] = set()
+        for function in functions:
+            for node in ast.walk(function):
+                for expr in _emitted(node):
+                    self.patterns.update(
+                        self._strings(expr, function, frozenset())
+                    )
+
+    def _fail(self, node: ast.expr, what: str) -> NoReturn:
+        raise UnresolvableFailure(
+            f"{self._filename}:{node.lineno}: cannot enumerate {what} "
+            f"{ast.unparse(node)!r}"
+        )
+
+    def _strings(
+        self, node: ast.expr, scope: Scope, seen: frozenset[Field]
+    ) -> list[str]:
+        """Regexes for the strings ``node`` evaluates to in ``scope``,
+        ``seen`` holding the names already being resolved."""
+        if isinstance(node, ast.Constant):
+            return (
+                [re.escape(node.value)] if isinstance(node.value, str) else []
+            )
+        if isinstance(node, ast.JoinedStr):
+            choices = [
+                [re.escape(str(part.value))]
+                if isinstance(part, ast.Constant)
+                else self._field(part, scope, seen)
+                for part in node.values
+            ]
+            return ["".join(parts) for parts in itertools.product(*choices)]
+        if isinstance(node, ast.IfExp):
+            return self._strings(node.body, scope, seen) + self._strings(
+                node.orelse, scope, seen
+            )
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return [
+                pattern
+                for element in node.elts
+                for pattern in self._strings(element, scope, seen)
+            ]
+        if isinstance(node, ast.Starred):
+            return self._strings(node.value, scope, seen)
+        if isinstance(node, ast.Name):
+            return [
+                pattern
+                for choice in self._name(node.id, scope, seen)
+                for pattern in choice
+            ]
+        if isinstance(node, ast.BinOp):
+            if _is_text(node.left) or _is_text(node.right):
+                self._fail(node, "the string built by")
+            return self._strings(node.left, scope, seen) + self._strings(
+                node.right, scope, seen
+            )
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("format", "join")
+            and _is_text(node.func.value)
+        ):
+            self._fail(node, "the string built by")
+        return []
+
+    def _name(
+        self, name: str, scope: Scope, seen: frozenset[Field]
+    ) -> list[list[str]]:
+        """The regexes of each expression ``name`` is bound to in
+        ``scope``, one list per binding."""
+        key = (scope.name if scope else "", name)
+        if key in seen:
+            return []
+        seen |= {key}
+        bindings: list[tuple[ast.expr, Scope]] = []
+        if scope is not None:
+            local = self._local[scope].get(name, [])
+            bindings = [(value, scope) for value in local]
+            if not bindings and self._defs.get(scope.name) is scope:
+                bindings = self._arguments(scope, name)
+        if not bindings:
+            bindings = [(value, None) for value in self._module.get(name, [])]
+        return [self._strings(value, where, seen) for value, where in bindings]
+
+    def _arguments(
+        self, function: ast.FunctionDef, name: str
+    ) -> list[tuple[ast.expr, Scope]]:
+        """What each call of ``function`` by name passes as its
+        parameter ``name``: the argument, else the parameter's default,
+        else the call itself; none when ``name`` is no parameter."""
+        args = function.args
+        positional = [arg.arg for arg in args.posonlyargs + args.args]
+        defaults: dict[str, ast.expr] = dict(
+            zip(
+                positional[len(positional) - len(args.defaults) :],
+                args.defaults,
+                strict=True,
+            )
+        )
+        for arg, default in zip(args.kwonlyargs, args.kw_defaults, strict=True):
+            if default is not None:
+                defaults[arg.arg] = default
+        if name not in positional and name not in {
+            arg.arg for arg in args.kwonlyargs
+        }:
+            return []
+        passed: list[tuple[ast.expr, Scope]] = []
+        for call, caller in self._calls.get(function.name, []):
+            keyword = [k.value for k in call.keywords if k.arg == name]
+            if name in positional and positional.index(name) < len(call.args):
+                passed.append((call.args[positional.index(name)], caller))
+            elif keyword:
+                passed.append((keyword[0], caller))
+            elif name in defaults:
+                passed.append((defaults[name], None))
+            else:
+                passed.append((call, caller))
+        return passed
+
+    def _field(
+        self, part: ast.expr, scope: Scope, seen: frozenset[Field]
+    ) -> list[str]:
+        """Regexes for the values of the replacement field ``part``."""
+        assert isinstance(part, ast.FormattedValue)
+        key = (scope.name if scope else "", ast.unparse(part.value))
+        if key in self._fields:
+            self.used.add(key)
+            if not self._fields[key] or part.format_spec is not None:
+                self._fail(part.value, "the replacement field")
+            return [re.escape(value) for value in self._fields[key]]
+        if key in self._open_fields:
+            self.used.add(key)
+            return [".+"]
+        if (
+            isinstance(part.value, ast.Name)
+            and part.format_spec is None
+            and part.conversion == -1
+        ):
+            choices = self._name(part.value.id, scope, seen)
+            if choices and all(choices):
+                return [pattern for choice in choices for pattern in choice]
+        self._fail(part.value, "the replacement field")
+
+
+@functools.cache
+def checker_scan() -> FailureScan:
+    """The :class:`FailureScan` of scripts/check_fixtures.py."""
+    return FailureScan(
+        CHECKER.read_text(),
+        str(CHECKER.relative_to(ROOT)),
+        FIELD_VALUES,
+        OPEN_FIELDS,
+    )
+
+
 def emitted_failures() -> set[str]:
-    """Regexes for every failure string the script can emit, each
-    expression :func:`_emitted` finds in its functions, with the names
-    each function binds to strings resolved (see :func:`_patterns`)."""
-    tree = ast.parse(CHECKER.read_text())
-    found: set[str] = set()
-    for function in ast.walk(tree):
-        if not isinstance(function, ast.FunctionDef):
-            continue
-        names = _local_strings(function)
-        for node in ast.walk(function):
-            for expr in _emitted(node):
-                found.update(_patterns(expr, names))
-    return found
+    """Regexes for every failure string the script can emit."""
+    return checker_scan().patterns
 
 
 def _specificity(pattern: str) -> int:
@@ -2159,6 +2410,210 @@ def test_the_scan_finds_known_failures() -> None:
     # A name bound to an f-string earlier in the function is resolved.
     assert "unchecked\\-llc\\-dsap\\-0x42\\-control\\-0x.+" in patterns
     assert "unchecked\\-.+" not in patterns
+    # Each member of a family the script iterates over is its own
+    # pattern; a BPDU Type with no unused Flags bits has none.
+    for member in (
+        "esp-unknown-sa",
+        "ah-unknown-sa",
+        "esp-icv",
+        "ah-icv",
+        "rip-keyed-md5",
+        "rip-hmac-sha256",
+        "ntp-md5",
+        "ntp-sha1",
+        "stp-config-unused-flags",
+        "stp-rst-unused-flags",
+    ):
+        assert re.escape(member) in patterns
+    assert re.escape("stp-tcn-unused-flags") not in patterns
+    assert (
+        not {
+            ".+\\-unknown\\-sa",
+            ".+\\-icv",
+            "rip\\-.+",
+            "ntp\\-.+",
+            "stp\\-.+\\-unused\\-flags",
+        }
+        & patterns
+    )
+
+
+def test_every_listed_field_is_one_a_failure_string_holds() -> None:
+    assert checker_scan().used == set(FIELD_VALUES) | OPEN_FIELDS
+
+
+def scan(
+    source: str,
+    fields: Mapping[Field, Sequence[str]] | None = None,
+    open_fields: AbstractSet[Field] = frozenset(),
+) -> set[str]:
+    """The patterns of a :class:`FailureScan` of ``source``, reported
+    as snippet.py."""
+    return FailureScan(source, "snippet.py", fields or {}, open_fields).patterns
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "def check(x):\n"
+            "    if x:\n"
+            '        return "a-fail"\n'
+            "    else:\n"
+            '        return "b-fail"\n',
+            {"a-fail", "b-fail"},
+            id="if-else",
+        ),
+        pytest.param(
+            'def check(x):\n    return "a-fail" if x else "b-fail"\n',
+            {"a-fail", "b-fail"},
+            id="conditional-expression",
+        ),
+        pytest.param(
+            'def check():\n    return ("a-fail", 1)\n',
+            {"a-fail"},
+            id="tuple",
+        ),
+        pytest.param(
+            "def check():\n"
+            '    failures = ("a-fail", "b-fail")\n'
+            "    return failures\n",
+            {"a-fail", "b-fail"},
+            id="name-bound-to-a-tuple",
+        ),
+        pytest.param(
+            'def check():\n    failure = "a-fail"\n    return [failure]\n',
+            {"a-fail"},
+            id="name-bound-to-a-str",
+        ),
+        pytest.param(
+            "def check():\n"
+            '    first, second = "a-fail", "b-fail"\n'
+            "    return [first, second]\n",
+            {"a-fail", "b-fail"},
+            id="names-unpacked-from-a-tuple",
+        ),
+        pytest.param(
+            'FAILURE = "a-fail"\n\n\ndef check():\n    return FAILURE\n',
+            {"a-fail"},
+            id="module-level-name",
+        ),
+        pytest.param(
+            "def verify(protocol):\n"
+            '    return [f"{protocol}-icv"]\n\n\n'
+            "def check():\n"
+            '    return verify("esp") + verify(protocol="ah")\n',
+            {"esp-icv", "ah-icv"},
+            id="parameter",
+        ),
+        pytest.param(
+            'def verify(protocol="esp"):\n'
+            '    return [f"{protocol}-icv"]\n\n\n'
+            "def check():\n"
+            '    return verify() + verify("ah")\n',
+            {"esp-icv", "ah-icv"},
+            id="parameter-default",
+        ),
+    ],
+)
+def test_the_scan_resolves(source: str, expected: set[str]) -> None:
+    assert scan(source) == {re.escape(failure) for failure in expected}
+
+
+def test_the_scan_takes_each_listed_value_of_a_field() -> None:
+    source = (
+        "def check(sa):\n"
+        "    algorithm, key = sa\n"
+        '    return [f"ntp-{algorithm}"]\n'
+    )
+    fields = {("check", "algorithm"): ["md5", "sha1"]}
+    assert scan(source, fields) == {"ntp\\-md5", "ntp\\-sha1"}
+
+
+def test_an_open_field_matches_any_text() -> None:
+    source = 'def check(packet):\n    return [f"autype-{packet[15]}"]\n'
+    open_fields = {("check", "packet[15]")}
+    assert scan(source, open_fields=open_fields) == {"autype\\-.+"}
+
+
+@pytest.mark.parametrize(
+    ("source", "line"),
+    [
+        pytest.param(
+            "def check(packet):\n"
+            "    au_type = packet[15]\n"
+            '    return [f"autype-{au_type}"]\n',
+            3,
+            id="unlisted-field",
+        ),
+        pytest.param(
+            'def check(n):\n    return [f"x-{n}"]\n',
+            2,
+            id="parameter-never-passed",
+        ),
+        pytest.param(
+            "def verify(protocol):\n"
+            '    return [f"{protocol}-icv"]\n\n\n'
+            "def check(packet):\n"
+            "    return verify(packet[0])\n",
+            2,
+            id="argument-not-a-str",
+        ),
+        pytest.param(
+            "def verify(protocol):\n"
+            '    return [f"{protocol}-icv"]\n\n\n'
+            "def check(**options):\n"
+            "    return verify(**options)\n",
+            2,
+            id="argument-not-passed-by-name-or-position",
+        ),
+        pytest.param(
+            'def check(value):\n    return [f"x-{value!r}"]\n',
+            2,
+            id="conversion",
+        ),
+        pytest.param(
+            'def check(name):\n    return ["x-" + name]\n',
+            2,
+            id="concatenation",
+        ),
+        pytest.param(
+            'def check(n):\n    return ["x-%d" % n]\n',
+            2,
+            id="percent-format",
+        ),
+        pytest.param(
+            'def check(n):\n    return ["x-{}".format(n)]\n',
+            2,
+            id="str-format",
+        ),
+        pytest.param(
+            'def check(parts):\n    return ["-".join(parts)]\n',
+            2,
+            id="str-join",
+        ),
+        pytest.param(
+            'def check(n):\n    failure = "x-" + n\n    return failure\n',
+            2,
+            id="name-bound-to-a-concatenation",
+        ),
+    ],
+)
+def test_the_scan_fails_on_a_string_it_cannot_enumerate(
+    source: str, line: int
+) -> None:
+    with pytest.raises(UnresolvableFailure, match=rf"^snippet\.py:{line}: "):
+        scan(source)
+
+
+def test_a_listed_field_with_no_values_is_unresolvable() -> None:
+    source = (
+        "def check(sa):\n"
+        "    algorithm, key = sa\n"
+        '    return [f"rip-{algorithm}"]\n'
+    )
+    with pytest.raises(UnresolvableFailure, match=r"^snippet\.py:3: "):
+        scan(source, {("check", "algorithm"): []})
 
 
 def test_a_kind_stands_only_for_its_most_specific_pattern() -> None:

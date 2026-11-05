@@ -18,6 +18,7 @@ as soon as it is added.
 import ast
 import re
 import shlex
+import textwrap
 import tomllib
 from pathlib import Path
 
@@ -925,43 +926,293 @@ class TestCIWorkflow:
         ], "[tool.mypy] exclude reaches beyond scripts/pyodide/node_modules"
 
     FIXTURES_STEP_NAME = "Check every committed capture with check_fixtures.py"
+    FIXTURES_STEP_IF = "${{ !cancelled() }}"
+    # The step's keys and their values, in order. Any other key
+    # (continue-on-error, env, working-directory, ...) can skip the
+    # step, let it fail green or change what its script does.
+    FIXTURES_STEP_KEYS = (
+        ("name", FIXTURES_STEP_NAME),
+        ("if", FIXTURES_STEP_IF),
+        ("shell", "bash"),
+        ("run", "|"),
+    )
+    # The step's run: body, word for word, once the block scalar's
+    # common indentation and each line's trailing whitespace are
+    # removed. Any added, removed or changed line makes the body
+    # differ.
+    FIXTURES_SCRIPT = (
+        "set -euo pipefail",
+        "mapfile -t dirs < <(",
+        "  git ls-files -- 'tests/fixtures/*.pcap'"
+        " | xargs -n1 dirname | sort -u",
+        ")",
+        'if [ "${#dirs[@]}" -eq 0 ]; then',
+        '  echo "::error::git ls-files found no capture under tests/fixtures."',
+        "  exit 1",
+        "fi",
+        'for dir in "${dirs[@]}"; do',
+        '  python3 scripts/check_fixtures.py "$dir"',
+        "done",
+    )
+    # Text in a step that names check_fixtures, a scripts/check_ path or
+    # a glob under scripts/, any of which can run a repository checker.
+    CHECKER_MENTION = re.compile(
+        r"check_fixtures|scripts/+check_|scripts/\S*[*?\[]"
+    )
+    # The lint job's one other checker step.
+    MARKERS_STEP = "      - run: python3 scripts/check_markers.py\n"
 
-    def test_test_job_runs_check_fixtures_over_every_capture_directory(
+    @classmethod
+    def _assert_runs_fixtures_check(cls, jobs: dict[str, str]) -> None:
+        """``jobs``, a :func:`job_blocks` mapping, has exactly one step
+        named :attr:`FIXTURES_STEP_NAME` or matching
+        :attr:`CHECKER_MENTION`, apart from the lint job's
+        :attr:`MARKERS_STEP`; that step is in the lint job and runs
+        :attr:`FIXTURES_SCRIPT`.
+
+        The lint job has no matrix and sets no job-level key outside
+        :attr:`SPHINX_JOB_KEYS`. The step's first lines are exactly the
+        keys and values of :attr:`FIXTURES_STEP_KEYS`, in order, and
+        every later line is indented past them, inside the ``run: |``
+        block scalar. That scalar's lines, with their common indentation
+        and trailing whitespace removed, equal :attr:`FIXTURES_SCRIPT`.
+        """
+        found = [
+            (job, step)
+            for job, block in jobs.items()
+            for step in job_steps(block)
+            if (
+                step_key(step, "name") == cls.FIXTURES_STEP_NAME
+                or cls.CHECKER_MENTION.search(step)
+            )
+            and not (job == "lint" and step == cls.MARKERS_STEP)
+        ]
+        assert [job for job, _ in found] == ["lint"], (
+            f"ci.yml has no single {cls.FIXTURES_STEP_NAME!r} step, in "
+            f"the lint job, and no other step running a checker: found "
+            f"in {[job for job, _ in found]}"
+        )
+        block = jobs["lint"]
+        assert "matrix:" not in block, "the lint job has a matrix"
+        job_keys = set(re.findall(r"(?m)^    ([A-Za-z0-9_-]+):", block))
+        extra = sorted(job_keys - cls.SPHINX_JOB_KEYS)
+        assert not extra, f"the lint job sets job-level keys {extra}"
+        lines = found[0][1].splitlines()
+        count = len(cls.FIXTURES_STEP_KEYS)
+        keys = [
+            match.groups()
+            if (
+                match := re.fullmatch(
+                    rf" {{6}}{'- ' if index == 0 else '  '}"
+                    r"([A-Za-z0-9_-]+): (.*)",
+                    line,
+                )
+            )
+            else line
+            for index, line in enumerate(lines[:count])
+        ]
+        assert keys == list(cls.FIXTURES_STEP_KEYS), (
+            f"the step's keys are not {list(cls.FIXTURES_STEP_KEYS)}: {keys}"
+        )
+        body = lines[count:]
+        assert all(line.startswith(" " * 10) for line in body), (
+            f"the step has a line outside its run: block: {body}"
+        )
+        script = tuple(
+            line.rstrip()
+            for line in textwrap.dedent("\n".join(body)).split("\n")
+        )
+        assert script == cls.FIXTURES_SCRIPT, (
+            f"the step's script is not FIXTURES_SCRIPT: {script}"
+        )
+
+    def test_lint_job_runs_check_fixtures_over_every_capture_directory(
         self, ci_jobs: dict[str, str]
     ) -> None:
-        """The test job has one step that runs scripts/check_fixtures.py
-        over each directory holding a ``git ls-files``-tracked capture
-        under tests/fixtures, under ``set -euo pipefail`` in bash, so a
-        failing directory, or no tracked capture at all, fails the job.
+        """The lint job, which has no matrix, has the one step in ci.yml
+        that runs scripts/check_fixtures.py over each directory holding
+        a ``git ls-files``-tracked capture under tests/fixtures, under
+        ``set -euo pipefail`` in bash, whatever an earlier step's
+        outcome, so a failing directory, or no tracked capture at all,
+        fails the job. No other step in ci.yml runs a repository
+        checker besides the lint job's check_markers.py.
         """
-        block = ci_jobs.get("test")
-        assert block is not None, "ci.yml has no test job"
-        steps = [
-            step
-            for step in job_steps(block)
-            if step_key(step, "name") == self.FIXTURES_STEP_NAME
-        ]
-        assert len(steps) == 1, (
-            f"test job has no single {self.FIXTURES_STEP_NAME!r} step"
-        )
-        step = steps[0]
-        assert step_key(step, "shell") == "bash", "the step is not bash"
-        assert re.search(r"(?m)^ +set -euo pipefail$", step), (
-            "the step no longer runs under set -euo pipefail"
-        )
-        assert "git ls-files -- 'tests/fixtures/*.pcap'" in step, (
-            "the step no longer lists the tracked captures"
-        )
-        assert re.search(
-            r'(?m)^ +python3 scripts/check_fixtures\.py "\$dir"$', step
-        ), "the step no longer runs check_fixtures.py on each directory"
-        assert re.search(r'(?m)^ +if \[ "\$\{#dirs\[@\]\}" -eq 0 \]', step), (
-            "the step no longer fails when no capture is tracked"
-        )
-        assert step_key(step, "continue-on-error") is None, (
-            "a failure in the step does not fail the job"
-        )
+        self._assert_runs_fixtures_check(ci_jobs)
         assert (ROOT / "scripts" / "check_fixtures.py").is_file()
+
+    # The fixtures step as ci.yml writes it, and the jobs holding it,
+    # for the cases below.
+    FIXTURES_STEP = (
+        f"      - name: {FIXTURES_STEP_NAME}\n"
+        f"        if: {FIXTURES_STEP_IF}\n"
+        "        shell: bash\n"
+        "        run: |\n"
+        + "".join(f"          {line}\n" for line in FIXTURES_SCRIPT)
+    )
+    FIXTURES_JOB_HEAD = "    runs-on: ubuntu-latest\n    steps:\n"
+    FIXTURES_TEST_JOB = (
+        FIXTURES_JOB_HEAD + "      - run: uv run --frozen pytest\n"
+    )
+
+    @pytest.mark.parametrize(
+        ("old", "new", "message"),
+        [
+            pytest.param(
+                "pipefail\n",
+                "pipefail\n          exit 0\n",
+                "script is not",
+                id="exit-0-after-set",
+            ),
+            pytest.param(
+                "          for dir",
+                "          set +e\n          for dir",
+                "script is not",
+                id="set-plus-e-before-loop",
+            ),
+            pytest.param(
+                "          python3 scripts/check_fixtures.py",
+                "            true ||\n          python3"
+                " scripts/check_fixtures.py",
+                "script is not",
+                id="true-or-before-checker",
+            ),
+            pytest.param(
+                '"${dirs[@]}"; do',
+                '"${dirs[@]:0:0}"; do',
+                "script is not",
+                id="empty-slice",
+            ),
+            pytest.param(
+                "'tests/fixtures/*.pcap' |",
+                "'tests/fixtures/*.pcap' | head -1 |",
+                "script is not",
+                id="head-1",
+            ),
+            pytest.param(
+                "exit 1",
+                "exit 0",
+                "script is not",
+                id="no-capture-exit-0",
+            ),
+            pytest.param(
+                "        run: |\n",
+                "        run: |\n          exit 0\n",
+                "script is not",
+                id="leading-exit-0",
+            ),
+            pytest.param(
+                "done\n",
+                "done\n        continue-on-error: true\n",
+                "outside its run",
+                id="continue-on-error-after-run",
+            ),
+            pytest.param(
+                "        shell: bash\n",
+                "        shell: bash\n        continue-on-error: true\n",
+                "keys are not",
+                id="continue-on-error-before-run",
+            ),
+            pytest.param(
+                "if: ${{ !cancelled() }}",
+                "if: always()",
+                "keys are not",
+                id="if-always",
+            ),
+            pytest.param(
+                "        if: ${{ !cancelled() }}\n",
+                "",
+                "keys are not",
+                id="no-if",
+            ),
+            pytest.param(
+                "shell: bash",
+                "shell: sh",
+                "keys are not",
+                id="shell-sh",
+            ),
+            pytest.param(
+                "run: |",
+                "run: |-",
+                "keys are not",
+                id="strip-chomping",
+            ),
+        ],
+    )
+    def test_fixtures_check_rejects_a_weakened_step(
+        self, old: str, new: str, message: str
+    ) -> None:
+        """A fixtures step with a key or a script line added, removed or
+        changed is rejected."""
+        assert self.FIXTURES_STEP.count(old) == 1
+        step = self.FIXTURES_STEP.replace(old, new)
+        jobs = {
+            "lint": self.FIXTURES_JOB_HEAD + self.MARKERS_STEP + step,
+            "test": self.FIXTURES_TEST_JOB,
+        }
+        with pytest.raises(AssertionError, match=message):
+            self._assert_runs_fixtures_check(jobs)
+
+    @pytest.mark.parametrize(
+        ("lint_extra", "test_extra", "message"),
+        [
+            pytest.param(
+                "",
+                "      - run: python3 scripts/check_*.py\n",
+                r"found in \['lint', 'test'\]",
+                id="test-job-check-glob",
+            ),
+            pytest.param(
+                "",
+                "      - run: python3 scripts/check_fixtures.py tests\n",
+                r"found in \['lint', 'test'\]",
+                id="test-job-check-fixtures",
+            ),
+            pytest.param(
+                "",
+                "      - run: python3 scripts/check_markers.py\n",
+                r"found in \['lint', 'test'\]",
+                id="test-job-check-markers",
+            ),
+            pytest.param(
+                "      - run: python3 scripts/check_*.py\n",
+                "",
+                r"found in \['lint', 'lint'\]",
+                id="lint-job-check-glob",
+            ),
+            pytest.param(
+                "      - run: python3 scripts/che?k_fixtures.py x\n",
+                "",
+                r"found in \['lint', 'lint'\]",
+                id="lint-job-scripts-glob",
+            ),
+        ],
+    )
+    def test_fixtures_check_rejects_another_checker_step(
+        self, lint_extra: str, test_extra: str, message: str
+    ) -> None:
+        """A second step anywhere in ci.yml that names check_fixtures, a
+        scripts/check_ path or a glob under scripts/ is rejected."""
+        jobs = {
+            "lint": self.FIXTURES_JOB_HEAD
+            + self.MARKERS_STEP
+            + self.FIXTURES_STEP
+            + lint_extra,
+            "test": self.FIXTURES_TEST_JOB + test_extra,
+        }
+        with pytest.raises(AssertionError, match=message):
+            self._assert_runs_fixtures_check(jobs)
+
+    def test_fixtures_check_accepts_the_strict_step(self) -> None:
+        """The negative cases above fail for their own reason: the same
+        jobs with the strict step alone pass."""
+        self._assert_runs_fixtures_check(
+            {
+                "lint": self.FIXTURES_JOB_HEAD
+                + self.MARKERS_STEP
+                + self.FIXTURES_STEP,
+                "test": self.FIXTURES_TEST_JOB,
+            }
+        )
 
     TRACEMALLOC_STEP_NAME = "Allocation tests under PYTHONTRACEMALLOC=1"
 
