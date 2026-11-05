@@ -7,35 +7,42 @@ with zero bytes to a multiple of 4. The padding is not counted in the
 length.
 
 SCTP has no length field of its own: like ICMP and IGMP, the packet is
-the whole IP payload, and the chain walk does not trim a frame to the
-IP header's declared length. Unlike them, SCTP cannot simply keep that
-whole buffer: an Ethernet sender pads a frame to its 60-byte minimum,
-normally with zero bytes, so every IP datagram under 46 bytes arrives
-with a trailer (COOKIE ACK, SHUTDOWN, SHUTDOWN ACK, SHUTDOWN COMPLETE,
-a bare ABORT), and the CRC32c checksum
-(:func:`netprotocols.checksum.crc32c`) changes when zero bytes are
-appended, where the internet checksum ICMPv4 and IGMP use does not.
-``decode`` therefore walks the chunk headers to find where the packet
-ends, and stops at a remainder made only of zero bytes that starts
-where a chunk would, since that can never begin a chunk (a chunk
-length below 4 is invalid), so the checksum covers exactly the
-packet's bytes.
+the whole IP payload. In a :func:`~netprotocols.decode_frame` walk the
+IP header's declared length ends the buffer ``decode`` receives, so an
+Ethernet sender's padding and a captured FCS are the packet's
+:attr:`~netprotocols.Packet.trailer`, and the CRC32c checksum
+(:func:`netprotocols.checksum.crc32c`) covers exactly the packet's
+bytes.
+
+Decoded on its own, as ``SCTP.decode(raw)``, or in a walk that no IP
+length bounds (an IPv4 Total Length or IPv6 Payload Length of 0), the
+buffer can run past the packet. An Ethernet sender pads a frame to its
+60-byte minimum, normally with zero bytes, so every IP datagram under
+46 bytes arrives with a trailer (COOKIE ACK, SHUTDOWN, SHUTDOWN ACK,
+SHUTDOWN COMPLETE, a bare ABORT), and the CRC32c changes when zero bytes
+are appended, where the internet checksum ICMPv4 and IGMP use does not.
+For that buffer ``decode`` walks the chunk headers to find where the
+packet ends, and stops at a remainder made only of zero bytes that
+starts where a chunk would, since that can never begin a chunk (a chunk
+length below 4 is invalid).
 
 Past the 12-byte common header, ``decode`` never raises. A remainder
 the walk cannot parse — a chunk cut short by a snap length, an IP
-fragment or an ICMP error's quote, a length below 4, a nonzero trailer
-such as an Ethernet FCS — is kept in ``chunks`` verbatim, so the ports,
-verification tag and checksum still decode, and
-:func:`~netprotocols.checksum.verify` returns ``False``, since the CRC
-covers bytes the sender did not send or misses bytes it did. That is
-the reliable signal: :attr:`SCTP.parsed_chunks` raises only when the
-remainder does not walk, and a trailer that happens to (an FCS whose
-bytes read as a chunk header) parses as a phantom chunk.
+fragment or an ICMP error's quote, a length below 4, and, in a buffer
+no IP length bounds, a nonzero trailer such as an Ethernet FCS — is
+kept in ``chunks`` verbatim, so the ports, verification tag and
+checksum still decode, and :func:`~netprotocols.checksum.verify`
+returns ``False``, since the CRC covers bytes the sender did not send
+or misses bytes it did. That is the reliable signal:
+:attr:`SCTP.parsed_chunks` raises only when the remainder does not
+walk, and a trailer that happens to (an FCS whose bytes read as a chunk
+header) parses as a phantom chunk.
 
-One sender bug the walk cannot see past: a final chunk sent without
-its padding (RFC 9260 §3.2 requires it), followed by Ethernet's zero
-bytes, takes up to three of those zeros as its padding, so the decoded
-packet is longer than the one sent and does not verify.
+One sender bug the zero-byte scan cannot see past, in a buffer no IP
+length bounds: a final chunk sent without its padding (RFC 9260 §3.2
+requires it), followed by Ethernet's zero bytes, takes up to three of
+those zeros as its padding, so the decoded packet is longer than the
+one sent and does not verify.
 
 The chunks are kept as raw ``bytes``, padding and all, so
 ``bytes(SCTP.decode(x)) == x[:header_len]`` holds by construction, even

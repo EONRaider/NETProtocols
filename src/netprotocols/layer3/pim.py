@@ -35,11 +35,13 @@ value) ending at the one with the E bit set (§3.4.1), is not supported,
 and the parser raises there too.
 
 PIM has no length field of its own: like ICMP, IGMP and SCTP, the
-message is the whole IP payload, and the chain walk does not trim a
-frame to the IP header's declared length, so an Ethernet sender's zero
-padding or a captured FCS can follow the message in the buffer
-``decode`` receives. ``decode`` therefore bounds the message by its own
-structure, using the same parser :attr:`PIM.message` does:
+message is the whole IP payload. In a :func:`~netprotocols.decode_frame`
+walk the IP header's declared length ends the buffer ``decode``
+receives, so an Ethernet sender's padding and a captured FCS are the
+packet's :attr:`~netprotocols.Packet.trailer`. Decoded on its own, or
+in a walk that no IP length bounds, the buffer can hold them after the
+message, and ``decode`` bounds the message by its own structure, using
+the same parser :attr:`PIM.message` does:
 
 * A message whose parser knows where it ends (Register-Stop, Join/Prune,
   Graft, Graft-Ack, Assert) ends there; whatever follows is left

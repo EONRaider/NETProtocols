@@ -70,7 +70,8 @@ follows the transfer knows the server's TID from the first reply to the
 request (its source port) and can decode the rest by naming it, either
 per walk, ``decode_frame(frame, decode_as={"udp.port": {tid: TFTP}})``,
 which catches both directions because one of their two ports is the
-server's TID, or directly, ``TFTP.decode(frame[packet.consumed:])``
+server's TID, or directly,
+``TFTP.decode(frame[packet.consumed : len(frame) - len(packet.trailer)])``
 after a walk that ended at UDP. Tracking transfers is the caller's, as
 reassembling a TCP stream is for ``HTTP`` and ``BGP``. A server that
 answers from port 69 itself, which RFC 1350 does not allow, has its
@@ -79,12 +80,13 @@ whole transfer dispatched.
 The message's extent
 --------------------
 
-TFTP has no length field, and the chain walk does not trim a frame to
-UDP's declared length, so anything after the datagram, an
-Ethernet frame's zero padding or an FCS a capture kept, reaches the
-decoder. Each opcode bounds itself as far as its structure allows, and
-leaves what follows undecoded, past :attr:`TFTP.header_len`, so
-``bytes(TFTP.decode(x)) == x[:header_len]``:
+TFTP has no length field. In a :func:`~netprotocols.decode_frame` walk
+UDP's declared length ends the buffer, so anything after the datagram,
+an Ethernet frame's zero padding or an FCS a capture kept, is the
+packet's :attr:`~netprotocols.Packet.trailer`. Decoded on its own, the
+buffer can hold such bytes after the message. Each opcode bounds itself
+as far as its structure allows, and leaves what follows undecoded, past
+:attr:`TFTP.header_len`, so ``bytes(TFTP.decode(x)) == x[:header_len]``:
 
 - An ACK is exactly 4 bytes (in an untagged Ethernet frame over IPv4
   with no IP options, the frame is padded with 14 zero bytes; over
@@ -97,17 +99,18 @@ leaves what follows undecoded, past :attr:`TFTP.header_len`, so
   cannot be told from a trailer, so it is left undecoded too.
 - An OACK ends after its last whole option pair, the same way.
 - DATA runs to the end of the buffer: its data has no terminator, so
-  bytes after the datagram join :attr:`TFTP.data`. In an untagged
-  Ethernet frame over IPv4 with no IP options, a final block shorter
-  than 14 bytes is padded on the wire, and only the UDP length
+  bytes after the message in the buffer join :attr:`TFTP.data`. In an
+  untagged Ethernet frame over IPv4 with no IP options, a final block
+  shorter than 14 bytes is padded on the wire; a walk leaves that
+  padding in the trailer, and decoded on its own only the UDP length
   (``udp.length - 12``) says how much of the data is real.
   For the same reason, and because the block size an OACK negotiated
   is not in the DATA itself, no accessor says whether a block is the
   last one (RFC 1350 §6: a block shorter than the block size is).
 
-Structure bounds a request or an OACK only so far: a trailer holding a
-zero byte can be read in as option bytes, and only the UDP length could
-tell.
+Structure bounds a request or an OACK only so far: decoded on its own,
+a trailer holding a zero byte can be read in as option bytes, which
+only the UDP length, as a walk applies it, rules out.
 
 - After whole option pairs, a trailer reads as one more option when it
   holds a name, a zero byte, a value and a zero byte: an FCS
@@ -515,8 +518,8 @@ class TFTP(Protocol):
 
         That is up to 512 bytes, or the negotiated ``blksize``. It runs to
         the end of the buffer decode was given, so bytes after the
-        datagram, such as Ethernet padding, are part of it (see the
-        module docstring). ``None`` for another opcode.
+        message in that buffer are part of it (see the module
+        docstring). ``None`` for another opcode.
         """
         if self.opcode != _DATA or len(self.body) < 2:
             return None

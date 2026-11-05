@@ -96,16 +96,12 @@ what it can without reassembly:
 - A segment with no payload at all (the handshake, a bare ACK, a FIN)
   raises :class:`~netprotocols.TruncatedHeaderError` at the empty
   buffer, as it does on BGP's port 179: dispatch happens before anyone
-  looks at the payload. That holds where the frame ends with the TCP
-  header. Over IPv4 a bare segment whose TCP header has no options is a
-  54-byte frame, short of Ethernet's 60-byte minimum, and where the
-  capture holds the padding the sender added, the walk, which does not
-  end a layer's buffer at IPv4's Total Length, hands TLS the
-  6 zero bytes as its payload: a ContentType of 0, so it raises
-  :class:`~netprotocols.InvalidFieldError` (``field``
-  ``"content_type"``) instead. BGP's decoder judges nothing before its
-  19-byte header is whole, so on port 179 the padded segment still
-  raises :class:`~netprotocols.TruncatedHeaderError`.
+  looks at the payload. Over IPv4 a bare segment whose TCP header has
+  no options is a 54-byte frame, short of Ethernet's 60-byte minimum;
+  where the capture holds the padding the sender added, the walk ends
+  TLS's buffer at IPv4's Total Length, so the padding is the packet's
+  :attr:`~netprotocols.Packet.trailer` and the padded segment raises
+  the same :class:`~netprotocols.TruncatedHeaderError`.
 
 A ClientHello larger than one segment is the case that matters most. A
 post-quantum key share makes one: Chromium's X25519MLKEM768 share is
@@ -145,7 +141,8 @@ the former (1,448 / 22 = 65.8) and 103 of the latter (1,448 / 14 =
 Past the limit a strict walk raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic and a lax
 one stops with ``packet.stopped_by`` set. A larger ``max_depth``
-decodes the rest, and so does walking on from ``packet.consumed`` with
+decodes the rest, and so does walking on from the lax walk's packet
+over ``frame[packet.consumed : len(frame) - len(packet.trailer)]`` with
 ``start=TLS`` as many times as it takes, as for BGP: a walk that starts
 there has room for 32 records, so the 65 take three walks and the 103
 four.

@@ -76,8 +76,9 @@ After the header
 ----------------
 
 NTP has no length field: what follows the 48 bytes runs to the end of
-the UDP datagram, and the chain walk does not trim a frame to UDP's
-length. So, like RIP, an NTP message keeps the whole buffer after
+the UDP datagram, whose length ends the buffer in a
+:func:`~netprotocols.decode_frame` walk. So, like RIP, an NTP message
+keeps the whole buffer after
 its header as :attr:`NTP.body`, verbatim, ``bytes(NTP.decode(x)) == x``
 holds for every buffer decode accepts, and the accessors split the body
 without raising:
@@ -103,12 +104,13 @@ without raising:
 - :attr:`NTP.remainder`: anything else, which neither walks as
   extension fields nor has a MAC's length.
 
-The rule has the blind spot RIP's has. A capture that keeps a 4-byte
-Ethernet FCS after a plain 48-byte message gives a body of 4 bytes,
-which reads as a crypto-NAK whose Key Identifier is the FCS; only the
-UDP length could tell them apart. Ethernet's zero padding never
-reaches NTP: the 48-byte header, behind IPv4's 20 and UDP's 8, already
-fills Ethernet's 46-byte minimum payload.
+The rule has the blind spot RIP's has, where no UDP length bounds the
+buffer: decoded on its own, a plain 48-byte message followed by a
+captured 4-byte Ethernet FCS gives a body of 4 bytes, which reads as a
+crypto-NAK whose Key Identifier is the FCS. In a walk the FCS is the
+packet's :attr:`~netprotocols.Packet.trailer`. Ethernet's zero padding
+never follows NTP: the 48-byte header, behind IPv4's 20 and UDP's 8,
+already fills Ethernet's 46-byte minimum payload.
 
 Decoding a guess
 ----------------

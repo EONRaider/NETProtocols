@@ -94,12 +94,14 @@ decoder does what it can without reassembly:
   buffer, as ``DNSOverTCP`` does on port 53: port dispatch happens
   before anyone looks at the payload.
 
-The bytes after the last message are left undecoded unless they begin
-with ``0xff`` bytes as above, so a trailer the walk hands the decoder —
-Ethernet zero padding, which a BGP segment is too long to need, or a
-4-byte FCS — ends the walk cleanly, with ``packet.consumed`` short of
-the frame. An FCS of four ``0xff`` bytes would read as the start of a
-cut message and raise; that is one value in 2**32.
+In a walk the IP header's declared length ends the segment, so bytes
+past the datagram, such as a 4-byte FCS a capture kept, are the
+packet's :attr:`~netprotocols.Packet.trailer` and never reach the
+decoder. Decoded on its own, the bytes after the last message are left
+undecoded unless they begin with ``0xff`` bytes as above, so a trailer
+there — Ethernet zero padding or an FCS — ends the decode cleanly, and
+an FCS of four ``0xff`` bytes reads as the start of a cut message and
+raises.
 
 Each message is one layer, so a segment of many small messages makes a
 deep chain: Ethernet, IPv4 and TCP are three layers, and the walk's
@@ -124,12 +126,14 @@ them, which then raises :class:`~netprotocols.TruncatedHeaderError`
 instead; so ``max_depth=79`` decodes 76 whole KEEPALIVEs. The other,
 which needs no bound on the segment, is to carry on where the walk
 stopped. The error's ``protocol`` is :class:`BGP` when the next layer
-is another message, and ``packet.consumed`` in lax mode, or the
-error's ``frame_offset`` in strict mode, is where that message starts::
+is another message. A lax walk returns the packet, whose
+``packet.consumed`` is where that message starts, and the walk on
+covers ``frame[packet.consumed : len(frame) - len(packet.trailer)]``,
+the segment's bytes without the trailer::
 
     packet = decode_frame(frame, lax=True)
     messages = [layer for layer in packet if isinstance(layer, BGP)]
-    rest = frame[packet.consumed :]
+    rest = frame[packet.consumed : len(frame) - len(packet.trailer)]
     while (
         isinstance(packet.stopped_by, MaxDepthExceededError)
         and packet.stopped_by.protocol is BGP
@@ -138,11 +142,14 @@ error's ``frame_offset`` in strict mode, is where that message starts::
         messages.extend(packet)
         rest = rest[packet.consumed :]
 
-Only the lax walk keeps what it decoded: a strict walk's
-:class:`~netprotocols.MaxDepthExceededError` carries no layers, so
-walking on from its ``frame_offset`` yields the messages after the
-limit but not those before it. Use the lax loop above, or a larger
-``max_depth``, when every message is wanted.
+Only the lax walk keeps what it decoded. A strict walk raises
+:class:`~netprotocols.MaxDepthExceededError` and returns no packet, so
+there is no ``packet.trailer`` to subtract: the error carries no
+layers, its ``frame_offset`` is where the next message starts, and
+``frame[error.frame_offset :]`` runs on to the end of the frame, the
+bytes past the IP datagram included. Walking on from there yields the
+messages after the limit but not those before it. Use the lax loop
+above, or a larger ``max_depth``, when every message is wanted.
 
 Out of scope
 ------------

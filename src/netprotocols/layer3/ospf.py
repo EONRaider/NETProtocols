@@ -61,15 +61,16 @@ AuType 3, cryptographic authentication with extended sequence numbers
 then the digest follow the packet (RFC 7474 §3), and Auth Data Len
 counts both (§2), so they are its ``auth_trailer``. So ``header_len`` is
 Packet Length plus the trailer, and ``bytes(OSPF.decode(x)) ==
-x[:header_len]``. Nothing after that is consumed. The chain walk does
-not trim a frame to the IP header's length, so what may follow is an
-Ethernet frame's padding or FCS, or an RFC 5613 Link-Local Signaling
-block, which a router appends to a Hello or Database Description when
-it sets the L bit (``0x10``) in Options. All three are left undecoded,
-after the OSPF layer: ``decode_frame`` ends the walk at OSPF, and
-``frame[packet.consumed:]`` holds them. An LLS block is not part of the
-packet the checksum covers, and :func:`~netprotocols.checksum.verify`
-does not read it.
+x[:header_len]``. Nothing after that is consumed. What may follow,
+inside the IP datagram, is an RFC 5613 Link-Local Signaling block,
+which a router appends to a Hello or Database Description when it sets
+the L bit (``0x10``) in Options. It is left undecoded, after the OSPF
+layer: ``decode_frame`` ends the walk at OSPF, and
+``frame[packet.consumed : len(frame) - len(packet.trailer)]`` holds it.
+An Ethernet frame's padding or FCS, past the IP header's declared
+length, is the packet's :attr:`~netprotocols.Packet.trailer`. An LLS
+block is not part of the packet the checksum covers, and
+:func:`~netprotocols.checksum.verify` does not read it.
 
 ``bytes(OSPF.decode(x)) == x[:header_len]`` holds by construction: the
 header fields are packed back and the body and authentication

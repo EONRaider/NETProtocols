@@ -53,8 +53,11 @@ class ProtocolError(Exception):
         its ``offset`` is always relative to the start of the message,
         i.e. the ``decode()`` buffer, or ``head + raw_body`` for an error
         raised while constructing one.
-    :ivar frame_offset: ``offset`` rebased to the whole captured frame.
-        ``None`` unless the error passed through
+    :ivar frame_offset: ``offset`` rebased to the whole captured frame,
+        or, when ``offset`` is ``None``, the frame offset where the
+        header at fault starts: the header whose decoding raised, or
+        the IPv4 or UDP header whose declared length is shorter than
+        itself. ``None`` unless the error passed through
         :func:`~netprotocols.decode_frame`, which is the only code
         holding the cursor needed to do the rebasing — a bare
         ``SomeClass.decode()`` call has no frame to rebase against, so

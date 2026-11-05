@@ -39,22 +39,23 @@ below 20 it cannot hold the header and raises
 :class:`~netprotocols.InvalidFieldError`; past the end of the buffer it
 raises :class:`~netprotocols.TruncatedHeaderError`, for RFC 2865 §3 says
 a packet shorter than its Length is discarded. Bytes past the Length
-are padding to be ignored (§3), and an Ethernet FCS a capture kept is
-too; both are left undecoded, past ``packet.consumed``. RFC 2865's
+are padding to be ignored (§3) and are left undecoded, past
+``packet.consumed``; in a walk, an Ethernet FCS a capture kept is the
+packet's :attr:`~netprotocols.Packet.trailer`. RFC 2865's
 upper bound of 4096 is not enforced, so a packet of up to 65535 bytes,
 which RFC 7930 §2 allows for RADIUS over TCP and TLS, decodes.
 
-The buffer is not the datagram, though. :func:`~netprotocols.decode_frame`
-does not bound a layer by the UDP or IP length, so behind UDP the
-buffer runs to the end of the frame, trailing bytes such as an Ethernet
-FCS included. A Length that overstates the datagram but stays
-within the frame therefore does not raise: the packet takes the
-trailing bytes as attributes, and :attr:`RADIUS.parsed_attributes` walks
-them as it would any other (an Accounting-Response whose Length is 24
-instead of 20, followed by an FCS reading ``12 04 be ef``, decodes with
-a Reply-Message of ``be ef``). Only a Length past the end of the frame
-raises. Decoding the UDP payload alone, sliced by the UDP length,
-avoids that.
+In a :func:`~netprotocols.decode_frame` walk the buffer is the UDP
+datagram's payload: the UDP and IP lengths end it, so a Length that
+overstates the datagram raises
+:class:`~netprotocols.TruncatedHeaderError` there. Decoded on its own,
+the buffer is whatever the caller passes, and a Length that overstates
+the packet but stays within that buffer does not raise: the packet
+takes the trailing bytes as attributes, and
+:attr:`RADIUS.parsed_attributes` walks them as it would any other (an
+Accounting-Response whose Length is 24 instead of 20, followed by an
+FCS reading ``12 04 be ef``, decodes with a Reply-Message of
+``be ef``).
 
 The attributes are not validated on decode. An attribute whose Length
 is below 2 or runs past the packet raises

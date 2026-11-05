@@ -133,11 +133,12 @@ minimum carries zero padding after it, and a capture can carry the
 layer's buffer after an :class:`~netprotocols.Ethernet` or
 :class:`~netprotocols.VLAN` header with a Length at the end of the PDU
 that Length gives (``Ethernet.length``), so padding and an FCS stay
-outside every layer and ``packet.consumed`` stops short of them. It is
-the one enclosing length the walk honours; IPv4's, IPv6's and UDP's
-are not, so a trailer after an IP packet reaches the layers inside it.
-A Length larger than the bytes captured bounds nothing
-and the layers decode what is there, as for a snap-length cut; a
+outside every layer, ``packet.consumed`` stops short of them, and they
+are the packet's :attr:`~netprotocols.Packet.trailer`. IPv4's, IPv6's
+and UDP's lengths bound a walk the same way (see
+:mod:`netprotocols.walk`). A Length larger than the bytes captured
+bounds nothing and the layers decode what is there, as for a
+snap-length cut; a
 Length smaller than the LLC header leaves :meth:`LLC.decode` too few
 bytes, so the walk raises :class:`~netprotocols.TruncatedHeaderError`
 (or, lax, stops with it on ``stopped_by``).

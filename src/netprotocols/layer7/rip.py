@@ -43,8 +43,9 @@ The datagram as a whole
 -----------------------
 
 RIP has no length field of its own: its entries fill the rest of the
-UDP datagram, and the chain walk does not trim a frame to the UDP
-header's declared length. So, like ICMPv4 and IGMP, a RIP message keeps
+UDP datagram, whose length ends the buffer in a
+:func:`~netprotocols.decode_frame` walk. So, like ICMPv4 and IGMP, a
+RIP message keeps
 the whole buffer after its header as :attr:`RIP.body`, verbatim, and
 past the 4-byte header :meth:`RIP.decode` never raises: ``bytes(RIP.
 decode(x)) == x`` holds for every buffer decode accepts. The accessors
@@ -69,15 +70,14 @@ then split that body without raising:
   when the message has no trailer: fewer than 20 bytes, which cannot be
   an entry.
 
-A remainder has two sources a decoder cannot tell apart without the
-UDP length: an entry cut short by a capture's snap length, and bytes
-after the datagram, such as a 4-byte Ethernet FCS a capture kept. Both
-stay in the body, reported by :attr:`RIP.remainder` (or, after a
-trailer, counted into :attr:`RIP.authentication_trailer`), and neither
-fails the decode. Ethernet's zero padding only reaches a message with
-no entries at all: the shortest one with an entry, 24 bytes behind
-UDP's 8 and IPv4's 20, already fills Ethernet's 46-byte minimum
-payload.
+In a walk a remainder is an entry cut short by a capture's snap
+length; bytes after the datagram, such as a 4-byte Ethernet FCS a
+capture kept or Ethernet's padding, are the packet's
+:attr:`~netprotocols.Packet.trailer`. Decoded on its own, a message has
+no UDP length to go by, and a remainder can be either. Both stay in
+the body, reported by :attr:`RIP.remainder` (or, after a trailer,
+counted into :attr:`RIP.authentication_trailer`), and neither fails the
+decode.
 
 Decoding a guess
 ----------------

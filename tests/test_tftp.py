@@ -278,9 +278,10 @@ FCS = b"\xde\xad\xbe\xef"
 class TestExtent:
     """Read a message whose buffer runs on past its datagram.
 
-    TFTP has no length field and the walk does not trim to UDP's, so
-    Ethernet padding and an FCS reach the decoder. veth does
-    not pad, so the captured frames carry neither: they are added here.
+    TFTP has no length field. In a walk UDP's ends its buffer, so
+    Ethernet padding and an FCS are the packet's trailer; decoded on
+    its own, they reach the decoder. veth does not pad, so the captured
+    frames carry neither: they are added here.
     """
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
@@ -301,6 +302,7 @@ class TestExtent:
         assert packet[TFTP] == tftp_of(index)
         assert packet.consumed == len(FRAMES[index])
         assert bytes(packet) == FRAMES[index]
+        assert packet.trailer == trailer
 
     def test_an_ack_padded_to_the_ethernet_minimum(self):
         """A 46-byte ACK frame goes out padded to 60 bytes; the ACK is
@@ -309,6 +311,18 @@ class TestExtent:
         tftp = TFTP.decode(raw)
         assert (tftp.header_len, tftp.block) == (4, 1)
         assert bytes(tftp) == raw[: tftp.header_len]
+
+    @pytest.mark.parametrize("trailer", [bytes(14), FCS], ids=["pad", "fcs"])
+    @pytest.mark.parametrize(
+        "index", [i for i in range(len(FRAMES)) if OPCODES[i] == "DATA"]
+    )
+    def test_a_walk_leaves_the_trailer_out_of_the_data(self, index, trailer):
+        tid = server_tid(next(t for t in TRANSFERS if index in t))
+        packet = decode_frame(
+            FRAMES[index] + trailer, decode_as={"udp.port": {tid: TFTP}}
+        )
+        assert packet[TFTP] == tftp_of(index)
+        assert packet.trailer == trailer
 
     @pytest.mark.parametrize("trailer", [bytes(14), FCS], ids=["pad", "fcs"])
     def test_a_trailer_joins_the_data(self, trailer):

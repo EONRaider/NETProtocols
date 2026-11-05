@@ -278,6 +278,9 @@ class IPv4(Protocol):
 
     _struct: ClassVar[Struct] = Struct("!BBHHHBBH4s4s")
 
+    #: The Total Length bounds what follows (see :meth:`_payload_extent`).
+    _BOUNDS_PAYLOAD: ClassVar[bool] = True
+
     flag_names: ClassVar[dict[int, str]] = {
         0b000: "Not set",
         0b001: "More fragments (MF)",
@@ -404,6 +407,28 @@ class IPv4(Protocol):
         """The header's length in bytes: ``ihl * 4``, options included."""
         return self.ihl * 4
 
+    def _payload_extent(self) -> int | None:
+        """Return the payload's length, ``total_length - ihl * 4``.
+
+        ``None`` for a ``total_length`` of 0, which bounds nothing.
+
+        :raises InvalidFieldError: if ``total_length`` is 1 or more but
+            shorter than the header itself (``field="total_length"``).
+        """
+        if self.total_length == 0:
+            return None
+        extent = self.total_length - self.ihl * 4
+        if extent < 0:
+            raise InvalidFieldError(
+                f"IPv4 total length {self.total_length} is shorter than "
+                f"its {self.ihl * 4}-byte header",
+                protocol=type(self),
+                field="total_length",
+                expected=f">={self.ihl * 4}",
+                actual=self.total_length,
+            )
+        return extent
+
     def next_protocol(
         self, registry: Registry | None = None
     ) -> type[Protocol] | None:
@@ -523,6 +548,9 @@ class IPv6(Protocol):
 
     _struct: ClassVar[Struct] = Struct("!IHBB16s16s")
 
+    #: The Payload Length bounds what follows (see :meth:`_payload_extent`).
+    _BOUNDS_PAYLOAD: ClassVar[bool] = True
+
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 40-byte IPv6 header at the start of ``data``.
@@ -562,6 +590,13 @@ class IPv6(Protocol):
             ipv6_to_bytes(self.src),
             ipv6_to_bytes(self.dst),
         )
+
+    def _payload_extent(self) -> int | None:
+        """Return ``payload_length``, extension headers included.
+
+        ``None`` for a ``payload_length`` of 0, which bounds nothing.
+        """
+        return self.payload_length or None
 
     def next_protocol(
         self, registry: Registry | None = None
