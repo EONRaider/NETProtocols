@@ -926,25 +926,33 @@ class TestCIWorkflow:
 
     FIXTURES_STEP_NAME = "Check every committed capture with check_fixtures.py"
 
-    def test_test_job_runs_check_fixtures_over_every_capture_directory(
+    def test_lint_job_runs_check_fixtures_over_every_capture_directory(
         self, ci_jobs: dict[str, str]
     ) -> None:
-        """The test job has one step that runs scripts/check_fixtures.py
-        over each directory holding a ``git ls-files``-tracked capture
-        under tests/fixtures, under ``set -euo pipefail`` in bash, so a
-        failing directory, or no tracked capture at all, fails the job.
+        """The lint job, which has no matrix, has the one step in ci.yml
+        that runs scripts/check_fixtures.py over each directory holding
+        a ``git ls-files``-tracked capture under tests/fixtures, under
+        ``set -euo pipefail`` in bash, whatever an earlier step's
+        outcome, so a failing directory, or no tracked capture at all,
+        fails the job.
         """
-        block = ci_jobs.get("test")
-        assert block is not None, "ci.yml has no test job"
-        steps = [
-            step
+        found = [
+            (job, step)
+            for job, block in ci_jobs.items()
             for step in job_steps(block)
             if step_key(step, "name") == self.FIXTURES_STEP_NAME
+            or "check_fixtures.py" in step
         ]
-        assert len(steps) == 1, (
-            f"test job has no single {self.FIXTURES_STEP_NAME!r} step"
+        assert [job for job, _ in found] == ["lint"], (
+            f"ci.yml has no single {self.FIXTURES_STEP_NAME!r} step, in "
+            f"the lint job: found in {[job for job, _ in found]}"
         )
-        step = steps[0]
+        assert "matrix:" not in ci_jobs["lint"], "the lint job has a matrix"
+        step = found[0][1]
+        assert step_key(step, "name") == self.FIXTURES_STEP_NAME
+        assert step_key(step, "if") == "${{ !cancelled() }}", (
+            "the step no longer runs after an earlier step fails"
+        )
         assert step_key(step, "shell") == "bash", "the step is not bash"
         assert re.search(r"(?m)^ +set -euo pipefail$", step), (
             "the step no longer runs under set -euo pipefail"

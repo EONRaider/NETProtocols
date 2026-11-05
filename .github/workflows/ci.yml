@@ -36,6 +36,28 @@ jobs:
       # Fails on any work-marker word in tracked text (see
       # scripts/check_markers.py). Offline.
       - run: python3 scripts/check_markers.py
+      # Runs scripts/check_fixtures.py, stdlib-only, under the runner's
+      # python3 over tests/fixtures and over each subdirectory holding a
+      # tracked capture; fails if no capture is tracked or if any
+      # directory's run exits non-zero. tests/test_check_fixtures.py
+      # also runs it over every capture directory under each Python the
+      # test job's matrix names. It runs whether or not an earlier step
+      # failed.
+      - name: Check every committed capture with check_fixtures.py
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dirs < <(
+            git ls-files -- 'tests/fixtures/*.pcap' | xargs -n1 dirname | sort -u
+          )
+          if [ "${#dirs[@]}" -eq 0 ]; then
+            echo "::error::git ls-files found no capture under tests/fixtures."
+            exit 1
+          fi
+          for dir in "${dirs[@]}"; do
+            python3 scripts/check_fixtures.py "$dir"
+          done
       # Renders every docstring in src/ through Sphinx autodoc
       # (docs/conf.py) and fails on any warning, an unresolved
       # cross-reference role included. Fetches the Python inventory from
@@ -64,23 +86,6 @@ jobs:
       # Also runs the doctests in src/: pyproject.toml's pytest
       # addopts and testpaths include --doctest-modules and src.
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
-      # Runs scripts/check_fixtures.py over tests/fixtures and over each
-      # subdirectory holding a tracked capture; fails if no capture is
-      # tracked or if any directory's run exits non-zero.
-      - name: Check every committed capture with check_fixtures.py
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t dirs < <(
-            git ls-files -- 'tests/fixtures/*.pcap' | xargs -n1 dirname | sort -u
-          )
-          if [ "${#dirs[@]}" -eq 0 ]; then
-            echo "::error::git ls-files found no capture under tests/fixtures."
-            exit 1
-          fi
-          for dir in "${dirs[@]}"; do
-            python3 scripts/check_fixtures.py "$dir"
-          done
       # Runs every module that measures allocations with
       # tests/conftest.py's allocation_peak while tracemalloc is already
       # tracing from interpreter start.
