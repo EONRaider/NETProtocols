@@ -576,8 +576,8 @@ the six checks CI enforces: `uv run ruff check`,
 pydoclint), `uv run mypy`, `uv run pytest` and
 `python3 scripts/check_markers.py` (no work markers). The test
 suite runs across Python 3.12–3.14; `ruff`, `flake8` and `mypy` run on
-3.12. The test suite is anchored by a 394-frame corpus of real
-captured traffic across 36 scenarios
+3.12. The test suite is anchored by a 402-frame corpus of real
+captured traffic across 38 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See
