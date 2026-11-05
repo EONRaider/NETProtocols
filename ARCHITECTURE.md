@@ -177,20 +177,23 @@ FCS are the packet's trailer, and those three keep the whole buffer,
 which is the whole IP payload. Decoded on its own, or in a walk no IP
 length bounds (a Total Length or Payload Length of 0), the buffer can
 run past the packet. ICMPv4's and IGMP's internet checksum is unchanged
-by appended zero bytes, and they keep the whole buffer then too. SCTP's
-CRC32c does change when zero bytes are appended, so for that buffer
-`decode()` walks the chunk headers to find where the packet ends and
-leaves a run of zero bytes where the next chunk would start undecoded,
-since that cannot begin a chunk and is what an Ethernet sender normally
-pads a short frame with. Rule 3 holds for those zeros; any other
-trailing bytes become part of the packet, which is the zero-tail scan's
-limit: in such a buffer a nonzero trailer, such as an Ethernet FCS,
-cannot be told from a broken chunk. Past the 12-byte common header
-`decode()` never raises, like the three it resembles: a remainder the
-walk cannot parse — a chunk cut by a snap length, an IP fragment or an
-ICMP error's quote, or such a nonzero trailer — is kept verbatim in
-`chunks`, the ports and verification tag still decode, and `verify()`
-returns `False`. `parsed_chunks` raises only when the
+by appended zero bytes, and they keep the whole buffer then too. When
+a message decoded on its own is checksummed, `checksum.compute()` and
+`verify()` given its IP header end their sum at the length that header
+declares, except where the checksum paragraph below says otherwise.
+SCTP's CRC32c does change when zero bytes are appended, so for that
+buffer `decode()` walks the chunk headers to find where the packet ends
+and leaves a run of zero bytes where the next chunk would start
+undecoded, since that cannot begin a chunk and is what an Ethernet
+sender normally pads a short frame with. Rule 3 holds for those zeros;
+any other trailing bytes become part of the packet, which is the
+zero-tail scan's limit: in such a buffer a nonzero trailer, such as an
+Ethernet FCS, cannot be told from a broken chunk. Past the 12-byte
+common header `decode()` never raises, like the three it resembles: a
+remainder the walk cannot parse — a chunk cut by a snap length, an IP
+fragment or an ICMP error's quote, or such a nonzero trailer — is kept
+verbatim in `chunks`, the ports and verification tag still decode, and
+`verify()` returns `False`. `parsed_chunks` raises only when the
 remainder does not walk: a trailer that happens to (an FCS whose bytes
 read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
@@ -378,9 +381,12 @@ assert frame == bytes(packet) + undecoded + packet.trailer
 `Packet` equality and hashing include the trailer, as they do
 `stopped_by`; `repr()` shows it only when it is non-empty; and
 `with_checksums()` carries it over unchanged. The checksum code reads
-the same per-class arithmetic: `_ip_checksum_extent()` takes the
-nearest enclosing IP header's `_payload_extent()`, where the walk takes
-the tightest of every enclosing end.
+the same per-class arithmetic: `checksum._datagram_extent()` takes an
+IP header's `_payload_extent()`, less the headers between it and the
+layer, where the walk takes the tightest of every enclosing end.
+`compute()` and `verify()` call it for the `ip` they are given, and
+`with_checksums()`, through `_ip_checksum_extent()`, for the nearest
+enclosing IP header.
 
 **One layer is one message.** A protocol whose self-delimiting
 messages, or records, follow one another in a transport payload decodes
@@ -1202,15 +1208,35 @@ captured traffic. Computing and verifying them is explicit, via
 checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
 pseudo-headers, PIM (the pseudo-header over IPv6 only, a Register's
 first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
-stack before sending. (The RFC 768 subtlety lives where it belongs:
-the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
-one transport that does not use the internet checksum: its CRC32c
-(`crc32c()`, RFC 9260 §A) covers the whole packet with no
-pseudo-header, and goes on the wire least significant byte first, so
-`compute()` returns it byte-swapped to match the field as decoded.
-STUN's FINGERPRINT is a checksum that lives in an attribute rather
-than a header field: the IEEE CRC-32 of the message up to it, XORed
-with `0x5354554E` (RFC 8489 §14.7). `compute()` returns it for a
+stack before sending. IGMP, ICMPv4 and GRE have no length of their
+own: an IGMP or ICMPv4 message decoded on its own keeps Ethernet
+padding or an FCS in its body, and for GRE, which has no body, they
+are in the `payload` the caller passes. So given `ip`, the IP header
+directly before the layer, `compute()` and `verify()` end their input
+at that datagram's declared end, `_payload_extent()` bytes after the
+layer's start; `with_checksums()` applies the same bound with the same
+helper from the nearest IP header, counting the headers between. With
+headers between `ip` and the layer (AH, or IPv6 extension headers such
+as a Routing header passed as `routing`), `compute()`'s bound is looser
+by their length and never cuts the message, so some padding may still be
+summed; `with_checksums()` counts them exactly. An IPv4 fragment's
+header (More Fragments set or a nonzero Fragment Offset), a Total Length
+or Payload Length of 0, an IPv4 Total Length shorter than its header, or
+an end before the layer's required bytes leaves the input unbounded, as
+it is without `ip`, and `with_checksums()` also leaves it unbounded
+behind an IPv6 Fragment header in the packet with its M flag set or a
+nonzero Fragment Offset, while an atomic fragment (both 0) stays
+bounded; `ip`'s length must cover the whole message, so a message
+reassembled from IPv6 fragments needs a header whose Payload Length
+covers the reassembled datagram, or no `ip`. (The RFC 768 subtlety lives
+where it belongs: the `0x0000 → 0xFFFF` substitution applies to UDP
+alone.) SCTP is the one transport that does not use the internet
+checksum: its CRC32c (`crc32c()`, RFC 9260 §A) covers the whole packet
+with no pseudo-header, and goes on the wire least significant byte
+first, so `compute()` returns it byte-swapped to match the field as
+decoded. STUN's FINGERPRINT is a checksum that lives in an attribute
+rather than a header field: the IEEE CRC-32 of the message up to it,
+XORed with `0x5354554E` (RFC 8489 §14.7). `compute()` returns it for a
 message whose last attribute is one, `verify()` accepts a message with
 none, and `with_checksums()` rewrites it. A message has none only when
 its attributes walk whole, none of them a FINGERPRINT, and its last 8
