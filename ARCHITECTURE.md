@@ -177,7 +177,9 @@ FCS are the packet's trailer, and those three keep the whole buffer,
 which is the whole IP payload. Decoded on its own, or in a walk no IP
 length bounds (a Total Length or Payload Length of 0), the buffer can
 run past the packet. ICMPv4's and IGMP's internet checksum is unchanged
-by appended zero bytes, and they keep the whole buffer then too. SCTP's
+by appended zero bytes, and they keep the whole buffer then too;
+`checksum.compute()` and `verify()` given `ip` end their sum at the
+datagram's declared end (see the checksum paragraph below). SCTP's
 CRC32c does change when zero bytes are appended, so for that buffer
 `decode()` walks the chunk headers to find where the packet ends and
 leaves a run of zero bytes where the next chunk would start undecoded,
@@ -378,9 +380,12 @@ assert frame == bytes(packet) + undecoded + packet.trailer
 `Packet` equality and hashing include the trailer, as they do
 `stopped_by`; `repr()` shows it only when it is non-empty; and
 `with_checksums()` carries it over unchanged. The checksum code reads
-the same per-class arithmetic: `_ip_checksum_extent()` takes the
-nearest enclosing IP header's `_payload_extent()`, where the walk takes
-the tightest of every enclosing end.
+the same per-class arithmetic: `checksum._datagram_extent()` takes an
+IP header's `_payload_extent()`, less the headers between it and the
+layer, where the walk takes the tightest of every enclosing end.
+`compute()` and `verify()` call it for the `ip` they are given, and
+`with_checksums()`, through `_ip_checksum_extent()`, for the nearest
+enclosing IP header.
 
 **One layer is one message.** A protocol whose self-delimiting
 messages, or records, follow one another in a transport payload decodes
@@ -1202,7 +1207,16 @@ captured traffic. Computing and verifying them is explicit, via
 checksum, ICMPv4, and TCP/UDP/ICMPv6 with their IPv4/IPv6
 pseudo-headers, PIM (the pseudo-header over IPv6 only, a Register's
 first 8 bytes only), and `Packet.with_checksums(payload)` fills a whole
-stack before sending. (The RFC 768 subtlety lives where it belongs:
+stack before sending. IGMP, ICMPv4 and GRE have no length of their
+own, and a message decoded on its own keeps Ethernet padding or an FCS
+in its body, so given `ip`, the IP header directly before the layer,
+`compute()` and `verify()` end their input at that datagram's declared
+end, `_payload_extent()` bytes after the layer's start;
+`with_checksums()` applies the same bound with the same helper from the
+nearest IP header, counting the headers between. A Total Length or
+Payload Length of 0, an IPv4 Total Length shorter than its header, or
+an end before the layer's required bytes leaves the input unbounded, as
+it is without `ip`. (The RFC 768 subtlety lives where it belongs:
 the `0x0000 → 0xFFFF` substitution applies to UDP alone.) SCTP is the
 one transport that does not use the internet checksum: its CRC32c
 (`crc32c()`, RFC 9260 §A) covers the whole packet with no

@@ -81,32 +81,28 @@ def _ip_checksum_extent(
 
     The datagram is the nearest IPv4 or IPv6 header before
     ``layers[index]``, and every header between the two counts in the
-    offset. Its end is the one that header's ``_payload_extent()``
-    gives, the same arithmetic :func:`~netprotocols.decode_frame`
-    bounds the walk with; this reads the nearest IP header alone, where
-    the walk takes the tightest of every enclosing bound. Return
-    ``None`` when no IP header encloses the layer, the IP header's
-    length is zero or shorter than the header itself, or the declared
-    end falls short of ``minimum``.
+    offset. The arithmetic is
+    :func:`~netprotocols.checksum._datagram_extent`'s, the one
+    :func:`~netprotocols.checksum.compute` bounds a layer with when
+    given ``ip``: the header's ``_payload_extent()``, which
+    :func:`~netprotocols.decode_frame` bounds the walk with; this reads
+    the nearest IP header alone, where the walk takes the tightest of
+    every enclosing bound. Return ``None`` when no IP header encloses
+    the layer, the IP header's length is zero or shorter than the
+    header itself, or the declared end falls short of ``minimum``.
 
     :param layers: The packet's headers, outermost first.
     :param index: The position of the layer whose checksum input is
         bounded.
     :param minimum: The bytes that layer requires at its start.
     """
+    from netprotocols.checksum import _datagram_extent
     from netprotocols.layer3.ip import IPv4, IPv6
 
     offset = 0
     for header in reversed(layers[:index]):
         if isinstance(header, (IPv4, IPv6)):
-            try:
-                payload = header._payload_extent()
-            except InvalidFieldError:
-                return None
-            if payload is None:
-                return None
-            extent = payload - offset
-            return extent if extent >= minimum else None
+            return _datagram_extent(header, offset, minimum)
         offset += header.header_len
     return None
 
@@ -355,13 +351,16 @@ class Packet:
         with it, and a PIM Register summed over the whole message comes
         back summed over its first 8 bytes.
 
-        IGMP's and GRE's checksum inputs end at the declared end of the
-        nearest enclosing IPv4 or IPv6 datagram, so Ethernet padding and
-        a captured FCS stay out of them; those bytes are kept in the
-        returned packet. An IPv4 Total Length or IPv6 payload length of
-        zero, an IPv4 Total Length shorter than its header, or a
-        declared end before the layer's required bytes leaves the input
-        unbounded.
+        IGMP's, ICMPv4's and GRE's checksum inputs end at the declared
+        end of the nearest enclosing IPv4 or IPv6 datagram, so Ethernet
+        padding and a captured FCS stay out of them; those bytes are
+        kept in the returned packet. An IPv4 Total Length or IPv6
+        payload length of zero, an IPv4 Total Length shorter than its
+        header, or a declared end before the layer's required bytes
+        leaves the input unbounded. The bound is the one
+        :func:`~netprotocols.checksum.compute` applies given ``ip``,
+        computed by the same helper, with the headers between the IP
+        header and the layer counted in the offset.
 
         Layers are processed innermost-first so each transport checksum
         covers the final bytes of everything that follows it; ``payload``
@@ -381,7 +380,11 @@ class Packet:
         has one, last; its MESSAGE-INTEGRITY, which needs a key, is
         left as it is.
         """
-        from netprotocols.checksum import compute
+        from netprotocols.checksum import (
+            _bounded_checksum,
+            _required_bytes,
+            compute,
+        )
         from netprotocols.layer2.cdp import CDP
         from netprotocols.layer3.gre import GRE
         from netprotocols.layer3.icmp import ICMPv4, ICMPv6
@@ -399,7 +402,7 @@ class Packet:
         trailing = payload
         for index in range(len(self.layers) - 1, -1, -1):
             layer = self.layers[index]
-            if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, ICMPv4, VRRP, PIM)):
+            if isinstance(layer, (TCP, UDP, SCTP, ICMPv6, VRRP, PIM)):
                 enclosing, routing = _enclosing_ip(self.layers, index)
                 layer = _refilled(
                     layer,
@@ -407,26 +410,25 @@ class Packet:
                         layer, ip=enclosing, routing=routing, payload=trailing
                     ),
                 )
-            elif isinstance(layer, GRE) and layer.checksum is not None:
+            elif isinstance(layer, (IGMP, ICMPv4)) or (
+                isinstance(layer, GRE) and layer.checksum is not None
+            ):
                 extent = _ip_checksum_extent(
-                    self.layers, index, layer.header_len
+                    self.layers, index, _required_bytes(layer)
                 )
                 covered = (
-                    trailing
-                    if extent is None
-                    else (trailing + self.trailer)[: extent - layer.header_len]
+                    trailing + self.trailer
+                    if isinstance(layer, GRE) and extent is not None
+                    else trailing
                 )
-                checksum = compute(layer, payload=covered).to_bytes(2, "big")
-                layer = _refilled(layer, fields=checksum + layer.fields[2:])
-            elif isinstance(layer, IGMP):
-                fixed = layer.header_len - len(layer.body)
-                extent = _ip_checksum_extent(self.layers, index, fixed)
-                message = layer
-                if extent is not None and extent < layer.header_len:
-                    message = _refilled(
-                        layer, body=layer.body[: extent - fixed]
+                checksum = _bounded_checksum(layer, extent, covered)
+                if isinstance(layer, GRE):
+                    layer = _refilled(
+                        layer,
+                        fields=checksum.to_bytes(2, "big") + layer.fields[2:],
                     )
-                layer = _refilled(layer, checksum=compute(message))
+                else:
+                    layer = _refilled(layer, checksum=checksum)
             elif isinstance(layer, (IPv4, CDP)) or (
                 isinstance(layer, OSPF)
                 and layer.au_type not in OSPF.CRYPTOGRAPHIC_AU_TYPES

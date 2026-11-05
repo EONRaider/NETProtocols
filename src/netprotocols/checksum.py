@@ -52,9 +52,27 @@ value, fails rather than reading as a message without one.
 MESSAGE-INTEGRITY, the keyed HMAC beside it, is not a checksum this
 module can compute: it needs the credential's key.
 
-Length fields are trusted, not reconciled: UDP uses ``layer.length``
-for the pseudo-header, TCP uses ``layer.header_len + len(payload)``,
-and nothing checks ``IPv4.total_length`` against the payload you pass.
+IGMP, ICMPv4 and GRE have no length field of their own: each message
+runs to the end of its IP datagram. Given ``ip``, :func:`compute` and
+:func:`verify` end their input at that datagram's declared end, so
+Ethernet padding or a captured FCS that a layer decoded on its own
+holds in its ``body``, or that ``payload`` carries, stays out of the
+sum. ``ip`` is then the IP header directly before the layer, and the
+end is ``ip._payload_extent()`` bytes after the layer's start, the
+arithmetic :func:`~netprotocols.decode_frame` bounds its walk with: an
+IPv4 ``total_length - ihl * 4`` or an IPv6 ``payload_length``. An
+IPv4 Total Length or IPv6 Payload Length of 0, an IPv4 Total Length
+shorter than its header, or an end before the layer's required bytes
+(IGMP's 4-byte header, ICMPv4's 8-byte header, GRE's whole header)
+leaves the input unbounded, as it is without ``ip``.
+:meth:`~netprotocols.Packet.with_checksums` applies the same bound
+with the same helper, from the nearest IP header before the layer and
+counting the headers between.
+
+Other length fields are trusted, not reconciled: UDP uses
+``layer.length`` for the pseudo-header, TCP and ICMPv6 use the
+segment's length, ``layer.header_len + len(payload)``, and nothing
+checks ``IPv4.total_length`` against a TCP or UDP payload you pass.
 Feed these helpers the payload exactly as it appears on the wire.
 """
 
@@ -256,17 +274,13 @@ def _cdp_sum(data: bytes) -> int:
     return internet_checksum(data)
 
 
-def _whole_message_checksum(layer: IGMP | CDP) -> int:
-    """Checksum a message whose field is bytes 2-3 and covers it all.
+def _cdp_checksum(layer: CDP) -> int:
+    """Checksum a CDP PDU: the whole PDU with bytes 2-3 zeroed.
 
-    Those are IGMP's and CDP's: the whole message with the field
-    zeroed, no pseudo-header, nothing after the message. IGMP's is the
-    internet checksum, CDP's :func:`_cdp_sum`.
+    There is no pseudo-header and nothing after the PDU; the sum is
+    :func:`_cdp_sum`.
     """
-    message = _zeroed(bytes(layer), 2)
-    if isinstance(layer, CDP):
-        return _cdp_sum(message)
-    return internet_checksum(message)
+    return _cdp_sum(_zeroed(bytes(layer), 2))
 
 
 def _pseudo_header(ip: IPv4 | IPv6, protocol: int, length: int) -> bytes:
@@ -326,25 +340,73 @@ def _zeroed(layer_bytes: bytes, checksum_offset: int) -> bytes:
     )
 
 
-def _gre_checksum(layer: GRE, payload: bytes) -> int:
-    """Return GRE's checksum over its header and ``payload``.
+def _datagram_extent(ip: IPv4 | IPv6, offset: int, minimum: int) -> int | None:
+    """Return the declared bytes from ``offset`` into ``ip``'s payload on.
 
-    The checksum field (bytes 4-5) is zeroed, and there is no
-    pseudo-header (RFC 2784 §2.5). It exists only when the
-    Checksum-Present bit announces the field.
+    The payload ends where ``ip._payload_extent()`` says, the
+    arithmetic :func:`~netprotocols.decode_frame` bounds its walk with.
+    ``None`` when that length is zero, an IPv4 Total Length is shorter
+    than its header, or the bytes left fall short of ``minimum``.
 
-    :param layer: The GRE header.
-    :param payload: The bytes following the header on the wire.
-    :raises InvalidFieldError: if :attr:`GRE.checksum` is ``None``.
+    :param ip: The IPv4 or IPv6 header whose datagram bounds the input.
+    :param offset: The bytes between the end of ``ip`` and the layer's
+        start.
+    :param minimum: The bytes the layer requires at its start.
     """
-    if layer.checksum is None:
-        raise InvalidFieldError(
-            "Computing a GRE checksum requires the Checksum-Present "
-            "bit and its field (RFC 2784 §2.5)",
-            protocol=type(layer),
-            field="checksum",
-        )
-    return internet_checksum(_zeroed(bytes(layer), 4) + payload)
+    try:
+        payload = ip._payload_extent()
+    except InvalidFieldError:
+        return None
+    if payload is None:
+        return None
+    extent = payload - offset
+    return extent if extent >= minimum else None
+
+
+def _required_bytes(layer: IGMP | ICMPv4 | GRE) -> int:
+    """Return the bytes a datagram-bounded layer requires at its start.
+
+    That is IGMP's 4-byte and ICMPv4's 8-byte header, and GRE's whole
+    header with its optional fields.
+    """
+    if isinstance(layer, GRE):
+        return layer.header_len
+    return layer._struct.size
+
+
+def _bounded_checksum(
+    layer: IGMP | ICMPv4 | GRE, extent: int | None, payload: bytes
+) -> int:
+    """Return the internet checksum of ``layer`` cut at ``extent``.
+
+    The input is the layer with its checksum field zeroed, followed by
+    ``payload`` for ICMPv4 and GRE (IGMP covers its message alone), and
+    ends ``extent`` bytes after the layer's start, or runs to its end
+    when ``extent`` is ``None``. GRE's field is bytes 4-5 and exists
+    only when the Checksum-Present bit announces it (RFC 2784 §2.5);
+    IGMP's and ICMPv4's is bytes 2-3, with no pseudo-header.
+
+    :param layer: The IGMP, ICMPv4 or GRE header.
+    :param extent: The bytes from the layer's start to its datagram's
+        declared end, or ``None`` for no bound.
+    :param payload: The bytes following the layer on the wire.
+    :raises InvalidFieldError: if ``layer`` is GRE and
+        :attr:`GRE.checksum` is ``None``.
+    """
+    if isinstance(layer, GRE):
+        if layer.checksum is None:
+            raise InvalidFieldError(
+                "Computing a GRE checksum requires the Checksum-Present "
+                "bit and its field (RFC 2784 §2.5)",
+                protocol=type(layer),
+                field="checksum",
+            )
+        covered = _zeroed(bytes(layer), 4) + payload
+    elif isinstance(layer, ICMPv4):
+        covered = _zeroed(bytes(layer), 2) + payload
+    else:
+        covered = _zeroed(bytes(layer), 2)
+    return internet_checksum(covered if extent is None else covered[:extent])
 
 
 def _sctp_checksum(layer: SCTP, payload: bytes) -> int:
@@ -553,16 +615,14 @@ def _stun_carries_no_fingerprint(layer: STUN) -> bool:
 def _standalone_checksum(layer: Protocol) -> int | None:
     """Checksum a layer whose checksum covers its own bytes alone.
 
-    Those are IPv4's header, IGMP's and CDP's whole message, OSPF's
-    packet and STUN's FINGERPRINT, none of which takes an IP header or
-    a payload; ``None`` for any other layer.
+    Those are IPv4's header, CDP's whole PDU, OSPF's packet and STUN's
+    FINGERPRINT, none of which takes an IP header or a payload;
+    ``None`` for any other layer.
     """
     if isinstance(layer, IPv4):
         return internet_checksum(_zeroed(bytes(layer), 10))
-    if isinstance(layer, (IGMP, CDP)):
-        # Whole message, checksum field (bytes 2-3) zeroed, no
-        # pseudo-header; the body is already part of bytes(layer).
-        return _whole_message_checksum(layer)
+    if isinstance(layer, CDP):
+        return _cdp_checksum(layer)
     if isinstance(layer, OSPF):
         return _ospf_checksum(layer)
     if isinstance(layer, STUN):
@@ -610,6 +670,9 @@ def compute(
         ``ICMPv4`` covers header plus ``payload`` (no pseudo-header);
         ``GRE`` covers header plus ``payload`` with no pseudo-header
         (RFC 2784 §2.5) and requires the Checksum-Present bit;
+        ``IGMP`` covers its whole message, body included, with no
+        pseudo-header (``payload`` ignored); given ``ip``, the input of
+        all three ends at its datagram's declared end (see ``ip``);
         ``TCP``, ``UDP``, and ``ICMPv6`` prepend the pseudo-header
         built from ``ip``; ``SCTP`` is a CRC32c over the whole packet,
         its chunks included, with no pseudo-header (``ip`` ignored),
@@ -636,7 +699,14 @@ def compute(
         ``payload`` ignored), and raises for a message whose last
         attribute is not a FINGERPRINT.
     :param ip: The enclosing IP layer, required for TCP/UDP/ICMPv6,
-        VRRPv3, and PIM, whose coverage depends on the family.
+        VRRPv3, and PIM, whose coverage depends on the family. For
+        ``IGMP``, ``ICMPv4`` and ``GRE`` it is optional and is the IP
+        header directly before the layer: the input then ends
+        ``ip._payload_extent()`` bytes after the layer's start, unless
+        that length is 0, an IPv4 Total Length is shorter than its
+        header, or the end falls before the layer's required bytes
+        (see the module docstring), and without it the input runs to
+        the end of ``bytes(layer)`` and ``payload``.
     :param routing: The :class:`~netprotocols.IPv6Routing` header
         between ``ip`` and ``layer``, if there is one. RFC 8200 §8.1
         puts the *final* destination in the pseudo-header behind a
@@ -667,13 +737,16 @@ def compute(
         compute, or ``ip`` is missing where the checksum needs it.
     """
     ip = _pseudo_ip(ip, routing)
+    if isinstance(layer, (IGMP, ICMPv4, GRE)):
+        extent = (
+            None
+            if ip is None
+            else _datagram_extent(ip, 0, _required_bytes(layer))
+        )
+        return _bounded_checksum(layer, extent, payload)
     standalone = _standalone_checksum(layer)
     if standalone is not None:
         return standalone
-    if isinstance(layer, ICMPv4):
-        return internet_checksum(_zeroed(bytes(layer), 2) + payload)
-    if isinstance(layer, GRE):
-        return _gre_checksum(layer, payload)
     if isinstance(layer, SCTP):
         return _sctp_checksum(layer, payload)
     if isinstance(layer, VRRP):
@@ -758,6 +831,11 @@ def verify(
     ``routing`` is :func:`compute`'s: behind a Routing header with
     segments left, the pseudo-header uses the route's final destination
     (RFC 8200 §8.1).
+
+    ``ip`` and ``payload`` are :func:`compute`'s too. Given ``ip``, an
+    IGMP, ICMPv4 or GRE checksum is recomputed over the bytes up to the
+    IP datagram's declared end, so an IGMP or ICMPv4 message decoded on
+    its own with Ethernet padding or an FCS in its ``body`` verifies.
     """
     ip = _pseudo_ip(ip, routing)
     if _carries_no_checksum(layer, ip):
