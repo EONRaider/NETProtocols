@@ -7,8 +7,7 @@ default interface) and validated by `scripts/check_fixtures.py`:
 pseudo-header, ICMPv4/v6, GRE where its Checksum field is present,
 VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet checksum and every OSPF
 LSA's Fletcher checksum; fragment slices carry no verifiable
-upper-layer checksum — it spans the reassembled datagram; `gre6.pcap`'s
-frames are read no further than their IPv6 header, see the GRE note),
+upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
 digest, every RADIUS authenticator the corpus holds (a reply's
 against its request's), every STUN MESSAGE-INTEGRITY and every NTP
@@ -149,14 +148,13 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   to .194, each followed by its reply, ICMP sequence numbers 1 and 2
   under one identifier, every GRE flags word `0x0000` with Protocol
   Type `0x0800`, each IPv6 Payload Length ending its frame.
-  `check_fixtures` does not decode GRE over IPv6
-  ([#326](https://github.com/EONRaider/NETProtocols/issues/326)): it
-  counts these frames as IPv6 and verifies nothing past that header,
-  which carries no checksum. The capture script asserts the frames
-  listed here with the standard library, among them that each frame's
-  inner IPv4 header and ICMPv4 checksums verify, and the corpus tests
-  walk them `Ethernet→IPv6→GRE→IPv4→ICMPv4` and round-trip every
-  layer.
+  `check_fixtures` peels each frame's GRE header, up to the IPv6
+  Payload Length, and verifies the inner IPv4/ICMP checksums; with the
+  C bit clear there is no GRE Checksum to verify. The capture script
+  asserts the frames listed here with the standard library, among them
+  that each frame's inner IPv4 header and ICMPv4 checksums verify, and
+  the corpus tests walk them `Ethernet→IPv6→GRE→IPv4→ICMPv4` and
+  round-trip every layer.
 - `dns_tcp.pcap` was produced by `scripts/capture_fixtures_dns_tcp.sh`:
   a real DNS exchange over TCP — `dig +tcp` querying an A and a TXT
   record against `dnsmasq` answering from its own records — over a veth
