@@ -484,7 +484,7 @@ GRE_TEMPLATE = frame("gre.pcap", 0)
 
 @case("gre-checksum")
 def _() -> tuple[bytes, bytes]:
-    good = ipv4_frame(GRE_TEMPLATE, 47, gre_with_checksum(ECHO_PACKET))
+    good = frame("gre_csum.pcap", 0)
     return good, flip(good, l4(good) + 5)
 
 
@@ -1530,6 +1530,7 @@ def radius_frame(
 
 
 GRE_FRAMES = pcap_frames(FIXTURES / "gre.pcap")
+GRE_CSUM_FRAMES = pcap_frames(FIXTURES / "gre_csum.pcap")
 
 
 def gre_flags(gre_frame: bytes) -> int:
@@ -1553,6 +1554,17 @@ class TestGREChecksum:
             assert checker.check_frame(gre_frame, stats) == []
             assert stats["gre"] == 1
             assert stats["gre-checksum"] == 0
+
+    def test_every_checksummed_committed_frame_verifies(self) -> None:
+        """gre_csum.pcap's four frames carry the C bit alone, and each
+        passes with its GRE Checksum counted as verified."""
+        assert len(GRE_CSUM_FRAMES) == 4
+        stats: Counter[str] = Counter()
+        for gre_frame in GRE_CSUM_FRAMES:
+            assert gre_flags(gre_frame) == 0x8000
+            assert checker.check_frame(gre_frame, stats) == []
+        assert stats["gre"] == 4
+        assert stats["gre-checksum"] == 4
 
     def test_a_clear_c_bit_reads_no_checksum(self) -> None:
         """With the C bit clear, bytes 4-7 of a keyed frame are its Key,
@@ -1768,6 +1780,21 @@ class TestMain:
             "radius-message-authenticatorx4, "
             "radius-reply-message-authenticatorx4, "
             "radius-response-authenticatorx6, udpx12)\n"
+        ) in out
+
+    def test_the_report_counts_the_verified_gre_checksums(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        gre_csum = list(pcap_frames(FIXTURES / "gre_csum.pcap"))
+        (tmp_path / "gre_csum.pcap").write_bytes(pcap_file(gre_csum))
+        status, out = run_main(tmp_path, monkeypatch, capsys)
+        assert status == 0
+        assert (
+            "[OK  ] gre_csum.pcap: 4 frames (grex4, gre-checksumx4, "
+            "icmpv4x4, ipv4x8)\n"
         ) in out
 
     def test_an_unpaired_reply_is_reported_and_passes(
