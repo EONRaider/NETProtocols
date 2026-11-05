@@ -138,12 +138,16 @@ matching and fails silently (the pattern falls through to the next
 the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
 
 1. **It receives the entire remaining buffer** — everything from the
-   start of its header to the end of the captured frame — and parses
-   the fixed portion with `_struct.unpack_from`. A buffer too short
-   for the fixed portion raises `TruncatedHeaderError`. One enclosing
-   length shortens that buffer in a walk: after an Ethernet or VLAN
-   header holding an IEEE 802.3 Length, every later layer's buffer ends
-   where the Length ends the LLC PDU (see *802.3 framing* below).
+   start of its header to the end of the captured frame, or to the end
+   the enclosing headers' declared lengths give, whichever comes first
+   — and parses the fixed portion with `_struct.unpack_from`. A buffer
+   too short for the fixed portion raises `TruncatedHeaderError`. In a
+   walk, four enclosing lengths shorten that buffer: an IEEE 802.3
+   Length after an Ethernet or VLAN header, IPv4's Total Length, IPv6's
+   Payload Length and UDP's Length. Every later layer's buffer ends
+   where the tightest of them puts the end of the payload, and the
+   bytes past it are the packet's `trailer` (see *Declared lengths and
+   the trailer* below).
 2. **Variable-length headers finish the job themselves.** IPv4 reads
    its IHL and TCP reads its data offset, sanity-checks it (5–15, and
    the declared bytes must exist in the buffer — a header that *lies*
@@ -167,22 +171,26 @@ the framing, so two messages with equal bytes and equal framing compare
 equal.
 
 The second is `SCTP`. Like ICMPv4, ICMPv6 and IGMP it has no length of
-its own: the packet is the whole IP payload, and the walk does not trim
-a frame to the IP header's declared length. Those three keep the whole
-buffer, Ethernet's zero padding included: ICMPv4's and IGMP's internet
-checksum is unchanged by appended zero bytes, and an IPv6 frame carrying
-ICMPv6 is never short enough to be padded. SCTP's CRC32c does change
-when zero bytes are appended, so `decode()` walks the chunk headers to
-find where the packet ends and leaves a run of zero bytes where the next
-chunk would start undecoded, since that cannot begin a chunk and is what
-an Ethernet sender normally pads a short frame with. Rule 3 holds for
-those zeros; any other trailing bytes become part of the packet. Past
-the 12-byte common header `decode()` never raises, like the three it
-resembles: a remainder the walk cannot parse — a chunk cut by a snap
-length, an IP fragment or an ICMP error's quote, or a nonzero trailer
-such as an Ethernet FCS, which cannot be told from a broken chunk — is
-kept verbatim in `chunks`, the ports and verification tag still decode,
-and `verify()` returns `False`. `parsed_chunks` raises only when the
+its own: the packet is the whole IP payload. In a walk the IP header's
+declared length ends the buffer, so Ethernet's padding and a captured
+FCS are the packet's trailer, and those three keep the whole buffer,
+which is the whole IP payload. Decoded on its own, or in a walk no IP
+length bounds (a Total Length or Payload Length of 0), the buffer can
+run past the packet. ICMPv4's and IGMP's internet checksum is unchanged
+by appended zero bytes, and they keep the whole buffer then too. SCTP's
+CRC32c does change when zero bytes are appended, so for that buffer
+`decode()` walks the chunk headers to find where the packet ends and
+leaves a run of zero bytes where the next chunk would start undecoded,
+since that cannot begin a chunk and is what an Ethernet sender normally
+pads a short frame with. Rule 3 holds for those zeros; any other
+trailing bytes become part of the packet, which is the zero-tail scan's
+limit: in such a buffer a nonzero trailer, such as an Ethernet FCS,
+cannot be told from a broken chunk. Past the 12-byte common header
+`decode()` never raises, like the three it resembles: a remainder the
+walk cannot parse — a chunk cut by a snap length, an IP fragment or an
+ICMP error's quote, or such a nonzero trailer — is kept verbatim in
+`chunks`, the ports and verification tag still decode, and `verify()`
+returns `False`. `parsed_chunks` raises only when the
 remainder does not walk: a trailer that happens to (an FCS whose bytes
 read as a chunk header) parses as a phantom chunk, so `verify()` is the
 reliable signal. See
@@ -201,17 +209,16 @@ parser cannot read is kept whole, for `PIM.message` to report. See
 [`layer3/pim.py`](src/netprotocols/layer3/pim.py)'s module docstring.
 
 `RIP` has the same problem one layer up: its 20-byte entries fill the
-rest of the UDP datagram, and the walk does not trim to UDP's length
-either. It keeps the whole buffer after its 4-byte header, as ICMPv4
-and IGMP do, leaving no trailing bytes, so `bytes(RIP.decode(x)) == x`.
+rest of the UDP datagram, whose length ends its buffer in a walk. It
+keeps the whole buffer after its 4-byte header, as ICMPv4 and IGMP do,
+leaving no trailing bytes, so `bytes(RIP.decode(x)) == x`.
 Its accessors read whole entries, up to the RFC 4822 authentication
 trailer that the first entry's Packet Length locates (when the bytes
 there start as a trailer does, `0xFFFF 0x0001`), and report what
 is left, fewer than 20 bytes, as `remainder`: an entry a snap length
-cut, or a trailer such as an Ethernet FCS, which only the UDP length
-could tell apart. Past the header neither `decode()` nor any accessor
-raises. Ethernet's zero padding reaches only a message with no entries,
-since one entry already fills the minimum frame. See
+cut, or, decoded on its own with no UDP length to go by, a trailer such
+as an Ethernet FCS. Past the header neither `decode()` nor any accessor
+raises. See
 [`layer7/rip.py`](src/netprotocols/layer7/rip.py)'s module docstring.
 
 `NTP` is the same case: after its 48-byte header come NTPv4 extension
@@ -220,9 +227,10 @@ datagram, which nothing in the message bounds. It keeps the whole
 buffer after the header, so `bytes(NTP.decode(x)) == x`, and its
 accessors split it: extension fields until what is left has a MAC's
 length (4, 20 or 24 bytes, the rule RFC 7822 §3's minimum field length
-is there for), then the MAC, and anything else as `remainder`. A
-4-byte Ethernet FCS after a plain message has a crypto-NAK's length,
-and only the UDP length could tell them apart. Past the header
+is there for), then the MAC, and anything else as `remainder`.
+Decoded on its own, a 4-byte Ethernet FCS after a plain message has a
+crypto-NAK's length; in a walk the UDP length ends the buffer and the
+FCS is the trailer. Past the header
 neither `decode()` nor any accessor raises, and Ethernet's padding
 never reaches it: the header alone fills the minimum frame. See
 [`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)'s module docstring.
@@ -234,15 +242,16 @@ zero byte where the next name would start ending the options. So it
 obeys rule 3 like a header with a length field,
 `bytes(TFTP.decode(x)) == x[:header_len]`, and leaves Ethernet's
 padding (which every ACK, at 4 bytes, gets in an untagged frame over
-IPv4 with no options) and an FCS undecoded, except that a trailer
-holding a zero byte can be read in, which only the UDP length could
-rule out (#235): after a name with no value, the trailer's first zero
-byte ends that value, so padding decodes `("tsize", "")` and takes one
-byte, and after whole pairs an FCS that holds a name, a zero byte, a
-value and a zero byte, such as `12 00 34 00`, reads as one more pair. A
-DATA message cannot bound itself at all: its data has no terminator, so
-it runs to the end of the buffer, and a trailer joins it, as it joins
-an ICMP `body`. Its
+IPv4 with no options) and an FCS undecoded. In a walk UDP's length
+ends the buffer, so both are the packet's trailer. Decoded on its own,
+a trailer holding a zero byte can be read in: after a name with no
+value, the trailer's first zero byte ends that value, so padding
+decodes `("tsize", "")` and takes one byte, and after whole pairs an
+FCS that holds a name, a zero byte, a value and a zero byte, such as
+`12 00 34 00`, reads as one more pair. A DATA message cannot bound
+itself at all: its data has no terminator, so it runs to the end of the
+buffer, and, decoded on its own, a trailer joins it, as it joins an
+ICMP `body`. Its
 strings are terminated rather than length-prefixed, so a missing
 terminator is TFTP's truncation case: a filename, mode or error message
 with no zero byte after it raises `TruncatedHeaderError`, as a lying
@@ -286,21 +295,15 @@ walk ends. `Ethernet.ethertype` holds the raw value either way, and
 `VLAN` reads the 2 bytes after a tag the same way. Neither `LLC` nor
 `SNAP` has a length of its own, and a short PDU arrives padded to
 Ethernet's minimum, often with an FCS after it; STP's BPDUs are that
-short, and CDP's checksum covers exactly its PDU. So the Length is the
-one enclosing length `decode_frame()` honours: after a header that
-holds one (a class setting `_BOUNDS_PAYLOAD`, answering
-`_payload_extent()`, both private while #235 settles the public form),
-it ends the buffer it hands every later layer at the PDU's end. A
-bound past the end of the frame bounds nothing, so a frame a snap
-length cut decodes what was captured; a later, looser bound never
-widens an earlier one; and a Length shorter than the LLC header leaves
-`LLC.decode()` too few bytes, so the walk raises
-`TruncatedHeaderError`. IPv4's, IPv6's and UDP's lengths are still not
-honoured (#235), so padding behind a short IPv4 packet in Ethernet II
-framing reaches its last layer as before. A third-party tag header
-(an E-tag, a VN-tag) can answer `LLC` from its own `next_protocol()`,
-but can bound the PDU after it only through that private hook, pending
-#235. Called directly,
+short, and CDP's checksum covers exactly its PDU. So `decode_frame()`
+honours the Length: after a header that holds one, it ends the buffer
+it hands every later layer at the PDU's end, and the padding and FCS
+after it are the packet's trailer. A Length shorter than the LLC
+header leaves `LLC.decode()` too few bytes, so the walk raises
+`TruncatedHeaderError`. A third-party tag header (an E-tag, a VN-tag)
+can answer `LLC` from its own `next_protocol()`, but can bound the PDU
+after it only through the private hook described under *Declared
+lengths and the trailer*. Called directly,
 `LLC.decode()` has no Length to go by and leaves the rest of its buffer
 to the caller, who can slice `frame[14 : 14 + eth.length]`. See
 [`layer2/llc.py`](src/netprotocols/layer2/llc.py)'s module docstring.
@@ -331,6 +334,54 @@ Length 0.
 See [`layer2/cdp.py`](src/netprotocols/layer2/cdp.py)'s module
 docstring.
 
+**Declared lengths and the trailer.** The 802.3 Length is one of four
+lengths `decode_frame()` honours. A header whose class sets
+`_BOUNDS_PAYLOAD` answers `_payload_extent()` with how many bytes after
+it belong to its payload, or `None` for no bound; both names are
+private. The classes and their extents:
+
+- `Ethernet` and `VLAN`: an 802.3 Length; `None` for an EtherType.
+- `IPv4`: `total_length - ihl * 4`; `None` for a Total Length of 0.
+- `IPv6`: `payload_length`, extension headers included; `None` for 0.
+- `UDP`: `length - 8`; `None` for 0.
+
+The walk ends every later layer's buffer at the tightest end these
+give. A declared end past the end of the frame bounds nothing, so a
+frame a snap length cut decodes exactly as it would unbounded, and a
+later, looser end never widens an earlier one: a first fragment's UDP
+Length, which counts the whole datagram, is clamped by the IP end, and
+so are the lengths of a packet quoted in an ICMP error, whose
+`embedded_chain` is bounded the same way. A length shorter than its own
+header cannot bound anything: `_payload_extent()` raises
+`InvalidFieldError` for an IPv4 Total Length of 1 to `ihl * 4 - 1` and
+a UDP Length of 1 to 7, with `field` naming it, `offset` `None` and
+`frame_offset` the start of that header; a lax walk keeps the header
+and stops with the error on `stopped_by`. A positive length too short
+for what follows leaves the next decoder too few bytes, so it raises
+`TruncatedHeaderError`, as an 802.3 Length shorter than the LLC header
+does. `decode()` reads none of these extents, so a header decoded on
+its own is never judged by them.
+
+The bytes past the tightest end are `Packet.trailer`, a `bytes` copy,
+`b""` when no declared end falls short of the frame. It is one value
+however deep the encapsulation: under VXLAN, GRE or IP in IP the inner
+datagram's end is the tighter one, and whatever lies between it and the
+outer end joins the trailer. `bytes(packet)` excludes it, and a walked
+frame splits into the layers, the bytes the last layer carries that no
+decoder read, and the trailer:
+
+```python
+undecoded = frame[packet.consumed : len(frame) - len(packet.trailer)]
+assert frame == bytes(packet) + undecoded + packet.trailer
+```
+
+`Packet` equality and hashing include the trailer, as they do
+`stopped_by`; `repr()` shows it only when it is non-empty; and
+`with_checksums()` carries it over unchanged. The checksum code reads
+the same per-class arithmetic: `_ip_checksum_extent()` takes the
+nearest enclosing IP header's `_payload_extent()`, where the walk takes
+the tightest of every enclosing end.
+
 **One layer is one message.** A protocol whose self-delimiting
 messages, or records, follow one another in a transport payload decodes
 one of them per layer, and its `next_protocol()` answers its own class
@@ -339,9 +390,9 @@ over TCP and `TLS`. `decode_frame()`'s `max_depth` counts each of those
 layers as it counts any header, so a valid segment of many small
 messages can exceed it: a strict walk raises `MaxDepthExceededError`,
 and a lax one stops with `stopped_by` set and `consumed` short of the
-frame. The caller passes a larger `max_depth`, or walks on from
-`packet.consumed` with `start=` set to that class as many times as it
-takes. Each protocol's segment arithmetic is under *Port-based dispatch
+frame. The caller passes a larger `max_depth`, or walks on over
+`frame[packet.consumed : len(frame) - len(packet.trailer)]` with
+`start=` set to that class as many times as it takes. Each protocol's segment arithmetic is under *Port-based dispatch
 is best-effort* below and in the "Bounded depth" section of
 [`walk.py`](src/netprotocols/walk.py)'s module docstring.
 
@@ -622,7 +673,7 @@ while protocol is not None:
     header = protocol.decode(frame[cursor:end])
     layers.append(header)
     cursor += header.header_len
-    if header._BOUNDS_PAYLOAD:  # an 802.3 Length (see above)
+    if header._BOUNDS_PAYLOAD:  # a declared length (see above)
         end = _bounded(header, cursor, end)
     protocol = header.next_protocol(registry)
 ```
@@ -781,9 +832,9 @@ Because the guess can be wrong, each application class validates on
 decode, but it can only reject what its format lets it tell apart from
 noise, and for most formats that is little. DNS needs only its 12-byte
 header and DHCP its 236-byte fixed part; past that, almost any bytes
-decode cleanly as either, and even a datagram to port 53 with no
-payload at all, padded to Ethernet's 60-byte minimum, decodes the
-padding as a DNS header. VXLAN can reject more, because its header has
+decode cleanly as either. A datagram to port 53 with no payload at all,
+padded to Ethernet's 60-byte minimum, raises `TruncatedHeaderError` as
+its unpadded form does: the padding is the packet's trailer. VXLAN can reject more, because its header has
 one bit it requires: the I flag, which random bytes leave clear half the
 time. Over 10,000 random 300-byte UDP payloads per port, decoded with
 `decode_frame(..., lax=True)`, the walk ended with `stopped_by` set for
@@ -791,8 +842,9 @@ time. Over 10,000 random 300-byte UDP payloads per port, decoded with
 With lengths drawn uniformly from 0-600 bytes instead, in frames not
 padded to Ethernet's minimum, the figures are about 52%, 2% and 39%,
 and every DNS and DHCP rejection is a payload too short for the fixed
-header; padded to the minimum, as on the wire, the DNS figure falls to
-0%, since the padding itself decodes as a DNS header. The VXLAN
+header. Padding a frame to the minimum, as on the wire, leaves the
+layers as they are unpadded, since the padding is the trailer, so the
+padded walks give the unpadded figures. The VXLAN
 header cannot reject more than it does: RFC 7348 says to ignore its
 reserved bits, so rejecting those would refuse real traffic, such as
 the Group Based Policy extension's.
@@ -804,8 +856,8 @@ satisfy, so about 99.2% of random datagrams are rejected. Measured the
 same way, the walk stopped for about 99.2% in each case: the 300-byte
 payloads sent to 520, and the 0-600 byte ones unpadded and padded, the
 differences between them within sampling noise; an empty datagram
-padded to the minimum is rejected too, since the padding reads as
-version 0. It goes no further. The obsolete and extension commands
+padded to the minimum is rejected too, as a truncated header, since the
+padding is the trailer. It goes no further. The obsolete and extension commands
 (TraceOn, TraceOff, the triggered and update messages) decode, and so
 does a RIPv1 message with nonzero must-be-zero fields, which RFC 1058
 tells a receiver to ignore but a decoder should show. Past the header,
@@ -827,10 +879,10 @@ RFC 5997 and RFC 5176 are named (IANA assigns others, such as 6-10,
 whose attribute list does not walk still decodes, and
 `parsed_attributes` raises when asked, so an accepted guess can still
 read as garbage. Bytes past the Length are padding (RFC 2865 §3) and
-stay undecoded, past `packet.consumed`. The walk does not yet end the
-buffer at UDP's length (#235), though, so a Length that overstates the
-datagram reaches into whatever follows it in the frame, such as an
-Ethernet FCS, and reads it as attributes instead of raising. Only 1812
+stay undecoded, past `packet.consumed`. The walk ends the buffer at
+UDP's length, so a Length that overstates the datagram raises
+`TruncatedHeaderError` rather than reading whatever follows the
+datagram in the frame, such as an Ethernet FCS, as attributes. Only 1812
 and 1813 are registered: the legacy 1645 and 1646, and Dynamic
 Authorization's 3799 (RFC 5176, whose Disconnect and CoA packets share
 the format), need `decode_as`.
@@ -944,8 +996,9 @@ one-prefix UPDATEs, and a capture taken with GRO or TSO on, over
 loopback or on a jumbo-frame link sees segments of up to 64 KB, so a
 strict walk raises `MaxDepthExceededError` on valid traffic and a lax
 one stops with `stopped_by` set and `consumed` short of the frame. A
-larger `max_depth` decodes the rest, and so does walking on from
-`packet.consumed` with `start=BGP` as many times as it takes (a walk
+larger `max_depth` decodes the rest, and so does walking on over
+`frame[packet.consumed : len(frame) - len(packet.trailer)]` with
+`start=BGP` as many times as it takes (a walk
 that starts there has room for 32 messages, so the 76 KEEPALIVEs take
 three walks); the busiest segment of the captured session in the corpus, taken with
 offload off, carries 7. Reassembling
@@ -1006,13 +1059,11 @@ inside one almost always fails the guard, a bare ACK raises
 `TruncatedHeaderError` at the empty payload
 (`tests/fixtures/tcp_https.pcap`'s five IPv6 ACKs do, and
 `tests/test_corpus.py` walks them lax), and `max_depth` bounds
-correctness. One difference from BGP's port: an IPv4 bare ACK with no
-TCP options is a 54-byte frame, and where the capture holds the padding
-that brings it to Ethernet's 60 bytes, the walk, which does not yet end
-a buffer at IPv4's Total Length (#235), hands TLS those 6 zero bytes,
-which it rejects as a ContentType of 0 (`InvalidFieldError`,
-`field="content_type"`), where BGP, judging nothing before its 19-byte
-header is whole, still raises `TruncatedHeaderError`. As for
+correctness. An IPv4 bare ACK with no TCP options is a 54-byte frame,
+and where the capture holds the padding that brings it to Ethernet's 60
+bytes, the walk ends TLS's buffer at IPv4's Total Length, so the 6
+bytes are the trailer and TLS raises `TruncatedHeaderError` at the
+empty payload, as BGP does on its port. As for
 `max_depth`, the decoder's worst case is a bare 5-byte header, 289 to a
 1448-byte segment; the smallest protected TLS 1.3 record is 5 + 1 + 16
 = 22 bytes (an empty Application Data fragment is protected with its
@@ -1119,6 +1170,11 @@ protocol:
 Protocol.decode(bytes(header)) == header        # object → wire → object
 bytes(Protocol.decode(raw)) == raw[:header_len] # wire → object → wire
 ```
+
+A walked frame round-trips as a whole too: `bytes(packet)` is its
+layers, without the trailer, and
+`frame == bytes(packet) + frame[packet.consumed : len(frame) - len(packet.trailer)] + packet.trailer`
+(see *Declared lengths and the trailer*).
 
 The first holds for canonical headers, the ones decode itself
 produces, when decode is given the context it produced them with

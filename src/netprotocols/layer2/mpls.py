@@ -16,9 +16,10 @@ top entry first, as :attr:`MPLS.labels`, a tuple of :class:`MPLSLabel`.
 :meth:`MPLS.decode` reads entries until the first one with S set, so
 the stack bounds itself and ``bytes(MPLS.decode(x)) == x[:header_len]``.
 MPLS has no length field and no checksum: what follows the stack is the
-labelled packet, to the end of the buffer. Ethernet zero padding or an
-FCS after it reaches that packet, and an IPv4 or IPv6 header bounds
-itself by its own length fields, as it does directly after Ethernet.
+labelled packet, to the end of the buffer. An IPv4 or IPv6 header's
+declared length ends a walk's buffer there, as it does directly after
+Ethernet, so Ethernet zero padding or an FCS after the labelled packet
+is the packet's :attr:`~netprotocols.Packet.trailer`.
 
 EtherTypes
 ----------

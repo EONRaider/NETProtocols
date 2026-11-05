@@ -208,12 +208,17 @@ print(packet[1].src)          # '192.168.1.96' — position, unchanged
 print(packet[TCP].flags_str)  # first TCP layer, or KeyError if none
 print(packet.get(TCP))        # same lookup, None instead of raising
 print(packet.consumed)        # bytes the headers occupied
+print(packet.trailer)         # bytes past the declared lengths, b"" if none
 ```
 
 It works because every header answers two questions: `header_len` (how
 many bytes it consumed) and `next_protocol()` (which class decodes what
-follows). Trailing bytes are fine — `frame[packet.consumed:]` is
-whatever the chain did not decode.
+follows). Trailing bytes are fine. The 802.3, IPv4, IPv6 and UDP
+lengths end what the walk hands each layer, and the bytes past the
+tightest of them, such as Ethernet padding or a captured FCS, are
+`packet.trailer`; `frame[packet.consumed : len(frame) - len(packet.trailer)]`
+is whatever the chain did not decode before them, and
+`frame == bytes(packet) + that + packet.trailer`.
 
 Start somewhere other than Ethernet when the buffer does — a tunnel
 payload, a packet quoted inside an ICMP error, a non-Ethernet link

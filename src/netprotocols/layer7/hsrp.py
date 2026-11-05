@@ -48,11 +48,13 @@ those 20 bytes and nothing more:
 :attr:`HSRP.header_len <netprotocols._base.Protocol.header_len>` is 20,
 and whatever follows stays outside the layer, after it and past a walk's
 ``packet.consumed``, undecoded and not kept, as VRRP and STP leave what
-follows theirs. That is an Ethernet FCS a capture kept, or the 30-byte
-MD5 Authentication TLV that some Cisco releases append after the 20
-bytes (Wireshark's packet-hsrp.c reads it when a message is exactly 50
-bytes long), which is not decoded; a caller who wants it reads it from
-the frame, after ``packet.consumed``. Ethernet's padding never
+follows theirs. Inside the UDP datagram that is the 30-byte MD5
+Authentication TLV that some Cisco releases append after the 20 bytes
+(Wireshark's packet-hsrp.c reads it when a message is exactly 50 bytes
+long), which is not decoded; a caller who wants it reads it from the
+frame, ``frame[packet.consumed : len(frame) - len(packet.trailer)]``.
+An Ethernet FCS a capture kept is the packet's
+:attr:`~netprotocols.Packet.trailer`. Ethernet's padding never
 reaches HSRP: the 20 bytes, behind UDP's 8 and IPv4's 20, already fill
 Ethernet's 46-byte minimum payload.
 

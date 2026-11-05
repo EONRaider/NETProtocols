@@ -63,8 +63,9 @@ class ESP(Protocol):
         payload data (with any IV), padding, Pad Length, Next Header and
         ICV, none of whose boundaries the packet reveals. It runs to the
         end of the buffer handed to :meth:`decode`, which a frame walk
-        makes the rest of the frame — so link-layer padding after a
-        datagram shorter than the link's minimum lands here too.
+        ends at the IP header's declared length, so link-layer padding
+        after a datagram shorter than the link's minimum, and a captured
+        FCS, are the packet's :attr:`~netprotocols.Packet.trailer`.
     """
 
     spi: int

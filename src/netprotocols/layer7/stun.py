@@ -138,7 +138,8 @@ room for 29 messages. A message can be a bare 20-byte header, so a
 1448-byte segment can hold 72, and a strict walk of it raises
 :class:`~netprotocols.MaxDepthExceededError` on valid traffic while a
 lax one stops with ``packet.stopped_by`` set. A larger ``max_depth``
-decodes the rest, and so does walking on from ``packet.consumed`` with
+decodes the rest, and so does walking on over
+``frame[packet.consumed : len(frame) - len(packet.trailer)]`` with
 ``start=STUN`` as many times as it takes, as
 :mod:`netprotocols.layer7.bgp` describes: a walk that starts there has
 room for 32 messages, so the 72 take three walks.
