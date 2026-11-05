@@ -497,6 +497,128 @@ def _() -> tuple[bytes, bytes]:
     return esp(47, packet), esp(47, packet[:5])
 
 
+#: An RFC 1702 IP source route SRE of two addresses, its SRE Offset at
+#: the second.
+IP_SRE = struct.pack("!HBB", 0x0800, 4, 8) + bytes([192, 0, 2, 1, 192, 0, 2, 2])
+
+#: The NULL SRE that ends a Routing field (RFC 1701).
+NULL_SRE = bytes(4)
+
+
+def gre_routed(
+    payload: bytes,
+    *,
+    routing: bytes = IP_SRE + NULL_SRE,
+    offset: int = 0,
+    checksum: bool = True,
+    key: bool = False,
+) -> bytes:
+    """A GRE packet with the R bit set, Offset ``offset`` and Routing
+    field ``routing`` (RFC 1701), with the C bit and a correct Checksum
+    when ``checksum``, and with the K and S bits and their words when
+    ``key``."""
+    flags = 0x4000 | (0x8000 if checksum else 0) | (0x3000 if key else 0)
+    optional = struct.pack("!II", 42, 7) if key else b""
+    header = struct.pack("!HHHH", flags, 0x0800, 0, offset) + optional
+    packet = header + routing + payload
+    if not checksum:
+        return packet
+    return put(packet, 4, internet_checksum(packet).to_bytes(2, "big"))
+
+
+#: A PPP frame for enhanced GRE to carry: Address, Control and the IPv4
+#: Protocol, then an IPv4 packet.
+PPP_FRAME = bytes.fromhex("ff030021") + ECHO_PACKET
+
+#: Enhanced GRE's K, S and A bits and Version 1 (RFC 2637 §4.1).
+GRE_V1_FLAGS = 0x3081
+
+
+def gre_v1(
+    payload: bytes,
+    *,
+    flags: int = GRE_V1_FLAGS,
+    protocol: int = 0x880B,
+    length: int | None = None,
+) -> bytes:
+    """An enhanced GRE packet (RFC 2637 §4.1) with flags word ``flags``,
+    carrying ``payload``, its Key's Payload Length ``length`` or else
+    the payload's, then Call ID ``0x1234``, followed by a Sequence
+    Number when the S bit is set and an Acknowledgment Number when the
+    A bit is."""
+    payload_length = len(payload) if length is None else length
+    words = struct.pack("!HHHH", flags, protocol, payload_length, 0x1234)
+    words += struct.pack("!I", 5) if flags & 0x1000 else b""
+    words += struct.pack("!I", 4) if flags & 0x0080 else b""
+    return words + payload
+
+
+@case("gre-version")
+def _() -> tuple[bytes, bytes]:
+    return GRE_TEMPLATE, put(GRE_TEMPLATE, l4(GRE_TEMPLATE) + 1, b"\x02")
+
+
+@case("gre-reserved-flags")
+def _() -> tuple[bytes, bytes]:
+    return GRE_TEMPLATE, put(GRE_TEMPLATE, l4(GRE_TEMPLATE) + 1, b"\x08")
+
+
+@case("gre-routing-null")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_routed(ECHO_PACKET))
+    last = struct.pack("!HBB", 0x0800, 0, 0)
+    bad = gre_routed(ECHO_PACKET, routing=IP_SRE + last)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-routing-offset")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_routed(ECHO_PACKET))
+    bad = gre_routed(ECHO_PACKET, offset=4)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-key")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS & ~0x2000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-flags")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS | 0x8000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-protocol")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, protocol=0x0800)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-payload-length")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, length=len(PPP_FRAME) + 1)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("gre-v1-sequence")
+def _() -> tuple[bytes, bytes]:
+    good = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME))
+    bad = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS & ~0x1000)
+    return good, ipv4_frame(GRE_TEMPLATE, 47, bad)
+
+
+@case("unchecked-gre-ppp")
+def _() -> tuple[bytes, bytes]:
+    acknowledgment = gre_v1(b"", flags=GRE_V1_FLAGS & ~0x1000)
+    return esp(47, acknowledgment), esp(47, gre_v1(PPP_FRAME))
+
+
 # OSPF.
 
 
@@ -1850,14 +1972,14 @@ class TestGREChecksum:
     @pytest.mark.parametrize("key", [False, True], ids=["c", "c-k-s"])
     @pytest.mark.parametrize(
         ("offset", "bits"),
-        [(0, 0x40), (4, 0xFF), (5, 0x01), (6, 0x80)],
-        ids=["routing-bit", "checksum-high", "checksum-low", "reserved1"],
+        [(0, 0x08), (4, 0xFF), (5, 0x01), (6, 0x80)],
+        ids=["strict-route-bit", "checksum-high", "checksum-low", "reserved1"],
     )
     def test_a_tampered_header_byte_fails(
         self, key: bool, offset: int, bits: int
     ) -> None:
         """The checksum covers the whole header: the flags word (here
-        its Routing Present bit, which nothing else reads), the
+        its Strict Source Route bit, which nothing else checks), the
         Checksum itself and Reserved1."""
         packet = gre_with_checksum(ECHO_PACKET, key=key)
         tampered = put(packet, offset, bytes([packet[offset] ^ bits]))
@@ -2134,6 +2256,382 @@ class TestGREOnEitherIP:
         assert checker.check_frame(sealed, Counter()) == [
             "unchecked-protocol-47"
         ]
+
+
+def sealed_gre_v6(packet: bytes) -> bytes:
+    """``packet`` as GRE in ESP's transport mode over IPv6."""
+    protected = esp(47, packet)[l4(ESP_TEMPLATE) :]
+    return ipv6_frame(GRE6_TEMPLATE, 50, protected)
+
+
+#: Where a :func:`gre_routed` packet with neither K nor S bit holds its
+#: first SRE's Address Family, SRE Offset and Routing Information, and
+#: where its payload starts.
+FAMILY_AT, SRE_OFFSET_AT, ROUTE_INFO_AT, ROUTED_PAYLOAD_AT = 8, 10, 12, 24
+
+
+class TestGRERouting:
+    @pytest.mark.parametrize("offset", [0, 12], ids=["first-sre", "null-sre"])
+    @pytest.mark.parametrize("key", [False, True], ids=["c-r", "c-r-k-s"])
+    def test_a_correct_checksum_over_the_routing_passes(
+        self, key: bool, offset: int
+    ) -> None:
+        """With the R bit set, the Routing field follows the Key and
+        Sequence Number words; the Checksum covers it, and the
+        tunnelled packet after the NULL SRE is checked. The Offset may
+        point to any SRE, the NULL SRE too."""
+        packet = gre_routed(ECHO_PACKET, offset=offset, key=key)
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-routing"] == 1
+        assert stats["gre-checksum"] == 1
+        assert stats["icmpv4"] == 1
+
+    def test_the_null_sre_alone_passes(self) -> None:
+        packet = gre_routed(ECHO_PACKET, routing=NULL_SRE)
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-routing"] == 1
+        assert stats["icmpv4"] == 1
+
+    def test_a_null_sre_ending_the_packet_is_read(self) -> None:
+        """A packet that ends with the NULL SRE holds its whole header,
+        and an empty payload."""
+        packet = gre_routed(b"")
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-routing"] == 1
+        assert stats["gre-checksum"] == 1
+        assert stats["gre-truncated"] == 0
+
+    def test_without_the_c_bit_no_checksum_is_read(self) -> None:
+        """The R bit alone makes the Checksum word present, but only the
+        C bit makes it valid: whatever it holds, nothing is summed."""
+        packet = put(gre_routed(ECHO_PACKET, checksum=False), 4, b"\xab\xcd")
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-routing"] == 1
+        assert stats["gre-checksum"] == 0
+        assert stats["icmpv4"] == 1
+
+    @pytest.mark.parametrize(
+        "offset",
+        [4, 5, FAMILY_AT, SRE_OFFSET_AT, ROUTE_INFO_AT, ROUTE_INFO_AT + 7],
+        ids=[
+            "checksum-high",
+            "checksum-low",
+            "address-family",
+            "sre-offset",
+            "routing-information",
+            "routing-information-last",
+        ],
+    )
+    def test_a_tampered_byte_fails_the_checksum(self, offset: int) -> None:
+        """The Checksum covers the whole Routing field; an SRE's Address
+        Family, SRE Offset and Routing Information are checked by it
+        alone."""
+        bad = flip(gre_routed(ECHO_PACKET), offset)
+        frame_ = ipv4_frame(GRE_TEMPLATE, 47, bad)
+        assert checker.check_frame(frame_, Counter()) == ["gre-checksum"]
+
+    def test_the_tunnelled_packet_after_the_routing_is_checked(self) -> None:
+        packet = gre_routed(ECHO_PACKET, checksum=False)
+        bad = flip(packet, ROUTED_PAYLOAD_AT + 20 + 2)
+        frame_ = ipv4_frame(GRE_TEMPLATE, 47, bad)
+        assert checker.check_frame(frame_, Counter()) == ["icmpv4-checksum"]
+
+    @pytest.mark.parametrize(
+        "routing",
+        [
+            IP_SRE,
+            IP_SRE[:-1],
+            struct.pack("!HBB", 0x0800, 0, 200) + bytes(8),
+            IP_SRE + NULL_SRE[:3],
+            b"",
+        ],
+        ids=[
+            "no-null-sre",
+            "cut-sre",
+            "sre-past-the-end",
+            "cut-null-sre",
+            "none",
+        ],
+    )
+    def test_a_routing_field_past_the_packet_is_not_read(
+        self, routing: bytes
+    ) -> None:
+        """An SRE list that the packet ends before the NULL SRE ends,
+        or that holds an SRE longer than the bytes left, is a header
+        cut short: it passes unread, and fails under strict."""
+        packet = gre_routed(b"", routing=routing)
+        stats: Counter[str] = Counter()
+        cut = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(cut, stats) == []
+        assert stats["gre-truncated"] == 1
+        assert stats["gre-routing"] == 0
+        assert checker.check_frame(esp(47, packet), Counter()) == [
+            "unchecked-gre-truncated"
+        ]
+
+    def test_an_sre_of_length_zero_ends_the_routing_field(self) -> None:
+        """An SRE of SRE Length ``0`` is the last, so the walk stops at
+        it and does not read the payload as SREs; one with a nonzero
+        Address Family is not the NULL SRE, and fails."""
+        last = struct.pack("!HBB", 0x0800, 0, 0)
+        packet = gre_routed(ECHO_PACKET, routing=IP_SRE + last)
+        stats: Counter[str] = Counter()
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, stats) == ["gre-routing-null"]
+        assert stats["gre-routing"] == 1
+        assert stats["icmpv4"] == 0
+
+    def test_an_sre_of_family_zero_with_a_length_is_not_the_last(self) -> None:
+        """Address Family ``0`` with a nonzero SRE Length is an SRE like
+        any other, and the walk goes on to the NULL SRE after it."""
+        empty_family = struct.pack("!HBB", 0, 0, 4) + bytes(4)
+        routing = empty_family + NULL_SRE
+        packet = gre_routed(ECHO_PACKET, routing=routing, offset=8)
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["icmpv4"] == 1
+
+    @pytest.mark.parametrize(
+        "offset",
+        [1, 4, 11, 13, 16, 0xFFFF],
+        ids=[
+            "first-sre+1",
+            "routing-information",
+            "first-sre-end",
+            "null-sre+1",
+            "past-the-routing",
+            "max",
+        ],
+    )
+    def test_an_offset_off_every_sre_fails(self, offset: int) -> None:
+        """The Offset must point to the first byte of an SRE; the
+        tunnelled packet and the Checksum are still checked."""
+        packet = gre_routed(ECHO_PACKET, offset=offset)
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-routing-offset"]
+        both = flip(packet, ROUTED_PAYLOAD_AT + 20 + 2)
+        assert checker.check_frame(
+            ipv4_frame(GRE_TEMPLATE, 47, both), Counter()
+        ) == ["gre-routing-offset", "gre-checksum", "icmpv4-checksum"]
+
+    def test_routing_over_ipv6_is_checked(self) -> None:
+        packet = gre_routed(ECHO_PACKET, key=True)
+        stats: Counter[str] = Counter()
+        good = ipv6_frame(GRE6_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-routing"] == 1
+        assert stats["gre-checksum"] == 1
+        assert stats["icmpv4"] == 1
+        bad = gre_routed(ECHO_PACKET, key=True, offset=2)
+        assert checker.check_frame(
+            ipv6_frame(GRE6_TEMPLATE, 47, bad), Counter()
+        ) == ["gre-routing-offset"]
+
+
+class TestGREFlagsAndVersion:
+    @pytest.mark.parametrize(
+        "bits",
+        [0x0800, 0x0400, 0x0200, 0x0100, 0x0F00],
+        ids=[
+            "strict-route",
+            "recursion-5",
+            "recursion-6",
+            "recursion-7",
+            "all",
+        ],
+    )
+    @pytest.mark.parametrize("checksum", [False, True], ids=["plain", "c"])
+    def test_rfc_1701s_strict_route_and_recursion_bits_pass(
+        self, checksum: bool, bits: int
+    ) -> None:
+        """RFC 2784 §2.3 has a receiver that implements RFC 1701 accept
+        bits 1-5; this one reads the s bit and Recursion Control as RFC
+        1701 defines them, and neither changes the header's layout."""
+        if checksum:
+            plain = gre_with_checksum(ECHO_PACKET)
+            flagged = put(plain, 0, struct.pack("!H", 0x8000 | bits))
+            summed = put(flagged, 4, b"\x00\x00")
+            packet = put(
+                summed, 4, internet_checksum(summed).to_bytes(2, "big")
+            )
+        else:
+            packet = gre(0x0800, ECHO_PACKET)
+            packet = put(packet, 0, struct.pack("!H", bits))
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre-checksum"] == int(checksum)
+        assert stats["icmpv4"] == 1
+
+    @pytest.mark.parametrize("bit", [8, 9, 10, 11, 12])
+    def test_a_reserved_flags_bit_fails(self, bit: int) -> None:
+        """Flags bits 8-12, reserved by RFC 1701 and RFC 2784 alike,
+        must be sent as zero; the tunnelled packet is still checked."""
+        packet = put(
+            gre(0x0800, ECHO_PACKET), 0, struct.pack("!H", 0x8000 >> bit)
+        )
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-reserved-flags"]
+        both = ipv4_frame(GRE_TEMPLATE, 47, flip(packet, 4 + 20 + 2))
+        assert checker.check_frame(both, Counter()) == [
+            "gre-reserved-flags",
+            "icmpv4-checksum",
+        ]
+
+    @pytest.mark.parametrize("version", range(2, 8))
+    def test_an_unassigned_version_fails(self, version: int) -> None:
+        packet = put(gre(0x0800, ECHO_PACKET), 1, bytes([version]))
+        stats: Counter[str] = Counter()
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, stats) == ["gre-version"]
+        assert stats["gre"] == 1
+        assert stats["icmpv4"] == 0
+        bad6 = ipv6_frame(GRE6_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad6, Counter()) == ["gre-version"]
+
+
+class TestEnhancedGRE:
+    @pytest.mark.parametrize(
+        "flags",
+        [GRE_V1_FLAGS, GRE_V1_FLAGS & ~0x0080],
+        ids=["k-s-a", "k-s"],
+    )
+    def test_a_data_packet_passes_its_ppp_unread(self, flags: int) -> None:
+        """A data packet, with or without an Acknowledgment Number,
+        passes with its PPP payload counted and not read: a corrupted
+        inner IPv4 header changes nothing."""
+        packet = gre_v1(flip(PPP_FRAME, 4 + 10), flags=flags)
+        stats: Counter[str] = Counter()
+        good = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["gre"] == 1
+        assert stats["gre-v1"] == 1
+        assert stats["gre-v1-ppp"] == 1
+        assert stats["ipv4"] == 1
+
+    def test_an_acknowledgment_alone_passes_even_under_strict(self) -> None:
+        """With the S bit clear, no payload: nothing is left unread."""
+        packet = gre_v1(b"", flags=GRE_V1_FLAGS & ~0x1000)
+        stats: Counter[str] = Counter()
+        assert (
+            checker.check_frame(ipv4_frame(GRE_TEMPLATE, 47, packet), stats)
+            == []
+        )
+        assert stats["gre-v1"] == 1
+        assert stats["gre-v1-ppp"] == 0
+        assert checker.check_frame(esp(47, packet), Counter()) == []
+
+    @pytest.mark.parametrize(
+        "flags", [GRE_V1_FLAGS, GRE_V1_FLAGS & ~0x0080], ids=["k-s-a", "k-s"]
+    )
+    def test_ppp_fails_as_unchecked_under_strict(self, flags: int) -> None:
+        sealed = esp(47, gre_v1(PPP_FRAME, flags=flags))
+        assert checker.check_frame(sealed, Counter()) == ["unchecked-gre-ppp"]
+
+    @pytest.mark.parametrize(
+        "flags",
+        [0x0001, 0x1001, 0x1081, 0x0081],
+        ids=["none", "s", "s-a", "a"],
+    )
+    def test_no_k_bit_fails(self, flags: int) -> None:
+        bad = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(PPP_FRAME, flags=flags))
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-key"]
+
+    @pytest.mark.parametrize(
+        "bit",
+        [
+            0x8000,
+            0x4000,
+            0x0800,
+            0x0400,
+            0x0200,
+            0x0100,
+            0x40,
+            0x20,
+            0x10,
+            0x08,
+        ],
+        ids=[
+            "c",
+            "r",
+            "s-route",
+            "recur-5",
+            "recur-6",
+            "recur-7",
+            "9",
+            "10",
+            "11",
+            "12",
+        ],
+    )
+    def test_a_bit_set_to_zero_by_rfc_2637_fails(self, bit: int) -> None:
+        packet = gre_v1(PPP_FRAME, flags=GRE_V1_FLAGS | bit)
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-flags"]
+
+    @pytest.mark.parametrize("protocol", [0x0800, 0x86DD, 0x880A, 0x880C])
+    def test_a_protocol_other_than_ppp_fails(self, protocol: int) -> None:
+        packet = gre_v1(PPP_FRAME, protocol=protocol)
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-protocol"]
+
+    @pytest.mark.parametrize("delta", [-1, 1, 4])
+    def test_a_payload_length_off_the_payload_fails(self, delta: int) -> None:
+        packet = gre_v1(PPP_FRAME, length=len(PPP_FRAME) + delta)
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-payload-length"]
+
+    def test_an_acknowledgment_with_a_payload_length_fails(self) -> None:
+        packet = gre_v1(b"", flags=GRE_V1_FLAGS & ~0x1000, length=1)
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-payload-length"]
+
+    @pytest.mark.parametrize(
+        ("payload", "flags"),
+        [(PPP_FRAME, GRE_V1_FLAGS & ~0x1000), (b"", GRE_V1_FLAGS)],
+        ids=["payload-without-s", "s-without-payload"],
+    )
+    def test_an_s_bit_disagreeing_with_the_payload_fails(
+        self, payload: bytes, flags: int
+    ) -> None:
+        bad = ipv4_frame(GRE_TEMPLATE, 47, gre_v1(payload, flags=flags))
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-sequence"]
+
+    @pytest.mark.parametrize("cut", [4, 8, 12, 15])
+    def test_a_cut_header_is_not_read(self, cut: int) -> None:
+        """A packet shorter than the Key, Sequence Number and
+        Acknowledgment Number words passes unread, and fails under
+        strict."""
+        packet = gre_v1(b"", flags=GRE_V1_FLAGS)[:cut]
+        stats: Counter[str] = Counter()
+        cut_frame = ipv4_frame(GRE_TEMPLATE, 47, packet)
+        assert checker.check_frame(cut_frame, stats) == []
+        assert stats["gre-truncated"] == 1
+        assert checker.check_frame(esp(47, packet), Counter()) == [
+            "unchecked-gre-truncated"
+        ]
+
+    def test_enhanced_gre_over_ipv6_is_checked(self) -> None:
+        packet = gre_v1(PPP_FRAME)
+        stats: Counter[str] = Counter()
+        good = ipv6_frame(GRE6_TEMPLATE, 47, packet)
+        assert checker.check_frame(good, stats) == []
+        assert stats["ipv6"] == 1
+        assert stats["gre-v1-ppp"] == 1
+        assert checker.check_frame(sealed_gre_v6(packet), Counter()) == [
+            "unchecked-gre-ppp"
+        ]
+        bad = ipv6_frame(GRE6_TEMPLATE, 47, gre_v1(PPP_FRAME, length=0))
+        assert checker.check_frame(bad, Counter()) == ["gre-v1-payload-length"]
 
 
 # The pcap file and the command line.
