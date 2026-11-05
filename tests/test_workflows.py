@@ -533,8 +533,9 @@ class TestCIWorkflow:
         "docs",
     )
     # The output directory: a literal path, optionally under
-    # $RUNNER_TEMP. No other expansion, quoting or shell punctuation.
-    SPHINX_OUTDIR = re.compile(r"(?:\$RUNNER_TEMP/)?[A-Za-z0-9_./-]+")
+    # $RUNNER_TEMP. No other expansion, quoting or shell punctuation,
+    # and no leading "-", which sphinx-build would read as an option.
+    SPHINX_OUTDIR = re.compile(r"(?:\$RUNNER_TEMP/)?(?!-)[A-Za-z0-9_./-]+")
     # Every other job-level key (if, continue-on-error, defaults, env,
     # strategy, needs, container, ...) can skip the job, let it fail
     # green or change the shell or the variables the step runs with.
@@ -600,7 +601,9 @@ class TestCIWorkflow:
         ``suppress_warnings`` anywhere: not as a module-level name, not
         as an attribute (``app.config.nitpicky``) and not as a
         subscript key (``app.config["nitpicky"]``), inside ``setup()``
-        or any other function included.
+        or any other function included. No string constant in it is
+        ``"warn-missing-reference"``, the event whose handler decides
+        whether a missing reference is reported.
         """
         tree = ast.parse(source)
         top_level_true = any(
@@ -615,6 +618,10 @@ class TestCIWorkflow:
         )
         assert top_level_true, "docs/conf.py does not set nitpicky = True"
         for node in ast.walk(tree):
+            assert not (
+                isinstance(node, ast.Constant)
+                and node.value == "warn-missing-reference"
+            ), "docs/conf.py names the warn-missing-reference event"
             # An augmented assignment's result is not a constant True.
             value: ast.expr | None = None
             if isinstance(node, ast.Assign):
@@ -739,6 +746,16 @@ class TestCIWorkflow:
                 id="command-substitution",
             ),
             pytest.param(
+                f"      - run: {SPHINX_CMD} --help\n",
+                "is not",
+                id="outdir-help",
+            ),
+            pytest.param(
+                f"      - run: {SPHINX_CMD} --version\n",
+                "is not",
+                id="outdir-version",
+            ),
+            pytest.param(
                 f"      - run: {SPHINX_CMD} out\n          || true\n",
                 "more than one line",
                 id="continued-plain-scalar",
@@ -847,13 +864,21 @@ class TestCIWorkflow:
                 "other than True",
                 id="setup-nitpicky",
             ),
+            pytest.param(
+                "nitpicky = True\n"
+                "def setup(app):\n"
+                "    app.connect('warn-missing-reference', lambda *a: True)\n",
+                "warn-missing-reference",
+                id="warn-missing-reference",
+            ),
         ],
     )
     def test_conf_check_rejects_a_weakened_conf(
         self, source: str, message: str
     ) -> None:
-        """A conf.py that turns ``nitpicky`` off or suppresses a warning,
-        at module level or inside a function, is rejected."""
+        """A conf.py that turns ``nitpicky`` off, suppresses a warning
+        or handles ``warn-missing-reference``, at module level or inside
+        a function, is rejected."""
         with pytest.raises(AssertionError, match=message):
             self._assert_conf_is_strict(source)
 
