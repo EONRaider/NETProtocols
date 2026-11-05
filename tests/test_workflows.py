@@ -557,6 +557,45 @@ class TestCIWorkflow:
             "^scripts/pyodide/node_modules/"
         ], "[tool.mypy] exclude reaches beyond scripts/pyodide/node_modules"
 
+    FIXTURES_STEP_NAME = "Check every committed capture with check_fixtures.py"
+
+    def test_test_job_runs_check_fixtures_over_every_capture_directory(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The test job has one step that runs scripts/check_fixtures.py
+        over each directory holding a ``git ls-files``-tracked capture
+        under tests/fixtures, under ``set -euo pipefail`` in bash, so a
+        failing directory, or no tracked capture at all, fails the job.
+        """
+        block = ci_jobs.get("test")
+        assert block is not None, "ci.yml has no test job"
+        steps = [
+            step
+            for step in job_steps(block)
+            if step_key(step, "name") == self.FIXTURES_STEP_NAME
+        ]
+        assert len(steps) == 1, (
+            f"test job has no single {self.FIXTURES_STEP_NAME!r} step"
+        )
+        step = steps[0]
+        assert step_key(step, "shell") == "bash", "the step is not bash"
+        assert re.search(r"(?m)^ +set -euo pipefail$", step), (
+            "the step no longer runs under set -euo pipefail"
+        )
+        assert "git ls-files -- 'tests/fixtures/*.pcap'" in step, (
+            "the step no longer lists the tracked captures"
+        )
+        assert re.search(
+            r'(?m)^ +python3 scripts/check_fixtures\.py "\$dir"$', step
+        ), "the step no longer runs check_fixtures.py on each directory"
+        assert re.search(r'(?m)^ +if \[ "\$\{#dirs\[@\]\}" -eq 0 \]', step), (
+            "the step no longer fails when no capture is tracked"
+        )
+        assert step_key(step, "continue-on-error") is None, (
+            "a failure in the step does not fail the job"
+        )
+        assert (ROOT / "scripts" / "check_fixtures.py").is_file()
+
     TRACEMALLOC_STEP_NAME = "Allocation tests under PYTHONTRACEMALLOC=1"
 
     def test_test_job_runs_the_allocation_tests_while_tracing(
