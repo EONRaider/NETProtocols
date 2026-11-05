@@ -1381,6 +1381,44 @@ def test_a_tampered_exchange_fails(
     assert check_capture(tampered) == (expected or [failure])
 
 
+#: The RADIUS request Codes: Access-Request (RFC 2865 §3),
+#: Accounting-Request (RFC 2866 §3), Status-Server (RFC 5997 §2),
+#: Disconnect-Request and CoA-Request (RFC 5176 §2.3).
+RADIUS_REQUEST_CODES = (1, 4, 12, 40, 43)
+
+#: The RADIUS reply Codes: Access-Accept, Access-Reject,
+#: Access-Challenge, Accounting-Response, Disconnect-ACK/NAK and
+#: CoA-ACK/NAK.
+RADIUS_REPLY_CODES = (2, 3, 5, 11, 41, 42, 44, 45)
+
+#: Each (request Code, reply Code) pair whose reply answers the
+#: request.
+RADIUS_ANSWERED = [
+    (1, 2),
+    (1, 3),
+    (1, 11),
+    (4, 5),
+    (12, 2),
+    (12, 3),
+    (12, 5),
+    (40, 41),
+    (40, 42),
+    (43, 44),
+    (43, 45),
+]
+
+#: Every other (request Code, reply Code) pair.
+RADIUS_MISMATCHED = [
+    (request, reply)
+    for request in RADIUS_REQUEST_CODES
+    for reply in RADIUS_REPLY_CODES
+    if (request, reply) not in RADIUS_ANSWERED
+]
+
+#: The server port each request Code is sent to in these tests.
+RADIUS_SERVER_PORTS = {1: 1812, 4: 1813, 12: 1812, 40: 3799, 43: 3799}
+
+
 class TestRadiusReplies:
     """Each RADIUS reply is paired with the most recent unanswered
     request of its exchange (client address and port, server address
@@ -1493,37 +1531,14 @@ class TestRadiusReplies:
         assert stats["radius-reply-unpaired"] == 1
 
     @pytest.mark.parametrize(
-        ("request_code", "reply_code", "port"),
-        [
-            (1, 2, 1812),
-            (1, 3, 1812),
-            (1, 11, 1812),
-            (4, 5, 1813),
-            (12, 2, 1812),
-            (12, 3, 1812),
-            (12, 5, 1813),
-            (40, 41, 3799),
-            (40, 42, 3799),
-            (43, 44, 3799),
-            (43, 45, 3799),
-        ],
-        ids=[
-            "access-accept",
-            "access-reject",
-            "access-challenge",
-            "accounting-response",
-            "status-server-access-accept",
-            "status-server-access-reject",
-            "status-server-accounting-response",
-            "disconnect-ack",
-            "disconnect-nak",
-            "coa-ack",
-            "coa-nak",
-        ],
+        ("request_code", "reply_code"),
+        RADIUS_ANSWERED,
+        ids=[f"{request}-{reply}" for request, reply in RADIUS_ANSWERED],
     )
     def test_every_reply_code_is_verified(
-        self, request_code: int, reply_code: int, port: int
+        self, request_code: int, reply_code: int
     ) -> None:
+        port = RADIUS_SERVER_PORTS[request_code]
         request, reply = radius_exchange(request_code, reply_code, port)
         stats: Counter[str] = Counter()
         assert check_capture([request, reply], stats) == []
@@ -1534,42 +1549,17 @@ class TestRadiusReplies:
         ]
 
     @pytest.mark.parametrize(
-        ("request_code", "reply_code", "port"),
-        [
-            (1, 5, 1812),
-            (1, 41, 1812),
-            (1, 44, 1812),
-            (4, 2, 1813),
-            (4, 3, 1813),
-            (4, 11, 1813),
-            (12, 11, 1812),
-            (12, 41, 1812),
-            (40, 2, 3799),
-            (40, 44, 3799),
-            (43, 5, 3799),
-            (43, 42, 3799),
-        ],
-        ids=[
-            "access-request-accounting-response",
-            "access-request-disconnect-ack",
-            "access-request-coa-ack",
-            "accounting-request-access-accept",
-            "accounting-request-access-reject",
-            "accounting-request-access-challenge",
-            "status-server-access-challenge",
-            "status-server-disconnect-ack",
-            "disconnect-request-access-accept",
-            "disconnect-request-coa-ack",
-            "coa-request-accounting-response",
-            "coa-request-disconnect-nak",
-        ],
+        ("request_code", "reply_code"),
+        RADIUS_MISMATCHED,
+        ids=[f"{request}-{reply}" for request, reply in RADIUS_MISMATCHED],
     )
     def test_a_reply_of_a_code_that_cannot_answer_is_not_verified(
-        self, request_code: int, reply_code: int, port: int
+        self, request_code: int, reply_code: int
     ) -> None:
         """A reply signed over the request of its exchange, but of a
         Code that cannot answer it, is counted as a mismatch and passes,
         and the request stays unanswered."""
+        port = RADIUS_SERVER_PORTS[request_code]
         request, reply = radius_exchange(request_code, reply_code, port)
         stats: Counter[str] = Counter()
         assert check_capture([request, reply], stats) == []
