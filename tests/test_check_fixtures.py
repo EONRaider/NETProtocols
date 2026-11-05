@@ -4,7 +4,8 @@ The checker is loaded by path and imports nothing from netprotocols.
 It runs over every directory of committed captures and must pass them
 all. Each failure string it can emit is then produced by a minimally
 tampered copy of a frame it accepts, a committed fixture frame wherever
-one carries the field, and a test fails when the script gains a failure
+one carries the field, or, for a RADIUS reply, of a capture holding the
+request before it, and a test fails when the script gains a failure
 string no case here produces.
 
 Frames for the strict mode, which applies to whatever an IPsec ICV
@@ -780,6 +781,88 @@ def _() -> tuple[bytes, bytes]:
     return RADIUS_REQUEST, reseal(split)
 
 
+#: radius.pcap's PAP Access-Accept, the reply to ``RADIUS_REQUEST``.
+RADIUS_ACCEPT = frame("radius.pcap", 1)
+
+#: The frame index of each reply in radius.pcap, each one frame after
+#: the request it answers.
+RADIUS_REPLIES = (1, 3, 5, 7, 9, 11)
+
+
+def radius_packet(frame: bytes) -> bytes:
+    """The RADIUS packet of an Ethernet/IPv4/UDP frame, to its Length."""
+    at = udp_data(frame)
+    return frame[at : at + struct.unpack_from("!H", frame, at + 2)[0]]
+
+
+def with_radius(frame: bytes, packet: bytes) -> bytes:
+    """``frame`` with its RADIUS packet replaced by ``packet``, of the
+    same length, resealed."""
+    return reseal(put(frame, udp_data(frame), packet))
+
+
+def radius_authenticator(frame: bytes) -> bytes:
+    """The Authenticator field of a frame's RADIUS packet."""
+    return radius_packet(frame)[4:20]
+
+
+def sign_message_authenticator(packet: bytes, authenticator: bytes) -> bytes:
+    """``packet`` with its Message-Authenticator, if any, recomputed
+    with ``authenticator`` in the Authenticator field (RFC 3579 §3.2);
+    the field itself is left as it is."""
+    cursor = 20
+    while cursor < len(packet):
+        if packet[cursor] == 80:
+            covered = put(packet, 4, authenticator)
+            covered = put(covered, cursor + 2, bytes(16))
+            mac = hmac.new(checker._RADIUS_SECRET, covered, hashlib.md5)
+            return put(packet, cursor + 2, mac.digest())
+        cursor += packet[cursor + 1]
+    return packet
+
+
+def sign_response(packet: bytes, request: bytes) -> bytes:
+    """``packet``, a reply, with its Response Authenticator recomputed
+    over ``request``, its request's Authenticator (RFC 2865 §3)."""
+    digest = hashlib.md5(
+        packet[:4] + request + packet[20:] + checker._RADIUS_SECRET,
+        usedforsecurity=False,
+    ).digest()
+    return put(packet, 4, digest)
+
+
+def answered(reply: bytes, request: bytes) -> bytes:
+    """``reply``, a RADIUS reply frame, with its Message-Authenticator,
+    if any, and then its Response Authenticator recomputed over
+    ``request``, a request's Authenticator, resealed."""
+    packet = sign_message_authenticator(radius_packet(reply), request)
+    return with_radius(reply, sign_response(packet, request))
+
+
+def asked(request: bytes, authenticator: bytes) -> bytes:
+    """``request``, an Access-Request frame, with ``authenticator`` as
+    its Request Authenticator and its Message-Authenticator recomputed
+    over it, resealed."""
+    packet = put(radius_packet(request), 4, authenticator)
+    return with_radius(
+        request, sign_message_authenticator(packet, authenticator)
+    )
+
+
+def udp_datagram(frame: bytes) -> bytes:
+    """The UDP datagram of an Ethernet/IPv4/UDP frame, its checksum
+    zeroed."""
+    datagram = frame[l4(frame) : 14 + struct.unpack_from("!H", frame, 16)[0]]
+    return put(datagram, 6, b"\x00\x00")
+
+
+@case("unchecked-radius-reply-unpaired")
+def _() -> tuple[bytes, bytes]:
+    return esp(17, udp_datagram(RADIUS_REQUEST)), esp(
+        17, udp_datagram(RADIUS_ACCEPT)
+    )
+
+
 NTP_PLAIN = frame("ntp.pcap", 0)
 NTP_MD5 = frame("ntp.pcap", 2)
 NTP_SHA1 = frame("ntp.pcap", 4)
@@ -1176,6 +1259,273 @@ def test_a_split_tls_record_passes_in_a_session_capture() -> None:
     assert check(split, session=True) == []
 
 
+# Failures that need the frames of a capture before them: RADIUS
+# replies, each verified against the request it answers.
+
+
+def check_capture(
+    frames: list[bytes], stats: Counter[str] | None = None
+) -> list[str]:
+    """The checker's failures for ``frames``, one capture, in order."""
+    stats = Counter() if stats is None else stats
+    exchanges = checker.RadiusExchanges()
+    failures: list[str] = []
+    for data in frames:
+        failures += checker.check_capture_frame(
+            data, stats, session=False, exchanges=exchanges
+        )
+    return failures
+
+
+#: (failure, good capture, tampered capture, failures expected from it).
+ExchangeCase = tuple[
+    str, Callable[[], tuple[list[bytes], list[bytes]]], list[str] | None
+]
+
+EXCHANGE_CASES: list[ExchangeCase] = []
+
+
+def exchange_case(
+    failure: str, *, expected: list[str] | None = None
+) -> Callable[
+    [Callable[[], tuple[list[bytes], list[bytes]]]],
+    Callable[[], tuple[list[bytes], list[bytes]]],
+]:
+    """Register a builder of (good, tampered) captures whose tampered
+    capture fails as ``expected``, by default ``[failure]`` alone."""
+
+    def register(
+        build: Callable[[], tuple[list[bytes], list[bytes]]],
+    ) -> Callable[[], tuple[list[bytes], list[bytes]]]:
+        EXCHANGE_CASES.append((failure, build, expected))
+        return build
+
+    return register
+
+
+@exchange_case("radius-response-authenticator")
+def _() -> tuple[list[bytes], list[bytes]]:
+    tampered = reseal(flip(RADIUS_ACCEPT, udp_data(RADIUS_ACCEPT) + 4))
+    return [RADIUS_REQUEST, RADIUS_ACCEPT], [RADIUS_REQUEST, tampered]
+
+
+@exchange_case(
+    "radius-reply-message-authenticator",
+    expected=[
+        "radius-response-authenticator",
+        "radius-reply-message-authenticator",
+    ],
+)
+def _() -> tuple[list[bytes], list[bytes]]:
+    at = radius_attribute(RADIUS_ACCEPT, 80) + 2
+    tampered = reseal(flip(RADIUS_ACCEPT, at))
+    return [RADIUS_REQUEST, RADIUS_ACCEPT], [RADIUS_REQUEST, tampered]
+
+
+@exchange_case("radius-reply-message-authenticator")
+def _() -> tuple[list[bytes], list[bytes]]:
+    # The Message-Authenticator is flipped and the Response
+    # Authenticator recomputed over the flipped bytes.
+    at = radius_attribute(RADIUS_ACCEPT, 80) + 2
+    packet = radius_packet(flip(RADIUS_ACCEPT, at))
+    request = radius_authenticator(RADIUS_REQUEST)
+    tampered = with_radius(RADIUS_ACCEPT, sign_response(packet, request))
+    return [RADIUS_REQUEST, RADIUS_ACCEPT], [RADIUS_REQUEST, tampered]
+
+
+@pytest.mark.parametrize(
+    ("failure", "build", "expected"),
+    EXCHANGE_CASES,
+    ids=[failure for failure, _, _ in EXCHANGE_CASES],
+)
+def test_a_tampered_exchange_fails(
+    failure: str,
+    build: Callable[[], tuple[list[bytes], list[bytes]]],
+    expected: list[str] | None,
+) -> None:
+    good, tampered = build()
+    assert check_capture(good) == []
+    assert check_capture(tampered) == (expected or [failure])
+
+
+class TestRadiusReplies:
+    """Each RADIUS reply is paired with the most recent unanswered
+    request of its exchange (client address and port, server address
+    and port, Identifier) in the same capture, and its Response
+    Authenticator and Message-Authenticator verified over that request's
+    Authenticator (RFC 2865 §3, RFC 3579 §3.2)."""
+
+    def test_the_helpers_reproduce_every_captured_reply(self) -> None:
+        for index in RADIUS_REPLIES:
+            request = radius_authenticator(frame("radius.pcap", index - 1))
+            reply = frame("radius.pcap", index)
+            assert answered(reply, request) == reply
+
+    def test_every_reply_in_the_capture_is_verified(self) -> None:
+        stats: Counter[str] = Counter()
+        assert (
+            check_capture(list(pcap_frames(FIXTURES / "radius.pcap")), stats)
+            == []
+        )
+        assert stats["radius-response-authenticator"] == 6
+        assert stats["radius-reply-message-authenticator"] == 4
+        assert stats["radius-reply-unpaired"] == 0
+
+    @pytest.mark.parametrize("index", RADIUS_REPLIES)
+    def test_a_changed_response_authenticator_byte_fails(
+        self, index: int
+    ) -> None:
+        frames = list(pcap_frames(FIXTURES / "radius.pcap"))[: index + 1]
+        frames[index] = reseal(
+            flip(frames[index], udp_data(frames[index]) + 19)
+        )
+        assert check_capture(frames) == ["radius-response-authenticator"]
+
+    def test_an_unpaired_reply_is_counted_and_passes(self) -> None:
+        stats: Counter[str] = Counter()
+        assert check_capture([RADIUS_ACCEPT], stats) == []
+        assert stats["radius-reply-unpaired"] == 1
+        assert stats["radius-response-authenticator"] == 0
+
+    def test_a_reply_answers_its_request_once(self) -> None:
+        stats: Counter[str] = Counter()
+        frames = [RADIUS_REQUEST, RADIUS_ACCEPT, RADIUS_ACCEPT]
+        assert check_capture(frames, stats) == []
+        assert stats["radius-response-authenticator"] == 1
+        assert stats["radius-reply-unpaired"] == 1
+
+    def test_a_reply_before_its_request_is_unpaired(self) -> None:
+        stats: Counter[str] = Counter()
+        assert check_capture([RADIUS_ACCEPT, RADIUS_REQUEST], stats) == []
+        assert stats["radius-reply-unpaired"] == 1
+
+    def test_a_reused_identifier_pairs_with_the_latest_request(self) -> None:
+        first = radius_authenticator(RADIUS_REQUEST)
+        second = bytes(range(16))
+        retried = asked(RADIUS_REQUEST, second)
+        to_second = answered(RADIUS_ACCEPT, second)
+        stats: Counter[str] = Counter()
+        frames = [RADIUS_REQUEST, retried, to_second, RADIUS_ACCEPT]
+        assert check_capture(frames, stats) == []
+        assert stats["radius-response-authenticator"] == 2
+        assert stats["radius-reply-unpaired"] == 0
+        # The reply to the first request, first, is checked against the
+        # second, the most recent unanswered one, and fails.
+        assert check_capture([RADIUS_REQUEST, retried, RADIUS_ACCEPT]) == [
+            "radius-response-authenticator",
+            "radius-reply-message-authenticator",
+        ]
+        assert answered(RADIUS_ACCEPT, first) == RADIUS_ACCEPT
+
+    @pytest.mark.parametrize(
+        ("offset", "value"),
+        [(0, struct.pack("!H", 57758)), (2, struct.pack("!H", 1813))],
+        ids=["client-port", "server-port"],
+    )
+    def test_a_request_on_other_ports_is_another_exchange(
+        self, offset: int, value: bytes
+    ) -> None:
+        moved = put(RADIUS_REQUEST, l4(RADIUS_REQUEST) + offset, value)
+        other = asked(reseal(moved), bytes(range(16)))
+        stats: Counter[str] = Counter()
+        assert (
+            check_capture([RADIUS_REQUEST, other, RADIUS_ACCEPT], stats) == []
+        )
+        assert stats["radius-response-authenticator"] == 1
+
+    def test_a_request_from_another_client_is_another_exchange(self) -> None:
+        moved = put(RADIUS_REQUEST, 26, bytes([10, 9, 193, 3]))
+        other = asked(reseal(moved), bytes(range(16)))
+        stats: Counter[str] = Counter()
+        assert (
+            check_capture([RADIUS_REQUEST, other, RADIUS_ACCEPT], stats) == []
+        )
+        assert stats["radius-response-authenticator"] == 1
+
+    def test_a_request_with_another_identifier_is_another_exchange(
+        self,
+    ) -> None:
+        at = udp_data(RADIUS_REQUEST) + 1
+        other = asked(reseal(flip(RADIUS_REQUEST, at)), bytes(range(16)))
+        stats: Counter[str] = Counter()
+        assert (
+            check_capture([RADIUS_REQUEST, other, RADIUS_ACCEPT], stats) == []
+        )
+        assert stats["radius-response-authenticator"] == 1
+
+    def test_exchanges_are_not_shared_between_captures(self) -> None:
+        stats: Counter[str] = Counter()
+        assert check_capture([RADIUS_REQUEST], stats) == []
+        assert check_capture([RADIUS_ACCEPT], stats) == []
+        assert stats["radius-reply-unpaired"] == 1
+
+    @pytest.mark.parametrize(
+        ("request_code", "reply_code", "port"),
+        [
+            (1, 11, 1812),
+            (40, 41, 3799),
+            (40, 42, 3799),
+            (43, 44, 3799),
+            (43, 45, 3799),
+        ],
+        ids=[
+            "access-challenge",
+            "disconnect-ack",
+            "disconnect-nak",
+            "coa-ack",
+            "coa-nak",
+        ],
+    )
+    def test_every_reply_code_is_verified(
+        self, request_code: int, reply_code: int, port: int
+    ) -> None:
+        request, reply = radius_exchange(request_code, reply_code, port)
+        stats: Counter[str] = Counter()
+        assert check_capture([request, reply], stats) == []
+        assert stats["radius-response-authenticator"] == 1
+        tampered = reseal(flip(reply, udp_data(reply) + 4))
+        assert check_capture([request, tampered]) == [
+            "radius-response-authenticator"
+        ]
+
+
+def radius_exchange(
+    request_code: int, reply_code: int, port: int
+) -> tuple[bytes, bytes]:
+    """A request of ``request_code`` from ``RADIUS_REQUEST``'s client to
+    its server's ``port``, carrying a User-Name, and its reply of
+    ``reply_code``, an empty one, on ``RADIUS_REQUEST``'s addresses."""
+    client, server = RADIUS_REQUEST[26:30], RADIUS_REQUEST[30:34]
+    user_name = b"\x01\x0cnp193-user"
+    head = struct.pack("!BBH", request_code, 7, 20 + len(user_name))
+    if request_code == 1:
+        authenticator = bytes(range(16))
+    else:
+        # RFC 5176 §3: computed as an Accounting-Request's is.
+        authenticator = hashlib.md5(
+            head + bytes(16) + user_name + checker._RADIUS_SECRET,
+            usedforsecurity=False,
+        ).digest()
+    request = head + authenticator + user_name
+    reply = sign_response(
+        struct.pack("!BBH", reply_code, 7, 20) + bytes(16), authenticator
+    )
+    return (
+        radius_frame(client, server, 50000, port, request),
+        radius_frame(server, client, port, 50000, reply),
+    )
+
+
+def radius_frame(
+    src: bytes, dst: bytes, src_port: int, dst_port: int, packet: bytes
+) -> bytes:
+    """``packet`` in UDP from ``src_port`` to ``dst_port``, in IPv4 from
+    ``src`` to ``dst`` with ``RADIUS_REQUEST``'s other header fields."""
+    template = put(put(RADIUS_REQUEST, 26, src), 30, dst)
+    udp = struct.pack("!HHHH", src_port, dst_port, 8 + len(packet), 1)
+    return ipv4_frame(template, 17, udp + packet)
+
+
 # GRE checksums (RFC 2784 §2.5).
 
 
@@ -1402,6 +1752,52 @@ class TestMain:
         assert "[FAIL] x.pcap" in out
         assert "!! tls-split x1" in out
 
+    def test_the_report_counts_the_verified_replies(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        radius = list(pcap_frames(FIXTURES / "radius.pcap"))
+        (tmp_path / "radius.pcap").write_bytes(pcap_file(radius))
+        status, out = run_main(tmp_path, monkeypatch, capsys)
+        assert status == 0
+        assert (
+            "[OK  ] radius.pcap: 12 frames (ipv4x12, radiusx12, "
+            "radius-accounting-authenticatorx2, "
+            "radius-message-authenticatorx4, "
+            "radius-reply-message-authenticatorx4, "
+            "radius-response-authenticatorx6, udpx12)\n"
+        ) in out
+
+    def test_an_unpaired_reply_is_reported_and_passes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        (tmp_path / "a.pcap").write_bytes(pcap_file([RADIUS_REQUEST]))
+        (tmp_path / "b.pcap").write_bytes(pcap_file([RADIUS_ACCEPT]))
+        status, out = run_main(tmp_path, monkeypatch, capsys)
+        assert status == 0
+        assert (
+            "[OK  ] b.pcap: 1 frames (ipv4x1, radiusx1, "
+            "radius-reply-unpairedx1, udpx1)\n"
+        ) in out
+
+    def test_a_tampered_reply_fails_the_run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        tampered = reseal(flip(RADIUS_ACCEPT, udp_data(RADIUS_ACCEPT) + 4))
+        frames = [RADIUS_REQUEST, tampered]
+        (tmp_path / "radius.pcap").write_bytes(pcap_file(frames))
+        status, out = run_main(tmp_path, monkeypatch, capsys)
+        assert status == 1
+        assert "!! radius-response-authenticator x1" in out
+
     def test_an_empty_directory_fails(
         self,
         tmp_path: Path,
@@ -1526,6 +1922,10 @@ def test_a_kind_stands_only_for_its_most_specific_pattern() -> None:
 
 
 def test_every_failure_string_has_a_case() -> None:
-    covered = {failure for failure, _, _ in CASES} | set(FILE_FAILURES)
+    covered = (
+        {failure for failure, _, _ in CASES}
+        | {failure for failure, _, _ in EXCHANGE_CASES}
+        | set(FILE_FAILURES)
+    )
     missing = uncovered(emitted_failures(), covered)
     assert not missing, f"no case produces {missing}"
