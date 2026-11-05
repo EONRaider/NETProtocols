@@ -1509,10 +1509,10 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:135-140` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 394
+frame[cursor:cursor+layer.header_len]` for **every layer of all 402
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
-across 36 scenarios captured with tcpdump over real kernel
+across 38 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
@@ -1525,10 +1525,14 @@ clients, HSRP messages crafted by Yersinia and sent across a netns
 veth pair, and an nginx HTTPS server answering five clients (headless
 Chromium, curl, gnutls-cli, `openssl s_client` and curl capped at TLS
 1.2) across another. Every frame's checksums (SCTP's CRC32c, VRRP's,
-PIM's, CDP's, and OSPF's packet and LSA checksums included), every ESP
-and AH ICV, every RIPv2 and OSPF keyed-MD5 digest, every RADIUS
-authenticator a frame holds alone, every STUN MESSAGE-INTEGRITY and
-FINGERPRINT, and every NTP MAC verify internally (`scripts/check_fixtures.py`); HSRP,
+PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's where its
+Checksum field is present included), every ESP and AH ICV, every RIPv2
+and OSPF keyed-MD5 digest, every RADIUS authenticator the corpus
+holds (a reply's against its request's), every STUN MESSAGE-INTEGRITY
+and FINGERPRINT, and every NTP MAC verify internally (`scripts/check_fixtures.py`), except that the
+checker reads `gre6.pcap`'s four frames no further than their IPv6
+header, which carries no checksum, since it does not decode GRE over
+IPv6 ([#326](https://github.com/EONRaider/NETProtocols/issues/326)); HSRP,
 which carries no checksum of its own, has every message's fields
 checked instead, and TLS, which has none beyond TCP's, every record:
 each segment on port 443 that carries data must hold whole records,
