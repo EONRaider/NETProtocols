@@ -9,7 +9,9 @@ Each object is documented once, under the module that defines it:
 ``automodule`` directive for every submodule, private ones included.
 :func:`resolve_import` resolves a reference that names an object
 through a module that imports it, such as ``netprotocols.TCP`` for
-``netprotocols.layer4.tcp.TCP``, to the object's defining module.
+``netprotocols.layer4.tcp.TCP``, to the object's defining module. The
+name it produces is looked up by the Python domain like any other, so
+the reference resolves only if that object is documented.
 """
 
 from __future__ import annotations
@@ -36,11 +38,16 @@ autodoc_default_options = {
     "private-members": True,
     "ignore-module-all": True,
 }
+# Signatures are rendered without annotations, so only the roles written
+# in docstrings are cross-referenced.
 autodoc_typehints = "none"
 
+# Standard-library references resolve against the inventory of the
+# oldest Python that pyproject.toml's requires-python admits. A fetch
+# that fails or exceeds the timeout (in seconds) is a warning, which
+# ``-W`` turns into a failed build.
 intersphinx_mapping = {"python": ("https://docs.python.org/3.12", None)}
-
-exclude_patterns = ["CLAIMS.md"]
+intersphinx_timeout = 30
 
 
 def submodules() -> list[str]:
@@ -62,9 +69,7 @@ def add_modules(app: Sphinx, docname: str, source: list[str]) -> None:
     """
     if docname != "index":
         return
-    source[0] += "".join(
-        f"\n.. automodule:: {name}\n" for name in submodules()
-    )
+    source[0] += "".join(f"\n.. automodule:: {name}\n" for name in submodules())
 
 
 def defining_name(target: str, module: str | None) -> str | None:
@@ -102,7 +107,7 @@ def defining_name(target: str, module: str | None) -> str | None:
             obj = getattr(obj, parts[index])
         except AttributeError:
             return None
-        if isinstance(obj, type) or callable(obj):
+        if callable(obj):
             qualname = getattr(obj, "__qualname__", None)
             owner = getattr(obj, "__module__", None)
             if not (qualname and owner):
