@@ -59,6 +59,23 @@ jobs:
       # Also runs the doctests in src/: pyproject.toml's pytest
       # addopts and testpaths include --doctest-modules and src.
       - run: uv run --frozen pytest --cov=netprotocols --cov-report=term
+      # Runs scripts/check_fixtures.py over tests/fixtures and over each
+      # subdirectory holding a tracked capture; fails if no capture is
+      # tracked or if any directory's run exits non-zero.
+      - name: Check every committed capture with check_fixtures.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dirs < <(
+            git ls-files -- 'tests/fixtures/*.pcap' | xargs -n1 dirname | sort -u
+          )
+          if [ "${#dirs[@]}" -eq 0 ]; then
+            echo "::error::git ls-files found no capture under tests/fixtures."
+            exit 1
+          fi
+          for dir in "${dirs[@]}"; do
+            python3 scripts/check_fixtures.py "$dir"
+          done
       # Runs every module that measures allocations with
       # tests/conftest.py's allocation_peak while tracemalloc is already
       # tracing from interpreter start.
