@@ -358,8 +358,9 @@ class Packet:
         IGMP's and GRE's checksum inputs end at the declared end of the
         nearest enclosing IPv4 or IPv6 datagram, so Ethernet padding and
         a captured FCS stay out of them; those bytes are kept in the
-        returned packet. An IPv6 payload length of zero, or a declared
-        end before the layer's required bytes, leaves the input
+        returned packet. An IPv4 Total Length or IPv6 payload length of
+        zero, an IPv4 Total Length shorter than its header, or a
+        declared end before the layer's required bytes leaves the input
         unbounded.
 
         Layers are processed innermost-first so each transport checksum
