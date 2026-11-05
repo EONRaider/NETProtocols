@@ -21,8 +21,9 @@ raising, and a hook for per-call decoder overrides.
 Strict by default
 -----------------
 
-Malformed input raises, exactly as ``decode()`` does — the chain has no
-opinion of its own about what is valid. Pass ``lax=True`` when a
+Malformed input raises, exactly as ``decode()`` does. The chain's one
+judgement of its own is a declared length too short to hold its own
+header (see "Declared lengths" below). Pass ``lax=True`` when a
 capture tool would rather keep the layers it got than lose frame
 4,000,001 to an exception::
 
@@ -73,25 +74,50 @@ jumbo-frame link is larger still. A strict walk of a segment past the
 limit raises :class:`~netprotocols.MaxDepthExceededError` and a lax one
 stops short with ``stopped_by`` set. A larger ``max_depth`` decodes the
 rest, and so does walking on from ``packet.consumed`` with ``start=BGP``
-(or ``start=STUN``, ``start=TLS``) as many times as it takes: a walk
-that starts there has room for 32 messages or records, so the 76
-KEEPALIVEs, 72 STUN messages or 65 TLS records above take three walks
-and the 103 records four (the loop in :mod:`netprotocols.layer7.bgp`).
+(or ``start=STUN``, ``start=TLS``) over
+``frame[packet.consumed : len(frame) - len(packet.trailer)]``, as many
+times as it takes: a walk that starts there has room for 32 messages
+or records, so the 76 KEEPALIVEs, 72 STUN messages or 65 TLS records
+above take three walks and the 103 records four (the loop in
+:mod:`netprotocols.layer7.bgp`).
 
-802.3 Length
-------------
+Declared lengths
+----------------
 
-An Ethernet or VLAN header whose Length/Type field holds an IEEE 802.3
-Length (1500 or less) says where the LLC PDU after it ends, and the
-walk ends the buffer it hands every later layer there: Ethernet's zero
-padding after a short PDU, and a captured FCS, reach no decoder and
-are left past ``packet.consumed``. It is the one enclosing length the
-walk honours; IPv4's, IPv6's and UDP's are not. A Length beyond
-the end of the frame bounds nothing, so a frame cut by a snap length
-decodes what was captured, and a Length shorter than the 3-byte LLC
-header makes the LLC decode raise
-:class:`~netprotocols.TruncatedHeaderError`. See
-:mod:`netprotocols.layer2.llc`.
+Four length fields say where the payload after a header ends: an IEEE
+802.3 Length (1500 or less) in an Ethernet or VLAN header's
+Length/Type field, IPv4's Total Length, IPv6's Payload Length and
+UDP's Length. The walk ends the buffer it hands every later layer at
+the tightest end these give, so Ethernet's padding after a short
+frame, and a captured FCS, reach no decoder. Those bytes are the
+returned packet's :attr:`~netprotocols.Packet.trailer`, a copy of the
+frame past that end, and the frame is the layers, then the bytes the
+last layer carries that no decoder read, then the trailer::
+
+    undecoded = frame[packet.consumed : len(frame) - len(packet.trailer)]
+    assert frame == bytes(packet) + undecoded + packet.trailer
+
+In an encapsulation (VXLAN, GRE, IP in IP, MPLS) an inner length is
+the tighter end, and whatever lies between it and an outer end joins
+the one trailer. The bound applies wherever the walk starts, so a walk
+with ``start=IPv4`` is bounded by that header's Total Length.
+
+A declared end beyond the end of the frame bounds nothing, so a frame
+cut by a snap length decodes what was captured, and a looser end never
+widens a tighter one: a first fragment's UDP Length, which counts the
+whole datagram, or a quoted packet's lengths in an ICMP error. A Total
+Length of 0, which a capture of TCP-segmentation-offloaded traffic can
+hold, a Payload Length of 0 and a UDP Length of 0 (RFC 2675 §2, §4)
+bound nothing either. A length shorter than its own header, an IPv4
+Total Length below the header's ``ihl * 4`` bytes or a UDP Length of 1
+to 7, raises :class:`~netprotocols.InvalidFieldError` naming that
+field (``"total_length"`` or ``"length"``), its ``frame_offset`` on
+the field; a lax walk keeps the header and stops there, with the
+trailer the earlier ends left. A length long enough for its own header
+but too short for what follows makes the next decoder raise
+:class:`~netprotocols.TruncatedHeaderError`, as an 802.3 Length
+shorter than the 3-byte LLC header does (see
+:mod:`netprotocols.layer2.llc`).
 
 On ``memoryview``
 -----------------
@@ -127,8 +153,9 @@ __all__ = ["MAX_DEPTH", "decode_frame"]
 #: 72 bare 20-byte STUN headers, or 65 of TLS 1.3's 22-byte protected
 #: records (103 of 14 bytes). Walk on from ``packet.consumed`` with
 #: ``start=BGP``, ``start=STUN`` or ``start=TLS`` as many times as it
-#: takes (each such walk takes up to 32 more, so 76 KEEPALIVEs need
-#: three walks), or pass a larger ``max_depth``; see
+#: takes, up to ``packet.trailer`` (each such walk takes up to 32
+#: more, so 76 KEEPALIVEs need three walks), or pass a larger
+#: ``max_depth``; see
 #: :mod:`netprotocols.layer7.bgp`, :mod:`netprotocols.layer7.stun` and
 #: :mod:`netprotocols.layer7.tls`.
 MAX_DEPTH = 32
@@ -151,7 +178,9 @@ def decode_frame(
 
     :param data: The frame, from the first byte of ``start``'s header.
         Trailing bytes the chain does not decode are fine and are left
-        alone; ``packet.consumed`` says where the walk stopped.
+        alone; ``packet.consumed`` says where the walk stopped, and
+        ``packet.trailer`` holds the bytes past the declared lengths'
+        end (see "Declared lengths" above).
     :param start: The class decoding the first header. Defaults to
         :class:`~netprotocols.Ethernet`; name another to walk a buffer
         that begins mid-stack, such as ``start=IPv4`` for a tunnel
@@ -172,8 +201,9 @@ def decode_frame(
 
     :raises MaxDepthExceededError: if the chain is longer than
         ``max_depth`` (strict mode only).
-    :raises ProtocolError: if any header failed to decode (strict mode
-        only).
+    :raises ProtocolError: if any header failed to decode, or declares
+        an IPv4 Total Length or UDP Length shorter than itself (strict
+        mode only).
     :raises UnknownTableError: if ``decode_as`` names a table that is not
         one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
         says.
@@ -191,9 +221,9 @@ def decode_frame(
 
     layers: list[Protocol] = []
     cursor = 0
-    # Where the buffers handed to decode() end: the frame's end, until an
-    # 802.3 Length bounds the PDU (see "802.3 Length" above). The bytes
-    # past it are the packet's trailer.
+    # Where the buffers handed to decode() end: the frame's end, until a
+    # declared length bounds the payload (see "Declared lengths" above).
+    # The bytes past it are the packet's trailer.
     end = len(data)
     protocol: type[Protocol] | None = start
     stopped_by: ProtocolError | None = None
@@ -247,8 +277,23 @@ def _bounded(header: Protocol, cursor: int, end: int) -> int:
     ``cursor`` is the offset just past ``header`` and ``end`` the
     current bound. The tighter of the two wins, so a length larger than
     what was captured bounds nothing and a bound never grows.
+
+    :param header: The header just decoded, whose class sets
+        ``_BOUNDS_PAYLOAD``.
+    :param cursor: The frame offset just past ``header``.
+    :param end: The frame offset where the current bound ends.
+    :raises ProtocolError: if ``header`` declares a length shorter than
+        itself; its ``frame_offset`` is set from the start of
+        ``header``.
     """
-    extent = header._payload_extent()
+    try:
+        extent = header._payload_extent()
+    except ProtocolError as error:
+        start = cursor - header.header_len
+        error.frame_offset = (
+            start if error.offset is None else start + error.offset
+        )
+        raise
     if extent is None:
         return end
     return min(end, cursor + extent)

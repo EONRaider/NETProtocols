@@ -100,9 +100,10 @@ def refill(frame):
                 + layer.fields[2:],
             )
         stale.append(layer)
-    payload = frame[packet.consumed :]
-    filled = Packet(*stale).with_checksums(payload)
-    return bytes(filled) + payload, filled, packet
+    payload = frame[packet.consumed : len(frame) - len(packet.trailer)]
+    filled = Packet(*stale, trailer=packet.trailer).with_checksums(payload)
+    assert filled.trailer == packet.trailer
+    return bytes(filled) + payload + filled.trailer, filled, packet
 
 
 @pytest.mark.parametrize("kind", [0x11, 0x12, 0x16, 0x17])
@@ -189,24 +190,50 @@ def test_nested_gre_uses_each_ip_extent_and_keeps_outer_payload(inner_family):
     assert wire == frame
 
 
-def test_gre_keeps_padding_stored_in_an_inner_igmp_body():
+def test_gre_walk_leaves_inner_padding_in_the_trailer():
     message = igmp(0x12)
     inner_ip = ipv4(message, 2, destination=bytes.fromhex("e0010203"), ttl=1)
     padding = bytes(range(1, 11))
     outer_message = gre(inner_ip + padding, protocol=0x0800)
     frame = ethernet(ipv4(outer_message, 47))
     start = 14 + 20 + 8 + 20
-    wire, filled, packet = refill(frame)
+    wire, _, packet = refill(frame)
+    assert packet[IGMP].body == message[4:]
+    assert packet.trailer == frame[start + len(message) :]
+    assert packet.trailer.startswith(padding)
     assert ones_complement(wire[start : start + len(message)]) == 0
     assert ones_complement(wire[14 + 20 :]) == 0
-    assert filled[IGMP].body == packet[IGMP].body
     assert wire == frame
+
+
+def test_gre_keeps_padding_stored_in_a_hand_built_inner_igmp_body():
+    message = igmp(0x12)
+    inner_ip = ipv4(message, 2, destination=bytes.fromhex("e0010203"), ttl=1)
+    padding = bytes(range(1, 11))
+    outer_message = gre(inner_ip + padding, protocol=0x0800)
+    frame = ethernet(ipv4(outer_message, 47))
+    start = 14 + 20 + 8 + 20
+    walked = decode_frame(frame)
+    padded = IGMP.decode(frame[start : start + len(message) + len(padding)])
+    stale = replace(padded, checksum=padded.checksum ^ 1)
+    layers = [*walked.layers[:-1], stale]
+    filled = Packet(*layers).with_checksums()
+    assert filled[IGMP].body == message[4:] + padding
+    assert filled[IGMP].checksum == padded.checksum
+    assert bytes(filled) == frame[: start + len(message) + len(padding)]
 
 
 @pytest.mark.parametrize("protocol", [IGMP, GRE])
 @pytest.mark.parametrize(
     "family,short",
-    [(None, False), (4, False), (4, True), (6, False), (6, True)],
+    [
+        (None, False),
+        (4, False),
+        (4, True),
+        (4, "lying"),
+        (6, False),
+        (6, True),
+    ],
 )
 def test_missing_or_impossible_extents_keep_unbounded_checksums(
     protocol, family, short
@@ -221,9 +248,8 @@ def test_missing_or_impossible_extents_keep_unbounded_checksums(
     layers = []
     if family == 4:
         ip = IPv4.decode(ipv4(b"", 2 if protocol is IGMP else 47))
-        layers.append(
-            replace(ip, total_length=20 + minimum - 1 if short else 0)
-        )
+        total_length = {False: 0, True: 20 + minimum - 1, "lying": 10}
+        layers.append(replace(ip, total_length=total_length[short]))
     elif family == 6:
         ip = IPv6.decode(ipv6(b"", 2 if protocol is IGMP else 47))
         layers.append(replace(ip, payload_length=minimum - 1 if short else 0))

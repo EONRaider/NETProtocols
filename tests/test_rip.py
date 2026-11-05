@@ -286,19 +286,26 @@ FCS = b"\xde\xad\xbe\xef"
 class TestTrailersAndTruncation:
     """Read a message whose buffer ends somewhere other than its end.
 
-    RIP has no length field and the walk does not trim to UDP's, so
-    whatever follows the datagram reaches the decoder.
+    RIP has no length field. In a walk UDP's length ends its buffer;
+    decoded on its own, whatever follows the message reaches the
+    decoder.
     """
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize("index", range(len(FRAMES)))
-    def test_an_appended_fcs_keeps_every_entry(self, index, lax):
-        """A 4-byte trailer after a real frame changes no entry."""
+    def test_a_walk_leaves_an_appended_fcs_in_the_trailer(self, index, lax):
+        """A 4-byte trailer after a real frame changes no layer."""
         frame = FRAMES[index] + FCS
         packet = decode_frame(frame, lax=lax)
         assert packet.stopped_by is None
-        assert packet.consumed == len(frame)
-        rip = packet[RIP]
+        assert packet.consumed == len(FRAMES[index])
+        assert packet.trailer == FCS
+        assert packet[RIP] == rip_of(index)
+
+    @pytest.mark.parametrize("index", range(len(FRAMES)))
+    def test_an_appended_fcs_keeps_every_entry(self, index):
+        """Decoded on its own, a 4-byte trailer changes no entry."""
+        rip = RIP.decode(message_bytes(index) + FCS)
         assert rip.entries == rip_of(index).entries
         assert rip.authentication == rip_of(index).authentication
         if index in [*MD5, *SHA256]:

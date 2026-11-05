@@ -477,25 +477,40 @@ class TestExtent:
         assert packet.consumed == len(FRAMES[index])
         assert packet[RADIUS] == radius_of(index)
 
-    def test_a_length_into_trailing_bytes_reads_them(self):
-        """A Length past the datagram takes trailing bytes as attributes.
+    def test_a_length_into_trailing_bytes_reads_them_standalone(self):
+        """A Length past the buffer's datagram takes trailing bytes.
 
-        The walk does not end the buffer at UDP's length, so a Length
-        that overstates the datagram takes trailing bytes, here an FCS
-        reading ``12 04 be ef``, as attributes instead of raising: the
-        example in the module docstring, ARCHITECTURE.md and the
-        CHANGELOG.
+        Decoded on its own, a RADIUS packet whose Length overstates the
+        datagram takes trailing bytes, here an FCS reading
+        ``12 04 be ef``, as attributes instead of raising.
         """
+        raw = bytearray(packet_bytes(ACCT_START + 1))
+        raw[2:4] = (24).to_bytes(2, "big")
+        radius = RADIUS.decode(bytes(raw) + b"\x12\x04\xbe\xef")
+        assert radius.length == 24
+        assert radius.parsed_attributes == (RADIUSAttribute(18, b"\xbe\xef"),)
+        assert radius.parsed_attributes[0].type_name == "Reply-Message"
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_in_a_walk_a_length_past_the_udp_length_raises(self, lax):
+        """The walk ends RADIUS's buffer at UDP's length, so the same
+        overstated Length is a truncation and the FCS is the trailer."""
         index = ACCT_START + 1
         assert index == 7
         frame = bytearray(FRAMES[index])
         start = RADIUS_START
         frame[start + 2 : start + 4] = (24).to_bytes(2, "big")
-        packet = decode_frame(bytes(frame) + b"\x12\x04\xbe\xef")
-        radius = packet[RADIUS]
-        assert radius.length == 24
-        assert radius.parsed_attributes == (RADIUSAttribute(18, b"\xbe\xef"),)
-        assert radius.parsed_attributes[0].type_name == "Reply-Message"
+        frame = bytes(frame) + b"\x12\x04\xbe\xef"
+        if not lax:
+            with pytest.raises(TruncatedHeaderError) as caught:
+                decode_frame(frame)
+            assert caught.value.protocol is RADIUS
+            assert caught.value.frame_offset == RADIUS_START
+            return
+        packet = decode_frame(frame, lax=True)
+        assert isinstance(packet.stopped_by, TruncatedHeaderError)
+        assert packet.get(RADIUS) is None
+        assert packet.trailer == b"\x12\x04\xbe\xef"
 
     def test_padding_inside_the_datagram_is_ignored(self):
         """RFC 2865 §3: octets past the Length are padding, ignored."""

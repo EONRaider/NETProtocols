@@ -195,23 +195,24 @@ class TestWalk:
         assert packet[ESP] == esp
         assert packet.consumed == len(frame)
 
-    def test_link_layer_padding_lands_in_the_ciphertext(self):
-        # The documented contract, shared with ICMP's body: the
-        # remainder runs to the end of the frame, so a datagram shorter
-        # than Ethernet's 60-byte minimum (14 + 20 + 8 + 4 = 46 here)
-        # brings the padding with it, and the ciphertext's tail is that
-        # padding, not the ICV.
+    @pytest.mark.parametrize("fill", [0x00, 0x5A], ids=["zeros", "nonzero"])
+    def test_link_layer_padding_stays_out_of_the_ciphertext(self, fill):
+        # A datagram shorter than Ethernet's 60-byte minimum
+        # (14 + 20 + 8 + 4 = 46 here) is padded; IPv4's Total Length
+        # ends the ciphertext before the padding, which is the trailer.
         esp = ESP(spi=0x1234, sequence_number=7, ciphertext=b"\xde\xad\xbe\xef")
         ip = make_ipv4(protocol=50, payload_len=esp.header_len)
         datagram = bytes(Packet(ethernet(0x0800), ip, esp).with_checksums())
         assert len(datagram) == 46
-        frame = datagram + bytes(14)
+        frame = datagram + bytes([fill]) * 14
         packet = decode_frame(frame)
-        decoded = packet[ESP]
-        assert decoded.ciphertext == b"\xde\xad\xbe\xef" + bytes(14)
-        ip_len = packet[IPv4].total_length - 20
-        assert len(decoded.ciphertext) == ip_len - 8 + 14
-        assert packet.consumed == len(frame)
+        assert packet[ESP] == esp
+        assert packet.consumed == len(datagram)
+        assert packet.trailer == bytes([fill]) * 14
+
+    def test_a_standalone_decode_keeps_the_whole_buffer(self):
+        esp = ESP.decode(bytes(range(8)) + b"\xde\xad" + bytes(14))
+        assert esp.ciphertext == b"\xde\xad" + bytes(14)
 
     def test_a_truncated_prefix_is_reported_at_its_frame_offset(self):
         frame = esp_frame("ipv6")[: 14 + 40 + 5]

@@ -81,9 +81,13 @@ def _ip_checksum_extent(
 
     The datagram is the nearest IPv4 or IPv6 header before
     ``layers[index]``, and every header between the two counts in the
-    offset. Return ``None`` when no IP header encloses the layer,
-    IPv6's payload length is zero, or the declared end falls short of
-    ``minimum``.
+    offset. Its end is the one that header's ``_payload_extent()``
+    gives, the same arithmetic :func:`~netprotocols.decode_frame`
+    bounds the walk with; this reads the nearest IP header alone, where
+    the walk takes the tightest of every enclosing bound. Return
+    ``None`` when no IP header encloses the layer, the IP header's
+    length is zero or shorter than the header itself, or the declared
+    end falls short of ``minimum``.
 
     :param layers: The packet's headers, outermost first.
     :param index: The position of the layer whose checksum input is
@@ -94,16 +98,16 @@ def _ip_checksum_extent(
 
     offset = 0
     for header in reversed(layers[:index]):
-        offset += header.header_len
-        if isinstance(header, IPv4):
-            extent = header.total_length - offset
-        elif isinstance(header, IPv6):
-            if header.payload_length == 0:
+        if isinstance(header, (IPv4, IPv6)):
+            try:
+                payload = header._payload_extent()
+            except InvalidFieldError:
                 return None
-            extent = header.header_len + header.payload_length - offset
-        else:
-            continue
-        return extent if extent >= minimum else None
+            if payload is None:
+                return None
+            extent = payload - offset
+            return extent if extent >= minimum else None
+        offset += header.header_len
     return None
 
 
@@ -178,10 +182,11 @@ class Packet:
         #: mode ever sets this; a packet you built yourself has nothing
         #: to report.
         self.stopped_by: ProtocolError | None = stopped_by
-        #: The frame's bytes past the end its declared length gives:
-        #: an Ethernet or VLAN 802.3 Length, whichever ends first among
-        #: the headers the walk decoded. Ethernet's padding of a short
-        #: frame and a captured FCS land here. Empty
+        #: The frame's bytes past the tightest end its declared lengths
+        #: give: an Ethernet or VLAN 802.3 Length, an IPv4 Total
+        #: Length, an IPv6 Payload Length or a UDP Length, whichever
+        #: ends first among the headers the walk decoded. Ethernet's
+        #: padding of a short frame and a captured FCS land here. Empty
         #: when no declared end falls short of the frame. Never part of
         #: ``bytes(packet)``, of a layer, or of :attr:`consumed`.
         self.trailer: bytes = bytes(trailer)
@@ -356,8 +361,10 @@ class Packet:
         :attr:`trailer`, which for a packet
         :func:`~netprotocols.decode_frame` returned is
         ``frame[packet.consumed : len(frame) - len(packet.trailer)]``.
-        No checksum covers the trailer, and the returned packet carries
-        it unchanged. Instances
+        GRE's input runs on into the trailer as far as its datagram's
+        declared end, which an inner datagram's shorter end leaves
+        there; no other checksum covers the trailer, and the returned
+        packet carries it unchanged. Instances
         are frozen, so layers are rebuilt with
         :func:`dataclasses.replace`, and the decode context a layer
         records outside its ``__init__`` fields, such as whether another
@@ -399,7 +406,7 @@ class Packet:
                 covered = (
                     trailing
                     if extent is None
-                    else trailing[: extent - layer.header_len]
+                    else (trailing + self.trailer)[: extent - layer.header_len]
                 )
                 checksum = compute(layer, payload=covered).to_bytes(2, "big")
                 layer = _refilled(layer, fields=checksum + layer.fields[2:])

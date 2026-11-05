@@ -157,18 +157,28 @@ class TestCapturedAssociation:
 
 
 class TestLinkLayerPadding:
-    """The walker does not trim to the IP length, so an Ethernet frame
-    padded to 60 bytes hands SCTP a zero tail it must not swallow."""
+    """In a walk the IP length ends SCTP's buffer, so an Ethernet frame
+    padded to 60 bytes leaves its padding in the packet's trailer.
+    Decoded on its own, SCTP sees the zero tail and must not swallow
+    it."""
 
-    def test_a_padded_frame_stops_before_the_padding(self):
+    @pytest.mark.parametrize("fill", [0x00, 0xA5], ids=["zeros", "nonzero"])
+    def test_a_padded_frame_stops_before_the_padding(self, fill):
         frame = FRAMES[3]  # COOKIE ACK: a 50-byte frame
-        padded = frame + bytes(60 - len(frame))
+        padded = frame + bytes([fill]) * (60 - len(frame))
         packet = decode_frame(padded)
         assert packet.consumed == len(frame)
+        assert packet.trailer == padded[len(frame) :]
         sctp = packet[SCTP]
         assert isinstance(sctp, SCTP)
         assert bytes(sctp) == packet_bytes(3)
         assert verify(sctp)  # CRC32c is not blind to trailing zeros
+
+    def test_a_padded_packet_decoded_alone_stops_before_the_padding(self):
+        raw = packet_bytes(3)
+        sctp = SCTP.decode(raw + bytes(10))
+        assert sctp.header_len == len(raw)
+        assert verify(sctp)
 
     def test_a_zero_tail_shorter_than_a_chunk_header_is_padding_too(self):
         raw = packet_bytes(3)
@@ -191,10 +201,11 @@ class TestLinkLayerPadding:
         assert SCTP.decode(raw).header_len == len(raw)
 
     def test_an_unpadded_final_chunk_takes_ethernet_zeros_as_padding(self):
-        """A sender bug the walk cannot see past: the final chunk's
-        missing padding (RFC 9260 §3.2) is filled from the link layer's
-        zeros, so the decoded packet is three bytes longer than the one
-        sent, and its CRC does not match."""
+        """A sender bug the zero-tail scan cannot see past, decoding
+        on its own: the final chunk's missing padding (RFC 9260 §3.2) is
+        filled from the link layer's zeros, so the decoded packet is
+        three bytes longer than the one sent, and its CRC does not
+        match."""
         unpadded = SCTP.decode(bytes(make_sctp(chunk(0, 3, b"x")))[:17])
         assert unpadded.header_len == 17  # a 5-byte DATA chunk, unpadded
         sent = bytes(replace(unpadded, checksum=compute(unpadded)))
@@ -539,16 +550,18 @@ class TestDamagedPacketsKeepTheirHeader:
         assert not verify(sctp)
         return sctp
 
-    @LAX
     @pytest.mark.parametrize("index", range(len(FRAMES)))
-    def test_an_appended_ethernet_fcs(self, index, lax):
-        """A capture that keeps the FCS ends every frame in 4 nonzero
-        bytes: kept as the packet's last bytes, which the CRC rejects."""
-        frame = FRAMES[index]
-        with_fcs = frame + zlib.crc32(frame).to_bytes(4, "little")
-        packet = decode_frame(with_fcs, lax=lax)
-        sctp = self.assert_header_kept(packet, index, len(with_fcs))
-        assert sctp.chunks.startswith(sctp_of(index).chunks)
+    def test_an_appended_ethernet_fcs_decoded_alone(self, index):
+        """Decoded on its own, a packet followed by 4 nonzero bytes, a
+        captured FCS, keeps them as its last bytes, which the CRC
+        rejects."""
+        raw = packet_bytes(index)
+        fcs = zlib.crc32(FRAMES[index]).to_bytes(4, "little")
+        sctp = SCTP.decode(raw + fcs)
+        assert sctp.header_len == len(raw) + 4
+        assert sctp.chunks == sctp_of(index).chunks + fcs
+        assert sctp.checksum == sctp_of(index).checksum
+        assert not verify(sctp)
 
     @LAX
     @pytest.mark.parametrize("snap", [96, 128, 200])

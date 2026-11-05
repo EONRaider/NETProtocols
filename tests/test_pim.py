@@ -370,9 +370,10 @@ class TestCapturedChecksums:
 class TestTrailingBytes:
     """Real frames with Ethernet's zero padding or a trailer appended.
 
-    PIM has no length field and the walk does not trim a frame to the
-    IP datagram (see the module docstring); the trailer is FCS-like, 4
-    bytes.
+    PIM has no length field: the walk ends its buffer at IPv4's Total
+    Length, and a message decoded on its own keeps what its structure
+    does not bound (see the module docstring). The trailer is
+    FCS-like, 4 bytes.
     """
 
     FCS = b"\xde\xad\xbe\xef"
@@ -406,31 +407,43 @@ class TestTrailingBytes:
 
     @pytest.mark.parametrize("index", [0, 1, 12], ids=lambda i: f"frame{i}")
     @pytest.mark.parametrize("padding", [0, 4])
+    def test_a_walk_leaves_any_trailer_outside_a_hello(self, index, padding):
+        """The walk ends PIM's buffer at IPv4's Total Length, so the
+        trailer reaches no decoder and the checksum verifies."""
+        frame = FRAMES[index] + bytes(padding) + self.FCS
+        packet = decode_frame(frame)
+        assert packet[PIM] == pim_of(index)
+        assert packet.consumed == len(FRAMES[index])
+        assert packet.trailer == bytes(padding) + self.FCS
+        assert verify(packet[PIM], ip=packet[IPv4])
+
+    @pytest.mark.parametrize("index", [0, 1, 12], ids=lambda i: f"frame{i}")
+    @pytest.mark.parametrize("padding", [0, 4])
     def test_a_hello_keeps_a_trailer_that_does_not_walk(self, index, padding):
         """Keep a trailer that reads as an option of 48879 bytes.
 
-        ``de ad be ef`` does not walk, so the whole remainder is kept,
-        the message does not parse, and the checksum fails.
+        Decoded on its own, ``de ad be ef`` does not walk, so the whole
+        remainder is kept, the message does not parse, and the checksum
+        fails.
         """
-        frame = FRAMES[index] + bytes(padding) + self.FCS
-        packet = decode_frame(frame)
-        pim = packet[PIM]
-        assert packet.consumed == len(frame)
+        raw = message_bytes(index) + bytes(padding) + self.FCS
+        pim = PIM.decode(raw)
+        assert pim.header_len == len(raw)
         assert pim.body.endswith(self.FCS)
         with pytest.raises(InvalidFieldError):
             _ = pim.message
-        assert not verify(pim, ip=packet[IPv4])
+        assert not verify(pim, ip=decode_frame(FRAMES[index])[IPv4])
 
     def test_a_hello_reads_a_trailer_that_walks_as_a_phantom_option(self):
         """Read an FCS whose last two bytes are zero as an empty option.
 
-        Only the checksum can tell.
+        Decoded on its own, only the checksum can tell.
         """
-        packet = decode_frame(FRAMES[1] + b"\xab\xcd\x00\x00")
-        hello = packet[PIM].message
+        pim = PIM.decode(message_bytes(1) + b"\xab\xcd\x00\x00")
+        hello = pim.message
         assert isinstance(hello, PIMHello)
         assert hello.options[-1] == PIMHelloOption(0xABCD)
-        assert not verify(packet[PIM], ip=packet[IPv4])
+        assert not verify(pim, ip=decode_frame(FRAMES[1])[IPv4])
 
     @pytest.mark.parametrize(
         "trailer,phantom",
@@ -446,32 +459,43 @@ class TestTrailingBytes:
         """Verify a nonzero trailer whose words sum to zero, over IPv4.
 
         ``ffff + 0000`` and ``1234 + edcb`` are both one's-complement
-        zero, so the checksum cannot see them: one walks as a phantom
-        option, the other makes :attr:`PIM.message` raise.
+        zero, so the checksum cannot see them in a message decoded on
+        its own: one walks as a phantom option, the other makes
+        :attr:`PIM.message` raise.
         """
-        packet = decode_frame(FRAMES[1] + trailer)
-        assert packet[PIM].body.endswith(trailer)
-        assert verify(packet[PIM], ip=packet[IPv4])
+        pim = PIM.decode(message_bytes(1) + trailer)
+        assert pim.body.endswith(trailer)
+        assert verify(pim, ip=decode_frame(FRAMES[1])[IPv4])
         if phantom is None:
             with pytest.raises(InvalidFieldError):
-                _ = packet[PIM].message
+                _ = pim.message
         else:
-            hello = packet[PIM].message
+            hello = pim.message
             assert isinstance(hello, PIMHello)
             assert hello.options[-1] == phantom
 
     @pytest.mark.parametrize("trailer", [bytes(8), FCS], ids=["zeros", "fcs"])
+    def test_a_walk_leaves_the_trailer_outside_a_register(self, trailer):
+        """The walk ends the Register's data packet at the datagram."""
+        packet = decode_frame(FRAMES[3] + trailer)
+        register = packet[PIM].message
+        assert isinstance(register, PIMRegister)
+        assert packet[PIM] == pim_of(3)
+        assert packet.trailer == trailer
+        assert verify(packet[PIM], ip=packet[IPv4])
+
+    @pytest.mark.parametrize("trailer", [bytes(8), FCS], ids=["zeros", "fcs"])
     def test_a_register_keeps_the_trailer_and_still_verifies(self, trailer):
-        """Keep the trailer in a Register's data packet.
+        """Keep the trailer in a Register's data packet decoded on its own.
 
         The data packet runs to the end of the buffer, so the trailer
         lands in it, but its checksum covers 8 bytes only.
         """
-        packet = decode_frame(FRAMES[3] + trailer)
-        register = packet[PIM].message
+        pim = PIM.decode(message_bytes(3) + trailer)
+        register = pim.message
         assert isinstance(register, PIMRegister)
         assert register.packet.endswith(trailer)
-        assert verify(packet[PIM], ip=packet[IPv4])
+        assert verify(pim, ip=decode_frame(FRAMES[3])[IPv4])
         assert register.encapsulated[IPv4].total_length == 47
 
 

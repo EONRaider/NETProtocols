@@ -9,6 +9,7 @@ from typing import ClassVar, Self
 from netprotocols._base import Protocol, hex_str
 from netprotocols.layer4._ports import udp_app_class
 from netprotocols.registry import Registry
+from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["UDP"]
 
@@ -31,6 +32,9 @@ class UDP(Protocol):
 
     _struct: ClassVar[Struct] = Struct("!HHHH")
 
+    #: The Length bounds what follows (see :meth:`_payload_extent`).
+    _BOUNDS_PAYLOAD: ClassVar[bool] = True
+
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte UDP header at the start of ``data``.
@@ -51,6 +55,28 @@ class UDP(Protocol):
         return self._struct.pack(
             self.src_port, self.dst_port, self.length, self.checksum
         )
+
+    def _payload_extent(self) -> int | None:
+        """Return the payload's length, ``length - 8``.
+
+        ``None`` for a ``length`` of 0, which bounds nothing (a UDP
+        Jumbogram, RFC 2675 §4, carries 0).
+
+        :raises InvalidFieldError: if ``length`` is 1 to 7, shorter than
+            the 8-byte header (``field="length"``, ``offset=4``).
+        """
+        if self.length == 0:
+            return None
+        if self.length < 8:
+            raise InvalidFieldError(
+                f"UDP length {self.length} is shorter than its 8-byte header",
+                protocol=type(self),
+                offset=4,
+                field="length",
+                expected=">=8",
+                actual=self.length,
+            )
+        return self.length - 8
 
     def next_protocol(
         self, registry: Registry | None = None

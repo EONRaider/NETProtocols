@@ -805,28 +805,35 @@ class TestChaining:
         assert packet.consumed == 54 + 6
         assert packet.stopped_by is None
 
-    def test_a_padded_bare_ack_fails_the_guard(self):
+    def test_a_padded_bare_ack_is_the_unpadded_one(self):
         """Over IPv4 a bare segment with no TCP options is a 54-byte
-        frame. Padded to Ethernet's 60-byte minimum, the 6 zero bytes
-        reach TLS, since the walk does not end its buffer at IPv4's
-        Total Length: a ContentType of 0. Unpadded, the buffer is
-        empty. On BGP's port the padding is still too short to judge."""
+        frame. Padded to Ethernet's 60-byte minimum, the walk ends TLS's
+        buffer at IPv4's Total Length, so the 6 zero bytes are the
+        trailer and TLS sees the empty buffer the unpadded frame gives
+        it, as BGP does on its port."""
         bare = frame(b"")
         assert len(bare) == 54
         padded = bare + bytes(6)
-        with pytest.raises(InvalidFieldError) as caught:
-            decode_frame(padded)
-        error = caught.value
-        assert (error.protocol, error.field) == (TLS, "content_type")
-        assert (error.frame_offset, error.actual) == (54, 0)
+        for data in (bare, padded):
+            with pytest.raises(TruncatedHeaderError) as caught:
+                decode_frame(data)
+            assert (caught.value.protocol, caught.value.actual) == (TLS, 0)
+            assert caught.value.frame_offset == 54
         packet = decode_frame(padded, lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, TCP]
-        with pytest.raises(TruncatedHeaderError) as caught:
-            decode_frame(bare)
-        assert (caught.value.protocol, caught.value.actual) == (TLS, 0)
+        assert packet.trailer == bytes(6)
         with pytest.raises(TruncatedHeaderError) as caught:
             decode_frame(frame(b"", dport=179) + bytes(6))
-        assert caught.value.actual == 6
+        assert caught.value.actual == 0
+
+    def test_six_zero_bytes_fail_the_guard(self):
+        """Decoded on its own, Ethernet's padding is a ContentType of 0."""
+        with pytest.raises(InvalidFieldError) as caught:
+            TLS.decode(bytes(6))
+        assert (caught.value.field, caught.value.actual) == (
+            "content_type",
+            0,
+        )
 
     def test_equal_records_compare_equal_wherever_found(self):
         """The chaining answer is decode context, not a field."""

@@ -3,15 +3,18 @@
 Decode contract
 ---------------
 ``decode(data)`` receives the *entire remaining buffer* — everything from
-the start of this protocol's header to the end of the captured frame —
-and must:
+the start of this protocol's header to the end of the captured frame,
+or to the end the enclosing headers' declared lengths give, whichever
+comes first — and must:
 
 1. Parse the fixed portion with the class-level ``struct.Struct``,
    raising :class:`TruncatedHeaderError` if the buffer is too short.
-   One enclosing length shortens that buffer: after an Ethernet or VLAN
-   header holding an IEEE 802.3 Length, the chain walk ends every later
-   layer's buffer where that Length puts the end of the LLC PDU, never
-   past the end of the frame (see "Payload extent" below).
+   The enclosing lengths that shorten the buffer are an 802.3 Length
+   after an Ethernet or VLAN header, an IPv4 Total Length, an IPv6
+   Payload Length and a UDP Length: the chain walk ends every later
+   layer's buffer where the tightest of them puts the end of the
+   payload, never past the end of the frame (see "Payload extent"
+   below).
 2. For variable-length headers (IPv4, TCP), validate the declared
    length, raising
    :class:`~netprotocols.utils.exceptions.InvalidFieldError` for
@@ -20,7 +23,9 @@ and must:
    the declared length exceeds the buffer, and materialize the options
    as ``bytes``.
 3. Tolerate trailing bytes: whatever follows the header is the next
-   layer's problem, reachable via ``instance.header_len``.
+   layer's problem, reachable via ``instance.header_len``. In a chain
+   walk, the bytes past the tightest declared end reach no decoder and
+   are the packet's :attr:`~netprotocols.Packet.trailer`.
 
 ``memoryview`` input is accepted and used as a decode-time transient
 only; no view is ever stored on an instance.
@@ -56,19 +61,19 @@ unpack).
 Protocols without a length field
 --------------------------------
 ``ICMPv4``, ``ICMPv6``, ``IGMP`` and ``SCTP`` carry no length of their
-own: each is the whole IP payload, and the chain walk does not trim a
-frame to the IP header's declared length. The first three keep the whole
-buffer, so an Ethernet frame's zero padding lands in their ``body``
-(only in IPv4's: an IPv6 frame carrying ICMPv6 is never short enough to
-be padded), and the internet checksum ICMPv4 and IGMP carry is unchanged
-by appended zero bytes. ``SCTP``'s CRC32c is not, so its ``decode()``
-walks the chunk headers to find where the packet ends and leaves a run
-of zero bytes where the next chunk would start undecoded: step 3 holds
-for those zeros, while any other trailing bytes become part of the
-packet. Like the other three, it never raises past its fixed portion:
-a remainder the walk cannot parse (a cut chunk, a nonzero trailer)
-stays in ``chunks`` verbatim, for the ``parsed_chunks`` accessor to
-report. See :mod:`netprotocols.layer4.sctp`.
+own: each is the whole IP payload, and in a chain walk the IP header's
+declared length ends their buffer, so Ethernet's padding and a captured
+FCS are the packet's trailer. Decoded on their own, or under an IP
+length of zero, which bounds nothing, the first three keep the whole
+buffer, so trailing bytes land in their ``body``. ``SCTP``'s CRC32c
+changes with appended bytes, so its ``decode()`` walks the chunk
+headers to find where the packet ends and leaves a run of zero bytes
+where the next chunk would start undecoded: step 3 holds for those
+zeros, while any other trailing bytes become part of the packet. Like
+the other three, it never raises past its fixed portion: a remainder
+the walk cannot parse (a cut chunk, a nonzero trailer) stays in
+``chunks`` verbatim, for the ``parsed_chunks`` accessor to report. See
+:mod:`netprotocols.layer4.sctp`.
 
 ``PIM`` has no length either, and bounds a message by its own
 structure: its counts and encoded addresses, or, for a Hello, a walk of
@@ -77,14 +82,14 @@ Past its 4-byte header it never raises: a body its parser cannot read
 is kept whole. See :mod:`netprotocols.layer3.pim`.
 
 ``RIP`` is the port-dispatched case: its entries fill the UDP datagram,
-which the walk does not trim to UDP's length either. It keeps the whole
-buffer after its 4-byte header, like ICMPv4 and IGMP, and its accessors
-report a remainder shorter than an entry (a cut entry, an Ethernet FCS)
-instead of raising. See :mod:`netprotocols.layer7.rip`. ``NTP`` is the
-same case after its 48-byte header: its extension fields and MAC run to
-the end of the datagram, so it keeps the rest of the buffer, and its
-accessors report what is neither as a remainder. See
-:mod:`netprotocols.layer7.ntp`.
+whose length ends its buffer in a walk. It keeps the whole buffer after
+its 4-byte header, like ICMPv4 and IGMP, and its accessors report a
+remainder shorter than an entry (a cut entry, or trailing bytes when it
+is decoded on its own) instead of raising. See
+:mod:`netprotocols.layer7.rip`. ``NTP`` is the same case after its
+48-byte header: its extension fields and MAC run to the end of the
+datagram, so it keeps the rest of the buffer, and its accessors report
+what is neither as a remainder. See :mod:`netprotocols.layer7.ntp`.
 
 ``TFTP`` is port-dispatched too, but bounds most of its messages by
 their structure: an ACK's 4 bytes, an ERROR's terminated message, a
@@ -114,7 +119,7 @@ labelled packet, and any padding after it, is the next layer's. See
 :mod:`netprotocols.layer2.mpls`.
 
 ``CDP`` has no length either; in a walk the 802.3 Length before it
-ends its buffer (see *Payload extent*). Its ``decode()`` walks TLVs to
+ends its buffer (see "Payload extent"). Its ``decode()`` walks TLVs to
 the end of that buffer and leaves only a run of zero bytes where the
 next TLV would start undecoded, so step 3 holds for those zeros alone:
 unlike SCTP's, it raises for any other bytes no TLV fits. See
@@ -122,16 +127,33 @@ unlike SCTP's, it raises for any other bytes no TLV fits. See
 
 Payload extent
 --------------
-An 802.3 Length is the only length field the chain walk honours: a
-header whose class sets ``_BOUNDS_PAYLOAD`` answers
+A header whose class sets ``_BOUNDS_PAYLOAD`` answers
 ``_payload_extent()`` with how many bytes after it belong to its
-payload, or ``None``, and :func:`~netprotocols.decode_frame` ends the
-buffers it hands every later layer there, so zero padding and an FCS
-after a short LLC PDU reach no decoder. ``Ethernet`` and ``VLAN`` are
-the two such classes. A bound past the end of the frame bounds
-nothing, so a frame cut by a snap length decodes as it would unbounded;
-the tighter of two bounds wins. IPv4's, IPv6's and UDP's lengths are
-not honoured. Both names are private.
+payload, or ``None`` for no bound, and
+:func:`~netprotocols.decode_frame` ends the buffers it hands every later
+layer there, so zero padding and an FCS after a short payload reach no
+decoder and are the packet's :attr:`~netprotocols.Packet.trailer`. The
+classes and their extents:
+
+- ``Ethernet`` and ``VLAN``: an 802.3 Length; ``None`` for an EtherType.
+- ``IPv4``: ``total_length - ihl * 4``; ``None`` for a Total Length of
+  0.
+- ``IPv6``: ``payload_length``, extension headers included; ``None``
+  for 0.
+- ``UDP``: ``length - 8``; ``None`` for 0.
+
+A bound past the end of the frame bounds nothing, so a frame cut by a
+snap length decodes as it would unbounded, and the tightest bound wins,
+so a looser one, such as a first fragment's UDP Length, never widens
+it. A length shorter than its own header cannot bound anything:
+``_payload_extent()`` raises
+:class:`~netprotocols.utils.exceptions.InvalidFieldError` for an IPv4
+Total Length below ``ihl * 4`` and a UDP Length of 1 to 7, and the walk
+reports it at that field's offset in the frame. A positive length too
+short for what follows is the next decoder's
+:class:`TruncatedHeaderError`. ``decode()`` reads none of these
+extents, so a header decoded on its own is never judged by them. Both
+names are private.
 
 Decode context in ``next_protocol``
 -----------------------------------
@@ -356,9 +378,13 @@ class Protocol(ABC):
         """Return how many bytes after this header its payload occupies.
 
         The count comes from a length field the header carries; ``None``
-        if it carries none. Read by the chain walk only for a class that sets
-        ``_BOUNDS_PAYLOAD`` (see "Payload extent" in this module's
-        docstring).
+        if it carries none, or one whose value bounds nothing. Read by
+        the chain walk only for a class that sets ``_BOUNDS_PAYLOAD``
+        (see "Payload extent" in this module's docstring).
+
+        :raises InvalidFieldError: if the length field declares fewer
+            bytes than the header itself (in the classes that override
+            this).
         """
         return None
 

@@ -661,10 +661,19 @@ class TestTheWalkBound:
         outer = pcap_frames(FIXTURES / "vxlan.pcap")[0]
         ihl = (outer[14] & 0x0F) * 4
         inner_at = 14 + ihl + 8 + 8
-        frame = outer[:inner_at] + pad(STP_CONFIG_A) + FCS
+        inner = pad(STP_CONFIG_A)
+        # The outer IPv4 and UDP lengths cover the padded inner frame,
+        # and the outer FCS follows.
+        head = bytearray(outer[:inner_at])
+        struct.pack_into("!H", head, 14 + 2, ihl + 8 + 8 + len(inner))
+        struct.pack_into("!H", head, 14 + ihl + 4, 8 + 8 + len(inner))
+        frame = bytes(head) + inner + FCS
         packet = decode_frame(frame, decode_as=WHOLE)
         assert kinds(packet)[3:] == [VXLAN, Ethernet, LLC, WholeBuffer]
         assert packet[WholeBuffer].body == pdu_of(STP_CONFIG_A)[3:]
+        pdu_end = inner_at + 14 + len(pdu_of(STP_CONFIG_A))
+        assert packet.trailer == frame[pdu_end:]
+        assert packet.trailer.endswith(FCS)
 
     def test_the_tighter_bound_wins(self):
         """An inner Length cannot widen an outer bound.
