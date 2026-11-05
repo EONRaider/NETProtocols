@@ -341,14 +341,16 @@ def _check_gre(
     *,
     strict: bool = False,
 ) -> list[str]:
-    """Validate a GRE packet, the whole IP payload ``upper``.
+    """Validate a GRE packet, ``upper``: the IPv4 payload, as far as the
+    IPv4 Total Length declares it, so Ethernet padding is not read.
 
     A 4-byte header (flags word and inner EtherType) is followed by the
     optional Checksum, Key and Sequence Number words its C, K and S
     bits announce (RFC 2784 §2, RFC 2890 §2), then the tunnelled
-    packet, validated in turn. With the C bit set, the Checksum is the
-    internet checksum of the GRE header and payload, Checksum field
-    zeroed (RFC 2784 §2.5). A packet shorter than the words its flags
+    packet, validated in turn. With the C bit set, the Checksum must be
+    the internet checksum of the GRE header and payload, every byte of
+    ``upper``, with the Checksum field zeroed (RFC 2784 §2.5); with it
+    clear, no checksum is read. A packet shorter than the words its flags
     announce cannot be checked: it passes unread, or fails under
     ``strict``.
     """

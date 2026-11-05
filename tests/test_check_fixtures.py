@@ -13,9 +13,11 @@ ICV recomputed with the key MANIFEST.md publishes.
 """
 
 import ast
+import functools
 import hashlib
 import hmac
 import importlib.util
+import itertools
 import re
 import struct
 import subprocess
@@ -28,10 +30,9 @@ from types import ModuleType
 
 import pytest
 
-from conftest import FIXTURES, pcap_frames
-
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = ROOT / "scripts" / "check_fixtures.py"
+FIXTURES = ROOT / "tests" / "fixtures"
 
 
 def _load_checker() -> ModuleType:
@@ -54,6 +55,13 @@ def check(frame: bytes, *, session: bool = False) -> list[str]:
     return failures
 
 
+@functools.cache
+def pcap_frames(path: Path) -> tuple[bytes, ...]:
+    """Every frame of the pcap at ``path``, read by the checker's own
+    reader."""
+    return tuple(checker.read_pcap(path))
+
+
 def frame(pcap: str, index: int) -> bytes:
     """Frame ``index`` of the committed fixture ``pcap``."""
     return pcap_frames(FIXTURES / pcap)[index]
@@ -62,7 +70,15 @@ def frame(pcap: str, index: int) -> bytes:
 # The corpus.
 
 
-PCAP_DIRS = sorted({pcap.parent for pcap in FIXTURES.rglob("*.pcap")})
+#: Every directory under tests/fixtures that holds a capture, but the
+#: untracked tests/fixtures/staging/ and what is under it.
+PCAP_DIRS = sorted(
+    {
+        pcap.parent
+        for pcap in FIXTURES.rglob("*.pcap")
+        if "staging" not in pcap.relative_to(FIXTURES).parts
+    }
+)
 
 
 def test_the_corpus_directories_include_the_top_level() -> None:
@@ -510,6 +526,12 @@ def _() -> tuple[bytes, bytes]:
     return good, put(good, l4(good) + 15, b"\x03")
 
 
+@case("ospf-checksum", expected=["ospf-checksum", "ospf-md5-digest"])
+def _() -> tuple[bytes, bytes]:
+    good = frame("ospf.pcap", 36)
+    return good, put(good, l4(good) + 12, b"\x00\x01")
+
+
 @case("ospf-unknown-key")
 def _() -> tuple[bytes, bytes]:
     good = frame("ospf.pcap", 36)
@@ -934,6 +956,28 @@ def _() -> tuple[bytes, bytes]:
     return esp(4, ECHO_PACKET), esp(4, first_fragment)
 
 
+@case("unchecked-fragment")
+def _() -> tuple[bytes, bytes]:
+    later_fragment = put(ECHO_PACKET, 6, b"\x00\x01")
+    header = put(later_fragment[:20], 10, b"\x00\x00")
+    checksum = internet_checksum(header).to_bytes(2, "big")
+    return esp(4, ECHO_PACKET), esp(4, put(later_fragment, 10, checksum))
+
+
+ECHO6_PACKET = frame("icmpv6_echo_lo.pcap", 0)[14:]
+
+
+@case("unchecked-fragment")
+def _() -> tuple[bytes, bytes]:
+    # A Fragment header (RFC 8200 §4.5): Next Header 58, offset 0 and
+    # the M flag set.
+    payload_length = struct.unpack_from("!H", ECHO6_PACKET, 4)[0]
+    header = put(ECHO6_PACKET[:40], 4, struct.pack("!H", payload_length + 8))
+    header = put(header, 6, b"\x2c")
+    fragment = struct.pack("!BBHI", 58, 0, 0x0001, 1)
+    return esp(41, ECHO6_PACKET), esp(41, header + fragment + ECHO6_PACKET[40:])
+
+
 @case("unchecked-ethertype-0x0801")
 def _() -> tuple[bytes, bytes]:
     return strict_l3(0x0800, ECHO_PACKET), strict_l3(0x0801, ECHO_PACKET)
@@ -1135,15 +1179,40 @@ def test_a_split_tls_record_passes_in_a_session_capture() -> None:
 # GRE checksums (RFC 2784 §2.5).
 
 
+GRE_FRAMES = pcap_frames(FIXTURES / "gre.pcap")
+
+
+def gre_flags(gre_frame: bytes) -> int:
+    """The GRE flags word of an Ethernet/IPv4/GRE frame."""
+    flags: int = struct.unpack_from("!H", gre_frame, l4(gre_frame))[0]
+    return flags
+
+
 class TestGREChecksum:
-    def test_the_corpus_has_no_checksummed_gre_frame(self) -> None:
-        """gre.pcap's tunnels leave the C bit clear, so the frames
-        below are built by hand."""
-        flags = [
-            struct.unpack_from("!H", gre_frame, l4(gre_frame))[0]
-            for gre_frame in pcap_frames(FIXTURES / "gre.pcap")
-        ]
-        assert flags and not any(word & 0x8000 for word in flags)
+    def test_committed_frames_have_the_c_bit_clear_and_are_not_summed(
+        self,
+    ) -> None:
+        """gre.pcap holds plain (flags clear) and keyed (K bit only)
+        frames; each passes, and none is counted as summed."""
+        assert {gre_flags(gre_frame) for gre_frame in GRE_FRAMES} == {
+            0x0000,
+            0x2000,
+        }
+        for gre_frame in GRE_FRAMES:
+            stats: Counter[str] = Counter()
+            assert checker.check_frame(gre_frame, stats) == []
+            assert stats["gre"] == 1
+            assert stats["gre-checksum"] == 0
+
+    def test_a_clear_c_bit_reads_no_checksum(self) -> None:
+        """With the C bit clear, bytes 4-7 of a keyed frame are its Key,
+        which no checksum covers: any value passes."""
+        keyed = next(f for f in GRE_FRAMES if gre_flags(f) == 0x2000)
+        for offset in (4, 5, 6, 7):
+            rekeyed = flip(keyed, l4(keyed) + offset)
+            stats: Counter[str] = Counter()
+            assert checker.check_frame(rekeyed, stats) == []
+            assert stats["gre-checksum"] == 0
 
     @pytest.mark.parametrize("key", [False, True], ids=["c", "c-k-s"])
     def test_a_correct_checksum_passes(self, key: bool) -> None:
@@ -1195,6 +1264,33 @@ class TestGREChecksum:
         good = ipv4_frame(GRE_TEMPLATE, 47, packet)
         assert checker.check_frame(good, Counter()) == []
         bad = ipv4_frame(GRE_TEMPLATE, 47, flip(packet, len(packet) - 1))
+        assert checker.check_frame(bad, Counter()) == ["gre-checksum"]
+
+    @pytest.mark.parametrize(
+        "trailer",
+        [bytes(18), bytes.fromhex("deadbeef"), bytes(6) + b"\xff" * 4],
+        ids=["zero-padding", "fcs", "padding-and-fcs"],
+    )
+    def test_bytes_after_the_ip_datagram_are_not_summed(
+        self, trailer: bytes
+    ) -> None:
+        """The sum ends where the outer IPv4 Total Length ends the
+        datagram: Ethernet padding or a frame check sequence after it
+        changes nothing, whether the Checksum is right or wrong."""
+        good = ipv4_frame(GRE_TEMPLATE, 47, gre_with_checksum(ECHO_PACKET))
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(good + trailer, stats) == []
+        assert stats["gre-checksum"] == 1
+        bad = flip(good, l4(good) + 5)
+        assert checker.check_frame(bad + trailer, Counter()) == ["gre-checksum"]
+
+    def test_a_checksum_over_the_trailer_too_fails(self) -> None:
+        """A Checksum computed over the bytes past the IPv4 Total Length
+        as well does not verify."""
+        trailer = bytes.fromhex("12345678")
+        summed = gre_with_checksum(ECHO_PACKET + trailer)
+        packet = summed[: -len(trailer)]
+        bad = ipv4_frame(GRE_TEMPLATE, 47, packet) + trailer
         assert checker.check_frame(bad, Counter()) == ["gre-checksum"]
 
     def test_a_cut_header_passes_unread_outside_strict(self) -> None:
@@ -1320,39 +1416,97 @@ class TestMain:
 # Every failure string in the script has a case above.
 
 
-def _pattern(node: ast.expr) -> str | None:
-    """A regex for the strings ``node``, a str literal or f-string,
-    evaluates to; ``None`` for anything else."""
+def _patterns(node: ast.expr, names: dict[str, list[str]]) -> list[str]:
+    """Regexes for the strings ``node``, a str literal or f-string,
+    evaluates to; none for anything else. A replacement field that is a
+    bare name bound in ``names`` takes each of that name's regexes in
+    turn, and any other replacement field matches any text."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return re.escape(node.value)
-    if isinstance(node, ast.JoinedStr):
-        return "".join(
-            re.escape(part.value) if isinstance(part, ast.Constant) else ".+"
-            for part in node.values
-        )
-    return None
+        return [re.escape(node.value)]
+    if not isinstance(node, ast.JoinedStr):
+        return []
+    choices: list[list[str]] = []
+    for part in node.values:
+        if isinstance(part, ast.Constant):
+            choices.append([re.escape(str(part.value))])
+        elif (
+            isinstance(part, ast.FormattedValue)
+            and isinstance(part.value, ast.Name)
+            and part.format_spec is None
+            and part.value.id in names
+        ):
+            choices.append(names[part.value.id])
+        else:
+            choices.append([".+"])
+    return ["".join(parts) for parts in itertools.product(*choices)]
+
+
+def _local_strings(function: ast.FunctionDef) -> dict[str, list[str]]:
+    """The regexes of the strings each name ``function`` binds, by plain
+    assignments, to a str literal or f-string."""
+    names: dict[str, list[str]] = {}
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            target = node.targets[0].id
+            names.setdefault(target, []).extend(_patterns(node.value, {}))
+    return {name: patterns for name, patterns in names.items() if patterns}
+
+
+def _emitted(node: ast.AST) -> list[ast.expr]:
+    """The expressions ``node`` hands back as a failure: the elements of
+    a list display, the value of a ``return``, and the first argument of
+    an ``.append`` call or of a ``ValueError``."""
+    if isinstance(node, ast.List):
+        return list(node.elts)
+    if isinstance(node, ast.Return) and node.value is not None:
+        return [node.value]
+    if isinstance(node, ast.Call) and node.args:
+        func = node.func
+        if (isinstance(func, ast.Attribute) and func.attr == "append") or (
+            isinstance(func, ast.Name) and func.id == "ValueError"
+        ):
+            return [node.args[0]]
+    return []
 
 
 def emitted_failures() -> set[str]:
-    """Regexes for every failure string the script can emit: the string
-    elements of its list displays, the arguments of ``.append`` calls,
-    the strings ``return`` hands back, and the messages of the
-    ``ValueError`` its pcap reader raises."""
+    """Regexes for every failure string the script can emit, each
+    expression :func:`_emitted` finds in its functions, with the names
+    each function binds to strings resolved (see :func:`_patterns`)."""
     tree = ast.parse(CHECKER.read_text())
-    found: set[str | None] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.List):
-            found.update(_pattern(element) for element in node.elts)
-        elif isinstance(node, ast.Return) and node.value is not None:
-            found.add(_pattern(node.value))
-        elif isinstance(node, ast.Call) and node.args:
-            func = node.func
-            if (isinstance(func, ast.Attribute) and func.attr == "append") or (
-                isinstance(func, ast.Name) and func.id == "ValueError"
-            ):
-                found.add(_pattern(node.args[0]))
-    found.discard(None)
-    return {pattern for pattern in found if pattern is not None}
+    found: set[str] = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        names = _local_strings(function)
+        for node in ast.walk(function):
+            for expr in _emitted(node):
+                found.update(_patterns(expr, names))
+    return found
+
+
+def _specificity(pattern: str) -> int:
+    """How many literal characters ``pattern`` holds."""
+    return len(re.sub(r"\\(.)", r"\1", pattern.replace(".+", "")))
+
+
+def uncovered(patterns: set[str], kinds: set[str]) -> list[str]:
+    """The ``patterns`` no kind in ``kinds`` is assigned to.
+
+    Each kind is assigned only to the patterns it matches with the most
+    literal characters, so a kind that a literal pattern names exactly
+    never also stands for an f-string pattern it happens to match."""
+    assigned: set[str] = set()
+    for kind in kinds:
+        matching = [p for p in patterns if re.fullmatch(p, kind)]
+        if matching:
+            best = max(map(_specificity, matching))
+            assigned.update(p for p in matching if _specificity(p) == best)
+    return sorted(patterns - assigned)
 
 
 def test_the_scan_finds_known_failures() -> None:
@@ -1360,13 +1514,18 @@ def test_the_scan_finds_known_failures() -> None:
     assert re.escape("gre-checksum") in patterns
     assert "unchecked\\-protocol\\-.+" in patterns
     assert "not\\ a\\ pcap:\\ magic\\ .+" in patterns
+    # A name bound to an f-string earlier in the function is resolved.
+    assert "unchecked\\-llc\\-dsap\\-0x42\\-control\\-0x.+" in patterns
+    assert "unchecked\\-.+" not in patterns
+
+
+def test_a_kind_stands_only_for_its_most_specific_pattern() -> None:
+    patterns = {"rip\\-.+", "rip\\-trailer"}
+    assert uncovered(patterns, {"rip-trailer"}) == ["rip\\-.+"]
+    assert uncovered(patterns, {"rip-trailer", "rip-keyed-md5"}) == []
 
 
 def test_every_failure_string_has_a_case() -> None:
     covered = {failure for failure, _, _ in CASES} | set(FILE_FAILURES)
-    missing = sorted(
-        pattern
-        for pattern in emitted_failures()
-        if not any(re.fullmatch(pattern, kind) for kind in covered)
-    )
+    missing = uncovered(emitted_failures(), covered)
     assert not missing, f"no case produces {missing}"
