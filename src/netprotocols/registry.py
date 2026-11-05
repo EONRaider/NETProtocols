@@ -86,6 +86,11 @@ its walk at the IPv6 header. A withheld key behaves like an override
 that maps to nothing: a write to the parent does not reach it, and a
 registration made directly in the child fills it as usual.
 
+Inheritance is resolved **when you register, not when you look up**: a
+write to a parent table is copied into every child that has not
+overridden the key. Dispatch is therefore a single ``dict.get`` on a
+flat table.
+
 Withholding
 -----------
 
@@ -108,11 +113,6 @@ passed ``override=True``, which ``decode_as`` and :meth:`Registry.derive`
 always pass; a key inherited from a parent is withheld either way. A
 class registered later in the same table fills the key as usual.
 ``None`` is not a decoder and is refused with :class:`TypeError`.
-
-Inheritance is resolved **when you register, not when you look up**: a
-write to a parent table is copied into every child that has not
-overridden the key. Dispatch is therefore a single ``dict.get`` on a
-flat table.
 
 Global and isolated registries
 ------------------------------
