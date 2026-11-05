@@ -8,10 +8,11 @@ pseudo-header, ICMPv4/v6, VRRP, PIM, SCTP's CRC32c, CDP, the OSPF packet
 checksum and every OSPF LSA's Fletcher checksum; fragment slices carry no
 verifiable upper-layer checksum — it spans the reassembled datagram),
 as does every IPsec ICV, every RIPv2 keyed digest, every OSPF MD5
-digest, every RADIUS authenticator (a reply's against its request's),
-every STUN MESSAGE-INTEGRITY and every NTP MAC, with the test keys published
-below, and every STUN FINGERPRINT; every TCP segment on port 443
-that carries data holds whole TLS records. Frames
+digest, every RADIUS authenticator the corpus holds (a reply's
+against its request's), every STUN MESSAGE-INTEGRITY and every NTP
+MAC, with the test keys published below, and every STUN FINGERPRINT;
+every TCP segment on port 443 that carries data holds whole TLS
+records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
 frames routinely leave checksums to NIC offload. 394 frames across 36
 scenarios. Addresses are as-captured from the capture host's network.
