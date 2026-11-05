@@ -498,6 +498,16 @@ class TestTrailingBytes:
         assert verify(pim, ip=decode_frame(FRAMES[3])[IPv4])
         assert register.encapsulated[IPv4].total_length == 47
 
+    @pytest.mark.parametrize("trailer", [bytes(8), FCS], ids=["zeros", "fcs"])
+    def test_a_registers_encapsulated_packet_keeps_its_trailer(self, trailer):
+        """Return the bytes past the inner datagram as its trailer."""
+        register = PIM.decode(message_bytes(3) + trailer).message
+        assert isinstance(register, PIMRegister)
+        inner = register.encapsulated
+        assert len(register.packet) == inner[IPv4].total_length + len(trailer)
+        assert inner.trailer == trailer
+        assert inner.stopped_by is None
+
 
 class TestTruncation:
     def test_a_buffer_shorter_than_the_header_raises(self):

@@ -153,6 +153,13 @@ class TestPacketTrailer:
         assert hash(with_fcs) != hash(eth_arp_packet)
         assert len({with_fcs, eth_arp_packet, Packet(*layers)}) == 2
 
+    def test_equality_and_hash_compare_the_trailer_bytes(self, eth_arp_packet):
+        layers = eth_arp_packet.layers
+        zeros = Packet(*layers, trailer=b"\0" * 4)
+        ones = Packet(*layers, trailer=b"\xff" * 4)
+        assert zeros != ones
+        assert hash(zeros) != hash(ones)
+
     def test_repr_shows_only_a_non_empty_trailer(self, eth_arp_packet):
         layers = eth_arp_packet.layers
         assert "trailer" not in repr(eth_arp_packet)

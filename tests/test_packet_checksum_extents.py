@@ -277,3 +277,17 @@ def test_a_zero_inner_length_does_not_use_an_outer_ipv4_extent(family):
         outer = IPv4.decode(ipv4(bytes(40 + layer.header_len), 41))
     filled = Packet(outer, inner, layer).with_checksums(payload)[GRE]
     assert filled.checksum == compute(layer, payload=payload)
+
+
+@pytest.mark.parametrize("total_length", [1, 10, 19])
+def test_a_lying_ipv4_length_leaves_the_gre_input_unbounded(total_length):
+    """A Total Length inside the IPv4 header bounds nothing, so the
+    checksum covers the GRE header and all 16 payload bytes:
+    ``8000 + 88b5 + 8 * 0102`` folds to ``10c6``, whose complement is
+    ``ef39``."""
+    layer = GRE(flags=0x8000, protocol_type=0x88B5, fields=bytes(4))
+    ip = replace(IPv4.decode(ipv4(b"", 47)), total_length=total_length)
+    payload = b"\x01\x02" * 8
+    filled = Packet(ip, layer).with_checksums(payload)[GRE]
+    assert filled.checksum == 0xEF39
+    assert filled.fields[2:] == bytes(2)
