@@ -1573,18 +1573,19 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:135-140` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 411
+frame[cursor:cursor+layer.header_len]` for **every layer of all 471
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
-across 39 scenarios captured with tcpdump over real kernel
+across 41 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
 script-built MPLS label stacks around kernel-built datagrams, lldpd
 LLDP agents, Linux STP bridges with lldpd speaking CDP over IEEE
 802.3 LLC/SNAP framing, a tftpd-hpa server with tftp-hpa and curl
-clients, a FreeRADIUS server answering radclient, coturn answering
-STUN clients, a chronyd NTP server queried by ntpdig and chronyd
+clients, a FreeRADIUS server answering radclient, a FreeRADIUS server
+listening as a NAS for radclient's CoA and Disconnect requests, coturn
+answering STUN clients, a chronyd NTP server queried by ntpdig and chronyd
 clients, HSRP messages crafted by Yersinia and sent across a netns
 veth pair, and an nginx HTTPS server answering five clients (headless
 Chromium, curl, gnutls-cli, `openssl s_client` and curl capped at TLS
