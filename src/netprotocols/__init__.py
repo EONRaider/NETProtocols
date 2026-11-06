@@ -104,7 +104,11 @@ from netprotocols.layer7.http import (
     HTTPHeaderField,
 )
 from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
-from netprotocols.layer7.radius import RADIUS, RADIUSAttribute
+from netprotocols.layer7.radius import (
+    RADIUS,
+    RADIUSAttribute,
+    RADIUSVendorAttribute,
+)
 from netprotocols.layer7.rip import RIP, RIPAuthentication, RIPEntry
 from netprotocols.layer7.stun import STUN, STUNAddress, STUNAttribute
 from netprotocols.layer7.tftp import TFTP
@@ -263,6 +267,7 @@ __all__ = [
     "Protocol",
     "ProtocolError",
     "RADIUSAttribute",
+    "RADIUSVendorAttribute",
     "RIPAuthentication",
     "RIPEntry",
     "Registry",

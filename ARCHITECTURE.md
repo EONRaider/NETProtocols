@@ -1337,9 +1337,10 @@ src/netprotocols/
 ├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
-│                   options, PIM Hello options, RADIUS attributes,
-│                   STUN attributes and SCTP INIT/INIT ACK
-│                   parameters TLV walker
+│                   options, PIM Hello options, RADIUS attributes
+│                   and Vendor-Specific sub-attributes, STUN
+│                   attributes and SCTP INIT/INIT ACK parameters
+│                   TLV walker
 ├── _enums.py       EtherType, LLCSAP, IPProtocol, ARPOperation,
 │                   ARPHardwareType (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
@@ -1374,7 +1375,8 @@ src/netprotocols/
 │                   and the HTTP codec class), vxlan.py, rip.py
 │                   (RIPv1 + RIPv2), bgp.py (BGP-4 messages),
 │                   tftp.py (TFTP, with RFC 2347 options),
-│                   radius.py (RADIUS + RADIUSAttribute),
+│                   radius.py (RADIUS, RADIUSAttribute and
+│                   RADIUSVendorAttribute),
 │                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages),
 │                   hsrp.py (HSRPv1 Hello, Coup and Resign),
