@@ -365,14 +365,15 @@ against their mutants (`tests/test_checksum.py`, `tests/test_tlv.py`,
 - The author of a PR that changes an audited module runs the
   `mutmut run` command above and `scripts/check_mutmut_survivors.py` by
   hand, from a tree with no `mutants/` directory, not only at release
-  time. This is a convention: CI does not
-  run the audit on a PR, since `mutation.yml` has no `pull_request`
-  trigger and runs only nightly and when dispatched.
+  time. This is a convention: CI does not run the audit on a PR, since
+  `mutation.yml` has no `pull_request` trigger and runs only nightly
+  and when dispatched.
 
 ## Releasing
 
 Releases follow [RELEASE.md](RELEASE.md), from the preconditions to the
-post-release checks. Its section "Pass the pre-tag gates on `master`"
+post-release checks. Its section
+["7. Pass the pre-tag gates on `master`"](RELEASE.md#7-pass-the-pre-tag-gates-on-master)
 holds the pre-tag gates: `release.yml` gates publishing on the CI ladder
 only, so the nightly fuzz and mutation workflows are dispatched by hand
 on `master` at the commit to be tagged, and the tag is pushed only once

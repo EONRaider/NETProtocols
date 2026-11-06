@@ -6,7 +6,7 @@ on `master`. Pushing it runs
 publishes to PyPI and creates the GitHub release; everything before the
 push is done by hand, in the order below.
 
-Run every command from the repository root, in one shell, after
+Run every command from the repository root, in one bash shell, after
 setting:
 
 ```bash
@@ -15,9 +15,13 @@ export PREV=A.B.C   # the latest released version, e.g. 2.9.0
 export REPO=EONRaider/NETProtocols
 ```
 
-Later command blocks set `MS`, `BODY`, `PR`, `HEAD_SHA`, `SHA`, `T0` and
-`RUN` where they are first needed, and the blocks after them reuse
-those values.
+Later command blocks set `MS`, `BODY`, `PR`, `HEAD_SHA`, `SHA`, `T0`,
+`FUZZ_RUN`, `MUT_RUN` and `RUN` where they are first needed, and the
+blocks after them reuse those values.
+
+The blocks assume bash. zsh does not word-split an unquoted `$runs`, so
+step 11's guard would treat every run ID as one, and the `(exit 1)` that
+ends a refused retag closes an interactive shell that has `set -e` on.
 
 ## 1. Check the preconditions
 
@@ -424,16 +428,27 @@ version without a GitHub release.
 
 Step 4 measured the wheel on the release branch. When `$SHA` is a later
 `master` commit, gate fixes may have changed what the wheel holds, so
-build it again from `$SHA` and compare its size with the CLAIMS 1.5
-figure:
+build it again from `$SHA` and compare its size with the last CLAIMS
+1.5 row and with the size README states, both read from `$SHA` rather
+than from the working tree. CLAIMS gives the size in bytes; README gives
+it in KiB to one decimal, as "**A 293.2 KiB wheel**". Each comparison
+prints `same`, or `DIFFERS: got ... vs want ...`:
 
 ```bash
 d=$(mktemp -d) && git archive "$SHA" | tar -x -C "$d" &&
-  (cd "$d" && uv build --wheel) && stat -c %s "$d"/dist/*.whl
-grep -n '^| 1.5 wheel' docs/CLAIMS.md | tail -1         # the same size, in bytes
+  (cd "$d" && uv build --wheel) && got=$(stat -c %s "$d"/dist/*.whl) &&
+  echo "wheel: $got bytes"
+want=$(git show "$SHA:docs/CLAIMS.md" | grep '^| 1.5 wheel' | tail -1 |
+  sed -n 's/.*-py3-none-any\.whl` \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+[ -n "$got" ] && [ "$got" = "$want" ] && echo "CLAIMS: same" ||
+  echo "CLAIMS: DIFFERS: got $got vs want $want"
+got_kib=$(awk -v b="$got" 'BEGIN { printf "%.1f", b / 1024 }')
+want_kib=$(git show "$SHA:README.md" | sed -n 's/.*\*\*A \([0-9.]*\) KiB wheel.*/\1/p' | head -1)
+[ -n "$got" ] && [ "$got_kib" = "$want_kib" ] && echo "README: same" ||
+  echo "README: DIFFERS: got $got_kib KiB vs want $want_kib KiB"
 ```
 
-If the sizes differ, correct README and CLAIMS by a PR to `master` as in
+If either differs, correct README and CLAIMS by a PR to `master` as in
 step 7's gate fixes, pass the gates again on the new commit, and come
 back to this step with `SHA` set to it.
 
@@ -451,12 +466,15 @@ git push origin "refs/tags/v$V"
 ## 10. Watch `release.yml`
 
 `new_run` and `wait_run` are the functions step 7 defines, and they
-read `SHA` and `T0`. In a new shell, define both functions again, and
-first set `SHA` to the tagged commit and `T0` to a UTC time, in the
-same `%Y-%m-%dT%H:%M:%SZ` format, at or shortly before the push:
+read `SHA` and `T0`. In a new shell, export `V` and `REPO` again as at
+the top of this file, define both functions again, and first set `SHA`
+to the tagged commit and `T0` to a UTC time, in the same
+`%Y-%m-%dT%H:%M:%SZ` format, at or shortly before the push. Left as
+written, the `T0` placeholder matches no run, and `wait_run` gives up:
 
 ```bash
 SHA=$(git rev-parse "v$V^{commit}")   # in a new shell only
+T0=YYYY-MM-DDTHH:MM:SSZ               # in a new shell only: UTC, at or before the push
 RUN=$(wait_run release.yml push) && echo "RUN=$RUN"
 gh run watch "$RUN" --exit-status
 ```
@@ -489,30 +507,67 @@ Its stages, in order, and what each one guarantees:
   deleted PyPI answers 404 for it, which is no evidence that nothing was
   uploaded. That is why the guard checks the runs as well as PyPI.
 
-  The guard defines two functions. `upload_not_reached` lists every job
-  named `publish` in every attempt of one run (`filter=all`, paginated)
-  and passes only if each was skipped, or ran and has an upload step
-  whose conclusion is `skipped`. The upload step is the one named
-  "Publish to PyPI"; runs from before `release.yml` named it list it as
-  "Run pypa/gh-action-pypi-publish@...", which the selector matches too.
-  A `publish` job that ran and lists no such step (an older workflow
-  that uploaded with another step, or a job cancelled before its steps
-  were recorded), and a job or step still in progress, fail the check.
-  `retag_allowed` passes only if PyPI answers 404 for the version and
-  every `release.yml` run for the tag, of all its attempts, passes
+  The guard defines two functions. `upload_not_reached` reads one run,
+  and every job of every attempt of it (`filter=all`, paginated, whatever
+  the job's name), and passes only if all of these hold:
+  - **The run is `completed`.** `release.yml` has
+    `cancel-in-progress: false`, so a run queued or in progress for the
+    old tag, a re-run included, still builds and uploads after the tag
+    has moved. A queued run can list no jobs yet, which on its own would
+    look like a run that uploaded nothing.
+  - **Every job is `completed`.**
+  - **No job has an upload step whose conclusion is anything but
+    `skipped`.** An upload step is one named "Publish to PyPI"; one whose
+    name starts with "Run pypa/gh-action-pypi-publish", as runs from
+    before `release.yml` named the step list it; or one whose name
+    contains `uv publish` or `twine upload`. v1.0.0's runs uploaded with
+    `uv publish`. A job that uploads under another name, such as a
+    renamed `publish` job, is caught by its step.
+  - **A `publish` job that was not skipped lists an upload step.** One
+    that ran and lists none (an older workflow that uploaded with another
+    step, or a job cancelled before its steps were recorded) fails the
+    check.
+  - **Some attempt lists a job named `publish`.** The exception is a run
+    that lists no jobs at all and concluded `failure` or
+    `startup_failure`, which is how GitHub records a run that never
+    started a job, such as one with an invalid workflow file. A run that
+    lists jobs but none named `publish` (a renamed job, or only `ci`
+    jobs), and a cancelled run with no jobs, fail the check.
+
+  2.3.0's first run, 39981620700, passes: it concluded `failure` and
+  lists `publish` and `github-release`, both skipped with no steps, and
+  no `ci` job. `retag_allowed` passes only if PyPI answers 404 for the
+  version and every `release.yml` run for the tag passes
   `upload_not_reached`; it fails if no run is found.
 
   ```bash
-  upload_not_reached() {  # $1 run ID: passes only if no publish job of any attempt reached its upload
-    local bad
-    bad=$(gh api "repos/$REPO/actions/runs/$1/jobs?filter=all&per_page=100" --paginate --jq '
-      .jobs[] | select(.name == "publish" and .conclusion != "skipped") |
+  upload_not_reached() {  # $1 run ID: passes only if the run is completed and no job of any attempt reached an upload step
+    local run jobs bad
+    run=$(gh api "repos/$REPO/actions/runs/$1" --jq '"\(.status) \(.conclusion)"') ||
+      { echo "Could not read run $1." >&2; return 1; }
+    case "$run" in
+      "completed "*) ;;
+      *) echo "Run $1 is $run, not completed." >&2; return 1 ;;
+    esac
+    jobs=$(gh api "repos/$REPO/actions/runs/$1/jobs?filter=all&per_page=100" --paginate --jq '
+      (.jobs // error("no jobs array in the response"))[] |
       [.steps[]? | select(.name == "Publish to PyPI" or
-                          (.name | startswith("Run pypa/gh-action-pypi-publish")))] as $up |
-      select(($up | length) == 0 or any($up[]; .conclusion != "skipped")) |
-      "run \(.run_id) attempt \(.run_attempt): publish \(.conclusion // .status), upload step \([$up[] | .conclusion // .status])"
+                          (.name | startswith("Run pypa/gh-action-pypi-publish")) or
+                          (.name | contains("uv publish")) or
+                          (.name | contains("twine upload")))] as $up |
+      "job \(.name)",
+      (select(.status != "completed" or any($up[]; .conclusion != "skipped") or
+              (.name == "publish" and .conclusion != "skipped" and ($up | length) == 0)) |
+       "bad run \(.run_id) attempt \(.run_attempt): job \(.name) \(.conclusion // .status), upload steps \([$up[] | "\(.name): \(.conclusion // .status)"])")
     ') || { echo "Could not list the jobs of run $1." >&2; return 1; }
+    bad=$(printf '%s\n' "$jobs" | sed -n 's/^bad //p')
     [ -z "$bad" ] || { echo "$bad" >&2; return 1; }
+    printf '%s\n' "$jobs" | grep -qx 'job publish' && return 0
+    if [ -z "$jobs" ]; then
+      case "$run" in "completed failure" | "completed startup_failure") return 0 ;; esac
+    fi
+    echo "Run $1 ($run) lists no job named publish." >&2
+    return 1
   }
   retag_allowed() {  # passes only if PyPI has no $V and no release.yml run for v$V reached its upload
     local code runs run
@@ -548,15 +603,19 @@ Its stages, in order, and what each one guarantees:
   - A cause in the tagged tree (code, workflow or version): a re-run
     cannot fix it. Fix it on `master` by its own PR, with its CHANGELOG
     entry in the release's section as step 7 says, pass the gates on the
-    new `master` commit (steps 7 and 8, which set `SHA` to it), and move
-    the tag there through the retagging rule's guard above:
+    new `master` commit (step 7 sets `SHA` to it, and step 8 checks
+    it), and move the tag there through the retagging rule's guard
+    above. The commands are chained, so an empty `SHA` or a failed
+    command stops the block before `git push --force`:
 
     ```bash
     if retag_allowed; then
-      git tag -f "v$V" "$SHA"
-      git cat-file -t "v$V"     # commit
-      T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-      git push --force origin "refs/tags/v$V"
+      [ -n "$SHA" ] &&
+        git tag -f "v$V" "$SHA" &&
+        [ "$(git cat-file -t "v$V")" = commit ] &&
+        T0=$(date -u +%Y-%m-%dT%H:%M:%SZ) &&
+        git push --force origin "refs/tags/v$V" ||
+        { echo "Stopped: SHA is empty, or one of these commands failed." >&2; (exit 1); }
     else
       echo "Refusing to move v$V: the retagging rule does not allow it." >&2
       (exit 1)
@@ -574,18 +633,20 @@ Its stages, in order, and what each one guarantees:
     hashes with "File already exists", and the name of a deleted file
     with "This filename was previously used by a file that has since been
     deleted"
-    ([`warehouse/forklift/legacy.py`](https://raw.githubusercontent.com/pypa/warehouse/main/warehouse/forklift/legacy.py)).
+    ([`warehouse/forklift/legacy.py`](https://github.com/pypi/warehouse/blob/0fac80550625bdc75baab04c303eddf249b93ab0/warehouse/forklift/legacy.py),
+    lines 1202-1224 and 1226-1245, at commit `0fac805`).
   - **A byte-identical re-upload is accepted silently.** When the name
     and the SHA-256 and BLAKE2b-256 digests all match an existing file,
-    `_is_duplicate_file` in the same `legacy.py` reports a duplicate and
-    the handler returns HTTP 200 without storing anything.
+    `_is_duplicate_file` in the same `legacy.py` (lines 419-447) reports
+    a duplicate and the handler returns HTTP 200 without storing anything
+    (lines 1198-1201).
   - **A missing file can be added only within 14 days of the release's
     creation.** After the duplicate and deleted-name checks, the handler
     refuses a new file for a release older than
     `MAXIMUM_AGE_FOR_NEW_UPLOADS = dt.timedelta(days=14)`
-    ([`warehouse/constants.py`](https://raw.githubusercontent.com/pypa/warehouse/main/warehouse/constants.py))
+    ([`warehouse/constants.py`](https://github.com/pypi/warehouse/blob/0fac80550625bdc75baab04c303eddf249b93ab0/warehouse/constants.py), line 32)
     with "Uploading new files to releases older than 14 days is not
-    allowed". A byte-identical duplicate still gets HTTP 200 after that,
+    allowed" (`legacy.py` lines 1252-1260). A byte-identical duplicate still gets HTTP 200 after that,
     because the duplicate check runs first.
   - **The builds are reproducible, within limits.** A local `uv build`
     of a `git archive` of `1e08ecb` matched PyPI's 2.9.0 wheel and sdist
