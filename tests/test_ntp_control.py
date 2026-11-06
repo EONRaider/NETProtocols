@@ -220,7 +220,7 @@ class TestNames:
         "raw",
         [
             pytest.param("168700050615000300000000", id="peer-trap"),
-            pytest.param("16c700050615000000000000", id="error"),
+            pytest.param("16c700050600000000000000", id="error"),
         ],
     )
     def test_a_trap_with_no_system_status_word(self, raw):

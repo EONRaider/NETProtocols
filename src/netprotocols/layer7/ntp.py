@@ -230,9 +230,8 @@ clock status word in a response to read or write clock variables, an
 Error Status Word in an error response, and zero in a command
 (RFC 9327 §3 and §4). :attr:`NTPControl.system_status` splits it as a
 system status word, as an :class:`NTPSystemStatus`, only in a response
-to opcode 1, 2, 3 or 7 for association 0 that is not an error
-response, and
-:attr:`NTPControl.error_code` reads an error response's code.
+to opcode 1, 2, 3 or 7 for association 0 that is not an error response,
+and :attr:`NTPControl.error_code` reads an error response's code.
 """
 
 from __future__ import annotations
