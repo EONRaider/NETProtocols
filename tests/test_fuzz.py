@@ -886,9 +886,11 @@ _SCTP_CHUNK_ACCESSORS = (
 
 
 def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
-    """Read every typed accessor."""
+    """Read every typed accessor, and decode the user data through the
+    default, empty ``sctp.ppid`` table."""
     for name in _SCTP_CHUNK_ACCESSORS:
         getattr(chunk, name)
+    assert chunk.decode_user_data() is None
 
 
 def test_the_sctp_accessor_list_names_every_property() -> None:

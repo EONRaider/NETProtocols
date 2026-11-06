@@ -52,6 +52,14 @@ splits them into :class:`SCTPChunk` objects on demand and never
 re-encodes. The typed accessors of :class:`SCTPChunk` read the fields
 of DATA, INIT, INIT ACK, SACK and I-DATA chunks, and the parameters of
 INIT and INIT ACK as :class:`SCTPParameter` objects.
+
+A :func:`~netprotocols.decode_frame` walk ends at SCTP, whose
+:meth:`~netprotocols._base.Protocol.next_protocol` answers ``None``.
+One packet can carry several DATA chunks, each with its own Payload
+Protocol Identifier, and a user message can span several chunks.
+:meth:`SCTPChunk.decode_user_data` decodes the user data of one
+unfragmented DATA or I-DATA chunk through the ``sctp.ppid`` dispatch
+table, and reassembling a fragmented message is the caller's.
 """
 
 from __future__ import annotations
@@ -63,6 +71,7 @@ from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, hex_str
 from netprotocols._tlv import walk_kind_length_value
+from netprotocols.registry import DEFAULT, TABLE_SCTP_PPID, Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -109,6 +118,11 @@ _I_DATA_USER_DATA = 16
 
 #: The State Cookie parameter type (RFC 9260 §3.3.3.1.1).
 _STATE_COOKIE = 7
+
+#: The flat ``sctp.ppid`` table of the default registry, bound once at
+#: import. Registering a decoder mutates this dict in place, so the
+#: reference stays live (see :mod:`netprotocols.registry`).
+_PPID_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_SCTP_PPID)
 
 #: Parameter types this library names: RFC 9260 §3.3.2.1 and §3.3.3.1,
 #: then the extensions an INIT or INIT ACK commonly carries (RFC 4895
@@ -496,6 +510,42 @@ class SCTPChunk:
         if start is None or len(self.value) < start:
             return None
         return self.value[start:]
+
+    def decode_user_data(
+        self, registry: Registry | None = None
+    ) -> Protocol | None:
+        """Decode an unfragmented message's user data by its PPID.
+
+        The decoder is the class the ``sctp.ppid`` table holds for
+        :attr:`ppid`. This library registers none there, so the table is
+        empty until a caller registers one. Only a DATA or I-DATA chunk
+        with both the B and E bits set carries a whole user message;
+        reassembling a fragmented one is the caller's.
+        :class:`~netprotocols.SCTP` names no successor layer in a
+        :func:`~netprotocols.decode_frame` walk, and the walk never reads
+        the ``sctp.ppid`` table, ``decode_as`` included.
+
+        :param registry: The registry whose ``sctp.ppid`` table is read;
+            :data:`~netprotocols.registry.DEFAULT` when ``None``.
+        :returns: The decoded user data, or ``None`` for a chunk of
+            another type, a fragment, a value too short for the user
+            data, and a PPID the table holds no class for or withholds
+            (:data:`~netprotocols.registry.WITHHELD`).
+        :raises ProtocolError: if the registered decoder rejects the user
+            data, as its ``decode()`` documents.
+        """
+        if not (self.beginning_fragment and self.ending_fragment):
+            return None
+        ppid, user_data = self.ppid, self.user_data
+        if ppid is None or user_data is None:
+            return None
+        table = (
+            _PPID_CLASSES
+            if registry is None
+            else registry.table(TABLE_SCTP_PPID)
+        )
+        decoder = table.get(ppid)
+        return None if decoder is None else decoder.decode(user_data)
 
     @property
     def initiate_tag(self) -> int | None:

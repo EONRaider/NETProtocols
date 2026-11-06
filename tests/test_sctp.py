@@ -1,6 +1,7 @@
 """SCTP (RFC 9260): the common header, the chunk walk that bounds the
 packet, the chunk accessors, the typed DATA, INIT, INIT ACK, SACK and
-I-DATA (RFC 8260) fields, and dispatch from IPv4/IPv6 protocol 132.
+I-DATA (RFC 8260) fields, PPID dispatch through ``sctp.ppid``, and
+dispatch from IPv4/IPv6 protocol 132.
 
 The real association in tests/fixtures/sctp.pcap (see its MANIFEST
 note) anchors the decode, round-trip and typed-field asserts, each
@@ -12,7 +13,8 @@ test_checksum.py, where the mutation audit's test selection reaches it.
 
 import struct
 import zlib
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import ClassVar, Self
 
 import pytest
 
@@ -28,12 +30,19 @@ from netprotocols import (
     IPv6,
     IPv6HopByHopOptions,
     Packet,
+    Protocol,
     SCTPChunk,
     SCTPParameter,
     TruncatedHeaderError,
     compute,
     decode_frame,
     verify,
+)
+from netprotocols.registry import (
+    DEFAULT,
+    TABLE_SCTP_PPID,
+    WITHHELD,
+    Registry,
 )
 
 FRAMES = pcap_frames(FIXTURES / "sctp.pcap")
@@ -1209,3 +1218,126 @@ class TestSCTPParameter:
     )
     def test_type_names(self, type_, name):
         assert SCTPParameter(type_).type_name == name
+
+
+@dataclass(frozen=True, slots=True)
+class Greeting(Protocol):
+    """A toy user-data decoder: it accepts what starts with ``hello``."""
+
+    text: bytes
+
+    _struct: ClassVar[struct.Struct] = struct.Struct("")
+
+    @classmethod
+    def decode(cls, data: bytes | memoryview) -> Self:
+        if not bytes(data).startswith(b"hello"):
+            raise InvalidFieldError(
+                "not a greeting", protocol=cls, field="text", offset=0
+            )
+        return cls(bytes(data))
+
+    def __bytes__(self) -> bytes:
+        return self.text
+
+    @property
+    def header_len(self) -> int:
+        return len(self.text)
+
+
+#: The PPID the toy decoder is registered at: 0, which the capture's
+#: DATA chunks carry.
+GREETING_PPID = 0
+
+
+@pytest.fixture
+def greeting_registry() -> Registry:
+    registry = Registry.from_defaults()
+    registry.register(TABLE_SCTP_PPID, GREETING_PPID, Greeting)
+    return registry
+
+
+def i_data(flags: int, word: int, data: bytes) -> SCTPChunk:
+    """A hand-built I-DATA chunk (sctp.pcap holds none)."""
+    return SCTPChunk(64, flags, struct.pack("!IHHII", 1, 0, 0, 0, word) + data)
+
+
+class TestDecodeUserData:
+    def test_the_table_ships_empty(self):
+        assert DEFAULT.table(TABLE_SCTP_PPID) == {}
+        assert only_chunk(4).decode_user_data() is None
+
+    def test_a_captured_data_chunk_through_a_registered_decoder(
+        self, greeting_registry
+    ):
+        for index in (4, 6):
+            decoded = only_chunk(index).decode_user_data(greeting_registry)
+            assert decoded == Greeting(b"hello sctp\n")
+
+    def test_the_default_registry_is_live(self):
+        DEFAULT.register(TABLE_SCTP_PPID, GREETING_PPID, Greeting)
+        try:
+            assert only_chunk(4).decode_user_data() == Greeting(b"hello sctp\n")
+        finally:
+            del DEFAULT.table(TABLE_SCTP_PPID)[GREETING_PPID]
+        assert only_chunk(4).decode_user_data() is None
+
+    @pytest.mark.parametrize("flags", [0x00, 0x01, 0x02, 0x0D, 0x0E])
+    def test_a_fragment_is_not_decoded(self, greeting_registry, flags):
+        data = replace(only_chunk(4), flags=flags)
+        assert data.decode_user_data(greeting_registry) is None
+        idata = i_data(flags, GREETING_PPID, b"hello")
+        assert idata.decode_user_data(greeting_registry) is None
+
+    @pytest.mark.parametrize("flags", [0x03, 0x07, 0x0F, 0xF3])
+    def test_an_unfragmented_message_is_decoded(self, greeting_registry, flags):
+        data = replace(only_chunk(4), flags=flags)
+        assert data.decode_user_data(greeting_registry) == Greeting(
+            b"hello sctp\n"
+        )
+
+    def test_an_unfragmented_i_data_chunk(self, greeting_registry):
+        """Hand-built: the PPID is the fifth word, the user data after
+        it."""
+        idata = i_data(0x03, GREETING_PPID, b"hello i-data")
+        assert idata.decode_user_data(greeting_registry) == Greeting(
+            b"hello i-data"
+        )
+        other = i_data(0x03, 99, b"hello i-data")
+        assert other.decode_user_data(greeting_registry) is None
+
+    def test_a_ppid_with_no_entry(self, greeting_registry):
+        data = SCTPChunk(0, 3, struct.pack("!IHHI", 1, 0, 0, 46) + b"hello")
+        assert data.decode_user_data(greeting_registry) is None
+
+    def test_a_withheld_ppid(self, greeting_registry):
+        withheld = greeting_registry.derive(
+            {TABLE_SCTP_PPID: {GREETING_PPID: WITHHELD}}
+        )
+        assert only_chunk(4).decode_user_data(withheld) is None
+        greeting_registry.register(
+            TABLE_SCTP_PPID, GREETING_PPID, WITHHELD, override=True
+        )
+        assert only_chunk(4).decode_user_data(greeting_registry) is None
+
+    @pytest.mark.parametrize("type_", [1, 2, 3, 4, 63])
+    def test_another_chunk_type(self, greeting_registry, type_):
+        chunk_ = replace(only_chunk(4), type=type_)
+        assert chunk_.decode_user_data(greeting_registry) is None
+
+    @pytest.mark.parametrize("cut", range(12))
+    def test_a_value_too_short_for_the_user_data(self, greeting_registry, cut):
+        data = SCTPChunk(0, 3, only_chunk(4).value[:cut])
+        assert data.decode_user_data(greeting_registry) is None
+
+    def test_a_decoder_that_rejects_the_user_data_raises(
+        self, greeting_registry
+    ):
+        data = SCTPChunk(0, 3, struct.pack("!IHHI", 1, 0, 0, 0) + b"bye")
+        with pytest.raises(InvalidFieldError) as excinfo:
+            data.decode_user_data(greeting_registry)
+        assert excinfo.value.protocol is Greeting
+
+    def test_the_walk_still_ends_at_sctp(self, greeting_registry):
+        packet = decode_frame(FRAMES[4], registry=greeting_registry)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4, SCTP]
+        assert sctp_of(4).next_protocol(greeting_registry) is None
