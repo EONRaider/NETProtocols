@@ -352,14 +352,32 @@ saying why. Two properties of the setup are easy to trip over:
   before each test, so a result cached by the original code can't hide
   a mutant.
 
+The audit is deliberately narrow, and two rules follow from its scope.
+`only_mutate` lists the audited modules (`checksum.py`, `_tlv.py`,
+`layer7/dns.py` and `layer7/http.py`), and
+`pytest_add_cli_args_test_selection` lists the only tests that run
+against their mutants (`tests/test_checksum.py`, `tests/test_tlv.py`,
+`tests/test_dns.py` and `tests/test_http.py`):
+
+- A test meant to kill mutants of an audited module lives in that
+  module's audited test file. A test elsewhere doesn't count, however
+  much of the module it exercises.
+- The author of a PR that changes an audited module runs the
+  `mutmut run` command above and `scripts/check_mutmut_survivors.py` by
+  hand, from a tree with no `mutants/` directory, not only at release
+  time. This is a convention: CI does not run the audit on a PR, since
+  `mutation.yml` has no `pull_request` trigger and runs only nightly
+  and when dispatched.
+
 ## Releasing
 
-`release.yml` gates publishing on the CI ladder only; the nightly fuzz
-and mutation jobs never run on a pull request. Before pushing a release
-tag, dispatch both by hand (Actions → the workflow → *Run workflow*,
-on `master` at the commit to be tagged) and tag only once both are
-green. Their concurrency groups are keyed on the triggering event, so a
-nightly run can't cancel a manual one.
+Releases follow [RELEASE.md](RELEASE.md), from the preconditions to the
+post-release checks. Its section
+["7. Pass the pre-tag gates on `master`"](RELEASE.md#7-pass-the-pre-tag-gates-on-master)
+holds the pre-tag gates: `release.yml` gates publishing on the CI ladder
+only, so the nightly fuzz and mutation workflows are dispatched by hand
+on `master` at the commit to be tagged, and the tag is pushed only once
+both are green.
 
 ## Changelog
 
@@ -367,12 +385,21 @@ This project keeps a [Keep a Changelog](https://keepachangelog.com/)
 file. Add an entry under `## [Unreleased]` in
 [`CHANGELOG.md`](CHANGELOG.md): user-facing changes under `### Added` /
 `### Changed` / `### Fixed`, test-and-tooling changes under
-`### Development`.
+`### Development`. A change merged to get a release's gates green
+before its tag, or before a permitted retag, goes into that release's
+section instead, as [RELEASE.md](RELEASE.md) says.
 
 ## Pull requests
 
 - Keep changes focused; don't widen a PR beyond what it needs.
 - Fill in the pull-request template and keep the QA ladder green.
+- Whoever merges a PR into `master` waits for all of CI, not only the
+  required checks, and merges with a merge commit, never a squash or a
+  rebase. These are conventions: the `master` ruleset requires only the
+  `lint`, `typecheck` and `build` checks and allows every merge method,
+  so it enforces neither.
+- At most 3 pull requests are open at once. This too is a convention;
+  GitHub does not enforce it.
 - CI on a first-time fork PR waits for a maintainer to approve the run —
   that's expected, not a failure on your end.
 - Commits and PRs describe the change and the reasoning; the diff shows

@@ -3,9 +3,9 @@ name: Docs lint
 # Runs lycheeverse/lychee (a link checker) over the small set of
 # hand-maintained docs that carry the project's external claims and
 # cross-references: README.md, ARCHITECTURE.md, CONTRIBUTING.md,
-# CHANGELOG.md, and docs/CLAIMS.md. The pull_request trigger, filtered
-# to those paths, checks the links of a docs edit; the weekly schedule
-# checks the links of unchanged files, which can go dead.
+# RELEASE.md, CHANGELOG.md, and docs/CLAIMS.md. The pull_request
+# trigger, filtered to those paths, checks the links of a docs edit; the
+# weekly schedule checks the links of unchanged files, which can go dead.
 on:
   pull_request:
     branches: [master]
@@ -13,6 +13,7 @@ on:
       - "README.md"
       - "ARCHITECTURE.md"
       - "CONTRIBUTING.md"
+      - "RELEASE.md"
       - "CHANGELOG.md"
       - "docs/CLAIMS.md"
   schedule:
@@ -42,6 +43,10 @@ jobs:
       # defaults (20s/3/1s), so a slow or briefly rate-limited external
       # host does not fail the run.
       #
+      # --include-fragments also checks each link's #fragment: against
+      # the headings of a linked Markdown file, and against the ids and
+      # anchor names of a linked HTML page.
+      #
       # --exclude skips img.shields.io, which serves the README badges
       # and intermittently rate-limits or times out under CI traffic. It
       # is the only exclusion.
@@ -54,9 +59,11 @@ jobs:
             --timeout 30
             --max-retries 3
             --retry-wait-time 10
+            --include-fragments
             --exclude '^https://img\.shields\.io'
             README.md
             ARCHITECTURE.md
             CONTRIBUTING.md
+            RELEASE.md
             CHANGELOG.md
             docs/CLAIMS.md

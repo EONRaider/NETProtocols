@@ -36,9 +36,11 @@ roadmap context in [#107](https://github.com/EONRaider/NETProtocols/issues/107).
 3. **Comparative numbers name versions** — the competitor's exact
    version and the Python version both were measured under. "Faster
    than scapy" without a version is not a claim, it is a vibe.
-4. **Re-measure before every release that quotes a number.** Hardware
-   moves, upstream releases move, and our own hot path is about to
-   move a great deal.
+4. **Re-measure before every release that quotes a number.** Each
+   figure is either re-measured, or explicitly marked as not repeated
+   for that release, with the version it was last measured in; it is
+   never carried over silently. Hardware moves, upstream releases move,
+   and our own hot path is about to move a great deal.
 5. **Comparative claims stayed unpublished until the roadmap closed —
    done as of 2026-09-04.** The numbers moved under our feet the whole
    way: claim 1.2 went from "2.9× slower than dpkt" after Tier 1's
