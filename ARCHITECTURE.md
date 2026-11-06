@@ -509,13 +509,13 @@ payload and `UDP.next_protocol()` hands it to the class its port
 names, through that class's `_for_payload()`: `NTP` answers
 `NTPControl` for a mode 6 byte and itself otherwise, and every other
 class answers itself, so the registry still names one class per port.
-Only the bytes can say, and `next_protocol()` is handed none, so each `decode()`
-records what it saw on the instance in a field kept out of the
-dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
-uses for its `_message` parse cache). Two equal headers compare equal
-however they were found, and can still chain differently. The rules of
-the decode contract hold for all six unchanged; see *Port-based
-dispatch is best-effort* below,
+Only the bytes can say, and `next_protocol()` is handed none, so each
+`decode()` records what it saw on the instance in a field kept out of
+the dataclass's comparison and hash (`compare=False`, the mechanism
+`HTTP` uses for its `_message` parse cache). Two equal headers compare
+equal however they were found, and can still chain differently. The
+rules of the decode contract hold for all six unchanged; see
+*Port-based dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
 next_protocol*, the module docstrings of
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py),
@@ -970,16 +970,19 @@ ntpd's private control message, is rejected. A time message needs the
 48-byte header, and a control message its 12-byte header and a Count of
 at most 468 that fits the datagram, which a random 300-byte payload's
 two Count bytes give 289 times in 65,536, so the first byte and the
-Count predict 62.47% rejected. Measured the same way (`random.Random`
-seeds 0-2, 10,000 random 300-byte payloads and 10,000 of uniformly
-random length 0-600 per seed, the latter walked unpadded and padded),
-the walk stopped for 61.14-62.88% of the 300-byte payloads and for
-64.78-65.68% of the 0-600 byte ones, padded or not: padding never
-makes a payload 48 bytes long, and is past UDP's Length, which ends
-the control message's buffer. Between 1 and 3 payloads of each 10,000
-decoded as `NTPControl`. Past the first byte any 47 bytes are a time
-message's header, and the stratum, the Reference ID and the timestamps
-are not judged, so a Kiss-o'-Death and a reserved stratum decode.
+Count predict 62.47% rejected. Measured the same way, by
+[`scripts/measure_port_guard.py`](scripts/measure_port_guard.py)
+(`random.Random` seeds 0-2, per seed 10,000 random 300-byte payloads
+and, from the generator seeded again, 10,000 of uniformly random
+length 0-600, the latter walked unpadded and padded), the walk stopped
+for 61.14-62.88% of the 300-byte payloads and for 65.44-66.32% of the
+0-600 byte ones, padded or not, against 61.15-62.90% and 65.45-66.34%
+on the tree before `NTPControl`: padding never makes a payload 48 bytes
+long, and is past UDP's Length, which ends the control message's
+buffer. One or two payloads of each 10,000 decoded as `NTPControl`.
+Past the first byte any 47 bytes are a time message's header, and the
+stratum, the Reference ID and the timestamps are not judged, so a
+Kiss-o'-Death and a reserved stratum decode.
 
 The first byte is judged before the length, so a mode 7 message
 raises `InvalidFieldError` with `field` `"mode"`, however long, and a
@@ -994,8 +997,9 @@ the MAC, which follows the data padded to 8 bytes, or the header of an
 error response, as ntpd and ntpsec place it (see the module docstring
 of [`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)). `NTP.decode()`
 called directly still rejects mode 6, naming `NTPControl` in its
-message. A typed way to take a port out of dispatch for one walk is a
-planned follow-up.
+message. To take port 123 out of dispatch for one walk, map it to
+`WITHHELD` in `decode_as`:
+`decode_frame(frame, decode_as={"udp.port": {123: WITHHELD}})`.
 
 HSRP on UDP 1985 (RFC 2281) rejects far more, though less than BGP and
 STUN below: its first three bytes must be a Version of 0, one of the

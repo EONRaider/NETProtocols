@@ -822,9 +822,11 @@ independently, in `scripts/check_fixtures.py` and `tests/test_stun.py`.
   header behind IPv4's 20 bytes and UDP's 8 already fills Ethernet's
   46-byte minimum payload. No frame carries an FCS either, since
   tcpdump on a veth device captures none. `tests/test_ntp.py` builds
-  the trailers, a crypto-NAK, a Kiss-o'-Death and the control messages
-  the decoder rejects (an ntpq mode 6 request and response, and mode 7
-  requests of 48 and 192 bytes), none of which these daemons send.
+  the trailers, a crypto-NAK, a Kiss-o'-Death and control messages,
+  none of which these daemons send: a mode 6 request and response,
+  which a walk decodes as `NTPControl` and only `NTP.decode()` called
+  directly rejects, and mode 7 requests of 48 and 192 bytes, which
+  `NTP.decode()` and a walk reject.
 
 - `ntp_control.pcap` was produced by
   `scripts/capture_fixtures_ntp_control.sh`: an ntpsec 1.2.2 ntpd
