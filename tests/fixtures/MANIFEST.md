@@ -14,17 +14,17 @@ request's), every STUN MESSAGE-INTEGRITY and every NTP MAC, with the
 test keys published below, and every STUN FINGERPRINT; every TCP
 segment on port 443 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 492 frames across 42
+frames routinely leave checksums to NIC offload. 509 frames across 43
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-nine scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Thirty scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
 `vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `ospf_areas.pcap`,
 `pim.pcap`, `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`,
 `tftp.pcap`, `radius.pcap`, `radius_coa.pcap`, `stun.pcap`, `ntp.pcap`,
-`ntp_control.pcap`, `hsrp.pcap`, `tls.pcap`) are captured separately
-by their own `scripts/capture_fixtures_*.sh` over
+`ntp_control.pcap`, `hsrp.pcap`, `tls.pcap`, `stp.pcap`) are captured
+separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, kernel GRE tunnels over IPv4 and IPv6, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN
@@ -40,9 +40,10 @@ server with tftp-hpa and curl clients, a FreeRADIUS server answering
 radclient, a FreeRADIUS server listening as a NAS for radclient's
 CoA-Requests and Disconnect-Requests, coturn answering STUN clients,
 a chronyd NTP server queried by ntpdig and chronyd clients, an ntpsec
-ntpd queried by ntpq over NTP's control protocol, HSRP messages crafted by
-Yersinia and sent between two netns, and an nginx HTTPS server
-answering Chromium, curl, gnutls-cli and openssl s_client — see their
+ntpd queried by ntpq over NTP's control protocol, HSRP messages crafted
+by Yersinia and sent between two netns, an nginx HTTPS server
+answering Chromium, curl, gnutls-cli and openssl s_client, and four
+Linux bridges whose STP mstpd runs in userspace — see their
 rows and the notes below.
 
 | File | Frames | Contents |
@@ -81,7 +82,7 @@ rows and the notes below.
 | `vrrp_rfc9568.pcap` | 9 | VRRPv3 adverts from two keepalived 2.2.8 routers with `v3_checksum_as_v2`, A (`10.9.203.1`, priority 200) and B (`10.9.203.2`, priority 100), every checksum the message's alone, without the IPv4 pseudo-header (RFC 9568 §5.2.8), two virtual routers: VRID 61, one address (the minimal 12-byte message), multicast — A ×2, A's priority-0 resignation, B taking over ×2, B's resignation; VRID 62, unicast from A to B, three addresses, Max Adver Int 50 cs — A ×2 and its resignation — `Ethernet→IPv4→VRRP`; **direct capture**, both directions, of a selection from the raw capture (see VRRP note) |
 | `lldp.pcap` | 6 | LLDP (IEEE 802.1AB) LLDPDUs from two lldpd 1.0.18 agents to `01:80:c2:00:00:0e`, a veth pair apart: A's first (Chassis ID: MAC address `02:4e:50:86:00:0a`, subtype 4; Port ID: interface name `nplldp-va`, subtype 5; TTL 120; System Name, System Description, System Capabilities, Management Address `10.9.86.1`, Port Description, two IEEE 802.3 organizationally specific TLVs and a 304-byte custom one, OUI `0a-4e-50`), B's first (Chassis ID: locally assigned `nplldp-chassis-b`, subtype 7; Port ID: MAC address `02:4e:50:86:00:0b`, subtype 3; TTL 180; the same optional TLVs but the custom one), A's shutdown LLDPDU (TTL 0) for its old Port ID when its Port ID changes to a locally assigned `np-port-a` (subtype 7), A's first LLDPDU with the new one, and A's and B's shutdown LLDPDUs on exit — `Ethernet→LLDP`; **direct capture**, both directions, a selection of the first LLDPDU of each kind (see LLDP note) |
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
-| `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST BPDU, which `tests/test_stp.py` builds by hand); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
+| `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST or MST BPDU: those are in `stp.pcap`); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, a Cisco (vendor 9) Cisco-AVPair Vendor-Specific, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, a Cisco-AVPair and a WISPr (vendor 14122) WISPr-Bandwidth-Max-Down Vendor-Specific, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and the Cisco-AVPair Vendor-Specific, and its Access-Accept with the same attributes as the PAP one's, the Cisco-AVPair and WISPr-Bandwidth-Max-Down Vendor-Specifics among them; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, a USR (vendor 429) USR-Connect-Speed in USR's own sub-attribute format, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause, a Microsoft (vendor 311) MS-Acct-Auth-Type), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
 | `radius_coa.pcap` | 8 | RADIUS Dynamic Authorization (RFC 5176) between radclient and a FreeRADIUS 3.2.5 server listening as a NAS on UDP 3799, four requests each followed by its reply: a CoA-Request (User-Name, Acct-Session-Id, Session-Timeout, Message-Authenticator) for the session the NAS holds and its CoA-ACK (Message-Authenticator); a CoA-Request for a session it does not hold (the same attributes, without the Message-Authenticator) and its CoA-NAK (Error-Cause 503, Session-Context-Not-Found); a Disconnect-Request (User-Name, Acct-Session-Id, Message-Authenticator) for the held session and its Disconnect-ACK (Message-Authenticator); and a Disconnect-Request for the other session (no Message-Authenticator) and its Disconnect-NAK (Error-Cause 503) — `Ethernet→IPv4→UDP→RADIUS` with `decode_as={"udp.port": {3799: RADIUS}}`, `Ethernet→IPv4→UDP` without it, UDP 3799 not being registered; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
@@ -89,6 +90,7 @@ rows and the notes below.
 | `ntp_control.pcap` | 21 | NTP control messages (RFC 9327, mode 6) between ntpq and an ntpsec 1.2.2 ntpd with two associations (the LOCAL refclock and an unreachable server), seven ntpq runs: `rv`, a read variables request and the system variables in one response, system status word `0xc016`; `as`, a read status request and the association list (IDs 17767 and 17768, peer status words `0x9014` and `0x8011`); `rv 0 version`, a read status exchange, then a read variables request naming `version` and its answer; `rv 0 nosuchvar`, the same with an unknown variable, answered by an error response (E bit, error code 5); `rv &1`, a read status exchange, then the peer variables of association 17767 in two fragments, the first with the M bit set and 468 bytes of data, the second at Offset 468; and `:config` authenticated with key 3 (MD5) and key 4 (SHA-1), the first answered "Config Succeeded" and the second refused with error code 1, each request and response ending in a 20- or 24-byte MAC, the error response's right after its 12-byte header — `Ethernet→IPv4→UDP→NTPControl`; **direct capture**, both directions, every mode 6 datagram (see NTP control note) |
 | `hsrp.pcap` | 12 | HSRPv1 (RFC 2281) messages crafted by Yersinia 0.8.2, every one to 224.0.0.2 (TTL 1) from and to UDP 1985 with Hellotime 3 and Holdtime 10, staging an election and a failover in two standby groups: group 1 (virtual IP 10.9.195.254, the default authentication data `cisco`) — R1 (10.9.195.11, priority 120) and R2 (10.9.195.12, priority 100) Hellos in Speak, R1 in Standby then Active, R2 in Standby, R1's Resign from Active, R2 in Speak then Active, then R3 (10.9.195.13, priority 200) preempting with a Coup and its Active Hello; group 2 (virtual IP 10.9.195.253, the configured password `spark`) — R4 (10.9.195.21, priority 110) Active and R5 (10.9.195.22, priority 90) Standby — 10 Hellos, 1 Coup, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **direct capture of script-built frames**, every byte Yersinia's (see HSRP note) |
 | `tls.pcap` | 15 | TLS (RFC 9846, RFC 5246) on TCP 443 between an nginx 1.24 server (OpenSSL 3.0, a self-signed ECDSA P-256 certificate for `tls.np196.test`) and five clients, each segment a whole number of records: from curl (OpenSSL 3.0, a 512-byte ClientHello with SNI), gnutls-cli (GnuTLS 3.8, record version TLS 1.2, SNI) and `openssl s_client -noservername` (no server_name), the ClientHello and the server's TLS 1.3 flight (ServerHello, ChangeCipherSpec and four encrypted records in one segment); from headless Chromium 153 (BoringSSL), whose ClientHello spans two segments and is not in the corpus, the server's flight and the client's ChangeCipherSpec and Finished; and every data segment of curl capped at TLS 1.2 — ClientHello; ServerHello, Certificate, ServerKeyExchange, ServerHelloDone; ClientKeyExchange, ChangeCipherSpec and the encrypted Finished; ChangeCipherSpec and Finished back; application data each way; the client's close_notify Alert — `Ethernet→IPv4→TCP→TLS` (→ `TLS` …, up to 6 records a segment); **direct capture**, both directions, a selection of the session in `tls/` (see TLS note) |
+| `stp.pcap` | 17 | BPDUs from mstpd 0.2.0 running the STP of four Linux bridges, to `01:80:c2:00:00:00`: ten MST BPDUs (IEEE 802.1Q MSTP, Protocol Version 3, BPDU Type 0x02, 151-byte frames), each with Version 1 Length 0, Version 3 Length 96 and two MSTI Configuration Messages (MSTIDs 1 and 2), MST Configuration Identifier Format Selector 0, Name `NETProtocols`, Revision Level 7 and Digest `f92468d366cf3c647eb33c03b166ad59` (VLANs 10-19 on MSTI 1, 20-29 on MSTI 2) — six between bridges A and B inside the region (each one's first, with Proposal; B's agreement as root port with Topology Change; A's with Topology Change, then without; B's without), three from B to the RSTP bridge C and one from B to the 802.1D bridge D before B falls back to 802.1D on that port; two RST BPDUs from C (Protocol Version 2, 53-byte frames: its proposal, then its agreement); and 802.1D BPDUs: D's Configuration BPDU and Topology Change Notification, and B's Configuration BPDUs to D plain, with Topology Change, and with Topology Change + Acknowledgment — `Ethernet→LLC→STP` (DSAP 0x42); **direct capture**, both directions on B's three ports, a selection of one frame of each kind (see STP note) |
 
 Consumed by `tests/test_corpus.py` (corpus-wide invariants +
 representative field asserts), mirrored into RootWire's test
@@ -766,9 +768,8 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   21-byte frame); `tests/test_llc.py` appends padding and a 4-byte
   FCS by hand, and `tests/test_cdp.py` does for the CDP frames. The
   BPDUs decode to `STP` (all 802.1D, Protocol Version 0: the kernel's
-  bridge speaks no RSTP, and mstpd, which would, has no installable
-  package here, so RST BPDUs are covered only by frames
-  `tests/test_stp.py` builds), and `check_fixtures` also holds each
+  bridge speaks no RSTP; real RST and MST BPDUs, from mstpd, are in
+  `stp.pcap`), and `check_fixtures` also holds each
   BPDU to its type's length (35 octets for a Configuration BPDU, 4 for
   a TCN, 36 for an RST BPDU, which must also have a Protocol Version of
   2 or more) and, as checks on what the sender transmitted rather than
@@ -779,6 +780,78 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   address, Port ID, Capabilities, Software version, Platform), and the
   forms they do not, such as an IPv6 address, are built in the tests
   (the kernel boots with IPv6 disabled).
+
+- `stp.pcap` was produced by `scripts/capture_fixtures_stp.sh` with
+  mstpd 0.2.0, built from upstream source: `git clone
+  https://github.com/mstpd/mstpd`, tag `0.2.0` (commit
+  `8995e5d11ee89f2251734e34cea711bb5a5bb911`, the latest release tag
+  on 2026-11-06), `./autogen.sh && ./configure && make` (autoconf
+  2.71, automake 1.16.5, gcc 13.3, Ubuntu 24.04), then `make install
+  DESTDIR=<dir>` into a staging tree outside the repository, with its
+  `sbin` put on `PATH` for the run; mstpd has no package in this
+  environment's apt. Kernel 6.18.44, tcpdump 4.99.4, tshark 4.2.2.
+  **The script runs in the initial network namespace** (the host's
+  own), unlike every other capture script: a Linux bridge hands its
+  STP to userspace (`stp_state` 2) only when the kernel's
+  `/sbin/bridge-stp` helper says so, and only in the initial netns; in
+  any other netns `stp_state 1` is the kernel's own 802.1D STP. There
+  it creates four bridges and three veth pairs, every link named
+  `npmstp-*` (no IP addresses), a temporary `/sbin/bridge-stp`,
+  marked as the script's by a comment line, that claims only bridges
+  named `npmstp-*` (any other bridge keeps the kernel's STP), one
+  mstpd and three tcpdump processes, and a `mktemp -d` scratch
+  directory; an EXIT trap removes them all, the helper only while it
+  still carries the mark, and leaves only
+  `tests/fixtures/staging/stp.pcap`. It refuses to run, touching
+  nothing, if a `/sbin/bridge-stp` without that mark exists (it never
+  overwrites another helper), if mstpd is running or if an `npmstp-*`
+  link exists. One mstpd, in the foreground, runs all four
+  bridges: A (`npmstp-bra`) and B (`npmstp-brb`) forced to MSTP in
+  one region (Name `NETProtocols`, Revision Level 7; VLANs 10-19 to
+  FID 1 to MSTI 1, 20-29 to FID 2 to MSTI 2), A at CIST priority
+  0x1000 (the CIST root and regional root), MSTI 1 priority 0x0000
+  and MSTI 2 priority 0xC000, B at the default 0x8000 but MSTI 2
+  priority 0x2000 (MSTI 2's regional root); C (`npmstp-brc`) forced
+  to RSTP and D (`npmstp-brd`) to 802.1D STP, each at 0x8000. Max Age
+  6 s and Forward Delay 4 s throughout; Hello Time is 2 s, the only
+  Bridge Hello Time mstpd 0.2.0 accepts (its bridge configuration
+  rejects any other value: "Bridge Hello Time must be 2"). B's ports
+  face A (`npmstp-ba`), C (`npmstp-bc`) and D (`npmstp-bd`); tcpdump
+  captures both directions on each and the script merges the three by
+  time. The links come up one at a
+  time, A-B, then B-C, then B-D, and the script keeps the first frame
+  of each of the 17 kinds it names (sending port, BPDU version and
+  type, CIST Flags) and fails unless it saw all of them, step by step.
+  **mstpd built every byte** (Ethernet header, LLC header and BPDU)
+  and sent it through a packet socket; veth adds no padding. The
+  bridges and veths have fixed MAC addresses (A `02:00:00:00:a0:00`,
+  B `02:00:00:00:b0:00`, ...), and three runs gave byte-identical
+  selections. The script asserts every frame: its 802.3 Length and
+  BPDU length (35 octets for a Configuration BPDU, 4 for a TCN, 36 for
+  an RST BPDU, 134 for an MST BPDU); for each MST BPDU, Version 1
+  Length 0, Version 3 Length 96, the MST Configuration Identifier,
+  with the digest recomputed as IEEE 802.1Q §13.8's HMAC-MD5 of the
+  VID-to-MSTID table, the CIST Bridge Identifier of the sender, and
+  its two MSTI messages' MSTIDs, Bridge and Port Priorities, and, once
+  forwarding, their Regional Roots (MSTI 1: A at 0x0001, MSTI 2: B at
+  0x2002); and tshark's reading of each frame's version, type, flags,
+  Version 1 and 3 Lengths, Configuration Identifier and MSTIDs against
+  its own. What the frames show: in an MST BPDU the RST prefix's
+  Bridge Identifier field holds the CIST Regional Root Identifier (A,
+  0x1000, in B's frames once it has heard A) and its Root Path Cost
+  the CIST External Root Path Cost (0: A is the CIST root); once B has
+  heard A, its CIST Internal Root Path Cost is 2000 and its CIST
+  Remaining Hops 19, A's 0 and 20. B sends MST BPDUs to C, an RSTP
+  bridge and so another region, as to A; C's first RST BPDU, its
+  proposal, names C itself root at Root Path Cost 0, and its
+  agreement names A at Root Path Cost 2000. To D, B sends MST BPDUs until its migration delay
+  ends, then 802.1D Configuration BPDUs; D sends a TCN as soon as its
+  port is up, and repeats it until B acknowledges it. No MSTI message
+  sets the Master flag. `check_fixtures` counts each MST BPDU as an RST BPDU (type
+  0x02, Protocol Version 2 or more, 36 octets or more, Version 1
+  Length 0) and checks nothing past the RST prefix;
+  `tests/test_stp.py` checks every MST BPDU's Version 3 information
+  field by field against a `struct` decode and this topology.
 
 - `stun.pcap` was produced by `scripts/capture_fixtures_stun.sh`:
   coturn 4.6.1's `turnserver` in STUN-only mode (`--stun-only`, no TLS

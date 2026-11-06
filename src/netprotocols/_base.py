@@ -103,7 +103,8 @@ has no terminator and runs to the end of the buffer. See
 give its exact length, so step 3 holds as for a header with one: the
 padding is left undecoded. See :mod:`netprotocols.layer3.vrrp`.
 ``STP`` is the same case at layer 2: its BPDU Type gives its exact
-length, so the octets after the BPDU are left undecoded. See
+length, and an MST BPDU that passes validation its Version 3 Length,
+so the octets after the BPDU are left undecoded. See
 :mod:`netprotocols.layer2.stp`.
 
 ``LLDP`` has no length for the whole LLDPDU, but each TLV has one and
