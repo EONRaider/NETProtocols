@@ -1110,6 +1110,53 @@ def _() -> tuple[bytes, bytes]:
     return NTP_SHA1, reseal(flip(NTP_SHA1, len(NTP_SHA1) - 1))
 
 
+NTP_CONTROL_REQUEST = frame("ntp_control.pcap", 0)
+NTP_CONTROL_MD5 = frame("ntp_control.pcap", 17)
+NTP_CONTROL_SHA1_ERROR = frame("ntp_control.pcap", 20)
+
+
+@case("ntp-control-truncated")
+def _() -> tuple[bytes, bytes]:
+    return NTP_CONTROL_REQUEST, udp_length(NTP_CONTROL_REQUEST, 8 + 11)
+
+
+@case("ntp-control-truncated")
+def _() -> tuple[bytes, bytes]:
+    # A Count of 19 runs one byte past the 18 bytes of data and the
+    # padding, short of the MAC's start.
+    at = udp_data(NTP_CONTROL_MD5) + 10
+    return NTP_CONTROL_MD5, udp_length(
+        reseal(put(NTP_CONTROL_MD5, at, b"\x00\x13")), 8 + 30
+    )
+
+
+@case("ntp-control-trailer")
+def _() -> tuple[bytes, bytes]:
+    length = struct.unpack_from("!H", NTP_CONTROL_MD5, l4(NTP_CONTROL_MD5) + 4)
+    return NTP_CONTROL_MD5, udp_length(NTP_CONTROL_MD5, length[0] - 4)
+
+
+@case("ntp-control-unknown-key")
+def _() -> tuple[bytes, bytes]:
+    at = udp_data(NTP_CONTROL_MD5) + 32 + 3
+    return NTP_CONTROL_MD5, reseal(put(NTP_CONTROL_MD5, at, b"\x09"))
+
+
+@case("ntp-control-md5")
+def _() -> tuple[bytes, bytes]:
+    return NTP_CONTROL_MD5, reseal(
+        flip(NTP_CONTROL_MD5, len(NTP_CONTROL_MD5) - 1)
+    )
+
+
+@case("ntp-control-sha1")
+def _() -> tuple[bytes, bytes]:
+    # An error response's MAC follows its 12-byte header.
+    return NTP_CONTROL_SHA1_ERROR, reseal(
+        flip(NTP_CONTROL_SHA1_ERROR, len(NTP_CONTROL_SHA1_ERROR) - 1)
+    )
+
+
 HSRP_HELLO = frame("hsrp.pcap", 0)
 
 
@@ -3043,6 +3090,9 @@ FIELD_VALUES: dict[Field, list[str]] = {
     ("_check_ntp", "algorithm"): [
         algorithm for algorithm, _ in checker._NTP_KEYS.values()
     ],
+    ("_check_ntp_control", "algorithm"): [
+        algorithm for algorithm, _ in checker._NTP_KEYS.values()
+    ],
     ("_check_bpdu", "name"): [
         name for name, _, unused in checker._BPDU_TYPES.values() if unused
     ],
@@ -3372,6 +3422,8 @@ def test_the_scan_finds_known_failures() -> None:
         "rip-hmac-sha256",
         "ntp-md5",
         "ntp-sha1",
+        "ntp-control-md5",
+        "ntp-control-sha1",
         "stp-config-unused-flags",
         "stp-rst-unused-flags",
         "radius-accounting-authenticator",

@@ -6,10 +6,15 @@ MAC is looked for and when it is found, truncation at every field,
 the ``name=value`` splitter, and how UDP port 123 chooses between
 ``NTP`` and ``NTPControl`` by the first byte.
 
-The messages are built here; the time messages of tests/fixtures/
-ntp.pcap check that dispatch leaves modes 1-5 to NTP.
+The cases ntpq and ntpd do not send are built here. The ntpq and ntpd
+exchanges in tests/fixtures/ntp_control.pcap (see its MANIFEST note)
+anchor the decode, round-trip and MAC asserts: each field is checked
+against an independent ``struct`` read of the frame and against what
+ntpq printed during the capture.
 """
 
+import hashlib
+import hmac
 import struct
 from dataclasses import replace
 
@@ -500,3 +505,202 @@ class TestDispatch:
             NTPControl,
             "mode",
         )
+
+
+FRAMES = pcap_frames(FIXTURES / "ntp_control.pcap")
+
+#: The fixture's frames, in the order the capture script keeps them.
+RV = (0, 1)
+AS = (2, 3)
+VERSION = (4, 5, 6, 7)
+UNKNOWN = (8, 9, 10, 11)
+PEER = (12, 13, 14, 15, 16)
+MD5 = (17, 18)
+SHA1 = (19, 20)
+REQUESTS = [0, 2, 4, 6, 8, 10, 12, 14, 17, 19]
+
+#: The test keys ntpd and ntpq were configured with, published in
+#: MANIFEST.md, by Key ID.
+KEYS = {3: ("md5", b"np272-md5-key"), 4: ("sha1", b"np272-sha1-key")}
+
+#: What ntpq printed during the capture, for the values a decoded
+#: message carries: the system status word of "rv", the association
+#: IDs and peer status words of "as", the variable of "rv 0 version",
+#: and the association ID and status word of "rv &1".
+NTPQ_SYSTEM_STATUS = 0xC016
+NTPQ_ASSOCIATIONS = [(17767, 0x9014), (17768, 0x8011)]
+NTPQ_VERSION = 'version="ntpd ntpsec-1.2.2"'
+NTPQ_PEER = (17767, 0x9014)
+
+
+def message_bytes(index: int) -> bytes:
+    """Return the control message of capture frame ``index``, exactly."""
+    return FRAMES[index][START:]
+
+
+def control_of(index: int) -> NTPControl:
+    layer = decode_frame(FRAMES[index])[NTPControl]
+    assert isinstance(layer, NTPControl)
+    return layer
+
+
+class TestCapturedMessages:
+    def test_every_frame_walks_to_ntp_control_and_ends_there(self):
+        for frame in FRAMES:
+            packet = decode_frame(frame)
+            assert [type(layer) for layer in packet] == [
+                Ethernet,
+                IPv4,
+                UDP,
+                NTPControl,
+            ]
+            assert packet.stopped_by is None
+            assert packet.consumed == len(frame)
+
+    def test_every_message_round_trips_exactly(self):
+        for index in range(len(FRAMES)):
+            message = message_bytes(index)
+            control_message = NTPControl.decode(message)
+            assert bytes(control_message) == message
+            assert control_message.header_len == len(message)
+            assert NTPControl.decode(bytes(control_message)) == control_message
+
+    @pytest.mark.parametrize("index", range(21))
+    def test_every_field_matches_an_independent_read(self, index):
+        message = control_of(index)
+        expected = reference(message_bytes(index))
+        assert expected.pop("mode") == message.mode == 6
+        for name, value in expected.items():
+            assert getattr(message, name) == value, name
+
+    def test_ntpq_and_ntpd_flags(self):
+        """ntpq sends version 2 with Leap Indicator 3, and the server,
+        unsynchronized, answers with the same."""
+        for index in range(len(FRAMES)):
+            message = control_of(index)
+            assert (message.leap, message.version) == (3, 2)
+            assert message.leap_name == "unknown (clock unsynchronized)"
+            assert message.response is (index not in REQUESTS)
+
+    def test_every_response_repeats_its_sequence_number(self):
+        exchanges = [RV, AS, VERSION[:2], VERSION[2:], UNKNOWN[:2]]
+        exchanges += [UNKNOWN[2:], PEER[:2], PEER[2:], MD5, SHA1]
+        for request, *responses in exchanges:
+            for response in responses:
+                assert (
+                    control_of(response).sequence
+                    == control_of(request).sequence
+                )
+
+    def test_the_opcodes(self):
+        names = [control_of(index).opcode_name for index in range(21)]
+        assert names[:2] == ["read variables"] * 2
+        assert names[2:6] == ["read status"] * 4
+        assert names[17:] == ["runtime configuration"] * 4
+
+    def test_the_system_status_word_ntpq_showed(self):
+        """ntpq printed "status=c016 leap_alarm, sync_unspec, 1 event,
+        restart" for the "rv" response's Status."""
+        message = control_of(RV[1])
+        assert message.status == NTPQ_SYSTEM_STATUS
+        assert message.system_status == NTPSystemStatus(3, 0, 1, 6)
+        status = message.system_status
+        assert status.leap_name == "unknown (clock unsynchronized)"
+        assert status.clock_source_name == "unspecified or unknown"
+        assert status.event_name == "system restart"
+
+    def test_the_association_list_ntpq_showed(self):
+        """The read status response's data is the association IDs and
+        peer status words ntpq listed, newest first."""
+        data = control_of(AS[1]).data
+        assert control_of(AS[1]).variables
+        words = struct.unpack(f"!{len(data) // 2}H", data)
+        listed = sorted(zip(words[0::2], words[1::2], strict=True))
+        assert listed == NTPQ_ASSOCIATIONS
+
+    def test_the_variable_ntpq_showed(self):
+        message = control_of(VERSION[3])
+        assert message.data == NTPQ_VERSION.encode() + b"\r\n"
+        assert message.variables == (("version", '"ntpd ntpsec-1.2.2"'),)
+        assert control_of(VERSION[2]).variables == (("version", None),)
+
+    def test_an_error_response(self):
+        """ntpq printed "Server error code UNKNOWNVAR"."""
+        message = control_of(UNKNOWN[3])
+        assert (message.response, message.error, message.count) == (
+            True,
+            True,
+            0,
+        )
+        assert (message.error_code, message.error_name) == (
+            5,
+            "unknown variable name",
+        )
+        assert message.system_status is None
+
+    def test_a_response_in_two_fragments(self):
+        """ntpq printed "associd=17767 status=9014" for "rv &1"; the
+        response came in two fragments, the first with the M bit set
+        and 468 bytes of data, the most a message holds."""
+        first, last = control_of(PEER[3]), control_of(PEER[4])
+        assert (first.more, last.more) == (True, False)
+        assert (first.offset, first.count) == (0, 468)
+        assert last.offset == first.count
+        for fragment in (first, last):
+            assert (fragment.association_id, fragment.status) == NTPQ_PEER
+            assert fragment.system_status is None
+        whole = replace(first, data=first.data + last.data)
+        variables = dict(whole.variables)
+        assert variables["srcadr"] == "127.127.1.0"
+        assert variables["srchost"] == '"LOCAL(0)"'
+        assert variables["stratum"] == "8"
+
+    def test_the_data_is_padded_to_4_bytes(self):
+        """The padding ntpsec sends is whatever its buffer held, not
+        always zeros, and is kept as it came."""
+        assert control_of(RV[1]).padding == bytes(3)
+        assert control_of(VERSION[2]).padding == bytes(1)
+        assert control_of(AS[1]).padding == b""
+        assert control_of(PEER[4]).padding == b"0."
+        for index in range(17):
+            message = control_of(index)
+            assert (message.mac, message.remainder) == (None, b"")
+            assert (12 + message.count + len(message.padding)) % 4 == 0
+
+    @pytest.mark.parametrize(
+        "index,key_id,digest_len,start",
+        [(17, 3, 16, 32), (18, 3, 16, 32), (19, 4, 20, 32), (20, 4, 20, 12)],
+    )
+    def test_the_macs(self, index, key_id, digest_len, start):
+        """The MAC follows the data padded to 8 bytes, and in an error
+        response the 12-byte header; it verifies with the published
+        key over every byte before it."""
+        message = control_of(index)
+        assert message.mac is not None
+        assert (message.mac.key_id, len(message.mac.digest)) == (
+            key_id,
+            digest_len,
+        )
+        assert 12 + message.count + len(message.padding) == start
+        algorithm, key = KEYS[key_id]
+        raw = message_bytes(index)
+        digest = hashlib.new(algorithm, key + raw[:start]).digest()
+        assert hmac.compare_digest(digest, message.mac.digest)
+
+    def test_the_configuration_exchange(self):
+        """ntpq printed "Config Succeeded" for key 3, and "Server error
+        code PERMISSION" for key 4, which is not the control key."""
+        assert control_of(MD5[0]).variables == (("logconfig", "syncall"),)
+        assert control_of(MD5[1]).data == b"Config Succeeded\r\n"
+        refused = control_of(SHA1[1])
+        assert (refused.error_code, refused.error_name) == (
+            1,
+            "authentication failure",
+        )
+
+    def test_build_ntpqs_read_variables_request(self):
+        message = NTPControl(leap=3, opcode=2, sequence=2, data=b"version")
+        assert bytes(replace(message, padding=b"\x00")) == message_bytes(
+            VERSION[2]
+        )
+        assert message.count == 7

@@ -601,8 +601,8 @@ pydoclint), `uv run mypy`, `uv run pytest`,
 `uv run sphinx-build -W -n -b dummy docs <outdir>` (docstring
 cross-references). The test suite runs across Python 3.12–3.14;
 `ruff`, `flake8`, `mypy` and Sphinx run on 3.12. The test suite is
-anchored by a 411-frame corpus of real captured traffic
-across 39 scenarios
+anchored by a 432-frame corpus of real captured traffic
+across 40 scenarios
 ([tests/fixtures/MANIFEST.md](tests/fixtures/MANIFEST.md), which says
 which layers a script built rather than the kernel) plus
 property-based fuzzing of the decode path. See

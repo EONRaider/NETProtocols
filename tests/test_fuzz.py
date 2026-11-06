@@ -1559,9 +1559,10 @@ class TestNTPAccessorSafety:
         event(f"NTP remainder: {bool(ntp.remainder)}")
 
 
-#: NTP control messages built by hand: a read variables request, a
+#: NTP control messages built by hand (a read variables request, a
 #: response with variables, an error response, and a request and an
-#: error response each with a MAC.
+#: error response each with a MAC), then every captured one, past its
+#: UDP header.
 _NTP_CONTROL_MESSAGES = [
     bytes(NTPControl(leap=3, opcode=2, sequence=1)),
     bytes(
@@ -1593,6 +1594,7 @@ _NTP_CONTROL_MESSAGES = [
             mac=NTPMAC(4, bytes(range(20))),
         )
     ),
+    *(frame[42:] for frame in pcap_frames(FIXTURES / "ntp_control.pcap")),
 ]
 
 

@@ -14,15 +14,16 @@ request's), every STUN MESSAGE-INTEGRITY and every NTP MAC, with the
 test keys published below, and every STUN FINGERPRINT; every TCP
 segment on port 443 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 411 frames across 39
+frames routinely leave checksums to NIC offload. 432 frames across 40
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-seven scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
 `vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`,
 `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`,
-`stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
+`stun.pcap`, `ntp.pcap`, `ntp_control.pcap`, `hsrp.pcap`,
+`tls.pcap`) are
 captured
 separately by
 their own `scripts/capture_fixtures_*.sh` over
@@ -38,7 +39,8 @@ kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
 server with tftp-hpa and curl clients, a FreeRADIUS server answering
 radclient, coturn answering STUN clients, a chronyd NTP server
-queried by ntpdig and chronyd clients, HSRP messages crafted by
+queried by ntpdig and chronyd clients, an ntpsec ntpd queried by
+ntpq over NTP's control protocol, HSRP messages crafted by
 Yersinia and sent between two netns, and an nginx HTTPS server
 answering Chromium, curl, gnutls-cli and openssl s_client — see their
 rows and the notes below.
@@ -82,6 +84,7 @@ rows and the notes below.
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, a Cisco (vendor 9) Cisco-AVPair Vendor-Specific, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, a Cisco-AVPair and a WISPr (vendor 14122) WISPr-Bandwidth-Max-Down Vendor-Specific, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and the Cisco-AVPair Vendor-Specific, and its Access-Accept with the same attributes as the PAP one's, the Cisco-AVPair and WISPr-Bandwidth-Max-Down Vendor-Specifics among them; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, a USR (vendor 429) USR-Connect-Speed in USR's own sub-attribute format, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause, a Microsoft (vendor 311) MS-Acct-Auth-Type), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
+| `ntp_control.pcap` | 21 | NTP control messages (RFC 9327, mode 6) between ntpq and an ntpsec 1.2.2 ntpd with two associations (the LOCAL refclock and an unreachable server), seven ntpq runs: `rv`, a read variables request and the system variables in one response, system status word `0xc016`; `as`, a read status request and the association list (IDs 17767 and 17768, peer status words `0x9014` and `0x8011`); `rv 0 version`, a read status exchange, then a read variables request naming `version` and its answer; `rv 0 nosuchvar`, the same with an unknown variable, answered by an error response (E bit, error code 5); `rv &1`, a read status exchange, then the peer variables of association 17767 in two fragments, the first with the M bit set and 468 bytes of data, the second at Offset 468; and `:config` authenticated with key 3 (MD5) and key 4 (SHA-1), the first answered "Config Succeeded" and the second refused with error code 1, each request and response ending in a 20- or 24-byte MAC, the error response's right after its 12-byte header — `Ethernet→IPv4→UDP→NTPControl`; **direct capture**, both directions, every mode 6 datagram (see NTP control note) |
 | `hsrp.pcap` | 12 | HSRPv1 (RFC 2281) messages crafted by Yersinia 0.8.2, every one to 224.0.0.2 (TTL 1) from and to UDP 1985 with Hellotime 3 and Holdtime 10, staging an election and a failover in two standby groups: group 1 (virtual IP 10.9.195.254, the default authentication data `cisco`) — R1 (10.9.195.11, priority 120) and R2 (10.9.195.12, priority 100) Hellos in Speak, R1 in Standby then Active, R2 in Standby, R1's Resign from Active, R2 in Speak then Active, then R3 (10.9.195.13, priority 200) preempting with a Coup and its Active Hello; group 2 (virtual IP 10.9.195.253, the configured password `spark`) — R4 (10.9.195.21, priority 110) Active and R5 (10.9.195.22, priority 90) Standby — 10 Hellos, 1 Coup, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **direct capture of script-built frames**, every byte Yersinia's (see HSRP note) |
 | `tls.pcap` | 15 | TLS (RFC 9846, RFC 5246) on TCP 443 between an nginx 1.24 server (OpenSSL 3.0, a self-signed ECDSA P-256 certificate for `tls.np196.test`) and five clients, each segment a whole number of records: from curl (OpenSSL 3.0, a 512-byte ClientHello with SNI), gnutls-cli (GnuTLS 3.8, record version TLS 1.2, SNI) and `openssl s_client -noservername` (no server_name), the ClientHello and the server's TLS 1.3 flight (ServerHello, ChangeCipherSpec and four encrypted records in one segment); from headless Chromium 153 (BoringSSL), whose ClientHello spans two segments and is not in the corpus, the server's flight and the client's ChangeCipherSpec and Finished; and every data segment of curl capped at TLS 1.2 — ClientHello; ServerHello, Certificate, ServerKeyExchange, ServerHelloDone; ClientKeyExchange, ChangeCipherSpec and the encrypted Finished; ChangeCipherSpec and Finished back; application data each way; the client's close_notify Alert — `Ethernet→IPv4→TCP→TLS` (→ `TLS` …, up to 6 records a segment); **direct capture**, both directions, a selection of the session in `tls/` (see TLS note) |
 
@@ -786,16 +789,59 @@ independently, in `scripts/check_fixtures.py` and `tests/test_stun.py`.
   the decoder rejects (an ntpq mode 6 request and response, and mode 7
   requests of 48 and 192 bytes), none of which these daemons send.
 
+- `ntp_control.pcap` was produced by
+  `scripts/capture_fixtures_ntp_control.sh`: an ntpsec 1.2.2 ntpd
+  (`disable ntp` and `disable kernel`, so it never adjusts the system
+  clock; the LOCAL refclock at stratum 8 and a `server` line for the
+  client's address, unanswered, so that it has two associations; keys
+  3 and 4 trusted, key 3 the control key; `restrict 10.9.172.2`, without
+  which this ntpd answered no mode 6 query) in netns `np272-s` at
+  10.9.172.1, and ntpq (ntpsec 1.2.2) in netns `np272-c` at
+  10.9.172.2, over a veth pair on 10.9.172.0/24. Seven ntpq runs, each
+  captured to its own scratch file with tcpdump on the server's side
+  of the pair, offload disabled on both ends: `rv`, `as`,
+  `rv 0 version`, `rv 0 nosuchvar`, `rv &1`, and
+  `:config logconfig =syncall` with `-a 3` and with `-a 4`. The script
+  keeps every mode 6 datagram (ntpd's own mode 3 polls of the
+  unreachable server are left out), asserts the selection exactly by
+  sender, opcode, R, E and M bits and MAC length, verifies each MAC with
+  the published keys, and checks the headers against what ntpq printed
+  during the run: the system status word `c016`, the association IDs
+  and peer status words of `as` (which ntpq sorts by ID and ntpd sends
+  newest first), the `version` variable, the error codes ntpq names
+  UNKNOWNVAR (5) and PERMISSION (1), the peer association's status word
+  `9014`, and "Config Succeeded". `tests/test_ntp_control.py` holds the
+  same values. **ntpq and ntpd built every NTP byte**, MACs included;
+  **the kernel built the UDP header** (its checksum computed in
+  software, and verified by `check_fixtures`), **the IPv4 header and the
+  Ethernet header**. ntpq sends version 2 with Leap Indicator 3, and
+  ntpd, unsynchronized, answers with Leap Indicator 3, which RFC 9327
+  §2 sets to zero. ntpd pads the data to a multiple of 4 bytes with
+  whatever its buffer held, so the padding is not always zeros (the
+  second peer fragment's is `30 2e`). An authenticated request and
+  response put the MAC after the data padded to 8 bytes, and the error
+  response after its 12-byte header. `check_fixtures` checks every
+  message's Count against its datagram and its padding, and verifies
+  every MAC with the published keys: the digest of the key followed by
+  the message before the MAC. A re-capture differs in the clock
+  variables, the association IDs, the digests, the IPv4 identification
+  and the client's source ports. The 12-byte requests make 54-byte
+  frames, which tcpdump on a veth device captures without Ethernet
+  padding, and no frame carries an FCS.
+
 ### NTP test keys
 
 Published so anyone can verify the captures: these keys protect
-nothing. `check_fixtures` and `tests/test_ntp.py` both hard-code them,
-independently, and verify every MAC in `ntp.pcap` with them.
+nothing. `check_fixtures`, `tests/test_ntp.py` and
+`tests/test_ntp_control.py` hard-code them, independently, and verify
+every MAC in `ntp.pcap` and `ntp_control.pcap` with them.
 
-| Key ID | Algorithm | Key (ASCII) |
-|---|---|---|
-| 1 | MD5 | `np191-md5-key` |
-| 2 | SHA-1 | `np191-sha1-key` |
+| Key ID | Algorithm | Key (ASCII) | Capture |
+|---|---|---|---|
+| 1 | MD5 | `np191-md5-key` | `ntp.pcap` |
+| 2 | SHA-1 | `np191-sha1-key` | `ntp.pcap` |
+| 3 | MD5 | `np272-md5-key` | `ntp_control.pcap` |
+| 4 | SHA-1 | `np272-sha1-key` | `ntp_control.pcap` |
 
 ### RIP test keys
 
