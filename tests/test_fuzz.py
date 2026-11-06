@@ -95,6 +95,8 @@ from netprotocols import (
     PIMRegister,
     Protocol,
     ProtocolError,
+    RADIUSAttribute,
+    RADIUSVendorAttribute,
     RIPAuthentication,
     RIPEntry,
     SCTPChunk,
@@ -1109,7 +1111,8 @@ def _radius_seeded(draw: st.DrawFn) -> bytes:
 def _read_every_radius_attribute(radius: RADIUS) -> None:
     """Walk the attributes and read every value and display accessor:
     the walk either tiles the attributes exactly or raises
-    InvalidFieldError, and nothing else raises."""
+    InvalidFieldError, and nothing else raises; so does each
+    Vendor-Specific's sub-attribute walk (see _read_vendor_attributes)."""
     try:
         attributes = radius.parsed_attributes
     except InvalidFieldError:
@@ -1119,9 +1122,87 @@ def _read_every_radius_attribute(radius: RADIUS) -> None:
     for found in attributes:
         assert found.type_name
         _ = found.value
+        _read_vendor_attributes(found)
     _ = (radius.user_name, radius.nas_ip_address)
     _ = (radius.nas_port, radius.framed_ip_address)
     event(f"RADIUS attributes: {len(attributes)}")
+
+
+def _read_vendor_attributes(found: RADIUSAttribute) -> None:
+    """Read a RADIUS attribute's Vendor-Specific accessors: the
+    Vendor-Id is its first 4 bytes or None, never raising; the
+    sub-attribute walk is None, tiles the String after the Vendor-Id
+    exactly, or raises InvalidFieldError."""
+    vendor = found.vendor_id
+    name = found.vendor_name
+    assert (vendor is None) == (name is None)
+    if vendor is not None:
+        assert vendor == int.from_bytes(found.data[:4])
+    try:
+        subs = found.vendor_attributes
+    except InvalidFieldError:
+        assert found.type == 26
+        event("RADIUS Vendor-Specific: malformed")
+        return
+    if subs is None:
+        event(f"RADIUS Vendor-Specific: kept raw ({found.type == 26})")
+        return
+    assert b"".join(map(bytes, subs)) == found.data[4:]
+    assert bytes(found) == bytes([26, 2 + len(found.data)]) + found.data
+    event(f"RADIUS Vendor-Specific sub-attributes: {len(subs)}")
+
+
+@st.composite
+def _radius_vendor_specifics(draw: st.DrawFn) -> RADIUSAttribute:
+    """A Vendor-Specific: a captured or hand-picked Vendor-Id (a
+    non-standard one among them) and sub-attributes built to tile, a
+    few bytes then changed and the whole perhaps cut short, or free
+    bytes."""
+    vendor = draw(
+        st.one_of(
+            st.sampled_from([9, 311, 429, 4846, 14122, 24757]),
+            st.integers(0, 0xFFFFFFFF),
+        )
+    )
+    string = draw(
+        st.one_of(
+            st.lists(
+                st.builds(
+                    RADIUSVendorAttribute,
+                    st.integers(0, 255),
+                    st.binary(max_size=20),
+                ),
+                max_size=4,
+            ).map(lambda found: b"".join(map(bytes, found))),
+            st.binary(max_size=24),
+        )
+    )
+    raw = bytearray(vendor.to_bytes(4, "big") + string)
+    for _ in range(draw(st.integers(0, 2))):
+        if raw:
+            raw[draw(st.integers(0, len(raw) - 1))] = draw(st.integers(0, 255))
+    if draw(st.booleans()):
+        raw = raw[: draw(st.integers(0, len(raw)))]
+    return RADIUSAttribute(26, bytes(raw))
+
+
+class TestRADIUSVendorSpecificSafety:
+    @given(found=_radius_vendor_specifics())
+    def test_every_vendor_accessor_is_total(
+        self, found: RADIUSAttribute
+    ) -> None:
+        """A Vendor-Specific's accessors answer, or the sub-attribute
+        walk raises InvalidFieldError (see _read_vendor_attributes),
+        and the attribute round-trips inside a packet."""
+        _read_vendor_attributes(found)
+        attributes = bytes(found)
+        radius = RADIUS(
+            code=1,
+            identifier=0,
+            length=20 + len(attributes),
+            attributes=attributes,
+        )
+        assert RADIUS.decode(bytes(radius)).parsed_attributes == (found,)
 
 
 class TestRADIUSAccessorSafety:

@@ -1,11 +1,12 @@
 """Test RADIUS (RFC 2865, RFC 2866) decoding and dispatch.
 
 Covered: the 20-byte header, the attribute list and the attribute
-types decoded to typed values, the extent the Length gives a packet
-(padding after it, a buffer cut short of it, a Length below the
-header), the authenticators verified against the published test secret
-(RFC 2865 §3, RFC 2866 §3, RFC 3579 §3.2), and dispatch from UDP ports
-1812 and 1813.
+types decoded to typed values, Vendor-Specific's Vendor-Id and
+sub-attributes (RFC 2865 §5.26), the RFC 6929 types kept raw, the
+extent the Length gives a packet (padding after it, a buffer cut short
+of it, a Length below the header), the authenticators verified
+against the published test secret (RFC 2865 §3, RFC 2866 §3, RFC 3579
+§3.2), and dispatch from UDP ports 1812 and 1813.
 
 The FreeRADIUS exchanges in tests/fixtures/radius.pcap (see its
 MANIFEST note) anchor the decode and round-trip asserts; the cases a
@@ -32,6 +33,7 @@ from netprotocols import (
     InvalidFieldError,
     IPv4,
     RADIUSAttribute,
+    RADIUSVendorAttribute,
     TruncatedHeaderError,
     decode_frame,
 )
@@ -62,7 +64,9 @@ WRONG_PASSWORD = b"np193-wrong"
 #: Every attribute type named, written from FreeRADIUS 3.2.5's
 #: dictionary.rfc2865 (RFC 2865 §5), dictionary.rfc2866 (RFC 2866 §5)
 #: and dictionary.rfc2869 (RFC 2869 §5: 55, 77, 85 and 87; 79 and 80,
-#: first defined there, are defined by RFC 3579 §3).
+#: first defined there, are defined by RFC 3579 §3), and from RFC 6929
+#: §3 for 241-246 (FreeRADIUS's dictionary.rfc6929 calls them
+#: Extended-Attribute-1 to -6).
 NAMED_TYPES = {
     1: "User-Name",
     2: "User-Password",
@@ -123,6 +127,12 @@ NAMED_TYPES = {
     80: "Message-Authenticator",
     85: "Acct-Interim-Interval",
     87: "NAS-Port-Id",
+    241: "Extended-Type-1",
+    242: "Extended-Type-2",
+    243: "Extended-Type-3",
+    244: "Extended-Type-4",
+    245: "Long-Extended-Type-1",
+    246: "Long-Extended-Type-2",
 }
 
 #: Every packet code named: RFC 2865 §3 (1-5, 11-13 and 255; 4 and 5
@@ -717,8 +727,8 @@ class TestAttributes:
         assert radius.parsed_attributes[0].value == 4294967295
         assert radius.nas_port == 4294967295
 
-    def test_vendor_specific_is_kept_raw(self):
-        """RFC 2865 §5.26: Vendor-Id, then the vendor's own attributes."""
+    def test_vendor_specific_value_is_its_raw_data(self):
+        """RFC 2865 §5.26: ``value`` is the Vendor-Id and String, raw."""
         data = (311).to_bytes(4, "big") + b"\x01\x06np19"
         found = RADIUSAttribute(26, data)
         assert (found.type_name, found.value) == ("Vendor-Specific", data)
@@ -736,13 +746,278 @@ class TestAttributes:
             for kind in range(256)
         }
 
-    @pytest.mark.parametrize("kind", [17, 21, 52, 64, 81, 241, 255])
+    @pytest.mark.parametrize("kind", [17, 21, 52, 64, 81, 240, 247, 255])
     def test_unnamed_types_fall_back(self, kind):
         """A type not named here displays as unknown, its value raw."""
         found = RADIUSAttribute(kind, b"np193")
         assert found.type_name == f"unknown ({kind})"
         assert found.value is None
         assert found.data == b"np193"
+
+
+def vsa(vendor: int, string: bytes) -> RADIUSAttribute:
+    """A Vendor-Specific of ``vendor`` whose String is ``string``."""
+    return RADIUSAttribute(26, vendor.to_bytes(4, "big") + string)
+
+
+#: Each vendor whose FreeRADIUS 3.2.5 dictionary ``VENDOR`` line gives
+#: a sub-attribute format other than 1,1, with one String in it.
+NONSTANDARD_VENDORS = {
+    429: b"\x00\x00\x90\x23\x00\x00\x00\x17",  # USR, format=4,0
+    637: b"\x00\x01\x07np193",  # Alcatel-ESAM, format=2,1
+    4846: b"\x00\x01\x07np193",  # Lucent, format=2,1
+    5323: b"\x01\x08\x00np193",  # Telrad, format=1,1,c
+    8164: b"\x00\x01\x00\x09np193",  # Starent, format=2,2
+    16445: b"\x00\x01\x07np193",  # Kineto, format=2,1
+    24757: b"\x01\x08\x00np193",  # WiMAX, format=1,1,c
+}
+
+#: The Vendor-Ids named, each checked against IANA's Private
+#: Enterprise Numbers (owner in the comment) and spelled as the
+#: FreeRADIUS 3.2.5 dictionary's ``VENDOR`` line spells it.
+NAMED_VENDORS = {
+    9: "Cisco",  # ciscoSystems
+    311: "Microsoft",  # Microsoft
+    429: "USR",  # UTStarcom Incorporated
+    637: "Alcatel-ESAM",  # Nokia (formerly 'Alcatel-Lucent')
+    2636: "Juniper",  # Juniper Networks, Inc.
+    4846: "Lucent",  # Lucent INS
+    5323: "Telrad",  # Telrad
+    8164: "Starent",  # Starent Networks
+    10415: "3GPP",  # 3GPP
+    14122: "WISPr",  # Wireless Broadband Alliance Ltd
+    16445: "Kineto",  # Kineto Wireless
+    24757: "WiMAX",  # WiMAX Forum
+}
+
+
+class TestVendorSpecific:
+    """Vendor-Specific (26) sub-attributes (RFC 2865 §5.26)."""
+
+    def test_captured_vendor_specifics_decode(self):
+        """Every captured Vendor-Specific in the recommended format
+        decodes to the Vendor-Id and sub-attributes ``struct`` reads."""
+        for index, expected in CAPTURED_VSAS.items():
+            for found, (vendor, string) in zip(
+                [a for a in radius_of(index).parsed_attributes if a.type == 26],
+                expected,
+                strict=True,
+            ):
+                assert found.vendor_id == vendor
+                if vendor == 429:
+                    continue
+                kind, size = struct.unpack_from("!BB", string)
+                assert size == len(string)
+                assert found.vendor_attributes == (
+                    RADIUSVendorAttribute(kind, string[2:]),
+                )
+
+    def test_the_cisco_avpairs(self):
+        """Cisco-AVPair (Vendor-Type 1) in each request and accept."""
+        for index, text in [
+            (PAP_ACCEPT, b"audit-session-id=np193-0001"),
+            (PAP_REJECT, b"audit-session-id=np193-0001"),
+            (CHAP_ACCEPT, b"audit-session-id=np193-0001"),
+            (PAP_ACCEPT + 1, b"shell:priv-lvl=15"),
+            (CHAP_ACCEPT + 1, b"shell:priv-lvl=15"),
+        ]:
+            (cisco,) = [
+                a
+                for a in radius_of(index).parsed_attributes
+                if a.vendor_id == 9
+            ]
+            assert (cisco.vendor_name, cisco.vendor_attributes) == (
+                "Cisco",
+                (RADIUSVendorAttribute(1, text),),
+            )
+
+    def test_the_wispr_and_microsoft_integers(self):
+        """WISPr-Bandwidth-Max-Down (8) 1000000; MS-Acct-Auth-Type (23)
+        1, PAP."""
+        for index, vendor, name, kind, number in [
+            (PAP_ACCEPT + 1, 14122, "WISPr", 8, 1000000),
+            (CHAP_ACCEPT + 1, 14122, "WISPr", 8, 1000000),
+            (ACCT_STOP, 311, "Microsoft", 23, 1),
+        ]:
+            (found,) = [
+                a
+                for a in radius_of(index).parsed_attributes
+                if a.vendor_id == vendor
+            ]
+            (sub,) = found.vendor_attributes
+            assert found.vendor_name == name
+            assert (sub.type, int.from_bytes(sub.data)) == (kind, number)
+
+    def test_the_captured_usr_attribute_stays_raw(self):
+        """FreeRADIUS sends USR's in format=4,0; it is not walked."""
+        found = attribute(radius_of(ACCT_START), 26)
+        assert (found.vendor_id, found.vendor_name) == (429, "USR")
+        assert found.vendor_attributes is None
+        assert found.data[4:] == CAPTURED_VSAS[ACCT_START][0][1]
+        assert bytes(found)[:2] == b"\x1a\x0e"
+
+    def test_several_sub_attributes_in_one(self):
+        """RFC 2865 §5.26: several sub-attributes MAY share one."""
+        parts = (
+            RADIUSVendorAttribute(1, b"np193=1"),
+            RADIUSVendorAttribute(2, b""),
+            RADIUSVendorAttribute(255, bytes(5)),
+        )
+        found = vsa(9, b"".join(map(bytes, parts)))
+        assert found.vendor_attributes == parts
+        assert b"".join(map(bytes, parts)) == found.data[4:]
+
+    def test_a_sub_attribute_spanning_the_string(self):
+        """The widest sub-attribute fills a 255-byte Vendor-Specific."""
+        sub = RADIUSVendorAttribute(1, bytes(247))
+        found = vsa(9, bytes(sub))
+        assert len(bytes(found)) == 255
+        assert found.vendor_attributes == (sub,)
+
+    @pytest.mark.parametrize("length", [0, 1])
+    def test_a_vendor_length_below_2_raises(self, length):
+        """The Vendor-Length counts its own 2-byte header."""
+        found = vsa(9, bytes([1, length]) + b"np193")
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = found.vendor_attributes
+        error = caught.value
+        assert (error.protocol, error.field, error.offset) == (
+            RADIUSAttribute,
+            "data",
+            4,
+        )
+        assert (error.expected, error.actual) == (">=2", length)
+
+    def test_a_vendor_length_past_the_value_raises(self):
+        """A sub-attribute running past the attribute raises."""
+        found = vsa(9, b"\x01\x04ab" + b"\x02\x09np193")
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = found.vendor_attributes
+        assert (caught.value.field, caught.value.offset) == ("data", 8)
+        assert "runs past" in str(caught.value)
+
+    def test_a_trailing_byte_raises(self):
+        """A Vendor-Type with no Vendor-Length after it is cut short."""
+        found = vsa(9, bytes(RADIUSVendorAttribute(1, b"np193")) + b"\x02")
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = found.vendor_attributes
+        assert (caught.value.field, caught.value.offset) == ("data", 11)
+
+    @pytest.mark.parametrize("size", [0, 1, 3])
+    def test_a_value_shorter_than_the_vendor_id(self, size):
+        """No Vendor-Id: no ``vendor_id``, and the walk raises."""
+        found = RADIUSAttribute(26, bytes(size))
+        assert (found.vendor_id, found.vendor_name) == (None, None)
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = found.vendor_attributes
+        error = caught.value
+        assert (error.field, error.offset) == ("data", None)
+        assert (error.expected, error.actual) == (">=5", size)
+
+    @pytest.mark.parametrize("vendor", [9, 429])
+    def test_an_empty_sub_attribute_list_raises(self, vendor):
+        """RFC 2865 §5.26: the String is one or more octets (Length >= 7),
+        whatever the vendor."""
+        found = vsa(vendor, b"")
+        assert found.vendor_id == vendor
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = found.vendor_attributes
+        assert (caught.value.expected, caught.value.actual) == (">=5", 4)
+
+    def test_malformed_sub_attributes_leave_the_packet_alone(self):
+        """The packet and its attribute list still decode and round-trip."""
+        broken = vsa(9, b"\x01\x00")
+        radius = build(bytes(broken) + bytes(RADIUSAttribute(1, b"np193")))
+        decoded = RADIUS.decode(bytes(radius))
+        assert decoded.parsed_attributes[0] == broken
+        assert decoded.user_name == "np193"
+        assert bytes(decoded) == bytes(radius)
+
+    @pytest.mark.parametrize("vendor", sorted(NONSTANDARD_VENDORS))
+    def test_nonstandard_vendors_are_kept_raw(self, vendor):
+        """A vendor with its own format is not walked as RFC 2865's."""
+        string = NONSTANDARD_VENDORS[vendor]
+        found = vsa(vendor, string)
+        assert found.vendor_attributes is None
+        assert (found.vendor_id, found.data[4:]) == (vendor, string)
+        assert found.value == found.data
+
+    def test_an_unknown_vendor_is_walked(self):
+        """The recommended format is read for a vendor not named here."""
+        found = vsa(0x00FFFFFF, b"\x07\x03x")
+        assert found.vendor_name == "unknown (16777215)"
+        assert found.vendor_attributes == (RADIUSVendorAttribute(7, b"x"),)
+
+    def test_all_four_vendor_id_bytes_are_read(self):
+        """RFC 6929 §2.6: the Vendor-Id is all four octets."""
+        found = vsa(0x01000009, b"\x01\x02")
+        assert found.vendor_id == 0x01000009
+        assert found.vendor_name == "unknown (16777225)"
+
+    def test_the_named_vendors(self):
+        """See :data:`NAMED_VENDORS`; every other Vendor-Id is unknown."""
+        for vendor in [*NAMED_VENDORS, 0, 1, 10, 3561, 0xFFFFFFFF]:
+            assert vsa(vendor, b"\x01\x02").vendor_name == NAMED_VENDORS.get(
+                vendor, f"unknown ({vendor})"
+            )
+
+    @pytest.mark.parametrize("kind", [1, 25, 27, 241, 255])
+    def test_other_types_have_no_vendor(self, kind):
+        """Only a Vendor-Specific has a Vendor-Id and sub-attributes."""
+        found = RADIUSAttribute(kind, (9).to_bytes(4, "big") + b"\x01\x02")
+        assert found.vendor_id is None
+        assert found.vendor_name is None
+        assert found.vendor_attributes is None
+
+    def test_sub_attribute_fields_are_checked(self):
+        """A Vendor-Type fits a byte and its data 253 bytes."""
+        with pytest.raises(InvalidFieldError) as caught:
+            RADIUSVendorAttribute(256)
+        assert (caught.value.protocol, caught.value.field) == (
+            RADIUSVendorAttribute,
+            "type",
+        )
+        with pytest.raises(InvalidFieldError) as caught:
+            RADIUSVendorAttribute(1, bytes(254))
+        assert (caught.value.field, caught.value.actual) == ("data", 254)
+        assert "RADIUSVendorAttribute data" in str(caught.value)
+        widest = RADIUSVendorAttribute(255, bytes(253))
+        assert bytes(widest)[:2] == b"\xff\xff"
+
+
+#: RFC 6929 §3: the Extended-Type (241-244) and Long-Extended-Type
+#: (245, 246) attributes, an Extended-Type byte first, then a More
+#: flag and reserved bits for a Long Extended Type, then the value.
+EXTENDED_TYPES = {
+    241: b"\x01np193",
+    242: b"\x01np193",
+    243: b"\x01np193",
+    244: b"\x01np193",
+    245: b"\x01\x00np193",
+    246: b"\x01\x80np193",
+}
+
+
+class TestExtendedTypes:
+    @pytest.mark.parametrize("kind", sorted(EXTENDED_TYPES))
+    def test_extended_types_are_named_and_kept_raw(self, kind):
+        """RFC 6929 §3 names them; the value is not decoded."""
+        found = RADIUSAttribute(kind, EXTENDED_TYPES[kind])
+        assert found.type_name == NAMED_TYPES[kind]
+        assert found.value is None
+        assert found.data == EXTENDED_TYPES[kind]
+        assert found.vendor_id is None
+        assert found.vendor_attributes is None
+
+    @pytest.mark.parametrize("kind", sorted(EXTENDED_TYPES))
+    def test_extended_vendor_specific_is_kept_raw(self, kind):
+        """RFC 6929 §4: Extended-Type 26, then a Vendor-Id, kept raw."""
+        flags = b"\x00" if kind >= 245 else b""
+        data = b"\x1a" + flags + (9).to_bytes(4, "big") + b"\x01np193"
+        radius = build(bytes(RADIUSAttribute(kind, data)))
+        (found,) = RADIUS.decode(bytes(radius)).parsed_attributes
+        assert (found.type, found.data, found.value) == (kind, data, None)
+        assert found.vendor_attributes is None
 
 
 class TestConstruction:
