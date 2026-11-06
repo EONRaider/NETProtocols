@@ -15,6 +15,7 @@ real server does not send are built here.
 import hashlib
 import hmac
 import importlib.util
+import struct
 from collections import Counter
 from dataclasses import replace
 from ipaddress import IPv4Address
@@ -150,6 +151,46 @@ NAMED_CODES = {
 def packet_bytes(index: int) -> bytes:
     """Return the RADIUS packet of capture frame ``index``, exactly."""
     return FRAMES[index][RADIUS_START:]
+
+
+def vendor_specifics(index: int) -> list[tuple[int, bytes]]:
+    """Return each Vendor-Specific of frame ``index`` as (Vendor-Id,
+    String), read with ``struct`` alone (RFC 2865 §5.26)."""
+    raw = packet_bytes(index)
+    (length,) = struct.unpack_from("!H", raw, 2)
+    found, offset = [], 20
+    while offset < length:
+        kind, size = struct.unpack_from("!BB", raw, offset)
+        if kind == 26:
+            (vendor,) = struct.unpack_from("!I", raw, offset + 2)
+            found.append((vendor, raw[offset + 6 : offset + size]))
+        offset += size
+    assert offset == length
+    return found
+
+
+#: The Vendor-Specifics of the capture, by frame, from the capture
+#: script: a Cisco (9) Cisco-AVPair (Vendor-Type 1) in each
+#: Access-Request; a Cisco-AVPair and a WISPr (14122)
+#: WISPr-Bandwidth-Max-Down (8) of 1000000 in each Access-Accept to
+#: them; a USR (429) USR-Connect-Speed (Vendor-Type 0x9023, value 23,
+#: 33600-BPS) in USR's 4-byte type, no length format in the
+#: Accounting-Request Start; and a Microsoft (311) MS-Acct-Auth-Type
+#: (23) of 1, PAP, in the Stop.
+REQUEST_AVPAIR = (9, b"\x01\x1daudit-session-id=np193-0001")
+REPLY_VSAS = [
+    (9, b"\x01\x13shell:priv-lvl=15"),
+    (14122, b"\x08\x06" + (1000000).to_bytes(4, "big")),
+]
+CAPTURED_VSAS = {
+    PAP_ACCEPT: [REQUEST_AVPAIR],
+    PAP_ACCEPT + 1: REPLY_VSAS,
+    PAP_REJECT: [REQUEST_AVPAIR],
+    CHAP_ACCEPT: [REQUEST_AVPAIR],
+    CHAP_ACCEPT + 1: REPLY_VSAS,
+    ACCT_START: [(429, b"\x00\x00\x90\x23" + (23).to_bytes(4, "big"))],
+    ACCT_STOP: [(311, b"\x17\x06" + (1).to_bytes(4, "big"))],
+}
 
 
 def radius_of(index: int) -> RADIUS:
@@ -325,6 +366,25 @@ class TestCapturedPackets:
             "Message-Authenticator",
             16,
         )
+
+    def test_vendor_specifics_in_capture_order(self):
+        """The Vendor-Specifics radclient and FreeRADIUS sent, by frame.
+
+        The Access-Reject has none: ``attr_filter.access_reject`` lets
+        only Reply-Message and Message-Authenticator through.
+        """
+        for index in range(len(FRAMES)):
+            assert vendor_specifics(index) == CAPTURED_VSAS.get(index, [])
+
+    def test_vendor_specifics_are_kept_raw_as_sent(self):
+        """Each Vendor-Specific's data is its Vendor-Id and String."""
+        for index, expected in CAPTURED_VSAS.items():
+            found = [
+                (int.from_bytes(a.data[:4]), a.data[4:])
+                for a in radius_of(index).parsed_attributes
+                if a.type == 26
+            ]
+            assert found == expected
 
     def test_attributes_reencode_to_their_wire_bytes(self):
         """The attributes re-encoded, joined, are the attribute bytes."""
@@ -519,17 +579,17 @@ class TestExtent:
         assert radius == RADIUS.decode(raw)
         assert bytes(radius) == raw
 
-    @pytest.mark.parametrize("cut", [20, 21, 40, 79])
+    @pytest.mark.parametrize("cut", [20, 21, 40, 114])
     def test_a_buffer_shorter_than_the_length_raises(self, cut):
         """RFC 2865 §3: a packet shorter than its Length is discarded."""
         raw = packet_bytes(PAP_ACCEPT)
-        assert len(raw) == 80
+        assert len(raw) == 115
         with pytest.raises(TruncatedHeaderError) as caught:
             RADIUS.decode(raw[:cut])
         error = caught.value
         assert (error.field, error.expected, error.actual) == (
             "length",
-            80,
+            115,
             cut,
         )
 
