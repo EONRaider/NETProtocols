@@ -130,6 +130,7 @@ from strategies import (
     vrrp_headers,
 )
 from test_corpus import walk
+from test_sctp import ACCESSOR_TYPES
 
 ALL_PROTOCOLS = (
     Ethernet,
@@ -791,6 +792,39 @@ class TestSCTPChunkAccessorSafety:
             assert chunk.type_name
             _ = chunk.flags_str
             assert 0 <= chunk.unrecognized_action <= 3
+            _read_every_sctp_chunk_accessor(chunk)
+
+    @given(
+        chunk=st.builds(
+            SCTPChunk,
+            type=st.sampled_from([0, 1, 2, 3, 64]),
+            flags=st.integers(0, 0xFF),
+            value=st.one_of(
+                st.binary(max_size=64),
+                st.lists(
+                    st.sampled_from([0, 0, 1, 2, 4, 7, 8, 0xFF]), max_size=64
+                ).map(bytes),
+            ),
+        )
+    )
+    def test_typed_accessors_never_raise(self, chunk: SCTPChunk) -> None:
+        """Every typed accessor answers a value or None for any value of
+        the five chunk types they read. Parsed parameters tile the value
+        after the 16 fixed bytes: each but the last padded to 4 bytes,
+        and the last with its padding or without it."""
+        _read_every_sctp_chunk_accessor(chunk)
+        parameters = chunk.parameters
+        if parameters is not None:
+            rest = len(chunk.value) - 16
+            padded = [len(bytes(parameter)) for parameter in parameters]
+            if parameters:
+                assert sum(padded[:-1]) + parameters[-1].length <= rest
+            assert rest <= sum(padded)
+            for parameter in parameters:
+                assert parameter.type_name
+        blocks = chunk.gap_ack_blocks
+        if blocks is not None:
+            assert len(blocks) == chunk.num_gap_ack_blocks
 
     @given(header=sctp_headers())
     def test_zero_padding_after_a_packet_is_left_undecoded(
@@ -823,6 +857,57 @@ class TestSCTPChunkAccessorSafety:
         sctp = SCTP.decode(bytes(12) + raw)
         assert sctp.chunks == raw
         assert list(sctp.parsed_chunks) == chunks
+
+
+#: Every typed SCTPChunk accessor, each of which must answer a value or
+#: None on any chunk.
+_SCTP_CHUNK_ACCESSORS = (
+    "immediate",
+    "unordered",
+    "beginning_fragment",
+    "ending_fragment",
+    "tsn",
+    "stream_id",
+    "stream_sequence_number",
+    "message_id",
+    "ppid",
+    "fragment_sequence_number",
+    "user_data",
+    "initiate_tag",
+    "a_rwnd",
+    "outbound_streams",
+    "inbound_streams",
+    "initial_tsn",
+    "parameters",
+    "state_cookie",
+    "cumulative_tsn_ack",
+    "num_gap_ack_blocks",
+    "num_duplicate_tsns",
+    "gap_ack_blocks",
+    "duplicate_tsns",
+)
+
+
+def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
+    """Read every typed accessor, and decode the user data through the
+    default, empty ``sctp.ppid`` table."""
+    for name in _SCTP_CHUNK_ACCESSORS:
+        getattr(chunk, name)
+    assert chunk.decode_user_data() is None
+
+
+def test_the_sctp_accessor_lists_name_every_property() -> None:
+    """_SCTP_CHUNK_ACCESSORS, and test_sctp.py's ACCESSOR_TYPES, cover
+    every SCTPChunk property beyond the display helpers the walk
+    property reads itself."""
+    properties = {
+        name
+        for name, attr in vars(SCTPChunk).items()
+        if isinstance(attr, property)
+    }
+    display = {"length", "type_name", "flags_str", "unrecognized_action"}
+    assert properties - display == set(_SCTP_CHUNK_ACCESSORS)
+    assert properties - display == set(ACCESSOR_TYPES)
 
 
 def _read_every_ospf_accessor(ospf: OSPF) -> None:

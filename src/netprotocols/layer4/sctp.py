@@ -49,7 +49,17 @@ The chunks are kept as raw ``bytes``, padding and all, so
 for the nonzero padding a receiver must ignore (§3.2) and for a
 remainder that does not parse. The :attr:`SCTP.parsed_chunks` accessor
 splits them into :class:`SCTPChunk` objects on demand and never
-re-encodes.
+re-encodes. The typed accessors of :class:`SCTPChunk` read the fields
+of DATA, INIT, INIT ACK, SACK and I-DATA chunks, and the parameters of
+INIT and INIT ACK as :class:`SCTPParameter` objects.
+
+A :func:`~netprotocols.decode_frame` walk ends at SCTP, whose
+:meth:`~netprotocols._base.Protocol.next_protocol` answers ``None``.
+One packet can carry several DATA chunks, each with its own Payload
+Protocol Identifier, and a user message can span several chunks.
+:meth:`SCTPChunk.decode_user_data` decodes the user data of one
+unfragmented DATA or I-DATA chunk through the ``sctp.ppid`` dispatch
+table, and reassembling a fragmented message is the caller's.
 """
 
 from __future__ import annotations
@@ -60,12 +70,14 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, hex_str
+from netprotocols._tlv import walk_kind_length_value
+from netprotocols.registry import DEFAULT, TABLE_SCTP_PPID, Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
 )
 
-__all__ = ["SCTP", "SCTPChunk"]
+__all__ = ["SCTP", "SCTPChunk", "SCTPParameter"]
 
 #: A chunk's type, flags and length (RFC 9260 §3.2).
 _CHUNK_HEADER = Struct("!BBH")
@@ -73,6 +85,75 @@ _CHUNK_HEADER = Struct("!BBH")
 #: The largest value a chunk can carry: its 16-bit length counts the
 #: 4-byte chunk header too.
 _MAX_VALUE_LEN = 0xFFFF - _CHUNK_HEADER.size
+
+#: A parameter's type and length (RFC 9260 §3.2.1).
+_PARAMETER_HEADER = Struct("!HH")
+
+#: The largest value a parameter can carry: its 16-bit length counts the
+#: 4-byte parameter header too.
+_MAX_PARAMETER_VALUE_LEN = 0xFFFF - _PARAMETER_HEADER.size
+
+#: The chunk types the typed accessors read (RFC 9260 §3.3.1-3.3.4,
+#: RFC 8260 §2.1).
+_DATA = 0
+_INIT = 1
+_INIT_ACK = 2
+_SACK = 3
+_I_DATA = 64
+
+#: The I, U, B and E flag bits of DATA and I-DATA chunks.
+_I_BIT = 0x08
+_U_BIT = 0x04
+_B_BIT = 0x02
+_E_BIT = 0x01
+
+#: The fixed fields before the parameters of an INIT or INIT ACK, and
+#: before the Gap Ack Blocks of a SACK.
+_INIT_FIXED_LEN = 16
+_SACK_FIXED_LEN = 12
+
+#: Where the user data starts in a DATA and in an I-DATA chunk's value.
+_DATA_USER_DATA = 12
+_I_DATA_USER_DATA = 16
+
+#: The user data's start by chunk type, for the types that carry it.
+_USER_DATA_START: dict[int, int] = {
+    _DATA: _DATA_USER_DATA,
+    _I_DATA: _I_DATA_USER_DATA,
+}
+
+#: The State Cookie parameter type (RFC 9260 §3.3.3.1.1).
+_STATE_COOKIE = 7
+
+#: The flat ``sctp.ppid`` table of the default registry, bound once at
+#: import. Registering a decoder mutates this dict in place, so the
+#: reference stays live (see :mod:`netprotocols.registry`).
+_PPID_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_SCTP_PPID)
+
+#: Parameter types this library names: RFC 9260 §3.3.2.1 and §3.3.3.1,
+#: then the extensions an INIT or INIT ACK commonly carries (RFC 4895
+#: Random, Chunk List and Requested HMAC Algorithm, RFC 4820 Padding,
+#: RFC 5061 Supported Extensions and Adaptation Layer Indication, RFC
+#: 3758 Forward-TSN-Supported, RFC 9653 Zero Checksum Acceptable).
+#: Unknown types read ``"unknown (n)"``.
+_PARAMETER_TYPE_NAMES: dict[int, str] = {
+    5: "IPv4 Address",
+    6: "IPv6 Address",
+    7: "State Cookie",
+    8: "Unrecognized Parameter",
+    9: "Cookie Preservative",
+    11: "Host Name Address",
+    12: "Supported Address Types",
+    0x8000: "ECN Capable",
+    0x8001: "Zero Checksum Acceptable",
+    0x8002: "Random",
+    0x8003: "Chunk List",
+    0x8004: "Requested HMAC Algorithm",
+    0x8005: "Padding",
+    0x8008: "Supported Extensions",
+    0xC000: "Forward-TSN-Supported",
+    0xC006: "Adaptation Layer Indication",
+}
 
 #: Chunk types this library names: RFC 9260 §3.2 (0-14), then the
 #: extensions in common use (RFC 4895 AUTH, RFC 8260 I-DATA and
@@ -123,6 +204,72 @@ _CHUNK_FLAG_NAMES: dict[int, tuple[tuple[int, str], ...]] = {
 
 
 @dataclass(frozen=True, slots=True)
+class SCTPParameter:
+    """One optional or variable-length parameter (RFC 9260 §3.2.1).
+
+    INIT and INIT ACK chunks carry them after their fixed fields
+    (:attr:`SCTPChunk.parameters`).
+
+    :param type: Parameter type, ``0``-``65535`` — ``5`` IPv4 Address,
+        ``6`` IPv6 Address, ``7`` State Cookie, ``9`` Cookie
+        Preservative, ``12`` Supported Address Types, ... (see
+        :attr:`type_name`).
+    :param value: The parameter value, kept raw, without its padding.
+        At most 65531 bytes, since :attr:`length` is a 16-bit field.
+
+    ``bytes(parameter)`` is the on-wire parameter, padded with zero
+    bytes to a multiple of 4.
+    """
+
+    type: int
+    value: bytes = b""
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.type <= 0xFFFF:
+            raise InvalidFieldError(
+                f"SCTP parameter type must be within 0-65535, got {self.type}",
+                protocol=type(self),
+                field="type",
+                expected="0-65535",
+                actual=self.type,
+            )
+        if len(self.value) > _MAX_PARAMETER_VALUE_LEN:
+            raise InvalidFieldError(
+                "SCTP parameter value must be at most "
+                f"{_MAX_PARAMETER_VALUE_LEN} bytes, got {len(self.value)}",
+                protocol=type(self),
+                field="value",
+                expected=f"<={_MAX_PARAMETER_VALUE_LEN}",
+                actual=len(self.value),
+            )
+
+    def __bytes__(self) -> bytes:
+        return (
+            _PARAMETER_HEADER.pack(self.type, self.length)
+            + self.value
+            + bytes(-self.length % 4)
+        )
+
+    @property
+    def length(self) -> int:
+        """The parameter length field (RFC 9260 §3.2.1).
+
+        It counts the 4-byte parameter header and the value, not the
+        padding.
+        """
+        return _PARAMETER_HEADER.size + len(self.value)
+
+    @property
+    def type_name(self) -> str:
+        """Display name of the parameter type, e.g. ``"State Cookie"``.
+
+        ``"unknown (n)"`` for types this library does not name (degrades,
+        never raises).
+        """
+        return _PARAMETER_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
+
+
+@dataclass(frozen=True, slots=True)
 class SCTPChunk:
     """One SCTP chunk (RFC 9260 §3.2).
 
@@ -141,6 +288,15 @@ class SCTPChunk:
     ``bytes(chunk)`` is the on-wire chunk, padded with zero bytes to a
     multiple of 4, so ``SCTP(..., chunks=b"".join(map(bytes, chunks)))``
     builds a packet from a list of them.
+
+    Typed accessors read the fields of DATA (RFC 9260 §3.3.1), INIT
+    (§3.3.2), INIT ACK (§3.3.3), SACK (§3.3.4) and I-DATA (RFC 8260
+    §2.1) chunks out of :attr:`value`. Each one never raises: it is
+    ``None`` for a chunk of a type that has no such field, and for a
+    value too short to hold it, so a field before the cut still reads
+    from a value cut short. Fields shared by several types (``tsn``,
+    ``stream_id``, ``ppid``, ``user_data``, ``a_rwnd``) read each
+    type's own layout.
     """
 
     type: int
@@ -217,6 +373,358 @@ class SCTPChunk:
         chunk and continue, ``3`` skip it, continue, and report it.
         """
         return self.type >> 6
+
+    def _uint(
+        self, types: tuple[int, ...], offset: int, size: int
+    ) -> int | None:
+        """Read a big-endian unsigned field of the value.
+
+        :param types: The chunk types that carry the field.
+        :param offset: Where the field starts in :attr:`value`.
+        :param size: The field's width in bytes.
+        :returns: The field, or ``None`` when :attr:`type` is not one of
+            ``types`` or :attr:`value` ends before the field does.
+        """
+        if self.type not in types or len(self.value) < offset + size:
+            return None
+        return int.from_bytes(self.value[offset : offset + size])
+
+    def _flag(self, bit: int) -> bool | None:
+        """Read a DATA or I-DATA flag bit.
+
+        :param bit: The bit's mask in :attr:`flags`.
+        :returns: Whether it is set, or ``None`` for any other chunk type.
+        """
+        if self.type not in (_DATA, _I_DATA):
+            return None
+        return bool(self.flags & bit)
+
+    @property
+    def immediate(self) -> bool | None:
+        """The I bit of a DATA (RFC 7053 §3) or I-DATA chunk.
+
+        Set, it asks the receiver to send its SACK without delay.
+        ``None`` for other chunk types (degrades, never raises).
+        """
+        return self._flag(_I_BIT)
+
+    @property
+    def unordered(self) -> bool | None:
+        """The U bit of a DATA or I-DATA chunk: an unordered message.
+
+        ``None`` for other chunk types (degrades, never raises).
+        """
+        return self._flag(_U_BIT)
+
+    @property
+    def beginning_fragment(self) -> bool | None:
+        """The B bit of a DATA or I-DATA chunk: a message's first piece.
+
+        Both B and E set mark an unfragmented message. ``None`` for
+        other chunk types (degrades, never raises).
+        """
+        return self._flag(_B_BIT)
+
+    @property
+    def ending_fragment(self) -> bool | None:
+        """The E bit of a DATA or I-DATA chunk: a message's last piece.
+
+        ``None`` for other chunk types (degrades, never raises).
+        """
+        return self._flag(_E_BIT)
+
+    @property
+    def tsn(self) -> int | None:
+        """The TSN of a DATA or I-DATA chunk.
+
+        ``None`` for other chunk types and a value shorter than 4 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_DATA, _I_DATA), 0, 4)
+
+    @property
+    def stream_id(self) -> int | None:
+        """The Stream Identifier of a DATA or I-DATA chunk.
+
+        ``None`` for other chunk types and a value shorter than 6 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_DATA, _I_DATA), 4, 2)
+
+    @property
+    def stream_sequence_number(self) -> int | None:
+        """The Stream Sequence Number of a DATA chunk.
+
+        A receiver ignores it when the U bit is set. ``None`` for other
+        chunk types, I-DATA included, and a value shorter than 8 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_DATA,), 6, 2)
+
+    @property
+    def message_id(self) -> int | None:
+        """The Message Identifier (MID) of an I-DATA chunk.
+
+        Every fragment of one user message carries the same MID.
+        ``None`` for other chunk types and a value shorter than 12 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_I_DATA,), 8, 4)
+
+    @property
+    def ppid(self) -> int | None:
+        """The Payload Protocol Identifier of a DATA or I-DATA chunk.
+
+        It names the upper-layer protocol of the user data, from IANA's
+        SCTP Payload Protocol Identifiers registry, read big-endian. An
+        I-DATA chunk carries it only in a message's first fragment, its
+        B bit set, in the place of the Fragment Sequence Number. ``None``
+        for other chunk types, an I-DATA chunk with B clear, and a value
+        shorter than 12 bytes (DATA) or 16 bytes (I-DATA) (degrades,
+        never raises).
+        """
+        if self.type == _I_DATA:
+            if not self.flags & _B_BIT:
+                return None
+            return self._uint((_I_DATA,), 12, 4)
+        return self._uint((_DATA,), 8, 4)
+
+    @property
+    def fragment_sequence_number(self) -> int | None:
+        """The Fragment Sequence Number (FSN) of an I-DATA chunk.
+
+        It numbers the fragments of one message from 0. A chunk with
+        the B bit clear carries it in its fifth word; a first fragment,
+        B set, holds the PPID there instead, and its FSN is 0 (RFC 8260
+        §2.1). ``None`` for other chunk types and a value shorter than
+        16 bytes (degrades, never raises).
+        """
+        if self.type == _I_DATA and self.flags & _B_BIT:
+            return 0 if len(self.value) >= _I_DATA_USER_DATA else None
+        return self._uint((_I_DATA,), 12, 4)
+
+    @property
+    def user_data(self) -> bytes | None:
+        """The user data of a DATA or I-DATA chunk, without its padding.
+
+        A fragment's user data is that piece of the message only.
+        ``None`` for other chunk types and a value shorter than the
+        12-byte (DATA) or 16-byte (I-DATA) fields before the user data
+        (degrades, never raises).
+        """
+        start = _USER_DATA_START.get(self.type)
+        if start is None or len(self.value) < start:
+            return None
+        return self.value[start:]
+
+    def decode_user_data(
+        self, registry: Registry | None = None
+    ) -> Protocol | None:
+        """Decode an unfragmented message's user data by its PPID.
+
+        The decoder is the class the ``sctp.ppid`` table holds for
+        :attr:`ppid`. This library registers none there, so the table is
+        empty until a caller registers one. Only a DATA or I-DATA chunk
+        with both the B and E bits set carries a whole user message;
+        reassembling a fragmented one is the caller's.
+        :class:`~netprotocols.SCTP` names no successor layer in a
+        :func:`~netprotocols.decode_frame` walk, and the walk never reads
+        the ``sctp.ppid`` table, ``decode_as`` included. A caller that
+        wants lax behaviour catches :class:`~netprotocols.ProtocolError`.
+
+        :param registry: The registry whose ``sctp.ppid`` table is read;
+            :data:`~netprotocols.registry.DEFAULT` when ``None``.
+        :returns: The decoded user data, or ``None`` for a chunk of
+            another type, a fragment, a value too short for the user
+            data, and a PPID the table holds no class for or withholds
+            (:data:`~netprotocols.registry.WITHHELD`).
+        :raises ProtocolError: if the registered decoder rejects the user
+            data, as its ``decode()`` documents.
+        """
+        if not (self.beginning_fragment and self.ending_fragment):
+            return None
+        ppid, user_data = self.ppid, self.user_data
+        if ppid is None or user_data is None:
+            return None
+        table = (
+            _PPID_CLASSES
+            if registry is None
+            else registry.table(TABLE_SCTP_PPID)
+        )
+        decoder = table.get(ppid)
+        return None if decoder is None else decoder.decode(user_data)
+
+    @property
+    def initiate_tag(self) -> int | None:
+        """The Initiate Tag of an INIT or INIT ACK chunk.
+
+        The receiver of the chunk puts it in the verification tag of
+        every packet it sends in the association. ``None`` for other
+        chunk types and a value shorter than 4 bytes (degrades, never
+        raises).
+        """
+        return self._uint((_INIT, _INIT_ACK), 0, 4)
+
+    @property
+    def a_rwnd(self) -> int | None:
+        """The Advertised Receiver Window Credit, in bytes.
+
+        An INIT, INIT ACK or SACK chunk carries it. ``None`` for other
+        chunk types and a value shorter than 8 bytes (degrades, never
+        raises).
+        """
+        return self._uint((_INIT, _INIT_ACK, _SACK), 4, 4)
+
+    @property
+    def outbound_streams(self) -> int | None:
+        """The Number of Outbound Streams of an INIT or INIT ACK chunk.
+
+        ``None`` for other chunk types and a value shorter than 10 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_INIT, _INIT_ACK), 8, 2)
+
+    @property
+    def inbound_streams(self) -> int | None:
+        """The Number of Inbound Streams of an INIT or INIT ACK chunk.
+
+        ``None`` for other chunk types and a value shorter than 12 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_INIT, _INIT_ACK), 10, 2)
+
+    @property
+    def initial_tsn(self) -> int | None:
+        """The Initial TSN of an INIT or INIT ACK chunk.
+
+        ``None`` for other chunk types and a value shorter than 16 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_INIT, _INIT_ACK), 12, 4)
+
+    @property
+    def parameters(self) -> tuple[SCTPParameter, ...] | None:
+        """The parameters after an INIT or INIT ACK's fixed fields.
+
+        They come in wire order, each value without its padding
+        (RFC 9260 §3.2.1). ``()`` for a value of exactly the 16 fixed
+        bytes. ``None`` for other chunk types, a value shorter than 16
+        bytes, and parameters that do not walk: a length below 4, a
+        length past the value, or 1-3 bytes left over for a parameter
+        header (degrades, never raises). Padding the value ends before
+        completing, after the last parameter, is accepted.
+        """
+        if self.type not in (_INIT, _INIT_ACK):
+            return None
+        if len(self.value) < _INIT_FIXED_LEN:
+            return None
+        try:
+            return tuple(
+                SCTPParameter(type_, value)
+                for type_, value in walk_kind_length_value(
+                    self.value[_INIT_FIXED_LEN:],
+                    lone_byte_kinds=frozenset(),
+                    terminator_kind=None,
+                    min_option_length=None,
+                    length_includes_header=True,
+                    protocol=SCTPChunk,
+                    field="value",
+                    width=2,
+                    align=4,
+                )
+            )
+        except InvalidFieldError:
+            return None
+
+    @property
+    def state_cookie(self) -> bytes | None:
+        """The Cookie of an INIT ACK chunk's State Cookie parameter.
+
+        The first State Cookie parameter's value (RFC 9260
+        §3.3.3.1.1), which the peer echoes back in its COOKIE ECHO.
+        ``None`` for other chunk types, INIT included, for parameters
+        that do not walk (see :attr:`parameters`), and for an INIT ACK
+        without a State Cookie (degrades, never raises).
+        """
+        if self.type != _INIT_ACK:
+            return None
+        for parameter in self.parameters or ():
+            if parameter.type == _STATE_COOKIE:
+                return parameter.value
+        return None
+
+    @property
+    def cumulative_tsn_ack(self) -> int | None:
+        """The Cumulative TSN Ack of a SACK chunk.
+
+        ``None`` for other chunk types and a value shorter than 4 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_SACK,), 0, 4)
+
+    @property
+    def num_gap_ack_blocks(self) -> int | None:
+        """The Number of Gap Ack Blocks a SACK chunk declares.
+
+        ``None`` for other chunk types and a value shorter than 10 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_SACK,), 8, 2)
+
+    @property
+    def num_duplicate_tsns(self) -> int | None:
+        """The Number of Duplicate TSNs a SACK chunk declares.
+
+        ``None`` for other chunk types and a value shorter than 12 bytes
+        (degrades, never raises).
+        """
+        return self._uint((_SACK,), 10, 2)
+
+    @property
+    def gap_ack_blocks(self) -> tuple[tuple[int, int], ...] | None:
+        """The Gap Ack Blocks of a SACK chunk, as ``(start, end)`` pairs.
+
+        Each is a pair of offsets from :attr:`cumulative_tsn_ack`: the
+        block acknowledges the TSNs from ``cumulative_tsn_ack + start``
+        to ``cumulative_tsn_ack + end``, both included. There are
+        :attr:`num_gap_ack_blocks` of them. ``None`` for other chunk
+        types, and for a value too short for the 12 fixed bytes and every
+        block the count declares, never a partial list (degrades, never
+        raises). Bytes after the declared blocks and duplicate TSNs are
+        ignored.
+        """
+        count = self.num_gap_ack_blocks
+        if count is None or len(self.value) < _SACK_FIXED_LEN + 4 * count:
+            return None
+        value = self.value
+        return tuple(
+            (
+                int.from_bytes(value[at : at + 2]),
+                int.from_bytes(value[at + 2 : at + 4]),
+            )
+            for at in range(_SACK_FIXED_LEN, _SACK_FIXED_LEN + 4 * count, 4)
+        )
+
+    @property
+    def duplicate_tsns(self) -> tuple[int, ...] | None:
+        """The Duplicate TSNs of a SACK chunk, in wire order.
+
+        There are :attr:`num_duplicate_tsns` of them, after the Gap Ack
+        Blocks. ``None`` for other chunk types, and for a value too short
+        for the 12 fixed bytes, every declared block and every declared
+        duplicate TSN, never a partial list (degrades, never raises).
+        """
+        blocks, count = self.num_gap_ack_blocks, self.num_duplicate_tsns
+        if blocks is None or count is None:
+            return None
+        start = _SACK_FIXED_LEN + 4 * blocks
+        if len(self.value) < start + 4 * count:
+            return None
+        value = self.value
+        return tuple(
+            int.from_bytes(value[at : at + 4])
+            for at in range(start, start + 4 * count, 4)
+        )
 
 
 def _walk_chunks(

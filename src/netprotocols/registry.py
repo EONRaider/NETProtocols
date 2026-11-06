@@ -22,6 +22,26 @@ stack names no payload protocol, looks up the ``ethertype`` table at
 ``tcp.port``     TCP well-known port (best-effort; see below)
 ===============  =========================================================
 
+An eighth table is read by an accessor, never by ``next_protocol()``:
+
+===============  =========================================================
+``sctp.ppid``    SCTP Payload Protocol Identifier, read by
+                 :meth:`~netprotocols.SCTPChunk.decode_user_data` for an
+                 unfragmented DATA or I-DATA chunk; empty by default
+===============  =========================================================
+
+The library registers no decoder in ``sctp.ppid``. A walk ends at SCTP,
+so ``decode_as`` accepts the table's name but no walk reads it; pass a
+registry to :meth:`~netprotocols.SCTPChunk.decode_user_data` instead::
+
+    # 46 is Diameter's PPID; MyDiameter is the caller's own decoder
+    class MyDiameter(Protocol):
+        ...
+
+    reg = Registry.from_defaults()
+    reg.register("sctp.ppid", 46, MyDiameter)
+    message = chunk.decode_user_data(reg)
+
 Registering a decoder is how you extend the frame walk without editing
 library source::
 
@@ -44,11 +64,12 @@ The decorator returns the class unchanged, so it stacks with
 Key ranges
 ----------
 
-Two tables reject a key their wire field cannot carry, raising
+Three tables reject a key their wire field cannot carry, raising
 :class:`InvalidRegistryKeyError` at registration (never on a lookup):
 
 * ``llc.dsap`` takes 0-0xFF, the width of the DSAP octet.
 * ``llc.snap`` takes 0 to 2**40 - 1: a 24-bit OUI and a 16-bit PID.
+* ``sctp.ppid`` takes 0 to 2**32 - 1, the width of the PPID field.
 
 The other tables accept any key, ``ethertype`` among them. An Ethernet
 or VLAN header never consults ``ethertype`` for a type/length value of
@@ -136,12 +157,12 @@ a per-call decoder override is expressed without touching global state.
 Best-effort tables
 ------------------
 
-``udp.port`` and ``tcp.port`` differ from the other five in kind, not
-just in name. An EtherType or IP protocol number is authoritative: the
-field exists to say what follows (MPLS, which looks up the ``ethertype``
-table by convention, is the exception described above). A port is a
-*guess* — any service may run on any port, and the discriminator is
-split across two fields.
+``udp.port`` and ``tcp.port`` differ from the other five tables a walk
+reads in kind, not just in name. An EtherType or IP protocol number is
+authoritative: the field exists to say what follows (MPLS, which looks
+up the ``ethertype`` table by convention, is the exception described
+above). A port is a *guess* — any service may run on any port, and the
+discriminator is split across two fields.
 Dispatch on those tables checks the destination port first (a request
 targets the server's well-known port) and then the source port (a
 response comes from it). The class it names validates on decode, but
@@ -172,6 +193,7 @@ __all__ = [
     "TABLE_IP_PROTO_V6",
     "TABLE_LLC_DSAP",
     "TABLE_LLC_SNAP",
+    "TABLE_SCTP_PPID",
     "TABLE_TCP_PORT",
     "TABLE_UDP_PORT",
     "WITHHELD",
@@ -191,6 +213,7 @@ TABLE_IP_PROTO = "ip.proto"
 TABLE_IP_PROTO_V6 = "ip.proto.v6"
 TABLE_UDP_PORT = "udp.port"
 TABLE_TCP_PORT = "tcp.port"
+TABLE_SCTP_PPID = "sctp.ppid"
 
 #: Every dispatch table, mapped to the table it inherits from (``None``
 #: for a root table). Adding an entry here is all it takes to give a new
@@ -203,6 +226,7 @@ TABLES: Mapping[str, str | None] = {
     TABLE_IP_PROTO_V6: TABLE_IP_PROTO,
     TABLE_UDP_PORT: None,
     TABLE_TCP_PORT: None,
+    TABLE_SCTP_PPID: None,
 }
 
 #: The inverse of :data:`TABLES`, precomputed: which tables inherit from
@@ -218,6 +242,7 @@ _CHILDREN: Mapping[str, tuple[str, ...]] = {
 _KEY_RANGES: Mapping[str, range] = {
     TABLE_LLC_DSAP: range(0x100),
     TABLE_LLC_SNAP: range(1 << 40),
+    TABLE_SCTP_PPID: range(1 << 32),
 }
 
 _C = TypeVar("_C", bound="type[Protocol]")
@@ -249,9 +274,10 @@ class UnknownTableError(ProtocolError):
 class InvalidRegistryKeyError(ProtocolError):
     """A registration named a key its table's wire field cannot carry.
 
-    Raised for an ``llc.dsap`` key outside 0-0xFF and an ``llc.snap``
-    key outside 0 to 2**40 - 1 (a negative key included), the values
-    the fields they are read from can carry. No other table raises it.
+    Raised for an ``llc.dsap`` key outside 0-0xFF, an ``llc.snap`` key
+    outside 0 to 2**40 - 1 and an ``sctp.ppid`` key outside 0 to
+    2**32 - 1 (a negative key included), the values the fields they are
+    read from can carry. No other table raises it.
     See "Key ranges" in the module docstring.
     """
 
@@ -364,9 +390,9 @@ class Registry:
             in place.
         :raises UnknownTableError: if ``table`` is not one of
             :data:`TABLES`.
-        :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
-            ``llc.snap`` and ``key`` is outside the range it accepts (see
-            "Key ranges" in the module docstring).
+        :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap``,
+            ``llc.snap`` or ``sctp.ppid`` and ``key`` is outside the range
+            it accepts (see "Key ranges" in the module docstring).
         :raises TypeError: if ``protocol`` is ``None``.
         :raises RegistryConflictError: if ``key`` is held by a different
             class and ``override`` is false. Re-registering the same
@@ -446,8 +472,9 @@ class Registry:
         :raises UnknownTableError: if an override names a table that is
             not one of :data:`TABLES`.
         :raises InvalidRegistryKeyError: if an override names an
-            ``llc.dsap`` or ``llc.snap`` key outside the range that table
-            accepts (see "Key ranges" in the module docstring).
+            ``llc.dsap``, ``llc.snap`` or ``sctp.ppid`` key outside the
+            range that table accepts (see "Key ranges" in the module
+            docstring).
         :raises TypeError: if an override maps a key to ``None``.
         """
         child = Registry()
@@ -588,9 +615,9 @@ def register_all(
         ``None``.
     :raises UnknownTableError: if ``table`` is not one of
         :data:`TABLES`.
-    :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap`` or
-        ``llc.snap`` and a key is outside the range it accepts (see "Key
-        ranges" in the module docstring).
+    :raises InvalidRegistryKeyError: if ``table`` is ``llc.dsap``,
+        ``llc.snap`` or ``sctp.ppid`` and a key is outside the range it
+        accepts (see "Key ranges" in the module docstring).
     :raises TypeError: if ``protocol`` is ``None`` and ``keys`` is not
         empty.
     :raises RegistryConflictError: if a key is held by a different

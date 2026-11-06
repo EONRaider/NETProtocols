@@ -9,6 +9,7 @@ import pytest
 
 import netprotocols
 import netprotocols.registry as registry_module
+from conftest import FIXTURES, pcap_frames
 from netprotocols import (
     AH,
     CDP,
@@ -41,6 +42,7 @@ from netprotocols.registry import (
     TABLE_IP_PROTO_V6,
     TABLE_LLC_DSAP,
     TABLE_LLC_SNAP,
+    TABLE_SCTP_PPID,
     TABLE_TCP_PORT,
     TABLE_UDP_PORT,
     TABLES,
@@ -79,7 +81,11 @@ class TestTableNames:
             TABLE_IP_PROTO_V6,
             TABLE_UDP_PORT,
             TABLE_TCP_PORT,
+            TABLE_SCTP_PPID,
         }
+
+    def test_the_table_names(self):
+        assert TABLE_SCTP_PPID == "sctp.ppid"
 
     def test_only_the_v6_table_inherits(self):
         parents = {name: of for name, of in TABLES.items() if of is not None}
@@ -397,6 +403,16 @@ class TestBuiltInsUnchanged:
         assert DEFAULT.get(TABLE_TCP_PORT, 53).__name__ == "DNSOverTCP"
         assert DEFAULT.get(TABLE_TCP_PORT, 179).__name__ == "BGP"
 
+    def test_sctp_ppid_ships_empty(self):
+        """No built-in class decodes a PPID's user data."""
+        assert DEFAULT.table(TABLE_SCTP_PPID) == {}
+        assert Registry.from_defaults().table(TABLE_SCTP_PPID) == {}
+
+    def test_the_sctp_module_binds_the_live_ppid_table(self):
+        from netprotocols.layer4.sctp import _PPID_CLASSES
+
+        assert _PPID_CLASSES is DEFAULT.table(TABLE_SCTP_PPID)
+
 
 class TestRepr:
     def test_repr_reports_the_table_sizes(self):
@@ -407,8 +423,8 @@ class TestRepr:
 
 
 class TestKeyRanges:
-    """The LLC tables refuse a key their field cannot carry; the others
-    accept any key, ``ethertype`` included."""
+    """The LLC tables and ``sctp.ppid`` refuse a key their field cannot
+    carry; the others accept any key, ``ethertype`` included."""
 
     @pytest.mark.parametrize(
         "key",
@@ -434,9 +450,11 @@ class TestKeyRanges:
             (TABLE_LLC_DSAP, -1, 0),
             (TABLE_LLC_SNAP, 1 << 40, (1 << 40) - 1),
             (TABLE_LLC_SNAP, -1, 0),
+            (TABLE_SCTP_PPID, 1 << 32, (1 << 32) - 1),
+            (TABLE_SCTP_PPID, -1, 0),
         ],
     )
-    def test_the_llc_tables_take_their_field_width(
+    def test_the_bounded_tables_take_their_field_width(
         self, registry, table, bad, good
     ):
         with pytest.raises(InvalidRegistryKeyError) as excinfo:
@@ -766,3 +784,53 @@ class TestNoneIsRefused:
             registry.register("udp.ports", 53, None)
         with pytest.raises(InvalidRegistryKeyError):
             registry.register(TABLE_LLC_DSAP, 0x100, None)
+
+
+class TestSCTPPPIDTable:
+    """``sctp.ppid`` is a table like the others, read by
+    ``SCTPChunk.decode_user_data`` and never by a walk."""
+
+    def test_register_derive_and_withhold(self, registry):
+        registry.register(TABLE_SCTP_PPID, 46, Fake)
+        assert registry.get(TABLE_SCTP_PPID, 46) is Fake
+        child = registry.derive({TABLE_SCTP_PPID: {46: WITHHELD}})
+        assert child.get(TABLE_SCTP_PPID, 46) is None
+        assert registry.get(TABLE_SCTP_PPID, 46) is Fake
+        assert DEFAULT.get(TABLE_SCTP_PPID, 46) is None
+
+    def test_a_conflict_raises_as_elsewhere(self, registry):
+        registry.register(TABLE_SCTP_PPID, 46, Fake)
+        with pytest.raises(RegistryConflictError):
+            registry.register(TABLE_SCTP_PPID, 46, OtherFake)
+
+    @pytest.mark.parametrize("lax", [False, True])
+    def test_decode_as_accepts_the_table_and_the_walk_ignores_it(self, lax):
+        frame = sctp_frame()
+        plain = decode_frame(frame, lax=lax)
+        overridden = decode_frame(
+            frame, lax=lax, decode_as={TABLE_SCTP_PPID: {0: Fake}}
+        )
+        assert layer_types(overridden) == [Ethernet, IPv4, SCTP]
+        assert overridden == plain
+        withheld = decode_frame(
+            frame, lax=lax, decode_as={TABLE_SCTP_PPID: {0: WITHHELD}}
+        )
+        assert withheld == plain
+
+    @pytest.mark.parametrize("lax", [False, True])
+    def test_decode_as_checks_the_ppid_range(self, lax):
+        with pytest.raises(InvalidRegistryKeyError):
+            decode_frame(
+                sctp_frame(),
+                lax=lax,
+                decode_as={TABLE_SCTP_PPID: {1 << 32: Fake}},
+            )
+
+    def test_decode_as_refuses_none_in_the_table(self):
+        with pytest.raises(TypeError):
+            decode_frame(sctp_frame(), decode_as={TABLE_SCTP_PPID: {0: None}})
+
+
+def sctp_frame() -> bytes:
+    """The DATA chunk frame of ``sctp.pcap``: PPID 0, B and E set."""
+    return pcap_frames(FIXTURES / "sctp.pcap")[4]

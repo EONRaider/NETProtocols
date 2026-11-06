@@ -68,7 +68,7 @@ from netprotocols.layer3.pim import (
     PIMRegisterStop,
 )
 from netprotocols.layer3.vrrp import VRRP, VRRPv6
-from netprotocols.layer4.sctp import SCTP, SCTPChunk
+from netprotocols.layer4.sctp import SCTP, SCTPChunk, SCTPParameter
 from netprotocols.layer4.tcp import TCP, TCPOption
 from netprotocols.layer4.udp import UDP
 from netprotocols.layer7.bgp import (
@@ -257,6 +257,7 @@ __all__ = [
     "Registry",
     "RegistryConflictError",
     "SCTPChunk",
+    "SCTPParameter",
     "SOARecord",
     "STUNAddress",
     "STUNAttribute",

@@ -182,7 +182,7 @@ ip.proto                  → error: "IPv4" has no attribute
 | 3 | VRRP | `VRRP`, `VRRPv6` | RFC 3768 (VRRPv2) and RFC 5798 (VRRPv3), IP protocol 112; one class branches on the version nibble (VRRPv2's Auth Type, Adver Int and authentication data; VRRPv3's Max Adver Int) and decodes the virtual-address list at the width of the IP family that carried it — `VRRPv6`, a `VRRP` subclass, is what IPv6 dispatches to; checksum compute/verify |
 | 4 | TCP | `TCP` | RFC 9293, data-offset/options aware |
 | 4 | UDP | `UDP` | RFC 768 |
-| 4 | SCTP | `SCTP` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; CRC32c compute/verify |
+| 4 | SCTP | `SCTP`, `SCTPChunk`, `SCTPParameter` | RFC 9260, IP protocol 132; common header + chunk list (`SCTPChunk`) parsed on demand; typed fields of DATA, INIT, INIT ACK, SACK and I-DATA (RFC 8260) chunks, and INIT / INIT ACK parameters (`SCTPParameter`); an unfragmented DATA or I-DATA chunk's user data decoded by its PPID through the `sctp.ppid` table, which ships empty; the walk ends at SCTP; CRC32c compute/verify |
 | 7 | DNS | `DNS` | RFC 1035, over UDP and TCP (`DNSOverTCP` length shim); on-demand name decompression + resource-record parsing |
 | 7 | DHCP | `DHCP` | RFC 2131/2132, over UDP 67/68; TLV options parsed on demand |
 | 7 | VXLAN | `VXLAN` | RFC 7348, over UDP 4789; the payload is a whole Ethernet frame, which walks on through the EtherType table |
@@ -442,9 +442,13 @@ class Telemetry(Protocol):
     ...
 ```
 
-The seven tables are `ethertype`, `llc.dsap`, `llc.snap`, `ip.proto`,
-`ip.proto.v6`, `udp.port` and `tcp.port`, each named after the wire
-field it dispatches on. To
+The seven tables the walk reads are `ethertype`, `llc.dsap`,
+`llc.snap`, `ip.proto`, `ip.proto.v6`, `udp.port` and `tcp.port`, each
+named after the wire field it dispatches on. An eighth, `sctp.ppid`,
+maps an SCTP Payload Protocol Identifier to a decoder for the user data
+of an unfragmented DATA or I-DATA chunk; the walk ends at SCTP and never
+reads it, `SCTPChunk.decode_user_data(registry)` does, and it ships
+empty, since this library decodes no PPID's payload. To
 change decoding for one call only — DNS on a nonstandard port in one
 capture — say so per call instead of registering globally:
 

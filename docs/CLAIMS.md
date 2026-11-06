@@ -1685,10 +1685,12 @@ class Telemetry(Protocol):
     ...
 ```
 
-Seven tables — `ethertype`, `llc.dsap`, `llc.snap`, `ip.proto`,
-`ip.proto.v6`, `udp.port`, `tcp.port` — each named after the field it
-dispatches on. The registry *is* the dispatch mechanism, not a hook
-bolted onto hardcoded functions: the built-in decoders go in through the
+Seven tables a walk reads — `ethertype`, `llc.dsap`, `llc.snap`,
+`ip.proto`, `ip.proto.v6`, `udp.port`, `tcp.port` — each named after
+the field it dispatches on, and an eighth, `sctp.ppid`, that only
+`SCTPChunk.decode_user_data()` reads. The registry *is* the dispatch
+mechanism, not a hook bolted onto hardcoded functions: the built-in
+decoders go in through the
 same public `register()` a third party calls
 (`src/netprotocols/_defaults.py`), so there is no privileged path and
 nothing to fall out of sync.

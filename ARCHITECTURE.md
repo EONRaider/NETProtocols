@@ -712,6 +712,18 @@ field they dispatch on:
 | `udp.port` | UDP well-known port | `UDP` |
 | `tcp.port` | TCP well-known port | `TCP` |
 
+An eighth table, `sctp.ppid`, maps an SCTP Payload Protocol Identifier
+to a decoder, and no `next_protocol()` reads it: the walk ends at SCTP.
+One SCTP packet can carry several DATA chunks, each with its own PPID,
+and a user message can span several chunks (the B and E flags), so the
+user data has no single successor layer. `SCTPChunk.decode_user_data()`
+reads the table for one chunk that holds a whole message, both B and E
+set, and answers `None` for a fragment, a PPID with no entry or a
+withheld one; reassembly is the caller's, as for HTTP over TCP. The
+table ships empty, since this library decodes no PPID's payload, takes
+keys of 0 to 2**32 - 1, the PPID's width, and `decode_as` accepts its
+name but no walk consults it.
+
 `ip.proto.v6` **inherits** `ip.proto`: the two share a number space
 but not a table, because the four extension headers must be reachable
 only inside an IPv6 chain. Registering in `ip.proto` reaches both,
@@ -1323,8 +1335,9 @@ src/netprotocols/
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
 │                   options, PIM Hello options, RADIUS attributes
-│                   and Vendor-Specific sub-attributes, and STUN
-│                   attributes TLV walker
+│                   and Vendor-Specific sub-attributes, STUN
+│                   attributes and SCTP INIT/INIT ACK parameters
+│                   TLV walker
 ├── _enums.py       EtherType, LLCSAP, IPProtocol, ARPOperation,
 │                   ARPHardwareType (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry
