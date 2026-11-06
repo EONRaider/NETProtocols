@@ -22,9 +22,9 @@ blocks after them reuse those values.
 The blocks assume bash. zsh does not word-split an unquoted `$runs`, so
 step 11's guard would treat every run ID as one.
 
-Do not turn on `set -e` in that shell. The `(exit 1)` that ends a
-refused block, such as a refused retag, closes an interactive shell
-that has it on, in bash as in zsh.
+Do not turn on `set -e` in the release shell: any failing command,
+including the `(exit 1)` that ends a refused block, then closes it, in
+bash as in zsh.
 
 ## 1. Check the preconditions
 
@@ -217,6 +217,7 @@ One commit holds the release change, in these six files.
    git log -1 --format=%s     # chore(release): X.Y.Z, or a later commit on the branch
    d=$(mktemp -d) && git archive HEAD | tar -x -C "$d" &&
      (cd "$d" && uv build --wheel) && stat -c %s "$d"/dist/*.whl
+   [ -z "$d" ] || rm -rf -- "$d"
    ```
 
    If the size differs from the figure in README and CLAIMS, correct it
@@ -431,15 +432,17 @@ version without a GitHub release.
 
 Step 4 measured the wheel on the release branch. When `$SHA` is a later
 `master` commit, gate fixes may have changed what the wheel holds, so
-build it again from `$SHA` and compare its size with the last CLAIMS
-1.5 row and with the size README states, both read from `$SHA` rather
-than from the working tree. CLAIMS gives the size in bytes, in the 1.5
-wheel row that names `netprotocols-X.Y.Z-py3-none-any.whl`; README gives
-it in KiB to one decimal, in its `**A N KiB wheel …` line. Each
+build it again from `$SHA` and compare its size with the CLAIMS 1.5
+wheel row that names `netprotocols-$V-py3-none-any.whl` and with the
+size README states, both read from `$SHA` rather than from the working
+tree. CLAIMS gives the size in bytes, in that row (the last one, if
+several name it), which is selected by the wheel's file name as a fixed
+string, so the dots in `$V` match only dots; README gives it in KiB to
+one decimal, in its `**A N KiB wheel …` line. Each
 comparison prints `same`, or `DIFFERS: got ... vs want ...`, where a
 failed build reads as `got no wheel` and a missing row or line as
 `want none`. The first line clears what an earlier pass set, so a stale
-size is never compared:
+size is never compared, and the last removes the build directory:
 
 ```bash
 d= got= want= got_kib= want_kib=
@@ -448,7 +451,8 @@ d=$(mktemp -d) && git archive "$SHA" | tar -x -C "$d" &&
   got=$(stat -c %s "$d/dist/netprotocols-$V-py3-none-any.whl") &&
   echo "wheel: $got bytes" || echo "wheel: FAILED: no netprotocols-$V wheel built from $SHA"
 want=$(git show "$SHA:docs/CLAIMS.md" | grep '^| 1\.5 wheel |' |
-  sed -n "s/.*\`netprotocols-${V//./\\.}-py3-none-any\.whl\` \([0-9,]*\) bytes.*/\1/p" |
+  grep -F "\`netprotocols-$V-py3-none-any.whl\`" |
+  sed -n 's/.*`netprotocols-[^`]*-py3-none-any\.whl` \([0-9,]*\) bytes.*/\1/p' |
   tail -1 | tr -d ,)
 [ -n "$got" ] && [ "$got" = "$want" ] && echo "CLAIMS: same" ||
   echo "CLAIMS: DIFFERS: got ${got:-no wheel} vs want ${want:-none} (bytes)"
@@ -457,6 +461,7 @@ want_kib=$(git show "$SHA:README.md" |
   sed -n 's/.*\*\*A \([0-9.]*\) KiB wheel.*/\1/p' | head -1)
 [ -n "$got_kib" ] && [ "$got_kib" = "$want_kib" ] && echo "README: same" ||
   echo "README: DIFFERS: got ${got_kib:-no wheel} vs want ${want_kib:-none} (KiB)"
+[ -z "$d" ] || rm -rf -- "$d"
 ```
 
 If either differs, correct README and CLAIMS by a PR to `master` as in
@@ -491,17 +496,21 @@ T0=YYYY-MM-DDTHH:MM:SSZ
 ```
 
 Then, in either shell, find the run and watch it. The block refuses to
-start while `T0` is unset or still holds the placeholder: an unset `T0`
-would match an older `push` run on the same commit, and the placeholder
-would match none:
+start while `SHA` is empty or `T0` is unset or still holds the
+placeholder: an empty `SHA` would make `gh run list --commit ""` list
+runs on every commit, so a run for another tag could be picked; an unset
+`T0` would match an older `push` run on the same commit, and the
+placeholder would match none:
 
 ```bash
 RUN=
-if [[ $T0 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+if [ -n "$SHA" ] &&
+  [[ $T0 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
   RUN=$(wait_run release.yml push) && echo "RUN=$RUN" &&
     gh run watch "$RUN" --exit-status
 else
-  echo "T0 is \"$T0\", not a UTC time: set it as in the block above." >&2
+  echo "SHA is \"$SHA\" and T0 is \"$T0\": SHA must not be empty and T0" \
+    "must be a UTC time; set them as in the block above." >&2
   (exit 1)
 fi
 ```
@@ -544,14 +553,19 @@ Its stages, in order, and what each one guarantees:
     look like a run that uploaded nothing.
   - **Every job is `completed`.**
   - **No job has an upload step whose conclusion is anything but
-    `skipped`.** Step names are compared in lower case, with leading and
-    trailing spaces trimmed. An upload step is one named "publish to
-    pypi"; one whose name starts with "run pypa/gh-action-pypi-publish",
-    as runs from before `release.yml` named the step list it; or one
-    whose name contains `uv publish` or `twine upload`. v1.0.0's runs
-    uploaded with `uv publish`. A job that uploads under another name,
-    such as a renamed `publish` job, is caught by its step, whatever the
-    case or spacing of the step's name.
+    `skipped`.** Each step name is normalized before it is compared:
+    ASCII letters are lowercased, every run of Unicode whitespace (space,
+    tab, newline, vertical tab, form feed, carriage return, U+0085 and
+    every space separator, such as the no-break and ideographic spaces)
+    becomes one space, and a leading or trailing space is removed. The
+    regex class that does this matches the same characters in gh's gojq
+    and in jq 1.7, whose `\s` differ. An upload step is one whose
+    normalized name is "publish to pypi"; starts with "run
+    pypa/gh-action-pypi-publish", as runs from before `release.yml`
+    named the step list it; or contains `uv publish` or `twine upload`.
+    v1.0.0's runs uploaded with `uv publish`. A job that uploads under
+    another name, such as a renamed `publish` job, is caught by its step,
+    whatever the ASCII case or whitespace of the step's name.
   - **A `publish` job that was not skipped lists an upload step.** One
     that ran and lists none (an older workflow that uploaded with another
     step, or a job cancelled before its steps were recorded) fails the
@@ -582,7 +596,8 @@ Its stages, in order, and what each one guarantees:
     esac
     jobs=$(gh api "repos/$REPO/actions/runs/$1/jobs?filter=all&per_page=100" --paginate --jq '
       (.jobs // error("no jobs array in the response"))[] |
-      [.steps[]? | (.name | ascii_downcase | gsub("^\\s+|\\s+$"; "")) as $n |
+      [.steps[]? | (.name | ascii_downcase | gsub("[\\s\\x{0B}\\x{85}\\p{Z}]+"; " ") |
+                    ltrimstr(" ") | rtrimstr(" ")) as $n |
        select($n == "publish to pypi" or
               ($n | startswith("run pypa/gh-action-pypi-publish")) or
               ($n | contains("uv publish")) or
@@ -709,6 +724,7 @@ Its stages, in order, and what each one guarantees:
       (cd "$d" && uv build) && (cd "$d/dist" && sha256sum -- *)
     curl -s "https://pypi.org/pypi/netprotocols/$V/json" |
       python3 -c 'import json, sys; [print(u["digests"]["sha256"], u["filename"]) for u in json.load(sys.stdin)["urls"]]'
+    [ -z "$d" ] || rm -rf -- "$d"
     ```
 
   - Only `github-release` failed, from a transient cause: re-run it with
@@ -741,6 +757,7 @@ Its stages, in order, and what each one guarantees:
    DL=$(mktemp -d)
    python3 -m pip download --no-deps --only-binary :all: "netprotocols==$V" -d "$DL"
    gh attestation verify "$DL/netprotocols-$V-py3-none-any.whl" --repo "$REPO"
+   [ -z "$DL" ] || rm -rf -- "$DL"
    ```
 
 3. Close the milestone:
