@@ -57,6 +57,7 @@ from netprotocols import (
 )
 from netprotocols.checksum import (
     _cdp_sum,
+    _datagram_extent,
     _pseudo_ip,
     fletcher_checksum,
     lsa_checksum,
@@ -2603,3 +2604,105 @@ class TestSTUNFingerprint:
         assert signed.message_integrity is not None
         refilled = Packet(signed).with_checksums()[STUN]
         assert refilled == signed
+
+
+def _ipv4_header(
+    total_length: int, *, flags: int = 0, fragment_offset: int = 0
+) -> IPv4:
+    """A bare 20-byte IPv4 header, ICMP as its payload, with the given
+    Total Length, Flags and Fragment Offset."""
+    return IPv4.decode(
+        struct.pack(
+            "!BBHHHBBH4s4s",
+            0x45,
+            0,
+            total_length,
+            0,
+            (flags << 13) | fragment_offset,
+            64,
+            1,
+            0,
+            bytes((192, 0, 2, 1)),
+            bytes((192, 0, 2, 2)),
+        )
+    )
+
+
+def _ipv6_header(payload_length: int) -> IPv6:
+    """A bare 40-byte IPv6 header with the given Payload Length."""
+    return IPv6.decode(
+        struct.pack(
+            "!IHBB16s16s",
+            0x60000000,
+            payload_length,
+            58,
+            64,
+            bytes(15) + b"\x01",
+            bytes(15) + b"\x02",
+        )
+    )
+
+
+class TestDatagramBoundedChecksum:
+    """``compute(..., ip=...)`` for IGMP, ICMPv4 and GRE ends the input
+    where the enclosing IP header declares its datagram to end.
+
+    The mutation audit selects only this file's tests (pyproject.toml's
+    ``[tool.mutmut]``), so the bound is pinned here, through ``compute``
+    and through ``_datagram_extent`` directly, not only in
+    ``tests/test_trailer.py``."""
+
+    ICMP = ICMPv4.decode(bytes.fromhex("0800000000010001"))
+    BODY = b"\x01\x02\x03\x04"
+
+    def test_compute_stops_at_the_declared_end(self):
+        ip = _ipv4_header(20 + 8 + len(self.BODY))
+        padded = self.BODY + b"\xaa\xbb\xcc\xdd\xee\x11"
+        bounded = internet_checksum(
+            bytes(self.ICMP)[:2] + bytes(2) + bytes(self.ICMP)[4:] + self.BODY
+        )
+        assert compute(self.ICMP, ip=ip, payload=padded) == bounded
+        assert compute(self.ICMP, payload=padded) != bounded
+        assert compute(self.ICMP, ip=ip, payload=self.BODY) == bounded
+
+    def test_compute_is_unbounded_without_ip(self):
+        whole = (
+            bytes(self.ICMP)[:2] + bytes(2) + bytes(self.ICMP)[4:] + self.BODY
+        )
+        assert compute(self.ICMP, payload=self.BODY) == internet_checksum(whole)
+
+    def test_a_zero_total_length_bounds_nothing(self):
+        padded = self.BODY + b"\xaa\xbb\xcc\xdd\xee\x11"
+        assert compute(self.ICMP, ip=_ipv4_header(0), payload=padded) == (
+            compute(self.ICMP, payload=padded)
+        )
+
+    def test_extent_is_the_declared_payload_less_the_offset(self):
+        ip = _ipv4_header(20 + 16)
+        assert _datagram_extent(ip, 0, 8) == 16
+        assert _datagram_extent(ip, 8, 8) == 8  # exactly the minimum
+        assert _datagram_extent(ip, 9, 8) is None  # one short of it
+
+    def test_extent_of_an_ipv6_header(self):
+        ip = _ipv6_header(16)
+        assert _datagram_extent(ip, 0, 8) == 16
+        assert _datagram_extent(ip, 8, 8) == 8
+        assert _datagram_extent(ip, 9, 8) is None
+        assert _datagram_extent(_ipv6_header(0), 0, 8) is None
+
+    @pytest.mark.parametrize(
+        ("flags", "fragment_offset"),
+        [(0b001, 0), (0, 5), (0b001, 5)],
+        ids=["more-fragments", "offset", "both"],
+    )
+    def test_an_ipv4_fragment_has_no_extent(self, flags, fragment_offset):
+        ip = _ipv4_header(20 + 16, flags=flags, fragment_offset=fragment_offset)
+        assert _datagram_extent(ip, 0, 8) is None
+
+    @pytest.mark.parametrize("flags", [0b000, 0b010], ids=["clear", "DF"])
+    def test_an_unfragmented_ipv4_datagram_has_one(self, flags):
+        ip = _ipv4_header(20 + 16, flags=flags)
+        assert _datagram_extent(ip, 0, 8) == 16
+
+    def test_a_total_length_shorter_than_the_header_has_none(self):
+        assert _datagram_extent(_ipv4_header(10), 0, 8) is None

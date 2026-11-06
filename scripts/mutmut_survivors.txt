@@ -25,3 +25,13 @@ netprotocols.checksum.x__pseudo_header__mutmut_33
 # decodes identically either way, with no observable difference for
 # any test to catch.
 netprotocols.layer7.dns.x__labels__mutmut_122
+
+# checksum._bounded_checksum's last line, internet_checksum(covered if
+# extent is None else covered[:extent]); this mutant turns the condition
+# into `(extent is None) and False`, so every call takes the sliced
+# arm. With extent None that arm is covered[:None], which Python
+# defines as the whole sequence, so the result is identical to the arm
+# it replaces and no input tells them apart. The mutants that flip the
+# condition the other way (42, 43) change the result for a bounded
+# extent and are killed by TestDatagramBoundedChecksum.
+netprotocols.checksum.x__bounded_checksum__mutmut_41
