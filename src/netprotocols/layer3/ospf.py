@@ -24,7 +24,8 @@ constructor check that the body has its message's framing -- a Hello's
 20 fixed bytes and whole 4-byte neighbors, a Database Description's 8
 fixed bytes and whole 20-byte LSA headers, whole 12-byte requests, whole
 LSA headers in an acknowledgment, and an update's LSA count and LSA
-lengths walking the body exactly -- so no accessor ever raises. A body
+lengths walking the body exactly, each LSA's body with its LS type's
+framing (see below) -- so no accessor ever raises. A body
 of another type is kept as it is. A malformed body of a known type
 fails the whole layer: ``decode`` raises, so a strict walk
 raises and a lax one stops after IPv4.
@@ -42,12 +43,34 @@ and protocol 89 is absent from the IPv6 dispatch table: an IPv6
 packet carrying OSPFv3 ends its walk at the IPv6 header instead of
 failing to decode as OSPFv2.
 
-**LSA bodies are not decoded.** A Link State Update's LSAs decode as a
-20-byte LSA header (§A.4.1) and a raw ``body`` -- the Router, Network,
-Summary, AS-external (and NSSA, opaque, ...) contents that the LS Type
-selects. The LS Checksum, a
-Fletcher checksum over the whole LSA but its LS Age, is computed and
-verified by
+**LSA bodies.** A Link State Update's LSAs decode as a 20-byte LSA
+header (§A.4.1) and a raw ``body``, the contents the LS type selects.
+:class:`OSPFLSA` parses the body on demand for six LS types, each into a
+frozen record:
+
+* ``1`` Router-LSA (§A.4.2): :attr:`OSPFLSA.router`, an
+  :class:`OSPFRouterLSA` of :class:`OSPFRouterLink` and
+  :class:`OSPFRouterLinkTOS`
+* ``2`` Network-LSA (§A.4.3): :attr:`OSPFLSA.network`, an
+  :class:`OSPFNetworkLSA`
+* ``3`` and ``4`` Summary-LSAs (§A.4.4): :attr:`OSPFLSA.summary`, an
+  :class:`OSPFSummaryLSA` of :class:`OSPFSummaryTOS`
+* ``5`` AS-external-LSA (§A.4.5) and ``7`` NSSA-LSA (RFC 3101 §2.3),
+  which has its layout: :attr:`OSPFLSA.external`, an
+  :class:`OSPFExternalLSA` of :class:`OSPFExternalRoute`
+
+Each accessor returns ``None`` for the other LS types, whose bodies
+(opaque LSAs, RFC 5250, among them) are kept raw and not checked. The
+constructor checks that a body of those six types has its framing -- a
+Router-LSA's "# links" and each link's "# TOS" walking the body
+exactly, the other types' fixed part and whole entries -- so no
+accessor ever raises, and every record re-encodes to the body it came
+from. A body without its framing fails the LSA, and with it the update
+it is in: ``decode`` raises, as for any malformed body of a known
+message type, with the offset of the first byte that breaks it.
+
+The LS Checksum, a Fletcher checksum over the whole LSA but its LS
+Age, is computed and verified by
 :func:`netprotocols.checksum.lsa_checksum` and
 :func:`~netprotocols.checksum.verify_lsa`.
 
@@ -82,7 +105,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, NoReturn, Self
 
 from netprotocols._base import (
     Protocol,
@@ -99,9 +122,17 @@ __all__ = [
     "OSPF",
     "OSPFLSA",
     "OSPFDatabaseDescription",
+    "OSPFExternalLSA",
+    "OSPFExternalRoute",
     "OSPFHello",
     "OSPFLSAHeader",
     "OSPFLSRequest",
+    "OSPFNetworkLSA",
+    "OSPFRouterLSA",
+    "OSPFRouterLink",
+    "OSPFRouterLinkTOS",
+    "OSPFSummaryLSA",
+    "OSPFSummaryTOS",
 ]
 
 #: The only OSPF version this module decodes (RFC 2328 §A.3.1).
@@ -182,6 +213,70 @@ _LS_TYPE_NAMES: dict[int, str] = {
     9: "Opaque-LSA (link-local)",
     10: "Opaque-LSA (area-local)",
     11: "Opaque-LSA (AS-wide)",
+}
+
+
+#: The LS types whose bodies decode (RFC 2328 §A.4.2-§A.4.5, RFC 3101
+#: §2.3 for the NSSA-LSA, which has the AS-external-LSA's layout).
+_ROUTER_LSA = 1
+_NETWORK_LSA = 2
+_SUMMARY_LSAS = frozenset({3, 4})
+_EXTERNAL_LSAS = frozenset({5, 7})
+
+#: A Router-LSA's flags byte, a reserved byte and its "# links" (RFC
+#: 2328 §A.4.2).
+_ROUTER_FIXED = Struct("!BBH")
+#: A router link: Link ID, Link Data, Type, "# TOS" and its metric
+#: (RFC 2328 §A.4.2).
+_ROUTER_LINK = Struct("!4s4sBBH")
+_ROUTER_LINK_TOS_COUNT_OFFSET = 9
+#: A router link's TOS entry: TOS, a reserved byte, TOS metric.
+_ROUTER_TOS = Struct("!BBH")
+#: A Network Mask, a Network-LSA's attached router, or a byte and a
+#: 24-bit metric: a Summary-LSA's TOS entry, or an AS-external-LSA's
+#: E bit, TOS and metric.
+_WORD = Struct("!I")
+#: The Forwarding Address and External Route Tag after an
+#: AS-external-LSA's E bit, TOS and metric (RFC 2328 §A.4.5).
+_EXTERNAL_TAIL = Struct("!4sI")
+_METRIC_MASK = 0xFFFFFF
+_EXTERNAL_ENTRY_SIZE = _WORD.size + _EXTERNAL_TAIL.size
+
+#: The bodies made of a fixed part and whole fixed-size entries: the
+#: fixed part's size, each entry's size, and what the entries are. A
+#: Summary-LSA's fixed part is the Network Mask and the TOS 0 metric;
+#: an AS-external-LSA's, the Network Mask and the TOS 0 entry.
+_LSA_FRAMING: dict[int, tuple[int, int, str]] = {
+    _NETWORK_LSA: (_WORD.size, _WORD.size, "attached routers"),
+    3: (2 * _WORD.size, _WORD.size, "TOS entries"),
+    4: (2 * _WORD.size, _WORD.size, "TOS entries"),
+    5: (_WORD.size + _EXTERNAL_ENTRY_SIZE, _EXTERNAL_ENTRY_SIZE, "TOS entries"),
+    7: (_WORD.size + _EXTERNAL_ENTRY_SIZE, _EXTERNAL_ENTRY_SIZE, "TOS entries"),
+}
+
+#: A Router-LSA's flags (RFC 2328 §A.4.2), most significant first: Nt
+#: (NSSA translator, RFC 3101 §2.3), W (wildcard multicast receiver,
+#: RFC 1584), V (virtual link endpoint), E (AS boundary router) and B
+#: (area border router).
+_ROUTER_FLAG_NAMES = (
+    (0x10, "Nt"),
+    (0x08, "W"),
+    (0x04, "V"),
+    (0x02, "E"),
+    (0x01, "B"),
+)
+_V_BIT = 0x04
+_E_BIT = 0x02
+_B_BIT = 0x01
+#: An AS-external-LSA entry's E bit, the top bit of its TOS byte.
+_EXTERNAL_E_BIT = 0x80
+
+#: Router link types (RFC 2328 §A.4.2).
+_ROUTER_LINK_TYPE_NAMES: dict[int, str] = {
+    1: "Point-to-point",
+    2: "Transit",
+    3: "Stub",
+    4: "Virtual link",
 }
 
 
@@ -299,16 +394,279 @@ class OSPFLSAHeader:
 
 
 @dataclass(frozen=True, slots=True)
+class OSPFRouterLinkTOS:
+    """A TOS-specific metric of a router link (RFC 2328 §A.4.2).
+
+    :param tos: The IP Type of Service the metric is for, in RFC 2328
+        §12.3's encoding.
+    :param metric: The 16-bit cost of the link for that TOS.
+    :param reserved: The byte between the two, zero on send, carried
+        verbatim.
+    """
+
+    tos: int
+    metric: int
+    reserved: int = 0
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return _ROUTER_TOS.pack(self.tos, self.reserved, self.metric)
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFRouterLink:
+    """One link of a Router-LSA (RFC 2328 §A.4.2).
+
+    :param link_id: The Link ID, dotted-decimal: the neighbor's Router
+        ID on a point-to-point or virtual link, the Designated Router's
+        interface address on a transit network, the network number on
+        a stub network.
+    :param link_data: The Link Data, dotted-decimal: the router's own
+        interface address, or a stub network's mask (an unnumbered
+        point-to-point link's MIB-II ifIndex, as an address).
+    :param type: The link type, ``1`` point-to-point, ``2`` transit,
+        ``3`` stub, ``4`` virtual link (see :attr:`type_name`).
+    :param metric: The 16-bit cost of the link for TOS 0.
+    :param tos: The link's TOS-specific metrics, in wire order; their
+        number is the link's "# TOS".
+    """
+
+    link_id: str
+    link_data: str
+    type: int
+    metric: int
+    tos: tuple[OSPFRouterLinkTOS, ...] = ()
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return _ROUTER_LINK.pack(
+            ipv4_to_bytes(self.link_id),
+            ipv4_to_bytes(self.link_data),
+            self.type,
+            len(self.tos),
+            self.metric,
+        ) + b"".join(bytes(entry) for entry in self.tos)
+
+    @property
+    def tos_count(self) -> int:
+        """The link's "# TOS": how many TOS-specific metrics it lists."""
+        return len(self.tos)
+
+    @property
+    def type_name(self) -> str:
+        """Display name of the link type, e.g. ``"Transit"``.
+
+        ``"unknown (n)"`` for a value this library does not name
+        (degrades, never raises).
+        """
+        return _ROUTER_LINK_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFRouterLSA:
+    """The body of a Router-LSA, LS type 1 (RFC 2328 §A.4.2).
+
+    :param flags: The flags byte: B (``0x01``, area border router), E
+        (``0x02``, AS boundary router) and V (``0x04``, virtual link
+        endpoint), RFC 1584's W (``0x08``) and RFC 3101's Nt (``0x10``,
+        NSSA translator); the other bits are carried verbatim (see
+        :attr:`flags_str`).
+    :param links: The router's links in the area, in wire order; their
+        number is the LSA's "# links".
+    :param reserved: The byte after the flags, zero on send, carried
+        verbatim.
+    """
+
+    flags: int
+    links: tuple[OSPFRouterLink, ...] = ()
+    reserved: int = 0
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return _ROUTER_FIXED.pack(
+            self.flags, self.reserved, len(self.links)
+        ) + b"".join(bytes(link) for link in self.links)
+
+    @property
+    def link_count(self) -> int:
+        """The LSA's "# links": how many links it describes."""
+        return len(self.links)
+
+    @property
+    def v(self) -> bool:
+        """Whether the V bit is set: the router ends a virtual link."""
+        return bool(self.flags & _V_BIT)
+
+    @property
+    def e(self) -> bool:
+        """Whether the E bit is set: the router is an AS boundary router."""
+        return bool(self.flags & _E_BIT)
+
+    @property
+    def b(self) -> bool:
+        """Whether the B bit is set: the router is an area border router."""
+        return bool(self.flags & _B_BIT)
+
+    @property
+    def flags_str(self) -> str:
+        """Space-separated names of the flags set, e.g. ``"E B"``.
+
+        Most significant first: ``Nt``, ``W``, ``V``, ``E``, ``B``;
+        empty when none is set.
+        """
+        return _bit_names(self.flags, _ROUTER_FLAG_NAMES)
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFNetworkLSA:
+    """The body of a Network-LSA, LS type 2 (RFC 2328 §A.4.3).
+
+    :param network_mask: The network's mask, dotted-decimal.
+    :param attached_routers: The Router IDs of the routers fully
+        adjacent to the Designated Router, the Designated Router's own
+        included, in wire order.
+    """
+
+    network_mask: str
+    attached_routers: tuple[str, ...] = ()
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return ipv4_to_bytes(self.network_mask) + b"".join(
+            ipv4_to_bytes(router) for router in self.attached_routers
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFSummaryTOS:
+    """A TOS-specific metric of a Summary-LSA (RFC 2328 §A.4.4).
+
+    :param tos: The IP Type of Service the metric is for, in RFC 2328
+        §12.3's encoding.
+    :param metric: The 24-bit cost of the route for that TOS.
+    """
+
+    tos: int
+    metric: int
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return bytes([self.tos]) + self.metric.to_bytes(3, "big")
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFSummaryLSA:
+    """The body of a Summary-LSA, LS type 3 or 4 (RFC 2328 §A.4.4).
+
+    A type 3 describes a route to a network outside the area, which
+    the Link State ID names; a type 4 describes a route to an AS
+    boundary router, whose Router ID the Link State ID is.
+
+    :param network_mask: The destination network's mask,
+        dotted-decimal; ``0.0.0.0`` in a type 4, where it has no
+        meaning.
+    :param metric: The 24-bit cost of the route for TOS 0.
+    :param tos: The route's TOS-specific metrics, in wire order.
+    :param reserved: The byte before the metric, zero on send, carried
+        verbatim.
+    """
+
+    network_mask: str
+    metric: int
+    tos: tuple[OSPFSummaryTOS, ...] = ()
+    reserved: int = 0
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        base = OSPFSummaryTOS(self.reserved, self.metric)
+        return ipv4_to_bytes(self.network_mask) + b"".join(
+            bytes(entry) for entry in (base, *self.tos)
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFExternalRoute:
+    """One TOS entry of an AS-external-LSA or NSSA-LSA (RFC 2328 §A.4.5).
+
+    :param e_bit: The E bit: ``True`` for a Type 2 external metric,
+        larger than any link state path, ``False`` for a Type 1 metric,
+        comparable to the link state metric.
+    :param tos: The IP Type of Service the entry is for, the 7 bits
+        after the E bit, in RFC 2328 §12.3's encoding; ``0`` in the
+        first entry.
+    :param metric: The 24-bit cost of the route for that TOS.
+    :param forwarding_address: Where traffic for the destination is
+        forwarded, dotted-decimal; ``0.0.0.0`` for the LSA's
+        originator.
+    :param external_route_tag: A 32-bit tag OSPF itself does not use.
+    """
+
+    e_bit: bool
+    tos: int
+    metric: int
+    forwarding_address: str
+    external_route_tag: int
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        first = (_EXTERNAL_E_BIT if self.e_bit else 0) | self.tos
+        return (
+            bytes([first])
+            + self.metric.to_bytes(3, "big")
+            + _EXTERNAL_TAIL.pack(
+                ipv4_to_bytes(self.forwarding_address),
+                self.external_route_tag,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OSPFExternalLSA:
+    """The body of an AS-external-LSA or an NSSA-LSA.
+
+    An AS-external-LSA is LS type 5 (RFC 2328 §A.4.5); an NSSA-LSA, LS
+    type 7, has the same layout (RFC 3101 §2.3). Either describes a
+    route to a destination outside the AS, which the Link State ID
+    names.
+
+    :param network_mask: The destination's mask, dotted-decimal.
+    :param routes: One entry per TOS, in wire order, the TOS 0 entry
+        first.
+    """
+
+    network_mask: str
+    routes: tuple[OSPFExternalRoute, ...]
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return ipv4_to_bytes(self.network_mask) + b"".join(
+            bytes(route) for route in self.routes
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class OSPFLSA:
     """One LSA from a Link State Update: its header and its body.
 
+    The body is kept raw; :attr:`router`, :attr:`network`,
+    :attr:`summary` and :attr:`external` parse it on demand for the LS
+    types they decode, 1 to 5 and 7, and answer ``None`` for any other.
+    The constructor checks that the body of one of those types has its
+    framing, so none of them ever raises.
+
     :param header: The 20-byte LSA header (RFC 2328 §A.4.1).
     :param body: Everything after the header, ``header.length - 20``
-        bytes, kept raw: this library does not decode the LS types'
-        contents (§A.4.2-§A.4.5).
+        bytes, kept raw. A body of LS type 1 to 5 or 7 must have that
+        type's framing: a Router-LSA's 4 fixed bytes and exactly its
+        "# links" whole links, each with its "# TOS" whole TOS entries;
+        a Network-LSA's mask and whole attached routers; a
+        Summary-LSA's mask, metric and whole TOS entries; an
+        AS-external-LSA's or NSSA-LSA's mask, TOS 0 entry and whole TOS
+        entries.
 
     :raises InvalidFieldError: if ``body`` is not ``header.length - 20``
-        bytes.
+        bytes, or a body of LS type 1 to 5 or 7 does not have its
+        framing.
     """
 
     header: OSPFLSAHeader
@@ -326,10 +684,113 @@ class OSPFLSA:
                 expected=expected,
                 actual=len(self.body),
             )
+        _check_lsa_body(self.header.ls_type, self.body, type(self), None)
 
     def __bytes__(self) -> bytes:
         """Serialize this record to its exact on-wire form."""
         return bytes(self.header) + self.body
+
+    @property
+    def router(self) -> OSPFRouterLSA | None:
+        """The Router-LSA body (LS type 1), parsed.
+
+        ``None`` for other LS types.
+        """
+        if self.header.ls_type != _ROUTER_LSA:
+            return None
+        body = self.body
+        flags, reserved, count = _ROUTER_FIXED.unpack_from(body)
+        links = []
+        cursor = _ROUTER_FIXED.size
+        for _ in range(count):
+            link_id, link_data, type_, tos_count, metric = (
+                _ROUTER_LINK.unpack_from(body, cursor)
+            )
+            cursor += _ROUTER_LINK.size
+            end = cursor + tos_count * _ROUTER_TOS.size
+            tos = tuple(
+                OSPFRouterLinkTOS(tos=tos, metric=tos_metric, reserved=byte)
+                for tos, byte, tos_metric in _ROUTER_TOS.iter_unpack(
+                    body[cursor:end]
+                )
+            )
+            cursor = end
+            links.append(
+                OSPFRouterLink(
+                    link_id=bytes_to_ipv4(link_id),
+                    link_data=bytes_to_ipv4(link_data),
+                    type=type_,
+                    metric=metric,
+                    tos=tos,
+                )
+            )
+        return OSPFRouterLSA(flags=flags, links=tuple(links), reserved=reserved)
+
+    @property
+    def network(self) -> OSPFNetworkLSA | None:
+        """The Network-LSA body (LS type 2), parsed.
+
+        ``None`` for other LS types.
+        """
+        if self.header.ls_type != _NETWORK_LSA:
+            return None
+        body = self.body
+        mask, *routers = (
+            bytes_to_ipv4(body[at : at + _WORD.size])
+            for at in range(0, len(body), _WORD.size)
+        )
+        return OSPFNetworkLSA(
+            network_mask=mask, attached_routers=tuple(routers)
+        )
+
+    @property
+    def summary(self) -> OSPFSummaryLSA | None:
+        """The Summary-LSA body (LS type 3 or 4), parsed.
+
+        ``None`` for other LS types.
+        """
+        if self.header.ls_type not in _SUMMARY_LSAS:
+            return None
+        body = self.body
+        base, *tos = (
+            OSPFSummaryTOS(tos=word >> 24, metric=word & _METRIC_MASK)
+            for (word,) in _WORD.iter_unpack(body[_WORD.size :])
+        )
+        return OSPFSummaryLSA(
+            network_mask=bytes_to_ipv4(body[: _WORD.size]),
+            metric=base.metric,
+            tos=tuple(tos),
+            reserved=base.tos,
+        )
+
+    @property
+    def external(self) -> OSPFExternalLSA | None:
+        """The AS-external-LSA or NSSA-LSA body (LS type 5 or 7), parsed.
+
+        ``None`` for other LS types.
+        """
+        if self.header.ls_type not in _EXTERNAL_LSAS:
+            return None
+        body = self.body
+        routes = []
+        for cursor in range(_WORD.size, len(body), _EXTERNAL_ENTRY_SIZE):
+            (word,) = _WORD.unpack_from(body, cursor)
+            forwarding_address, tag = _EXTERNAL_TAIL.unpack_from(
+                body, cursor + _WORD.size
+            )
+            routes.append(
+                OSPFExternalRoute(
+                    e_bit=bool(word >> 24 & _EXTERNAL_E_BIT),
+                    tos=word >> 24 & ~_EXTERNAL_E_BIT,
+                    metric=word & _METRIC_MASK,
+                    forwarding_address=bytes_to_ipv4(forwarding_address),
+                    external_route_tag=tag,
+                )
+            )
+        return OSPFExternalLSA(
+            network_mask=bytes_to_ipv4(body[: _WORD.size]),
+            routes=tuple(routes),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -889,8 +1350,8 @@ class OSPF(Protocol):
     def lsas(self) -> tuple[OSPFLSA, ...] | None:
         """The LSAs of a Link State Update (type 4), in wire order.
 
-        Each is a parsed header and a raw body. ``None`` for other
-        types.
+        Each is a parsed header and a raw body, which :class:`OSPFLSA`
+        parses on demand. ``None`` for other types.
         """
         if self.type != _LS_UPDATE_TYPE:
             return None
@@ -938,7 +1399,8 @@ def _walk_lsas(
     :param base: Added to each error's offset (relative to ``body``);
         ``None`` leaves the offset ``None``.
     :raises InvalidFieldError: if the body does not hold exactly the
-        LSAs its count gives, with ``field="body"``.
+        LSAs its count gives, or an LSA's body does not have its LS
+        type's framing (see :class:`OSPFLSA`), with ``field="body"``.
 
     Bounded: every LSA advances the walk by at least 20 bytes, so a
     hostile count can neither hang nor over-read.
@@ -980,6 +1442,13 @@ def _walk_lsas(
                 expected=f"{_LSA_HEADER.size}-{remaining}",
                 actual=length,
             )
+        body_start = cursor + _LSA_HEADER.size
+        _check_lsa_body(
+            body[cursor + 3],
+            body[body_start : cursor + length],
+            protocol,
+            None if base is None else base + body_start,
+        )
         yield cursor, cursor + length
         cursor += length
     if cursor != size:
@@ -991,4 +1460,106 @@ def _walk_lsas(
             field="body",
             expected=cursor,
             actual=size,
+        )
+
+
+def _check_lsa_body(
+    ls_type: int, body: bytes, protocol: type, base: int | None
+) -> None:
+    """Check that an LSA's body has its LS type's framing.
+
+    A Router-LSA's "# links" and each link's "# TOS" must walk the body
+    exactly; the other decoded types' bodies are a fixed part and whole
+    entries (see :class:`OSPFLSA`). Any other LS type's body is not
+    checked.
+
+    :param ls_type: The LSA's LS type.
+    :param body: The LSA's body, after its 20-byte header.
+    :param protocol: The class to attach to a raised error.
+    :param base: Added to each error's offset (relative to ``body``);
+        ``None`` leaves the offset ``None``.
+    :raises InvalidFieldError: if ``body`` does not have the framing,
+        with ``field="body"``.
+    """
+    if ls_type == _ROUTER_LSA:
+        _check_router_body(body, protocol, base)
+        return
+    framing = _LSA_FRAMING.get(ls_type)
+    if framing is None:
+        return
+    fixed, entry, what = framing
+    excess = (len(body) - fixed) % entry
+    if len(body) >= fixed and not excess:
+        return
+    position = 0 if len(body) < fixed else len(body) - excess
+    raise InvalidFieldError(
+        f"OSPF {_ls_type_name(ls_type)} body is {len(body)} bytes, not "
+        f"{fixed} plus whole {entry}-byte {what}",
+        protocol=protocol,
+        offset=None if base is None else base + position,
+        field="body",
+        expected=f"{fixed} + n*{entry}",
+        actual=len(body),
+    )
+
+
+def _check_router_body(body: bytes, protocol: type, base: int | None) -> None:
+    """Check that a Router-LSA's links walk its body exactly.
+
+    Bounded: every link advances the walk by at least 12 bytes, so a
+    hostile "# links" can neither hang nor over-read.
+
+    :param body: The Router-LSA's body, after its 20-byte header.
+    :param protocol: The class to attach to a raised error.
+    :param base: Added to each error's offset (relative to ``body``);
+        ``None`` leaves the offset ``None``.
+    :raises InvalidFieldError: if the body is shorter than its 4 fixed
+        bytes, a link or its TOS entries run past it, or bytes follow
+        the last link, with ``field="body"``.
+    """
+    size = len(body)
+
+    def fail(message: str, position: int, expected: object) -> NoReturn:
+        raise InvalidFieldError(
+            f"OSPF Router-LSA {message}",
+            protocol=protocol,
+            offset=None if base is None else base + position,
+            field="body",
+            expected=expected,
+            actual=size,
+        )
+
+    if size < _ROUTER_FIXED.size:
+        fail(
+            f"body is {size} bytes, too short for its "
+            f"{_ROUTER_FIXED.size} fixed bytes",
+            0,
+            f">={_ROUTER_FIXED.size}",
+        )
+    _, _, count = _ROUTER_FIXED.unpack_from(body)
+    cursor = _ROUTER_FIXED.size
+    for index in range(count):
+        if size - cursor < _ROUTER_LINK.size:
+            fail(
+                f"declares {count} links, but link {index + 1} has "
+                f"{size - cursor} bytes for its {_ROUTER_LINK.size} fixed "
+                f"bytes",
+                cursor,
+                f">={cursor + _ROUTER_LINK.size}",
+            )
+        tos_count = body[cursor + _ROUTER_LINK_TOS_COUNT_OFFSET]
+        end = cursor + _ROUTER_LINK.size + tos_count * _ROUTER_TOS.size
+        if end > size:
+            fail(
+                f"link {index + 1} declares {tos_count} TOS entries, so "
+                f"it ends at byte {end}, past the {size}-byte body",
+                cursor,
+                f">={end}",
+            )
+        cursor = end
+    if cursor != size:
+        fail(
+            f"carries {size - cursor} bytes after its {count} links",
+            cursor,
+            cursor,
         )

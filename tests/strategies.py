@@ -12,6 +12,7 @@ instead of hand-rolling field values.
 """
 
 from collections.abc import Mapping
+from dataclasses import replace
 
 from hypothesis import strategies as st
 
@@ -62,9 +63,17 @@ from netprotocols import (
     LLDPPortID,
     MPLSLabel,
     OSPFDatabaseDescription,
+    OSPFExternalLSA,
+    OSPFExternalRoute,
     OSPFHello,
     OSPFLSAHeader,
     OSPFLSRequest,
+    OSPFNetworkLSA,
+    OSPFRouterLink,
+    OSPFRouterLinkTOS,
+    OSPFRouterLSA,
+    OSPFSummaryLSA,
+    OSPFSummaryTOS,
     PIMAssert,
     PIMEncodedGroup,
     PIMEncodedSource,
@@ -556,10 +565,85 @@ def ospf_lsa_headers(draw: st.DrawFn, length: int = 20) -> OSPFLSAHeader:
     )
 
 
+def ospf_router_lsas() -> st.SearchStrategy[OSPFRouterLSA]:
+    """A Router-LSA body record (LS type 1)."""
+    tos = st.builds(OSPFRouterLinkTOS, _u(8), _u(16), _u(8))
+    link = st.builds(
+        OSPFRouterLink,
+        ipv4_strings(),
+        ipv4_strings(),
+        _u(8),
+        _u(16),
+        st.lists(tos, max_size=2).map(tuple),
+    )
+    return st.builds(
+        OSPFRouterLSA, _u(8), st.lists(link, max_size=3).map(tuple), _u(8)
+    )
+
+
+def ospf_network_lsas() -> st.SearchStrategy[OSPFNetworkLSA]:
+    """A Network-LSA body record (LS type 2)."""
+    return st.builds(
+        OSPFNetworkLSA,
+        ipv4_strings(),
+        st.lists(ipv4_strings(), max_size=4).map(tuple),
+    )
+
+
+def ospf_summary_lsas() -> st.SearchStrategy[OSPFSummaryLSA]:
+    """A Summary-LSA body record (LS type 3 or 4)."""
+    tos = st.builds(OSPFSummaryTOS, _u(8), _u(24))
+    return st.builds(
+        OSPFSummaryLSA,
+        ipv4_strings(),
+        _u(24),
+        st.lists(tos, max_size=3).map(tuple),
+        _u(8),
+    )
+
+
+def ospf_external_lsas() -> st.SearchStrategy[OSPFExternalLSA]:
+    """An AS-external-LSA or NSSA-LSA body record (LS type 5 or 7)."""
+    route = st.builds(
+        OSPFExternalRoute,
+        st.booleans(),
+        _u(7),
+        _u(24),
+        ipv4_strings(),
+        _u(32),
+    )
+    return st.builds(
+        OSPFExternalLSA,
+        ipv4_strings(),
+        st.lists(route, min_size=1, max_size=3).map(tuple),
+    )
+
+
+#: Each decoded LS type's body records.
+OSPF_LSA_BODIES: dict[int, st.SearchStrategy] = {
+    1: ospf_router_lsas(),
+    2: ospf_network_lsas(),
+    3: ospf_summary_lsas(),
+    4: ospf_summary_lsas(),
+    5: ospf_external_lsas(),
+    7: ospf_external_lsas(),
+}
+
+
 @st.composite
 def ospf_lsas(draw: st.DrawFn) -> OSPFLSA:
-    body = draw(st.binary(max_size=24))
-    return OSPFLSA(draw(ospf_lsa_headers(20 + len(body))), body)
+    """An LSA whose body has its LS type's framing: built from the
+    records its accessor returns for LS types 1-5 and 7, free bytes for
+    any other type."""
+    ls_type = draw(st.sampled_from([1, 2, 3, 4, 5, 7, 0, 6, 9, 10, 11, 255]))
+    records = OSPF_LSA_BODIES.get(ls_type)
+    body = (
+        bytes(draw(records))
+        if records is not None
+        else draw(st.binary(max_size=24))
+    )
+    header = draw(ospf_lsa_headers(20 + len(body)))
+    return OSPFLSA(replace(header, ls_type=ls_type), body)
 
 
 @st.composite

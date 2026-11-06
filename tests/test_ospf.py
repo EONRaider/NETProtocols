@@ -3,11 +3,13 @@
 The common header, the five message types' accessors, where the packet
 ends (Packet Length, plus the digest under cryptographic
 authentication, and never the link-layer padding, FCS or LLS block
-after it), the framing ``decode`` and construction enforce, the IPv4-only
-wiring that keeps an IPv6 packet's OSPFv3 out of this decoder, and the
-real FRR capture in ``ospf.pcap`` -- checked by ``scripts/check_fixtures.py``
-too, here, against tampering. Checksums are tested in test_checksum.py,
-which the mutation audit selects.
+after it), the framing ``decode`` and construction enforce, the typed LSA bodies
+and their framing, the IPv4-only wiring that keeps an IPv6 packet's
+OSPFv3 out of this decoder, and the real FRR captures in ``ospf.pcap``
+-- checked by ``scripts/check_fixtures.py`` too, here, against
+tampering -- and ``ospf_areas.pcap``, whose LSA bodies are checked
+against the link-state database FRR recorded with it. Checksums are
+tested in test_checksum.py, which the mutation audit selects.
 """
 
 import importlib.util
@@ -27,9 +29,17 @@ from netprotocols import (
     IPv4,
     IPv6,
     OSPFDatabaseDescription,
+    OSPFExternalLSA,
+    OSPFExternalRoute,
     OSPFHello,
     OSPFLSAHeader,
     OSPFLSRequest,
+    OSPFNetworkLSA,
+    OSPFRouterLink,
+    OSPFRouterLinkTOS,
+    OSPFRouterLSA,
+    OSPFSummaryLSA,
+    OSPFSummaryTOS,
     Packet,
     ProtocolError,
     Registry,
@@ -49,10 +59,13 @@ MD5_KEY = b"NETProtocols-md5"
 
 
 def lsa_header(**fields) -> OSPFLSAHeader:
+    """Build an LSA header, of a link-local opaque LSA (LS type 9) unless
+    ``fields`` say otherwise: its body is not decoded, so any bytes of
+    the length it declares construct."""
     values = {
         "ls_age": 1,
         "options": 2,
-        "ls_type": 1,
+        "ls_type": 9,
         "link_state_id": "10.0.0.1",
         "advertising_router": "10.0.0.1",
         "ls_sequence_number": 0x80000001,
@@ -434,7 +447,7 @@ class TestLinkStateUpdate:
         return [p for p in packets if p.lsas is not None]
 
     def test_the_captured_lsas(self):
-        """Decode the captured LSAs' headers, bodies left raw."""
+        """Decode the captured LSAs' headers, and keep the raw bodies."""
         lsas = [lsa for p in self.updates() for lsa in p.lsas]
         assert len(lsas) == 18
         assert Counter(lsa.header.ls_type for lsa in lsas) == {
@@ -447,8 +460,11 @@ class TestLinkStateUpdate:
         assert network.header.advertising_router == "10.0.0.1"
         assert network.header.ls_type_name == "Network-LSA"
         assert network.header.length == 32
-        # The body stays raw: the mask, then the attached routers.
+        # The raw body: the mask, then the attached routers.
         assert network.body == bytes.fromhex("ffffff000a0000010a000002")
+        assert network.network == OSPFNetworkLSA(
+            "255.255.255.0", ("10.0.0.1", "10.0.0.2")
+        )
 
     def test_every_lsa_body_is_its_declared_length(self):
         """Size every LSA body by its header's length."""
@@ -464,7 +480,7 @@ class TestLinkStateUpdate:
             assert count + b"".join(map(bytes, update.lsas)) == update.body
 
     def test_a_router_lsa_header(self):
-        """Decode a captured router LSA's header and raw body."""
+        """Decode a captured router LSA's header and body."""
         lsa = decode_frame(FRAMES[9])[OSPF].lsas[0]
         assert lsa.header == OSPFLSAHeader(
             ls_age=lsa.header.ls_age,
@@ -483,6 +499,10 @@ class TestLinkStateUpdate:
         )
         # One stub link: the 10.9.83.0/24 network, metric 10.
         assert lsa.body == bytes.fromhex("020000010a095300ffffff000300000a")
+        assert lsa.router == OSPFRouterLSA(
+            0x02, (stub("10.9.83.0", "255.255.255.0"),)
+        )
+        assert lsa.router.flags_str == "E"
 
     def test_an_update_with_no_lsas(self):
         """Decode an update whose count is zero."""
@@ -968,7 +988,7 @@ class TestConstruction:
         """Build an update from records and decode it back."""
         lsas = (
             OSPFLSA(lsa_header(length=24), b"\x01\x02\x03\x04"),
-            OSPFLSA(lsa_header(ls_type=5, length=20)),
+            OSPFLSA(lsa_header(ls_type=11, length=20)),
         )
         body = len(lsas).to_bytes(4, "big") + b"".join(map(bytes, lsas))
         ospf = make_ospf(4, body)
@@ -1165,7 +1185,7 @@ class TestCheckerCatchesTampering:
         """Build an update carrying one LSA whose checksum should be 0xffff."""
         lsa = OSPFLSA(
             lsa_header(ls_checksum=ls_checksum, length=24),
-            bytes.fromhex("8a00c200"),
+            bytes.fromhex("3e000700"),
         )
         return v4_frame(make_ospf(4, struct.pack("!I", 1) + bytes(lsa)))
 
@@ -1235,15 +1255,22 @@ def lsdb_entries() -> list[dict[str, str]]:
     """Every LSA ``AREA_LSDB`` prints, each as its ``key: value`` lines.
 
     An entry starts at its ``LS age`` line; a key that repeats within
-    one (an attached router) keeps its values comma-separated.
+    one (an attached router) keeps its values comma-separated. Its
+    ``scope`` is the area of the section it is printed in, or ``"AS"``
+    for an AS-external-LSA.
     """
     entries: list[dict[str, str]] = []
+    scope = ""
     for line in AREA_LSDB.splitlines():
+        if line.strip().endswith(")") and "Link States (Area " in line:
+            scope = line.split("(Area ")[1].split()[0].rstrip(")")
+        elif "AS External Link States" in line:
+            scope = "AS"
         key, colon, value = line.strip().partition(":")
         if not colon or line.startswith("###"):
             continue
         if key == "LS age":
-            entries.append({})
+            entries.append({"scope": scope})
         if entries:
             entry = entries[-1]
             value = value.strip()
@@ -1375,3 +1402,551 @@ class TestCorpusOSPFAreas:
 def ospf_area(index: int) -> str:
     """The area of ``ospf_areas.pcap``'s frame ``index``."""
     return decode_frame(AREA_FRAMES[index])[OSPF].area_id
+
+
+def stub(network: str, mask: str) -> OSPFRouterLink:
+    """A stub link of metric 10, as FRR's interfaces here all cost."""
+    return OSPFRouterLink(network, mask, 3, 10)
+
+
+def transit(dr: str, interface: str) -> OSPFRouterLink:
+    """A transit link of metric 10."""
+    return OSPFRouterLink(dr, interface, 2, 10)
+
+
+def external(forwarding_address: str = "0.0.0.0") -> OSPFExternalLSA:
+    """A /32 with one Type 2 (E bit set) metric of 20, FRR's default
+    for a redistributed connected route, and no tag."""
+    route = OSPFExternalRoute(True, 0, 20, forwarding_address, 0)
+    return OSPFExternalLSA("255.255.255.255", (route,))
+
+
+MASK_26 = "255.255.255.192"
+
+#: Every LSA body of ``ospf.pcap``, by (LS type, Link State ID,
+#: advertising router, LS sequence number). No database was recorded
+#: for that capture: the values follow from its script's configuration
+#: (10.9.83.0/24 between A and B, A the DR and redistributing
+#: 192.0.2.1/32) and :meth:`TestLSABodies.test_a_struct_decode_agrees`
+#: checks them against the bytes.
+OSPF_BODIES = {
+    (1, "10.0.0.1", "10.0.0.1", 0x80000002): OSPFRouterLSA(
+        0x02, (stub("10.9.83.0", "255.255.255.0"),)
+    ),
+    (1, "10.0.0.1", "10.0.0.1", 0x80000003): OSPFRouterLSA(
+        0x02, (transit("10.9.83.1", "10.9.83.1"),)
+    ),
+    (1, "10.0.0.2", "10.0.0.2", 0x80000002): OSPFRouterLSA(
+        0x00, (stub("10.9.83.0", "255.255.255.0"),)
+    ),
+    (1, "10.0.0.2", "10.0.0.2", 0x80000003): OSPFRouterLSA(
+        0x00, (transit("10.9.83.1", "10.9.83.2"),)
+    ),
+    (2, "10.9.83.1", "10.0.0.1", 0x80000001): OSPFNetworkLSA(
+        "255.255.255.0", ("10.0.0.1", "10.0.0.2")
+    ),
+    (5, "192.0.2.1", "10.0.0.1", 0x80000001): external(),
+}
+
+#: Every LSA body of ``ospf_areas.pcap``, by (flooding scope, LS type,
+#: Link State ID, advertising router, LS sequence number), as FRR's
+#: database records them in ``ospf_areas_lsdb.txt``, which holds all
+#: but three. The scope is the area, or ``"AS"`` for an
+#: AS-external-LSA.
+AREA_BODIES = {
+    # Area 0.0.0.2, the NSSA; B's and D's first Router-LSAs and D's
+    # first NSSA-LSA are not recorded.
+    ("0.0.0.2", 1, "10.0.0.2", "10.0.0.2", 0x80000005): OSPFRouterLSA(
+        0x03, (stub("10.9.84.128", MASK_26),)
+    ),
+    ("0.0.0.2", 1, "10.0.0.2", "10.0.0.2", 0x80000006): OSPFRouterLSA(
+        0x03, (transit("10.9.84.129", "10.9.84.129"),)
+    ),
+    ("0.0.0.2", 1, "10.0.0.4", "10.0.0.4", 0x80000004): OSPFRouterLSA(
+        0x02, (stub("10.9.84.128", MASK_26),)
+    ),
+    ("0.0.0.2", 1, "10.0.0.4", "10.0.0.4", 0x80000005): OSPFRouterLSA(
+        0x02, (transit("10.9.84.129", "10.9.84.130"),)
+    ),
+    ("0.0.0.2", 2, "10.9.84.129", "10.0.0.2", 0x80000001): OSPFNetworkLSA(
+        MASK_26, ("10.0.0.2", "10.0.0.4")
+    ),
+    ("0.0.0.2", 3, "0.0.0.0", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        "0.0.0.0", 1
+    ),
+    ("0.0.0.2", 3, "10.9.84.0", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        MASK_26, 10
+    ),
+    ("0.0.0.2", 3, "10.9.84.64", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        MASK_26, 10
+    ),
+    ("0.0.0.2", 7, "192.0.2.4", "10.0.0.4", 0x80000001): external(
+        "10.9.84.130"
+    ),
+    ("0.0.0.2", 7, "192.0.2.4", "10.0.0.4", 0x80000002): external(
+        "10.9.84.130"
+    ),
+    # Area 0, and the AS-external-LSAs.
+    ("0.0.0.0", 1, "10.0.0.1", "10.0.0.1", 0x80000002): OSPFRouterLSA(
+        0x00, (stub("10.9.84.0", MASK_26),)
+    ),
+    ("0.0.0.0", 1, "10.0.0.1", "10.0.0.1", 0x80000003): OSPFRouterLSA(
+        0x00, (transit("10.9.84.2", "10.9.84.1"),)
+    ),
+    ("0.0.0.0", 1, "10.0.0.2", "10.0.0.2", 0x80000004): OSPFRouterLSA(
+        0x03, (stub("10.9.84.0", MASK_26),)
+    ),
+    ("0.0.0.0", 1, "10.0.0.2", "10.0.0.2", 0x80000005): OSPFRouterLSA(
+        0x03, (transit("10.9.84.2", "10.9.84.2"),)
+    ),
+    ("0.0.0.0", 2, "10.9.84.2", "10.0.0.2", 0x80000001): OSPFNetworkLSA(
+        MASK_26, ("10.0.0.1", "10.0.0.2")
+    ),
+    ("0.0.0.0", 3, "10.9.84.64", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        MASK_26, 10
+    ),
+    ("0.0.0.0", 3, "10.9.84.128", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        MASK_26, 10
+    ),
+    ("0.0.0.0", 4, "10.0.0.3", "10.0.0.2", 0x80000001): OSPFSummaryLSA(
+        "0.0.0.0", 10
+    ),
+    ("AS", 5, "192.0.2.3", "10.0.0.3", 0x80000001): external(),
+    ("AS", 5, "192.0.2.4", "10.0.0.2", 0x80000003): external("10.9.84.130"),
+}
+
+#: An accessor per decoded LS type.
+ACCESSOR = {
+    1: "router",
+    2: "network",
+    3: "summary",
+    4: "summary",
+    5: "external",
+    7: "external",
+}
+
+
+def lsa_key(lsa: OSPFLSA) -> tuple[int, str, str, int]:
+    header = lsa.header
+    return (
+        header.ls_type,
+        header.link_state_id,
+        header.advertising_router,
+        header.ls_sequence_number,
+    )
+
+
+def lsa_scope(area_id: str, lsa: OSPFLSA) -> str:
+    """The LSA's flooding scope: ``"AS"`` for an AS-external-LSA, else
+    the area it was sent in."""
+    return "AS" if lsa.header.ls_type == 5 else area_id
+
+
+def make_lsa(ls_type: int, body: bytes) -> OSPFLSA:
+    return OSPFLSA(lsa_header(ls_type=ls_type, length=20 + len(body)), body)
+
+
+def hand_decode(lsa: OSPFLSA) -> tuple:
+    """Decode an LSA body with ``struct`` alone, into plain tuples."""
+    body, ls_type = lsa.body, lsa.header.ls_type
+
+    def ip(at: int) -> str:
+        return ".".join(map(str, body[at : at + 4]))
+
+    if ls_type == 1:
+        flags, count = body[0], struct.unpack_from("!H", body, 2)[0]
+        links, at = [], 4
+        for _ in range(count):
+            kind, tos_count, metric = struct.unpack_from("!BBH", body, at + 8)
+            tos = [
+                (
+                    body[at + 12 + 4 * i],
+                    struct.unpack_from("!H", body, at + 14 + 4 * i)[0],
+                )
+                for i in range(tos_count)
+            ]
+            links.append((ip(at), ip(at + 4), kind, metric, tos))
+            at += 12 + 4 * tos_count
+        return flags, links
+    if ls_type == 2:
+        return ip(0), [ip(at) for at in range(4, len(body), 4)]
+    if ls_type in (3, 4):
+        return ip(0), [
+            (body[at], int.from_bytes(body[at + 1 : at + 4], "big"))
+            for at in range(4, len(body), 4)
+        ]
+    return ip(0), [
+        (
+            body[at] >> 7,
+            body[at] & 0x7F,
+            int.from_bytes(body[at + 1 : at + 4], "big"),
+            ip(at + 4),
+            struct.unpack_from("!I", body, at + 8)[0],
+        )
+        for at in range(4, len(body), 12)
+    ]
+
+
+def as_tuples(record) -> tuple:
+    """Flatten a typed body record into :func:`hand_decode`'s shape."""
+    if isinstance(record, OSPFRouterLSA):
+        return record.flags, [
+            (
+                link.link_id,
+                link.link_data,
+                link.type,
+                link.metric,
+                [(t.tos, t.metric) for t in link.tos],
+            )
+            for link in record.links
+        ]
+    if isinstance(record, OSPFNetworkLSA):
+        return record.network_mask, list(record.attached_routers)
+    if isinstance(record, OSPFSummaryLSA):
+        entries = [(record.reserved, record.metric)]
+        entries += [(t.tos, t.metric) for t in record.tos]
+        return record.network_mask, entries
+    return record.network_mask, [
+        (
+            int(r.e_bit),
+            r.tos,
+            r.metric,
+            r.forwarding_address,
+            r.external_route_tag,
+        )
+        for r in record.routes
+    ]
+
+
+def all_lsas() -> list[OSPFLSA]:
+    """Every LSA in both OSPF captures' updates."""
+    return [
+        lsa
+        for frame in FRAMES + AREA_FRAMES
+        for lsa in decode_frame(frame)[OSPF].lsas or ()
+    ]
+
+
+class TestLSABodies:
+    """The typed LSA body accessors, over both real captures."""
+
+    @pytest.mark.parametrize(
+        "frames,expected,scoped",
+        [(FRAMES, OSPF_BODIES, False), (AREA_FRAMES, AREA_BODIES, True)],
+        ids=["ospf.pcap", "ospf_areas.pcap"],
+    )
+    def test_every_captured_body(self, frames, expected, scoped):
+        """Decode every LSA body to its expected record."""
+        seen = set()
+        for frame in frames:
+            ospf = decode_frame(frame)[OSPF]
+            for lsa in ospf.lsas or ():
+                key = lsa_key(lsa)
+                if scoped:
+                    key = (lsa_scope(ospf.area_id, lsa), *key)
+                record = getattr(lsa, ACCESSOR[lsa.header.ls_type])
+                assert record == expected[key], key
+                assert bytes(record) == lsa.body
+                seen.add(key)
+        assert seen == set(expected)
+
+    def test_the_captures_hold_every_decoded_type(self):
+        """Find LS types 1-5 and 7 among the captured LSAs."""
+        assert {lsa.header.ls_type for lsa in all_lsas()} == set(ACCESSOR)
+
+    def test_a_struct_decode_agrees(self):
+        """Match every captured body to a ``struct`` hand-decode."""
+        for lsa in all_lsas():
+            record = getattr(lsa, ACCESSOR[lsa.header.ls_type])
+            assert as_tuples(record) == hand_decode(lsa)
+
+    def test_the_expected_bodies_are_frr_s_database(self):
+        """Hold ``AREA_BODIES`` to ``ospf_areas_lsdb.txt``.
+
+        Every recorded entry of a captured instance agrees with it,
+        field by field, in FRR's own words.
+        """
+        link_types = {
+            "a Transit Network": 2,
+            "Stub Network": 3,
+            "a Point-to-point Network": 1,
+            "a Virtual Link": 4,
+        }
+        captured = {
+            (lsa_scope(ospf_area(index), lsa), *lsa_key(lsa))
+            for index, lsa in area_lsas()
+        }
+        checked = set()
+        for entry in lsdb_entries():
+            ls_type = {
+                "router-LSA": 1,
+                "network-LSA": 2,
+                "summary-LSA": 3,
+                "AS-external-LSA": 5,
+                "NSSA-LSA": 7,
+            }[entry["LS Type"]]
+            lsid, comment = entry["Link State ID"].partition(" ")[::2]
+            if "AS Boundary Router" in comment:
+                ls_type = 4
+            key = (
+                entry["scope"],
+                ls_type,
+                lsid,
+                entry["Advertising Router"],
+                int(entry["LS Seq Number"], 16),
+            )
+            record = AREA_BODIES.get(key)
+            if record is None:
+                # Area 0.0.0.1's LSAs and the earlier ones in no capture.
+                assert key[0] == "0.0.0.1" or key not in captured
+                continue
+            prefix = (
+                int(entry["Network Mask"].lstrip("/"))
+                if ("Network Mask" in entry)
+                else None
+            )
+            if ls_type == 1:
+                (link,) = record.links
+                assert int(entry["Flags"].split()[0], 16) == record.flags
+                assert int(entry["Number of Links"]) == record.link_count
+                assert link_types[entry["Link connected to"]] == link.type
+                ids = [v for k, v in entry.items() if k.startswith("(Link ID)")]
+                data = [
+                    v for k, v in entry.items() if k.startswith("(Link Data)")
+                ]
+                assert (ids, data) == ([link.link_id], [link.link_data])
+                assert int(entry["Number of TOS metrics"]) == link.tos_count
+                assert int(entry["TOS 0 Metric"]) == link.metric
+            elif ls_type == 2:
+                assert entry["Attached Router"].split(",") == list(
+                    record.attached_routers
+                )
+            elif ls_type in (3, 4):
+                assert entry["TOS"].split() == [
+                    "0",
+                    "Metric:",
+                    str(record.metric),
+                ]
+            else:
+                (route,) = record.routes
+                # An NSSA-LSA's line reads "NSSA: Forward Address: ...".
+                forwarding = entry.get("Forward Address") or entry[
+                    "NSSA"
+                ].removeprefix("Forward Address: ")
+                assert entry["Metric Type"].split()[0] == (
+                    "2" if route.e_bit else "1"
+                )
+                assert int(entry["TOS"]) == route.tos
+                assert int(entry["Metric"]) == route.metric
+                assert forwarding == route.forwarding_address
+                assert int(entry["External Route Tag"]) == (
+                    route.external_route_tag
+                )
+            if prefix is not None and ls_type != 4:
+                mask = record.network_mask
+                assert sum(bin(int(o)).count("1") for o in mask.split(".")) == (
+                    prefix
+                )
+            checked.add(key)
+        assert captured - checked == {
+            ("0.0.0.2", 1, "10.0.0.2", "10.0.0.2", 0x80000005),
+            ("0.0.0.2", 1, "10.0.0.4", "10.0.0.4", 0x80000004),
+            ("0.0.0.2", 7, "192.0.2.4", "10.0.0.4", 0x80000001),
+        }
+
+    def test_router_flags_and_names(self):
+        """Name the Router-LSA flags and link types."""
+        abr = AREA_BODIES[("0.0.0.2", 1, "10.0.0.2", "10.0.0.2", 0x80000006)]
+        assert (abr.v, abr.e, abr.b, abr.flags_str) == (
+            False,
+            True,
+            True,
+            "E B",
+        )
+        assert abr.links[0].type_name == "Transit"
+        everything = OSPFRouterLSA(0xFF)
+        assert everything.flags_str == "Nt W V E B"
+        assert (everything.v, everything.e, everything.b) == (True,) * 3
+        assert OSPFRouterLSA(0).flags_str == ""
+        names = [
+            OSPFRouterLink("0.0.0.0", "0.0.0.0", t, 1).type_name
+            for t in range(6)
+        ]
+        assert names == [
+            "unknown (0)",
+            "Point-to-point",
+            "Transit",
+            "Stub",
+            "Virtual link",
+            "unknown (5)",
+        ]
+
+    def test_tos_entries_and_reserved_bytes_round_trip(self):
+        """Decode TOS entries and carry reserved bytes verbatim."""
+        router = OSPFRouterLSA(
+            0x01,
+            (
+                OSPFRouterLink(
+                    "10.0.0.9",
+                    "10.9.84.1",
+                    1,
+                    5,
+                    (OSPFRouterLinkTOS(2, 7), OSPFRouterLinkTOS(4, 9, 0xAA)),
+                ),
+                stub("192.0.2.0", "255.255.255.0"),
+            ),
+            reserved=0x55,
+        )
+        summary = OSPFSummaryLSA(
+            MASK_26, 0xABCDEF, (OSPFSummaryTOS(8, 0x123456),), reserved=0x7F
+        )
+        routes = (
+            OSPFExternalRoute(False, 0, 1, "0.0.0.0", 0xDEADBEEF),
+            OSPFExternalRoute(True, 0x7F, 0xFFFFFF, "10.9.84.130", 1),
+        )
+        cases = [
+            (1, router),
+            (2, OSPFNetworkLSA("255.255.255.0")),
+            (3, summary),
+            (4, summary),
+            (5, OSPFExternalLSA("0.0.0.0", routes)),
+            (7, OSPFExternalLSA("0.0.0.0", routes)),
+        ]
+        for ls_type, record in cases:
+            lsa = make_lsa(ls_type, bytes(record))
+            assert getattr(lsa, ACCESSOR[ls_type]) == record
+            assert as_tuples(record) == hand_decode(lsa)
+        assert router.link_count == 2
+        assert router.links[0].tos_count == 2
+        assert bytes(router)[:4] == bytes.fromhex("01550002")
+        assert bytes(summary)[4:12] == bytes.fromhex("7fabcdef08123456")
+        assert bytes(routes[1])[:4] == b"\xff\xff\xff\xff"
+        assert bytes(routes[0])[:4] == b"\x00\x00\x00\x01"
+
+    @pytest.mark.parametrize("ls_type", [1, 2, 3, 4, 5, 7, 9, 10, 11, 6, 0])
+    def test_each_accessor_answers_only_its_own_types(self, ls_type):
+        """Answer None from every accessor but the LS type's own."""
+        bodies = {
+            1: bytes(OSPFRouterLSA(0)),
+            2: bytes(OSPFNetworkLSA("0.0.0.0")),
+            3: bytes(OSPFSummaryLSA("0.0.0.0", 0)),
+            5: bytes(external()),
+        }
+        bodies[4], bodies[7] = bodies[3], bodies[5]
+        lsa = make_lsa(ls_type, bodies.get(ls_type, b"\x01\x02\x03"))
+        for name in ("router", "network", "summary", "external"):
+            value = getattr(lsa, name)
+            assert (value is not None) == (ACCESSOR.get(ls_type) == name)
+
+    def test_other_types_stay_raw(self):
+        """Keep an opaque or unknown LSA's body as it is, any length."""
+        for ls_type in (6, 8, 9, 10, 11, 255):
+            for body in (b"", b"\x01", bytes(13)):
+                lsa = make_lsa(ls_type, body)
+                assert lsa.body == body
+                assert bytes(lsa) == bytes(lsa.header) + body
+
+
+class TestLSABodyFraming:
+    """A decoded LS type's body must have its framing, checked once."""
+
+    @pytest.mark.parametrize(
+        "ls_type,body,position,fragment",
+        [
+            (1, b"", 0, "too short for its 4 fixed bytes"),
+            (1, bytes(3), 0, "too short"),
+            (1, bytes.fromhex("00000001"), 4, "link 1 has 0 bytes"),
+            (1, bytes.fromhex("00000002") + bytes(12), 16, "link 2 has 0"),
+            (1, bytes.fromhex("00000001") + bytes(11), 4, "link 1 has 11"),
+            (
+                1,
+                bytes.fromhex("00000001") + bytes(9) + b"\x01" + bytes(2),
+                4,
+                "1 TOS entries",
+            ),
+            (
+                1,
+                bytes.fromhex("00000001") + bytes(9) + b"\x02" + bytes(6),
+                4,
+                "2 TOS entries",
+            ),
+            (1, bytes.fromhex("00000000") + bytes(1), 4, "1 bytes after"),
+            (1, bytes.fromhex("00000001") + bytes(16), 16, "4 bytes after"),
+            (1, bytes.fromhex("0000ffff") + bytes(24), 28, "link 3 has 0"),
+            (2, b"", 0, "4 plus whole 4-byte attached routers"),
+            (2, bytes(6), 4, "Network-LSA body is 6 bytes"),
+            (3, bytes(4), 0, "8 plus whole 4-byte TOS entries"),
+            (3, bytes(10), 8, "Summary-LSA (IP network)"),
+            (4, bytes(7), 0, "Summary-LSA (ASBR)"),
+            (5, bytes(4), 0, "16 plus whole 12-byte TOS entries"),
+            (5, bytes(20), 16, "AS-external-LSA"),
+            (7, bytes(15), 0, "NSSA-LSA"),
+            (7, bytes(27), 16, "NSSA-LSA body is 27 bytes"),
+        ],
+    )
+    def test_a_body_without_its_framing(
+        self, ls_type, body, position, fragment
+    ):
+        """Reject the body at construction, then in an update at decode."""
+        header = lsa_header(ls_type=ls_type, length=20 + len(body))
+        with pytest.raises(InvalidFieldError) as excinfo:
+            OSPFLSA(header, body)
+        error = excinfo.value
+        assert (error.protocol, error.field, error.offset) == (
+            OSPFLSA,
+            "body",
+            None,
+        )
+        assert fragment in str(error)
+        update = (
+            (2).to_bytes(4, "big") + bytes(lsa_header()) + bytes(header) + body
+        )
+        raw = struct.pack("!BBH", 2, 4, 24 + len(update)) + bytes(20) + update
+        with pytest.raises(InvalidFieldError) as excinfo:
+            OSPF.decode(raw)
+        error = excinfo.value
+        assert (error.protocol, error.field) == (OSPF, "body")
+        # The packet header, the count, the first LSA, the second's header.
+        assert error.offset == 24 + 4 + 20 + 20 + position
+        assert fragment in str(error)
+
+    def test_a_framing_error_rebases_onto_the_frame(self):
+        """Point a strict walk's error at the frame's bad byte."""
+        lsa = OSPFLSA(lsa_header(ls_type=2, length=24), bytes(4))
+        raw = bytearray(
+            bytes(make_ospf(4, (1).to_bytes(4, "big") + bytes(lsa)))
+        )
+        # Make the LSA a Router-LSA whose 4-byte body declares one link.
+        raw[24 + 4 + 3] = 1
+        raw[24 + 4 + 20 + 3] = 1
+        ip = make_ipv4(protocol=IPProtocol.OSPF, payload_len=len(raw))
+        frame = bytes(ethernet(0x0800)) + bytes(ip) + bytes(raw)
+        packet = decode_frame(frame, lax=True)
+        assert [type(layer) for layer in packet] == [Ethernet, IPv4]
+        error = packet.stopped_by
+        assert isinstance(error, InvalidFieldError)
+        assert error.offset == 24 + 4 + 20 + 4
+        assert error.frame_offset == 34 + error.offset
+
+    def test_a_hostile_link_count_is_bounded(self):
+        """Stop a 65535-link count at the end of the body."""
+        body = bytes.fromhex("0000ffff") + bytes(12 * 3)
+        with pytest.raises(InvalidFieldError) as excinfo:
+            make_lsa(1, body)
+        assert "link 4 has 0 bytes" in str(excinfo.value)
+
+    def test_the_packet_constructor_checks_its_lsas(self):
+        """Refuse an update body whose LSA is badly framed."""
+        header = bytes(lsa_header(ls_type=5, length=24))
+        with pytest.raises(InvalidFieldError) as excinfo:
+            make_ospf(4, (1).to_bytes(4, "big") + header + bytes(4))
+        assert (excinfo.value.protocol, excinfo.value.offset) == (OSPF, None)
+
+    def test_replace_revalidates_the_body(self):
+        """Check the framing again on replace()."""
+        lsa = make_lsa(9, bytes(4))
+        with pytest.raises(InvalidFieldError):
+            replace(lsa, header=replace(lsa.header, ls_type=5))
+        assert replace(lsa, header=replace(lsa.header, ls_type=2)).network == (
+            OSPFNetworkLSA("0.0.0.0")
+        )
