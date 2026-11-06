@@ -51,9 +51,10 @@ bits "shall be transmitted as 0 and ignored on receipt", so a flag
 accessor answers ``None`` in a type that does not define its bit, as
 :class:`~netprotocols.VRRP`'s per-version accessors do, and the raw
 octet stays in :attr:`STP.flags`. The Port Role encodes 1 as Alternate
-or Backup, 2 as Root and 3 as Designated; 0 is Unknown here, the name
-IEEE 802.1D-2004 gave it, which 802.1Q replaced with Master (the
-draft's §14.2.9 NOTE).
+or Backup, 2 as Root and 3 as Designated. 0 is Unknown in an RST BPDU,
+IEEE 802.1D-2004's name for it, and Master in an MST BPDU that passes
+validation (see "MST BPDUs") and in an MSTI Configuration Message,
+802.1Q's name for it (the draft's §14.2.9 NOTE).
 
 The bit positions, the role values and the field layout are from the
 BPDU encoding text of the IEEE 802.1 working group's public document
@@ -153,9 +154,12 @@ An MST BPDU (IEEE 802.1Q MSTP; Protocol Version 3, BPDU Type 0x02)
 is an RST BPDU followed by the Version 3 information: a two-octet
 Version 3 Length, the 51-octet MST Configuration Identifier, the
 CIST's 13 octets of internal fields and 0 to 64 MSTI Configuration
-Messages of 16 octets each. In it the RST prefix's Bridge Identifier
-is the CIST Regional Root Identifier and its Root Path Cost the CIST
-External Root Path Cost.
+Messages of 16 octets each. In it the RST prefix's fields carry the
+CIST's external priority information (802.1Q §14.4, Figure 14-1): the
+Root Identifier is the CIST Root Identifier, the Root Path Cost the
+CIST External Root Path Cost and the Bridge Identifier the CIST
+Regional Root Identifier. The sending bridge's own identifier is the
+CIST Bridge Identifier, in the Version 3 information.
 
 :meth:`STP.decode` reads the Version 3 information when the BPDU
 passes the validation of IEEE 802.1Q §14.5 e): a type 0x02 BPDU of
@@ -165,21 +169,25 @@ number, 0 to 64, of 16-octet MSTI Configuration Messages, all of them
 inside the buffer. It keeps those ``2 + Version 3 Length`` octets
 verbatim in :attr:`STP.mst`, and :attr:`STP.header_len` counts them,
 so the BPDU ends where its Version 3 Length puts the end; octets after
-it stay after the layer, as for the other types. In a walk the 802.3
-Length has already ended the buffer at the end of the PDU, so the
-validation reads the PDU's own length and a Version 3 Length running
-past it fails. A direct call has no such bound: the octets after the
-RST prefix are read as Version 3 information only if they pass the
-same validation, and anything after the Version 3 Length's end, such
-as Ethernet padding or an FCS, is left undecoded.
+it stay after the layer, as for the other types. A BPDU of version 4
+or above that passes the validation decodes as an MST BPDU too, and its
+SPT information, from the Version 4 Length on, stays after the layer.
+In a walk the 802.3 Length has already ended the buffer at the end of
+the PDU, so the validation reads the PDU's own length and a Version 3
+Length running past it fails. A direct call has no such bound: the
+octets after the RST prefix are read as Version 3 information only if
+they pass the same validation, and anything after the Version 3
+Length's end, such as Ethernet padding or an FCS, is left undecoded.
 
 A version 3 BPDU that fails the validation decodes as an RST BPDU, as
 §14.5 d) and §14.6 i) prescribe: its first 36 octets, with
 :attr:`STP.mst` empty and the octets after them left after the layer.
 So do the two encodings Wireshark's ``packet-bpdu.c`` handles beside
 the standard one, a Version 3 Length counting MSTI messages rather
-than octets, and a Version 3 Length of 0 with the length in the
-format selector octet: each holds a Version 3 Length below 64.
+than octets, and an alternative format with a Version 3 Length of 0,
+in which the format selector octet holds the BPDU's length less 39 and
+each MSTI message takes 26 octets: each holds a Version 3 Length below
+64.
 
 The Version 3 information is read through accessors that parse
 :attr:`STP.mst` on demand and answer ``None`` while it is empty, for
@@ -187,10 +195,19 @@ any STP or RSTP BPDU and any MST BPDU that fails the validation:
 :attr:`STP.version_3_length`, :attr:`STP.mst_config_id` (an
 :class:`STPMSTConfigurationIdentifier`), the CIST internal fields
 :attr:`STP.cist_internal_root_path_cost`,
-:attr:`STP.cist_bridge_priority`, :attr:`STP.cist_bridge_mac` and
-:attr:`STP.cist_remaining_hops`, and :attr:`STP.msti_messages` (a
-tuple of :class:`STPMSTIMessage`). An MSTI message's Regional Root
-Identifier carries its MSTID in its system ID extension
+:attr:`STP.cist_bridge_priority`, :attr:`STP.cist_bridge_mac`,
+:attr:`STP.cist_bridge_id_str` and :attr:`STP.cist_remaining_hops`,
+and :attr:`STP.msti_messages` (a tuple of :class:`STPMSTIMessage`).
+Under the same rule, :attr:`STP.cist_regional_root_priority`,
+:attr:`STP.cist_regional_root_mac` and
+:attr:`STP.cist_regional_root_id_str` read the RST prefix's Bridge
+Identifier (:attr:`STP.bridge_priority`, :attr:`STP.bridge_mac`,
+:attr:`STP.bridge_id_str`), and
+:attr:`STP.cist_external_root_path_cost` its Root Path Cost
+(:attr:`STP.root_path_cost`); the CIST Root Identifier is the prefix's
+Root Identifier, read through :attr:`STP.root_priority`,
+:attr:`STP.root_mac` and :attr:`STP.root_id_str`. An MSTI message's
+Regional Root Identifier carries its MSTID in its system ID extension
 (:attr:`STPMSTIMessage.msti_id`). Each record re-encodes with
 ``bytes()`` to its octets in :attr:`STP.mst`.
 """
@@ -237,8 +254,7 @@ _VERSION_NAMES: dict[int, str] = {
 
 #: Port Role values of an RST BPDU (see the module docstring): 1-3 as
 #: Wireshark's role_vals names them; 0, which role_vals does not name,
-#: is 802.1D-2004's Unknown, which 802.1Q calls Master (the draft's
-#: §14.2.9 NOTE).
+#: is 802.1D-2004's Unknown.
 _ROLE_NAMES: dict[int, str] = {
     0: "Unknown",
     1: "Alternate or Backup",
@@ -258,8 +274,10 @@ _TCA = 0x80
 #: The Master flag of an MSTI Configuration Message (802.1Q §14.4.1).
 _MASTER = 0x80
 
-#: Port Role values of an MSTI Configuration Message: those of
-#: ``_ROLE_NAMES``, with 0 named Master, as 802.1Q names it.
+#: Port Role values of an MSTI Configuration Message and of the CIST
+#: Flags of an MST BPDU that passes validation: those of
+#: ``_ROLE_NAMES``, with 0 named Master, as 802.1Q names it (the
+#: draft's §14.2.9 NOTE).
 _MSTI_ROLE_NAMES: dict[int, str] = {
     0: "Master",
     1: "Alternate or Backup",
@@ -579,10 +597,14 @@ class STP(Protocol):
         :class:`~netprotocols.InvalidFieldError`.
     :param flags: The Flags octet, kept raw; read its bits through
         :attr:`topology_change` and the other flag accessors.
-    :param root_priority: The Root Identifier's two priority octets.
-    :param root_mac: The Root Identifier's MAC address.
-    :param root_path_cost: Root Path Cost (4 octets).
-    :param bridge_priority: The Bridge Identifier's two priority octets.
+    :param root_priority: The Root Identifier's two priority octets (in
+        an MST BPDU, the CIST Root Identifier's).
+    :param root_mac: The Root Identifier's MAC address (in an MST BPDU,
+        the CIST Root's).
+    :param root_path_cost: Root Path Cost (4 octets; in an MST BPDU, the
+        CIST External Root Path Cost).
+    :param bridge_priority: The Bridge Identifier's two priority octets
+        (in an MST BPDU, the CIST Regional Root Identifier's).
     :param bridge_mac: The Bridge Identifier's MAC address: the sending
         bridge's (in an MST BPDU, the CIST Regional Root's).
     :param port_id: Port Identifier: priority and Port Number.
@@ -895,7 +917,8 @@ class STP(Protocol):
     def port_role(self) -> int | None:
         """An RST BPDU's two-bit Port Role; ``None`` in the other types.
 
-        1 Alternate or Backup, 2 Root, 3 Designated, 0 Unknown.
+        1 Alternate or Backup, 2 Root, 3 Designated; 0 Unknown, or
+        Master in an MST BPDU with :attr:`mst` set.
         """
         if self.flags is None or self.bpdu_type != _RST:
             return None
@@ -905,11 +928,14 @@ class STP(Protocol):
     def port_role_name(self) -> str | None:
         """Display name of :attr:`port_role`, e.g. ``"Designated"``.
 
-        Every two-bit role has a name, so this never raises; ``None``
-        when :attr:`port_role` is.
+        Role 0 is ``"Master"`` in an MST BPDU with :attr:`mst` set and
+        ``"Unknown"`` otherwise. Every two-bit role has a name, so this
+        never raises; ``None`` when :attr:`port_role` is.
         """
         role = self.port_role
-        return None if role is None else _ROLE_NAMES[role]
+        if role is None:
+            return None
+        return (_MSTI_ROLE_NAMES if self.mst else _ROLE_NAMES)[role]
 
     @property
     def root_priority_component(self) -> int | None:
@@ -1050,6 +1076,44 @@ class STP(Protocol):
     def cist_bridge_id_str(self) -> str | None:
         """The CIST Bridge Identifier in :attr:`root_id_str`'s form."""
         return _bridge_id_str(self.cist_bridge_priority, self.cist_bridge_mac)
+
+    @property
+    def cist_regional_root_priority(self) -> int | None:
+        """The CIST Regional Root Identifier's two priority octets.
+
+        :attr:`bridge_priority`, which holds them in an MST BPDU;
+        ``None`` while :attr:`mst` is empty.
+        """
+        return self.bridge_priority if self.mst else None
+
+    @property
+    def cist_regional_root_mac(self) -> str | None:
+        """The CIST Regional Root Identifier's MAC address.
+
+        :attr:`bridge_mac`, which holds it in an MST BPDU; ``None``
+        while :attr:`mst` is empty.
+        """
+        return self.bridge_mac if self.mst else None
+
+    @property
+    def cist_regional_root_id_str(self) -> str | None:
+        """The CIST Regional Root Identifier in :attr:`root_id_str`'s form.
+
+        :attr:`bridge_id_str` in an MST BPDU; ``None`` while :attr:`mst`
+        is empty.
+        """
+        return _bridge_id_str(
+            self.cist_regional_root_priority, self.cist_regional_root_mac
+        )
+
+    @property
+    def cist_external_root_path_cost(self) -> int | None:
+        """An MST BPDU's CIST External Root Path Cost (4 octets).
+
+        :attr:`root_path_cost`, which holds it in an MST BPDU; ``None``
+        while :attr:`mst` is empty.
+        """
+        return self.root_path_cost if self.mst else None
 
     @property
     def cist_remaining_hops(self) -> int | None:

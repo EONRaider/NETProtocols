@@ -306,7 +306,7 @@ def stp_headers(draw: st.DrawFn) -> STP:
     version_1_length = None
     mst = b""
     if bpdu_type == 0x02:
-        version_1_length = draw(st.sampled_from([0, 0, 1, 0xFF]))
+        version_1_length = draw(st.one_of(st.just(0), st.integers(0, 0xFF)))
         if version >= 3 and version_1_length == 0 and draw(st.booleans()):
             mst = draw(stp_msts())
     return STP(

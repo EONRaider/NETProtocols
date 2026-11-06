@@ -66,11 +66,12 @@
 # userspace and sends it through a packet socket; veth adds no padding.
 # The bridges and veths get fixed MAC addresses, so the bridge and
 # port IDs are the same on every run. BPDUs repeat every hello time (2
-# s, the only value 802.1Q-2005 and later allow) for as long as mstpd
-# runs, so the script drives each step by watching the capture and
-# keeps a fixed selection: the first frame of each kind named below,
-# a kind being the sending port, the BPDU type and version, and the
-# CIST Flags. The kept frames are asserted at the end: their kinds,
+# s, the only Bridge Hello Time mstpd 0.2.0 accepts: its bridge
+# configuration rejects any other value, "Bridge Hello Time must be
+# 2") for as long as mstpd runs, so the script drives each step by
+# watching the capture and keeps a fixed selection: the first frame of
+# each kind named below, a kind being the sending port, the BPDU type
+# and version, and the CIST Flags. The kept frames are asserted at the end: their kinds,
 # step by step; their lengths; every MST BPDU's Version 1 and Version
 # 3 Lengths, MST Configuration Identifier, CIST Bridge Identifier and
 # Remaining Hops, and its MSTI messages' MSTIDs, Regional Roots and
@@ -102,7 +103,8 @@ if pgrep -x mstpd >/dev/null; then
     echo "mstpd is already running; stop it first." >&2
     exit 1
 fi
-if ip -o link show | grep -q ': npmstp-'; then
+links=$(ip -o link show)
+if grep -q ': npmstp-' <<<"$links"; then
     echo "npmstp-* links exist; remove them first." >&2
     exit 1
 fi

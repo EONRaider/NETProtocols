@@ -777,9 +777,11 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   priority 0x2000 (MSTI 2's regional root); C (`npmstp-brc`) forced
   to RSTP and D (`npmstp-brd`) to 802.1D STP, each at 0x8000. Max Age
   6 s and Forward Delay 4 s throughout; Hello Time is 2 s, the only
-  value mstpd accepts. B's ports face A (`npmstp-ba`), C (`npmstp-bc`)
-  and D (`npmstp-bd`); tcpdump captures both directions on each and
-  the script merges the three by time. The links come up one at a
+  Bridge Hello Time mstpd 0.2.0 accepts (its bridge configuration
+  rejects any other value: "Bridge Hello Time must be 2"). B's ports
+  face A (`npmstp-ba`), C (`npmstp-bc`) and D (`npmstp-bd`); tcpdump
+  captures both directions on each and the script merges the three by
+  time. The links come up one at a
   time, A-B, then B-C, then B-D, and the script keeps the first frame
   of each of the 17 kinds it names (sending port, BPDU version and
   type, CIST Flags) and fails unless it saw all of them, step by step.

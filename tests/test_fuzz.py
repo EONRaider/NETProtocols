@@ -2438,6 +2438,10 @@ _STP_ACCESSORS = (
     "cist_bridge_priority",
     "cist_bridge_mac",
     "cist_bridge_id_str",
+    "cist_regional_root_priority",
+    "cist_regional_root_mac",
+    "cist_regional_root_id_str",
+    "cist_external_root_path_cost",
     "cist_remaining_hops",
     "msti_messages",
 )
@@ -2468,9 +2472,15 @@ def _read_every_stp_accessor(stp: STP) -> None:
     for name in _STP_ACCESSORS:
         getattr(stp, name)
     config_id, mstis = stp.mst_config_id, stp.msti_messages
+    if stp.port_role == 0:
+        assert stp.port_role_name == ("Master" if stp.mst else "Unknown")
     if not stp.mst:
         assert config_id is None and mstis is None
+        assert stp.cist_regional_root_id_str is None
+        assert stp.cist_external_root_path_cost is None
         return
+    assert stp.cist_regional_root_id_str == stp.bridge_id_str
+    assert stp.cist_external_root_path_cost == stp.root_path_cost
     assert config_id is not None and mstis is not None
     for name in _MST_CONFIG_ID_ACCESSORS:
         getattr(config_id, name)

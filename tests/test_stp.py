@@ -253,7 +253,7 @@ class TestRSTBPDUs:
         ],
     )
     def test_every_port_role(self, role, name):
-        """Test every port role."""
+        """Test every port role; role 0 is Unknown outside MST."""
         stp = STP.decode(rst(role << 2))
         assert stp.port_role == role
         assert stp.port_role_name == name
@@ -391,6 +391,10 @@ NON_ROOT_COMMON = {
     "cist_bridge_priority": None,
     "cist_bridge_mac": None,
     "cist_bridge_id_str": None,
+    "cist_regional_root_priority": None,
+    "cist_regional_root_mac": None,
+    "cist_regional_root_id_str": None,
+    "cist_external_root_path_cost": None,
     "cist_remaining_hops": None,
     "msti_messages": None,
 }
@@ -551,7 +555,14 @@ MSTI_BRIDGE_PRIORITIES = {"a": [0x00, 0xC0], "b": [0x80, 0x20]}
 
 
 def mst_by_struct(bpdu: bytes) -> dict[str, object]:
-    """Decode an MST BPDU's Version 3 information with ``struct`` alone."""
+    """Decode an MST BPDU's CIST and Version 3 information with ``struct``.
+
+    The RST prefix's Root Path Cost (octets 13-16) and Bridge Identifier
+    (octets 17-24) are the CIST External Root Path Cost and the CIST
+    Regional Root Identifier.
+    """
+    (external_cost,) = struct.unpack_from("!I", bpdu, 13)
+    regional_priority, regional_mac = struct.unpack_from("!H6s", bpdu, 17)
     (v3_length,) = struct.unpack_from("!H", bpdu, 36)
     selector, name, revision, digest = struct.unpack_from("!B32sH16s", bpdu, 38)
     cost, priority, mac, hops = struct.unpack_from("!IH6sB", bpdu, 89)
@@ -560,6 +571,11 @@ def mst_by_struct(bpdu: bytes) -> dict[str, object]:
         for at in range(102, 38 + v3_length, 16)
     ]
     return {
+        "cist_external_root_path_cost": external_cost,
+        "cist_regional_root": (
+            regional_priority,
+            ":".join(f"{o:02x}" for o in regional_mac),
+        ),
         "version_3_length": v3_length,
         "config_id": (selector, name, revision, digest),
         "cist": (cost, priority, ":".join(f"{o:02x}" for o in mac), hops),
@@ -611,6 +627,14 @@ class TestMSTBPDUsOfTheCapture:
         expected = mst_by_struct(bpdu)
         stp = decode_frame(frame)[STP]
         assert stp.mst == bpdu[36:]
+        assert (
+            stp.cist_external_root_path_cost
+            == expected["cist_external_root_path_cost"]
+        )
+        assert (
+            stp.cist_regional_root_priority,
+            stp.cist_regional_root_mac,
+        ) == expected["cist_regional_root"]
         assert stp.version_3_length == expected["version_3_length"]
         config_id = stp.mst_config_id
         assert (
@@ -658,6 +682,21 @@ class TestMSTBPDUsOfTheCapture:
         bridge = BRIDGE_A if sender == "a" else BRIDGE_B
         assert (stp.cist_bridge_priority, stp.cist_bridge_mac) == bridge
         assert stp.cist_bridge_id_str == f"{bridge[0]}/0/{bridge[1]}"
+        # A is the CIST root and the region's CIST Regional Root, so
+        # the CIST External Root Path Cost is 0 throughout; B's first
+        # BPDU, before it hears A, names B as both.
+        root = BRIDGE_B if index == 1 else BRIDGE_A
+        assert (stp.root_priority, stp.root_mac) == root
+        assert (
+            stp.cist_regional_root_priority,
+            stp.cist_regional_root_mac,
+        ) == root
+        assert stp.cist_regional_root_id_str == f"{root[0]}/0/{root[1]}"
+        assert stp.cist_regional_root_id_str == stp.bridge_id_str
+        assert stp.cist_external_root_path_cost == 0
+        assert stp.port_role_name == (
+            "Root" if stp.port_role == 2 else "Designated"
+        )
         mstis = stp.msti_messages
         assert [m.msti_id for m in mstis] == [1, 2]
         priorities = MSTI_BRIDGE_PRIORITIES[sender[0]]
@@ -757,6 +796,10 @@ MST_ACCESSORS = (
     "cist_bridge_priority",
     "cist_bridge_mac",
     "cist_bridge_id_str",
+    "cist_regional_root_priority",
+    "cist_regional_root_mac",
+    "cist_regional_root_id_str",
+    "cist_external_root_path_cost",
     "cist_remaining_hops",
     "msti_messages",
 )
@@ -798,6 +841,64 @@ class TestNonMSTBPDUsOfTheCapture:
         assert agreement.flags == 0x79
         assert agreement.root_id_str == "4096/0/02:00:00:00:a0:00"
         assert agreement.root_path_cost == 2000
+
+
+def alternative_format_bpdu() -> bytes:
+    """Build an MST BPDU in Wireshark's alternative MSTI format.
+
+    Hand-built from stp.pcap's first MST BPDU, in the layout
+    packet-bpdu.c reads when the Version 3 Length is 0 and the BPDU is
+    the format selector octet plus 39 octets long: the captured RST
+    prefix; a Version 3 Length of 0; a format selector octet of 116,
+    the BPDU's 155 octets less 39; the captured Configuration Name,
+    Revision Level and Digest; the CIST Bridge Identifier at octet 89,
+    the CIST Internal Root Path Cost at 97 and the CIST Remaining Hops
+    at 101; the two captured MSTI messages from octet 102, 26 octets
+    each (MSTID, Flags, Regional Root Identifier, Internal Root Path
+    Cost, Bridge Identifier, Port Identifier, Remaining Hops); and one
+    zero octet.
+    """
+    real = bpdu_of(STP_PCAP[0])
+    cost, priority, mac, hops = struct.unpack_from("!IH6sB", real, 89)
+    port_number = struct.unpack_from("!H", real, 25)[0] & 0x0FFF
+    messages = b""
+    for at in (102, 118):
+        flags, root, root_mac, internal, bridge, port, remaining = (
+            struct.unpack_from("!BH6sIBBB", real, at)
+        )
+        msti_id = root & 0x0FFF
+        messages += struct.pack(
+            "!HBH6sIH6sHB",
+            msti_id,
+            flags,
+            root,
+            root_mac,
+            internal,
+            bridge << 8 | msti_id,
+            mac,
+            port << 8 | port_number,
+            remaining,
+        )
+    length = 39 + 64 + len(messages)
+    return (
+        real[:36]
+        + b"\x00\x00"
+        + bytes((length - 39,))
+        + real[39:89]
+        + struct.pack("!H6sIB", priority, mac, cost, hops)
+        + messages
+        + b"\x00"
+    )
+
+
+#: :func:`alternative_format_bpdu`'s 155 octets.
+ALTERNATIVE_FORMAT_BPDU = bytes.fromhex(
+    "000003024e100002000000a00000000000100002000000a00080010000060002"
+    "000400000000744e455450726f746f636f6c7300000000000000000000000000"
+    "000000000000000007f92468d366cf3c647eb33c03b166ad59100002000000a0"
+    "00000000001400014e000102000000a00000000000000102000000a000800114"
+    "00024ec00202000000a00000000000c00202000000a00080011400"
+)
 
 
 class TestMSTValidation:
@@ -896,23 +997,44 @@ class TestMSTValidation:
         assert packet[STP] == stp
         assert packet.consumed == 14 + 3 + 36
 
-    def test_the_length_in_the_format_selector(self):
-        """A Version 3 Length of 0, the length in the format selector.
+    def test_the_alternative_format(self):
+        """Wireshark's alternative MSTI format fails validation.
 
-        Hand-built: the capture's BPDU with its Version 3 Length set to
-        0 and its format selector octet to 96, the length, the encoding
-        Wireshark's packet-bpdu.c describes beside the standard one. No
-        such BPDU was captured.
+        Hand-built (see :func:`alternative_format_bpdu`): no such BPDU
+        was captured. Its Version 3 Length is 0, which is below 64.
         """
-        bpdu = mst_bpdu(v3_length=0, selector=96)
-        assert len(bpdu) == 134
+        bpdu = alternative_format_bpdu()
+        assert bpdu == ALTERNATIVE_FORMAT_BPDU
+        assert len(bpdu) == 155
+        assert bpdu[36:39] == b"\x00\x00\x74"
+        assert bpdu[38] == len(bpdu) - 39
         stp = STP.decode(bpdu)
         assert_not_mst(stp)
         assert (stp.version, stp.header_len) == (3, 36)
+        assert stp.port_role_name == "Designated"
         assert bytes(stp) == bpdu[:36]
         packet = decode_frame(frame_8023(LLC_UI + bpdu))
         assert packet[STP] == stp
         assert packet.consumed == 14 + 3 + 36
+
+    def test_cist_port_role_0_is_master(self):
+        """Role 0 is Master in a validated MST BPDU, Unknown otherwise.
+
+        Hand-built: the capture's BPDU with its CIST Port Role set to 0.
+        """
+        bpdu = mst_bpdu()
+        bpdu = bpdu[:4] + bytes((bpdu[4] & ~0x0C,)) + bpdu[5:]
+        stp = STP.decode(bpdu)
+        assert (stp.port_role, stp.port_role_name) == (0, "Master")
+        unvalidated = STP.decode(bpdu[:2] + b"\x02" + bpdu[3:])
+        assert_not_mst(unvalidated)
+        assert unvalidated.port_role_name == "Unknown"
+        for version_1_length in (1, 0xFF):
+            invalid = STP.decode(
+                bpdu[:35] + bytes((version_1_length,)) + bpdu[36:]
+            )
+            assert invalid.port_role_name == "Unknown"
+        assert STP.decode(bpdu[:101]).port_role_name == "Unknown"
 
     def test_a_nonzero_format_selector_is_carried(self):
         """Test a nonzero format selector is carried."""
