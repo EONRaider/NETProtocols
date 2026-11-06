@@ -3,9 +3,9 @@ name: Docs lint
 # Runs lycheeverse/lychee (a link checker) over the small set of
 # hand-maintained docs that carry the project's external claims and
 # cross-references: README.md, ARCHITECTURE.md, CONTRIBUTING.md,
-# CHANGELOG.md, and docs/CLAIMS.md. The pull_request trigger, filtered
-# to those paths, checks the links of a docs edit; the weekly schedule
-# checks the links of unchanged files, which can go dead.
+# RELEASE.md, CHANGELOG.md, and docs/CLAIMS.md. The pull_request
+# trigger, filtered to those paths, checks the links of a docs edit; the
+# weekly schedule checks the links of unchanged files, which can go dead.
 on:
   pull_request:
     branches: [master]
@@ -13,6 +13,7 @@ on:
       - "README.md"
       - "ARCHITECTURE.md"
       - "CONTRIBUTING.md"
+      - "RELEASE.md"
       - "CHANGELOG.md"
       - "docs/CLAIMS.md"
   schedule:
@@ -58,5 +59,6 @@ jobs:
             README.md
             ARCHITECTURE.md
             CONTRIBUTING.md
+            RELEASE.md
             CHANGELOG.md
             docs/CLAIMS.md

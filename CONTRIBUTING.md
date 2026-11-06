@@ -354,12 +354,11 @@ saying why. Two properties of the setup are easy to trip over:
 
 ## Releasing
 
-`release.yml` gates publishing on the CI ladder only; the nightly fuzz
-and mutation jobs never run on a pull request. Before pushing a release
-tag, dispatch both by hand (Actions → the workflow → *Run workflow*,
-on `master` at the commit to be tagged) and tag only once both are
-green. Their concurrency groups are keyed on the triggering event, so a
-nightly run can't cancel a manual one.
+Releases follow [RELEASE.md](RELEASE.md), from the preconditions to the
+post-release checks. Its step 7 holds the pre-tag gates: `release.yml`
+gates publishing on the CI ladder only, so the nightly fuzz and mutation
+workflows are dispatched by hand on `master` at the commit to be
+tagged, and the tag is pushed only once both are green.
 
 ## Changelog
 
