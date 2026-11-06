@@ -1,4 +1,4 @@
-"""HSRP — Cisco's Hot Standby Router Protocol, version 1 (RFC 2281).
+"""HSRP — Cisco's Hot Standby Router Protocol: HSRPv1 (RFC 2281) and HSRPv2.
 
 HSRP lets a group of routers on a LAN present one virtual router to the
 hosts on it: one virtual IP address and one virtual MAC address, held by
@@ -78,26 +78,32 @@ often. The other fields are not judged: any Hellotime, Holdtime,
 Priority, Group, Reserved byte, Authentication Data and Virtual IP
 Address decodes.
 
-Two kinds of message on the same port are not HSRPv1, and are rejected
-by that guard rather than misread as it:
+Two kinds of message on the same port are not HSRPv1, and
+:meth:`HSRP.decode` rejects them rather than misread them as it:
 
 - HSRPv2, which runs on port 1985 too, to 224.0.0.102 rather than
   224.0.0.2, is a sequence of TLVs whose first, the Group State TLV,
-  starts with its type, 1, where HSRPv1 has its Version, so every
-  HSRPv2 message raises ``InvalidFieldError`` with ``field``
-  ``"version"`` and ``actual`` 1. (Its own version, 2, is the TLV's
-  third byte.) HSRPv2 is not decoded.
+  starts with its type, 1, where HSRPv1 has its Version, so
+  :meth:`HSRP.decode` raises ``InvalidFieldError`` for every HSRPv2
+  message, with ``field`` ``"version"`` and ``actual`` 1, and a message
+  that names :class:`HSRPv2`. (HSRPv2's own version, 2, is the TLV's
+  third byte.) A walk does not reach that error: it hands the first byte
+  of the datagram to ``HSRP._for_payload``, which answers
+  :class:`HSRPv2` for a first byte of 1 and :class:`HSRP` for any other,
+  so UDP port 1985 decodes both versions (see "HSRPv2" below). The
+  choice holds wherever :class:`HSRP` is registered, a port named in
+  ``decode_as`` included.
 - Op Code 3, the Advertise message of Cisco's HSRP interface-state
   advertisements, is version 0 too, but a 16-byte message whose Op Code
   is followed by a TLV rather than by this header's fields (Wireshark's
   packet-hsrp.c decodes it), so it raises ``InvalidFieldError`` with
   ``field`` ``"opcode"`` and ``actual`` 3, whatever its length. It is
-  not decoded either.
+  not decoded.
 
-A strict :func:`~netprotocols.decode_frame` therefore raises on either,
-as it does on NTP's control messages on port 123. Walk such traffic with
-``decode_frame(frame, lax=True)``, which keeps Ethernet, IP and UDP and
-reports the rejection as ``stopped_by``.
+A strict :func:`~netprotocols.decode_frame` therefore raises on an
+Advertise, as it does on ntpd's mode 7 messages on port 123. Walk such
+traffic with ``decode_frame(frame, lax=True)``, which keeps Ethernet, IP
+and UDP and reports the rejection as ``stopped_by``.
 
 Construction checks only that each field fits its byte, that the
 Authentication Data is 8 bytes and that the Virtual IP Address is
@@ -105,19 +111,109 @@ dotted-decimal, so a message with a Version, Op Code or State decode
 rejects builds, and ``HSRP.decode(bytes(message))`` raises for it,
 which ARCHITECTURE.md's round-trip guarantee allows: it covers canonical
 headers, which that one is not.
+
+HSRPv2
+------
+
+HSRPv2 is Cisco's and has no RFC. Its layout here is the one Wireshark's
+dissector reads, epan/dissectors/packet-hsrp.c (commit 6f7207a6): a
+message is a sequence of TLVs, each a 1-byte Type, a 1-byte Length that
+counts the value alone, and the value, running to the end of the UDP
+datagram. Over IPv4 it is sent from and to UDP port 1985, to
+224.0.0.102; HSRP for IPv6 is the same format from and to UDP port
+2029, to ff02::66, and that port names :class:`HSRPv2` directly. The
+first TLV is the Group State TLV, Type 1 and Length 40::
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |    Type=1     |   Length=40   |    Version    |    Op Code    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     State     |  IP Version   |         Group Number          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Identifier (6 bytes)                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          Identifier           |      Priority (4 bytes)       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |           Priority            |     Hello Time (4 bytes)      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |          Hello Time           |      Hold Time (4 bytes)      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |           Hold Time           |  Virtual IP Address (16 bytes)|
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   /                      Virtual IP Address                       /
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+The Version is 2. The Op Codes are HSRPv1's: Hello (0), Coup (1) and
+Resign (2). The States are numbered apart from HSRPv1's: Disabled (0),
+Initial (1), Learn (2), Listen (3), Speak (4), Standby (5) and Active
+(6), named here as :class:`HSRP` names their HSRPv1 counterparts. The IP
+Version, 4 or 6, says how to read the Virtual IP Address field, which is
+16 bytes either way: an IPv6 address fills it, and an IPv4 address takes
+its first 4 bytes, the other 12 kept raw as
+:attr:`HSRPv2GroupState.virtual_ip_padding`. The Group is 0-4095, the
+Identifier is the sender's MAC address, the Priority a 32-bit integer,
+and the Hello Time and Hold Time are in milliseconds.
+
+Two more TLVs are decoded where they follow it: the Text Authentication
+TLV (Type 3, Length 8), 8 bytes of clear-text password as in HSRPv1's
+Authentication Data, and the MD5 Authentication TLV (Type 4, Length
+28), an Algorithm byte (1, MD5), a padding byte, 2 bytes of Flags, the
+sender's IPv4 address, a 4-byte Key ID and the 16-byte digest, which is
+kept raw and not verified. Any other TLV, the Interface State TLV (Type
+2) among them, is an :class:`HSRPv2TLV`, its value raw, and a Group
+State TLV after the first is decoded as the first is.
+
+:meth:`HSRPv2.decode` judges the Group State TLV's first eight bytes as
+soon as each is in the buffer, before the length: the Type must be 1,
+the Length 40, the Version 2, the Op Code 0-2, the State 0-6, the IP
+Version 4 or 6 and the Group, once both its bytes are present, at most
+4095. Only a buffer whose leading bytes all pass can raise
+``TruncatedHeaderError``, when it is shorter than the 42-byte TLV. The
+rest of the buffer is then walked as TLVs: one whose Length runs past
+the buffer, a Type byte with no Length after it, and a Group State,
+Text Authentication or MD5 Authentication TLV of another Length or, for
+a Group State TLV, with a field the first is held to, raise
+``InvalidFieldError``, its ``offset`` counted from the start of the
+message. The Priority, the timers, the Identifier and the address are
+not judged. The message has no length of its own and keeps the whole
+buffer, which a walk ends at the end of the UDP datagram, so
+``bytes(HSRPv2.decode(x)) == x`` for every ``x`` decode accepts.
+
+Construction checks that each field fits, that the Group is at most
+4095, the IP Version 4 or 6 and the address of that version, and that
+the message opens with a Group State TLV; it accepts a Version, Op Code
+or State decode rejects.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from struct import Struct
-from typing import ClassVar, NoReturn, Self
+from typing import ClassVar, NoReturn, Self, cast
 
-from netprotocols._base import Protocol, bytes_to_ipv4, ipv4_to_bytes
+from netprotocols._base import (
+    Protocol,
+    bytes_to_ipv4,
+    bytes_to_ipv6,
+    bytes_to_mac,
+    ipv4_to_bytes,
+    ipv6_to_bytes,
+    mac_to_bytes,
+)
+from netprotocols._tlv import walk_kind_length_value
 from netprotocols.utils.exceptions import InvalidFieldError
 from netprotocols.utils.ipv4 import validate_ipv4_addr
+from netprotocols.utils.mac import validate_mac_addr
 
-__all__ = ["HSRP"]
+__all__ = [
+    "HSRP",
+    "HSRPv2",
+    "HSRPv2GroupState",
+    "HSRPv2MD5Authentication",
+    "HSRPv2TLV",
+    "HSRPv2TextAuthentication",
+]
 
 #: The one version RFC 2281 describes (§5.1: "This document describes
 #: version 0").
@@ -126,6 +222,10 @@ _VERSION = 0
 #: Op Codes (RFC 2281 §5.1). Op Code 3, Cisco's Advertise, is named in
 #: :data:`_ADVERTISE` only, for the error that rejects it.
 _OPCODE_NAMES: dict[int, str] = {0: "Hello", 1: "Coup", 2: "Resign"}
+
+#: The Type of HSRPv2's Group State TLV, which opens every HSRPv2
+#: message (Wireshark's packet-hsrp.c).
+_GROUP_STATE_TYPE = 1
 
 #: The interface-state Advertise message's Op Code, which shares the
 #: port and the version but not the layout (Wireshark's packet-hsrp.c).
@@ -176,8 +276,8 @@ def _reject(owner: type, field: str, offset: int, value: int) -> NoReturn:
     if field == "version":
         expected = str(_VERSION)
         message = f"HSRP version must be {_VERSION}, got {value}"
-        if value == 1:
-            message += " (HSRPv2's Group State TLV type; not decoded)"
+        if value == _GROUP_STATE_TYPE:
+            message += " (HSRPv2's Group State TLV type: decode it with HSRPv2)"
     elif field == "opcode":
         expected = "0-2"
         message = f"HSRP opcode must be 0-2, got {value}"
@@ -316,6 +416,20 @@ class HSRP(Protocol):
             virtual_ip=bytes_to_ipv4(virtual_ip),
         )
 
+    @classmethod
+    def _for_payload(cls, lead: int) -> type[Protocol]:
+        """Return :class:`HSRPv2` for a first byte of 1, else ``cls``.
+
+        UDP port 1985 carries both versions, and an HSRPv2 message opens
+        with its Group State TLV's Type, 1, where an HSRPv1 message has
+        its Version, 0, so a walk reads ``lead`` before it chooses a
+        header (see the module docstring). Any other first byte is left
+        to :meth:`decode`, which rejects all but 0.
+
+        :param lead: The first byte of the UDP payload.
+        """
+        return HSRPv2 if lead == _GROUP_STATE_TYPE else cls
+
     def __bytes__(self) -> bytes:
         """Serialize the message to its 20 on-wire bytes."""
         return self._struct.pack(
@@ -394,3 +508,745 @@ class HSRP(Protocol):
         MAC address instead, which §6.1 strongly discourages.
         """
         return f"{_VIRTUAL_MAC_PREFIX}:{self.group:02x}"
+
+
+#: HSRPv2's version, the Group State TLV's first value byte.
+_V2_VERSION = 2
+
+#: HSRPv2's States, by the value a Group State TLV carries
+#: (packet-hsrp.c's ``HSRP2_STATE_*``), named as :data:`_STATE_NAMES`
+#: names their HSRPv1 counterparts.
+_V2_STATE_NAMES: dict[int, str] = {
+    0: "Disabled",
+    1: "Initial",
+    2: "Learn",
+    3: "Listen",
+    4: "Speak",
+    5: "Standby",
+    6: "Active",
+}
+
+#: The IP Versions a Group State TLV can carry, by name.
+_IP_VERSION_NAMES: dict[int, str] = {4: "IPv4", 6: "IPv6"}
+
+#: The largest HSRPv2 group number.
+_MAX_V2_GROUP = 4095
+
+#: The Types of the TLVs this module decodes into their own classes.
+_TEXT_AUTH_TYPE = 3
+_MD5_AUTH_TYPE = 4
+
+#: The value Length each typed TLV must have, by Type.
+_TLV_LENGTHS: dict[int, int] = {
+    _GROUP_STATE_TYPE: 40,
+    _TEXT_AUTH_TYPE: 8,
+    _MD5_AUTH_TYPE: 28,
+}
+
+#: The names of the TLV Types packet-hsrp.c reads.
+_TLV_TYPE_NAMES: dict[int, str] = {
+    _GROUP_STATE_TYPE: "Group State",
+    2: "Interface State",
+    _TEXT_AUTH_TYPE: "Text Authentication",
+    _MD5_AUTH_TYPE: "MD5 Authentication",
+}
+
+#: The MD5 Authentication TLV's Algorithm values, by name.
+_MD5_ALGORITHM_NAMES: dict[int, str] = {1: "MD5"}
+
+#: The Virtual IP Address field's length, whatever the IP Version.
+_V2_ADDRESS_LEN = 16
+
+#: The length of an IPv4 address.
+_IPV4_LEN = 4
+
+#: The length of the MD5 digest.
+_MD5_DIGEST_LEN = 16
+
+#: The first four bytes and a half of an HSRPv2 group's virtual MAC
+#: address, by IP Version; the group number, in three hex digits, ends
+#: it.
+_V2_VIRTUAL_MAC_PREFIXES: dict[int, str] = {
+    4: "00:00:0c:9f:f",
+    6: "00:05:73:a0:0",
+}
+
+#: The Group State TLV, header included: Type, Length, Version, Op Code,
+#: State, IP Version, Group, Identifier, Priority, Hello Time, Hold Time
+#: and the Virtual IP Address field.
+_GROUP_STATE = Struct("!6BH6sIII16s")
+
+#: The MD5 Authentication TLV's value: Algorithm, padding, Flags, IP
+#: Address, Key ID and digest.
+_MD5_AUTH = Struct("!BBH4sI16s")
+
+#: The Group State TLV's one-byte fields that decode judges: each one's
+#: offset in the TLV, name, accepted values and those values in words.
+_V2_JUDGED: tuple[tuple[int, str, frozenset[int], str], ...] = (
+    (0, "type", frozenset((_GROUP_STATE_TYPE,)), "1"),
+    (1, "length", frozenset((_TLV_LENGTHS[_GROUP_STATE_TYPE],)), "40"),
+    (2, "version", frozenset((_V2_VERSION,)), "2"),
+    (3, "opcode", frozenset(_OPCODE_NAMES), "0-2"),
+    (4, "state", frozenset(_V2_STATE_NAMES), "0-6"),
+    (5, "ip_version", frozenset(_IP_VERSION_NAMES), "4 or 6"),
+)
+
+
+def _check_width(owner: type, field: str, value: int, bits: int) -> None:
+    """Raise :class:`InvalidFieldError` unless ``value`` fits ``bits``.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param field: The field's name.
+    :param value: The field's value.
+    :param bits: The field's width in bits.
+    :raises InvalidFieldError: if ``value`` is negative or wider.
+    """
+    top = (1 << bits) - 1
+    if not 0 <= value <= top:
+        raise InvalidFieldError(
+            f"{owner.__name__} {field} must be within 0-{top}, got {value}",
+            protocol=owner,
+            field=field,
+            expected=f"0-{top}",
+            actual=value,
+        )
+
+
+def _check_len(owner: type, field: str, value: bytes, length: int) -> None:
+    """Raise :class:`InvalidFieldError` unless ``value`` is ``length`` long.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param field: The field's name.
+    :param value: The field's bytes.
+    :param length: The length they must have.
+    :raises InvalidFieldError: if ``len(value)`` is not ``length``.
+    """
+    if len(value) != length:
+        raise InvalidFieldError(
+            f"{owner.__name__} {field} must be {length} bytes, got "
+            f"{len(value)}",
+            protocol=owner,
+            field=field,
+            expected=length,
+            actual=len(value),
+        )
+
+
+def _check_ipv6(owner: type, address: str) -> None:
+    """Raise :class:`InvalidFieldError` unless ``address`` is IPv6 text.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param address: The ``virtual_ip`` to check.
+    :raises InvalidFieldError: if ``address`` is not a string, or not an
+        IPv6 address.
+    """
+    valid = isinstance(address, str)
+    if valid:
+        try:
+            ipv6_to_bytes(address)
+        except OSError:
+            valid = False
+    if not valid:
+        raise InvalidFieldError(
+            f"{owner.__name__} virtual_ip {address!r} is not an IPv6 address",
+            protocol=owner,
+            field="virtual_ip",
+            actual=address,
+        )
+
+
+def _judge_group_state(owner: type, data: bytes | memoryview, at: int) -> None:
+    """Judge the Group State TLV that starts at ``at`` in ``data``.
+
+    Each of the fields in :data:`_V2_JUDGED` is judged once its byte is
+    in ``data``, in wire order, and then the Group once both its bytes
+    are (see "HSRPv2" in the module docstring).
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param data: The message.
+    :param at: The offset of the TLV's Type byte in ``data``.
+    :raises InvalidFieldError: if a judged field holds a value no Group
+        State TLV carries, ``offset`` that field's in ``data``.
+    """
+    for position, field, accepted, expected in _V2_JUDGED:
+        offset = at + position
+        if len(data) <= offset:
+            return
+        value = data[offset]
+        if value not in accepted:
+            raise InvalidFieldError(
+                f"HSRPv2 Group State TLV {field} must be {expected}, got "
+                f"{value}",
+                protocol=owner,
+                field=field,
+                offset=offset,
+                expected=expected,
+                actual=value,
+            )
+    if len(data) < at + 8:
+        return
+    group = int.from_bytes(data[at + 6 : at + 8])
+    if group > _MAX_V2_GROUP:
+        raise InvalidFieldError(
+            f"HSRPv2 group must be at most {_MAX_V2_GROUP}, got {group}",
+            protocol=owner,
+            field="group",
+            offset=at + 6,
+            expected=f"0-{_MAX_V2_GROUP}",
+            actual=group,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPv2GroupState:
+    """An HSRPv2 Group State TLV: Type 1, Length 40.
+
+    Its layout is packet-hsrp.c's (see "HSRPv2" in the module
+    docstring). Construction accepts any Version, Op Code and State
+    that fits its byte; :meth:`HSRPv2.decode` is stricter.
+
+    :param version: Version, ``2``.
+    :param opcode: Op Code: ``0`` Hello, ``1`` Coup, ``2`` Resign (see
+        :attr:`opcode_name`).
+    :param state: The sender's state: ``0`` Disabled, ``1`` Initial,
+        ``2`` Learn, ``3`` Listen, ``4`` Speak, ``5`` Standby, ``6``
+        Active (see :attr:`state_name`).
+    :param ip_version: ``4`` or ``6``: the version of
+        :attr:`virtual_ip`.
+    :param group: The standby group number, ``0``-``4095``.
+    :param identifier: The sender's MAC address, colon-separated.
+    :param priority: The sender's priority in the election of the
+        Active and Standby routers, 32 bits.
+    :param hellotime: The sender's interval between Hellos, in
+        milliseconds, 32 bits.
+    :param holdtime: How long, in milliseconds, a receiver should
+        consider this Hello valid, 32 bits.
+    :param virtual_ip: The group's virtual IP address: dotted-decimal
+        for ``ip_version`` 4, RFC 5952 text for 6.
+    :param virtual_ip_padding: The 12 bytes of the Virtual IP Address
+        field after an IPv4 address, kept raw; ``b""`` for IPv6, whose
+        address fills the field.
+    :raises InvalidFieldError: if an integer field does not fit its
+        width, ``group`` exceeds 4095, ``ip_version`` is neither 4 nor
+        6, ``virtual_ip`` is not an address of that version, or
+        ``virtual_ip_padding`` is not 12 bytes for IPv4 and empty for
+        IPv6.
+    :raises InvalidMACAddressError: if ``identifier`` is not a MAC
+        address.
+
+    ``bytes(tlv)`` is the 42-byte TLV, its Type and Length included.
+    """
+
+    version: int
+    opcode: int
+    state: int
+    ip_version: int
+    group: int
+    identifier: str
+    priority: int
+    hellotime: int
+    holdtime: int
+    virtual_ip: str
+    virtual_ip_padding: bytes
+
+    #: The TLV's Type.
+    type: ClassVar[int] = _GROUP_STATE_TYPE
+
+    def __post_init__(self) -> None:
+        """Check each field's width and the address's form."""
+        owner = type(self)
+        for name in ("version", "opcode", "state", "ip_version"):
+            _check_width(owner, name, getattr(self, name), 8)
+        if self.ip_version not in _IP_VERSION_NAMES:
+            raise InvalidFieldError(
+                f"HSRPv2GroupState ip_version must be 4 or 6, got "
+                f"{self.ip_version}",
+                protocol=owner,
+                field="ip_version",
+                expected="4 or 6",
+                actual=self.ip_version,
+            )
+        if not 0 <= self.group <= _MAX_V2_GROUP:
+            raise InvalidFieldError(
+                f"HSRPv2GroupState group must be within 0-{_MAX_V2_GROUP}, "
+                f"got {self.group}",
+                protocol=owner,
+                field="group",
+                expected=f"0-{_MAX_V2_GROUP}",
+                actual=self.group,
+            )
+        validate_mac_addr(self.identifier, protocol=owner, field="identifier")
+        for name in ("priority", "hellotime", "holdtime"):
+            _check_width(owner, name, getattr(self, name), 32)
+        if self.ip_version == 4:
+            validate_ipv4_addr(
+                self.virtual_ip, protocol=owner, field="virtual_ip"
+            )
+            padding = _V2_ADDRESS_LEN - _IPV4_LEN
+        else:
+            _check_ipv6(owner, self.virtual_ip)
+            padding = 0
+        _check_len(
+            owner, "virtual_ip_padding", self.virtual_ip_padding, padding
+        )
+
+    def __bytes__(self) -> bytes:
+        """Serialize the TLV: Type, Length, then its 40 bytes of value."""
+        if self.ip_version == 4:
+            address = ipv4_to_bytes(self.virtual_ip) + self.virtual_ip_padding
+        else:
+            address = ipv6_to_bytes(self.virtual_ip)
+        return _GROUP_STATE.pack(
+            self.type,
+            _TLV_LENGTHS[self.type],
+            self.version,
+            self.opcode,
+            self.state,
+            self.ip_version,
+            self.group,
+            mac_to_bytes(self.identifier),
+            self.priority,
+            self.hellotime,
+            self.holdtime,
+            address,
+        )
+
+    @property
+    def opcode_name(self) -> str:
+        """Name the Op Code, e.g. ``"Hello"``.
+
+        Falls back to ``"unknown (n)"`` for a value other than 0-2,
+        which only construction can give (degrades, never raises).
+        """
+        return _OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
+
+    @property
+    def state_name(self) -> str:
+        """Name the sender's state, e.g. ``"Active"``.
+
+        Falls back to ``"unknown (n)"`` for a value other than 0-6,
+        which only construction can give (degrades, never raises).
+        """
+        return _V2_STATE_NAMES.get(self.state, f"unknown ({self.state})")
+
+    @property
+    def ip_version_name(self) -> str:
+        """Name the IP Version, ``"IPv4"`` or ``"IPv6"``.
+
+        Construction accepts no other, so this never raises.
+        """
+        return _IP_VERSION_NAMES[self.ip_version]
+
+    @property
+    def virtual_mac(self) -> str:
+        """Return the group's well-known HSRPv2 virtual MAC address.
+
+        ``00:00:0c:9f:f`` and the group number in three hex digits for
+        an IPv4 group, ``"00:00:0c:9f:f0:01"`` for group 1, and
+        ``00:05:73:a0:0`` and the group number for an IPv6 group,
+        ``"00:05:73:a0:00:01"`` for group 1: the ranges Cisco's HSRP
+        configuration guides give HSRPv2 and HSRP for IPv6. Never
+        raises.
+        """
+        prefix = _V2_VIRTUAL_MAC_PREFIXES[self.ip_version]
+        digits = f"{self.group:03x}"
+        return f"{prefix}{digits[0]}:{digits[1:]}"
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPv2TextAuthentication:
+    """An HSRPv2 Text Authentication TLV: Type 3, Length 8.
+
+    :param auth_data: The 8 bytes of Authentication Data, kept raw: a
+        clear-text password, NUL-padded, as in HSRPv1's (see
+        :attr:`password`).
+    :raises InvalidFieldError: if ``auth_data`` is not 8 bytes long.
+
+    ``bytes(tlv)`` is the 10-byte TLV, its Type and Length included.
+    """
+
+    auth_data: bytes
+
+    #: The TLV's Type.
+    type: ClassVar[int] = _TEXT_AUTH_TYPE
+
+    def __post_init__(self) -> None:
+        """Check the Authentication Data's length."""
+        _check_len(type(self), "auth_data", self.auth_data, _AUTH_DATA_LEN)
+
+    def __bytes__(self) -> bytes:
+        """Serialize the TLV: Type, Length, then the Authentication Data."""
+        return bytes([self.type, _AUTH_DATA_LEN]) + self.auth_data
+
+    @property
+    def password(self) -> bytes:
+        """Return the Authentication Data with its NUL padding stripped.
+
+        Only trailing NUL bytes are stripped; ``b""`` when all eight are
+        NUL.
+        """
+        return self.auth_data.rstrip(b"\x00")
+
+    @property
+    def auth_data_str(self) -> str:
+        """Render the Authentication Data for display.
+
+        The :attr:`password` as text when it is printable ASCII, such
+        as ``"cisco"``, and otherwise the 8 bytes in hex, such as
+        ``"0x00ff..."``, which never raises.
+        """
+        password = self.password
+        if all(0x20 <= byte < 0x7F for byte in password):
+            return password.decode("ascii")
+        return "0x" + self.auth_data.hex()
+
+    @property
+    def is_default_auth(self) -> bool:
+        """Whether the Authentication Data is ``cisco`` and three NULs.
+
+        That is HSRPv1's default Authentication Data (RFC 2281 §5.1).
+        """
+        return self.auth_data == _DEFAULT_AUTH_DATA
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPv2MD5Authentication:
+    """An HSRPv2 MD5 Authentication TLV: Type 4, Length 28.
+
+    :param algorithm: The hash algorithm, ``1`` for MD5 (see
+        :attr:`algorithm_name`).
+    :param padding: The byte after the Algorithm, carried verbatim.
+    :param flags: The 16-bit Flags, carried verbatim.
+    :param ip_address: The sender's IPv4 address, dotted-decimal.
+    :param key_id: The 32-bit Key ID.
+    :param digest: The 16-byte MD5 digest, kept raw and not verified.
+    :raises InvalidFieldError: if an integer field does not fit its
+        width, or ``digest`` is not 16 bytes long.
+    :raises InvalidIPv4AddressError: if ``ip_address`` is not a
+        dotted-decimal IPv4 address.
+
+    ``bytes(tlv)`` is the 30-byte TLV, its Type and Length included.
+    """
+
+    algorithm: int
+    padding: int
+    flags: int
+    ip_address: str
+    key_id: int
+    digest: bytes
+
+    #: The TLV's Type.
+    type: ClassVar[int] = _MD5_AUTH_TYPE
+
+    def __post_init__(self) -> None:
+        """Check each field's width and the address's form."""
+        owner = type(self)
+        _check_width(owner, "algorithm", self.algorithm, 8)
+        _check_width(owner, "padding", self.padding, 8)
+        _check_width(owner, "flags", self.flags, 16)
+        validate_ipv4_addr(self.ip_address, protocol=owner, field="ip_address")
+        _check_width(owner, "key_id", self.key_id, 32)
+        _check_len(owner, "digest", self.digest, _MD5_DIGEST_LEN)
+
+    def __bytes__(self) -> bytes:
+        """Serialize the TLV: Type, Length, then its 28 bytes of value."""
+        return bytes([self.type, _MD5_AUTH.size]) + _MD5_AUTH.pack(
+            self.algorithm,
+            self.padding,
+            self.flags,
+            ipv4_to_bytes(self.ip_address),
+            self.key_id,
+            self.digest,
+        )
+
+    @property
+    def algorithm_name(self) -> str:
+        """Name the Algorithm, ``"MD5"`` for 1.
+
+        Falls back to ``"unknown (n)"`` for any other value (degrades,
+        never raises).
+        """
+        return _MD5_ALGORITHM_NAMES.get(
+            self.algorithm, f"unknown ({self.algorithm})"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPv2TLV:
+    """An HSRPv2 TLV of a Type this module does not decode, its value raw.
+
+    :param type: The Type, ``0``-``255`` but 1, 3 and 4, which have
+        their own classes (see :attr:`type_name`).
+    :param value: The value, at most 255 bytes.
+    :raises InvalidFieldError: if ``type`` does not fit a byte or is 1,
+        3 or 4, or ``value`` is longer than 255 bytes.
+
+    ``bytes(tlv)`` is the TLV: Type, a Length of ``len(value)``, then
+    the value.
+    """
+
+    type: int
+    value: bytes = b""
+
+    def __post_init__(self) -> None:
+        """Check the Type and the value's length."""
+        owner = type(self)
+        _check_width(owner, "type", self.type, 8)
+        if self.type in _TLV_LENGTHS:
+            raise InvalidFieldError(
+                f"HSRPv2TLV type {self.type} is the "
+                f"{_TLV_TYPE_NAMES[self.type]} TLV, which has its own class",
+                protocol=owner,
+                field="type",
+                actual=self.type,
+            )
+        if len(self.value) > 0xFF:
+            raise InvalidFieldError(
+                f"HSRPv2TLV value must be at most 255 bytes, got "
+                f"{len(self.value)}",
+                protocol=owner,
+                field="value",
+                expected="<=255",
+                actual=len(self.value),
+            )
+
+    def __bytes__(self) -> bytes:
+        """Serialize the TLV: Type, Length, then the value."""
+        return bytes([self.type, len(self.value)]) + self.value
+
+    @property
+    def type_name(self) -> str:
+        """Name the Type, e.g. ``"Interface State"``.
+
+        Falls back to ``"unknown (n)"`` for a Type packet-hsrp.c does
+        not name (degrades, never raises).
+        """
+        return _TLV_TYPE_NAMES.get(self.type, f"unknown ({self.type})")
+
+
+#: Any of the TLVs an :class:`HSRPv2` message holds.
+_HSRPv2Record = (
+    HSRPv2GroupState
+    | HSRPv2TextAuthentication
+    | HSRPv2MD5Authentication
+    | HSRPv2TLV
+)
+
+#: The classes of :data:`_HSRPv2Record`, for ``isinstance``.
+_RECORD_CLASSES = (
+    HSRPv2GroupState,
+    HSRPv2TextAuthentication,
+    HSRPv2MD5Authentication,
+    HSRPv2TLV,
+)
+
+
+def _record(
+    owner: type, data: bytes, kind: int, value: bytes, at: int
+) -> _HSRPv2Record:
+    """Decode the TLV of Type ``kind`` and ``value`` at ``at`` in ``data``.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param data: The message.
+    :param kind: The TLV's Type.
+    :param value: The TLV's value.
+    :param at: The offset of the TLV's Type byte in ``data``.
+    :raises InvalidFieldError: if a Group State, Text Authentication or
+        MD5 Authentication TLV has another Length (``field``
+        ``"length"``), or a Group State TLV a field decode judges that
+        holds a value it rejects.
+    """
+    length = _TLV_LENGTHS.get(kind)
+    if length is None:
+        return HSRPv2TLV(type=kind, value=value)
+    if len(value) != length:
+        raise InvalidFieldError(
+            f"HSRPv2 {_TLV_TYPE_NAMES[kind]} TLV length must be {length}, "
+            f"got {len(value)}",
+            protocol=owner,
+            field="length",
+            offset=at + 1,
+            expected=str(length),
+            actual=len(value),
+        )
+    if kind == _TEXT_AUTH_TYPE:
+        return HSRPv2TextAuthentication(auth_data=value)
+    if kind == _MD5_AUTH_TYPE:
+        algorithm, padding, flags, address, key_id, digest = _MD5_AUTH.unpack(
+            value
+        )
+        return HSRPv2MD5Authentication(
+            algorithm=algorithm,
+            padding=padding,
+            flags=flags,
+            ip_address=bytes_to_ipv4(address),
+            key_id=key_id,
+            digest=digest,
+        )
+    _judge_group_state(owner, data, at)
+    return _group_state(data[at : at + _GROUP_STATE.size])
+
+
+def _group_state(tlv: bytes) -> HSRPv2GroupState:
+    """Build the Group State TLV ``tlv``, whose judged fields all pass.
+
+    :param tlv: The 42 bytes of the TLV, its Type and Length included.
+    """
+    (
+        _,
+        _,
+        version,
+        opcode,
+        state,
+        ip_version,
+        group,
+        identifier,
+        priority,
+        hellotime,
+        holdtime,
+        address,
+    ) = _GROUP_STATE.unpack(tlv)
+    if ip_version == 4:
+        virtual_ip = bytes_to_ipv4(address[:_IPV4_LEN])
+        padding = address[_IPV4_LEN:]
+    else:
+        virtual_ip = bytes_to_ipv6(address)
+        padding = b""
+    return HSRPv2GroupState(
+        version=version,
+        opcode=opcode,
+        state=state,
+        ip_version=ip_version,
+        group=group,
+        identifier=bytes_to_mac(identifier),
+        priority=priority,
+        hellotime=hellotime,
+        holdtime=holdtime,
+        virtual_ip=virtual_ip,
+        virtual_ip_padding=padding,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPv2(Protocol):
+    """An HSRPv2 message, or an HSRP for IPv6 one: a sequence of TLVs.
+
+    The first is the Group State TLV; Text Authentication, MD5
+    Authentication and further Group State TLVs are decoded into their
+    classes, and any other TLV is kept raw (see "HSRPv2" in the module
+    docstring).
+
+    :param tlvs: The TLVs, in wire order, the first an
+        :class:`HSRPv2GroupState`.
+    :raises InvalidFieldError: if ``tlvs`` is empty, does not open with
+        an :class:`HSRPv2GroupState`, or holds anything but the four TLV
+        classes.
+
+    >>> message = HSRPv2.decode(
+    ...     bytes.fromhex("0128020006040001020000000001")
+    ...     + bytes.fromhex("000000640000 0bb8 00002710 c0000201")
+    ...     + bytes(12)
+    ... )
+    >>> state = message.group_state
+    >>> state.opcode_name, state.state_name, state.virtual_ip
+    ('Hello', 'Active', '192.0.2.1')
+    >>> state.hellotime, state.holdtime, state.virtual_mac
+    (3000, 10000, '00:00:0c:9f:f0:01')
+    """
+
+    tlvs: tuple[_HSRPv2Record, ...]
+
+    #: The Group State TLV that opens every message, header included.
+    _struct: ClassVar[Struct] = _GROUP_STATE
+
+    def __post_init__(self) -> None:
+        """Check that the TLVs open with a Group State TLV."""
+        owner = type(self)
+        if not self.tlvs or not isinstance(self.tlvs[0], HSRPv2GroupState):
+            raise InvalidFieldError(
+                "HSRPv2 tlvs must open with an HSRPv2GroupState",
+                protocol=owner,
+                field="tlvs",
+            )
+        for tlv in self.tlvs:
+            if not isinstance(tlv, _RECORD_CLASSES):
+                raise InvalidFieldError(
+                    f"HSRPv2 tlvs must hold HSRPv2 TLVs, got {tlv!r}",
+                    protocol=owner,
+                    field="tlvs",
+                )
+
+    @classmethod
+    def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the HSRPv2 message that fills ``data``.
+
+        The Group State TLV's judged fields come first, each once its
+        bytes are present, then its length, then the walk of every TLV
+        to the end of ``data`` (see "HSRPv2" in the module docstring).
+
+        :param data: The buffer, starting at the Group State TLV's Type.
+        :raises InvalidFieldError: if the first TLV's Type is not 1
+            (``field`` ``"type"``, ``offset`` 0), its Length not 40
+            (``"length"``, 1), its Version not 2 (``"version"``, 2), its
+            Op Code not 0-2 (``"opcode"``, 3), its State not 0-6
+            (``"state"``, 4), its IP Version neither 4 nor 6
+            (``"ip_version"``, 5) or its Group above 4095 (``"group"``,
+            6), at any length; or if a later TLV breaks the walk
+            (``"tlvs"``), has a Length its Type does not allow
+            (``"length"``), or is a Group State TLV with a field the
+            first is held to that fails, ``offset`` counted from the
+            start of ``data``.
+        :raises TruncatedHeaderError: if ``data`` is shorter than the
+            42-byte Group State TLV and every judged byte it holds
+            passes.
+        """
+        _judge_group_state(cls, data, 0)
+        cls._unpack_fixed(data)
+        raw = bytes(data)
+        tlvs: list[_HSRPv2Record] = []
+        cursor = 0
+        for kind, value in walk_kind_length_value(
+            raw,
+            lone_byte_kinds=frozenset(),
+            terminator_kind=None,
+            min_option_length=None,
+            length_includes_header=False,
+            protocol=cls,
+            field="tlvs",
+        ):
+            tlvs.append(_record(cls, raw, kind, value, cursor))
+            cursor += 2 + len(value)
+        return cls(tlvs=tuple(tlvs))
+
+    def __bytes__(self) -> bytes:
+        """Serialize the message: every TLV, in order."""
+        return b"".join(bytes(tlv) for tlv in self.tlvs)
+
+    @property
+    def header_len(self) -> int:
+        """The whole message: every TLV.
+
+        The message runs to the end of the datagram: HSRPv2 is terminal.
+        """
+        return sum(len(bytes(tlv)) for tlv in self.tlvs)
+
+    @property
+    def group_state(self) -> HSRPv2GroupState:
+        """The Group State TLV that opens the message."""
+        return cast(HSRPv2GroupState, self.tlvs[0])
+
+    @property
+    def text_authentication(self) -> HSRPv2TextAuthentication | None:
+        """The first Text Authentication TLV; ``None`` if there is none."""
+        for tlv in self.tlvs:
+            if isinstance(tlv, HSRPv2TextAuthentication):
+                return tlv
+        return None
+
+    @property
+    def md5_authentication(self) -> HSRPv2MD5Authentication | None:
+        """The first MD5 Authentication TLV; ``None`` if there is none."""
+        for tlv in self.tlvs:
+            if isinstance(tlv, HSRPv2MD5Authentication):
+                return tlv
+        return None

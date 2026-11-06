@@ -80,6 +80,7 @@ from netprotocols import (
     BGPPrefix,
     DNSOverTCP,
     Ethernet,
+    HSRPv2,
     ICMPv4,
     ICMPv6,
     InvalidFieldError,
@@ -120,6 +121,7 @@ from strategies import (
     bgp_prefixes,
     cdp_pdus,
     hsrp_messages,
+    hsrpv2_messages,
     http_context_responses,
     http_messages,
     http_wire,
@@ -177,6 +179,7 @@ ALL_PROTOCOLS = (
     NTP,
     NTPControl,
     HSRP,
+    HSRPv2,
     VRRP,
     VRRPv6,
     BGP,
@@ -1887,6 +1890,113 @@ class TestHSRPAccessorSafety:
         assert hsrp.state_name == f"unknown ({state})"
         for name in _HSRP_ACCESSORS:
             getattr(hsrp, name)
+
+
+#: Hand-built HSRPv2 messages, packed here in the layout of Wireshark's
+#: packet-hsrp.c, not built by the library: a Group State TLV for IPv4
+#: and for IPv6 in every State, alone or followed by a Text
+#: Authentication, an MD5 Authentication or an Interface State TLV.
+_HSRPV2_MESSAGES = [
+    bytes([1, 40, 2, opcode, state, ip_version, 0, 1])
+    + bytes.fromhex("02000a09c30b")
+    + (100).to_bytes(4, "big")
+    + (3000).to_bytes(4, "big")
+    + (10000).to_bytes(4, "big")
+    + bytes(range(16))
+    + tail
+    for opcode in (0, 1, 2)
+    for state in range(7)
+    for ip_version in (4, 6)
+    for tail in (
+        b"",
+        bytes([3, 8]) + b"cisco\x00\x00\x00",
+        bytes([4, 28, 1, 0, 0, 0, 192, 0, 2, 11, 0, 0, 0, 1]) + bytes(16),
+        bytes([2, 4, 0, 1, 0, 0]),
+    )
+]
+
+#: Values near those HSRPv2.decode() judges in the Group State TLV's
+#: first eight bytes.
+_hsrpv2_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 6, 7, 15, 16, 39, 40, 255])
+
+
+@st.composite
+def _hsrpv2_seeded(draw: st.DrawFn) -> bytes:
+    """A hand-built HSRPv2 message, now and then a judged byte redrawn
+    near the values decode() accepts, a later byte changed, cut anywhere
+    and followed by nothing or free bytes."""
+    raw = bytearray(draw(st.sampled_from(_HSRPV2_MESSAGES)))
+    for position in range(8):
+        if draw(st.integers(0, 7)) == 0:
+            raw[position] = draw(_hsrpv2_lead)
+    if draw(st.booleans()):
+        raw[draw(st.integers(8, len(raw) - 1))] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(st.one_of(st.just(b""), st.binary(max_size=40)))
+    return bytes(raw[:cut]) + tail
+
+
+#: HSRPv2's display accessors, every one of which must answer on any
+#: decoded message.
+_HSRPV2_ACCESSORS = (
+    "group_state",
+    "text_authentication",
+    "md5_authentication",
+    "header_len",
+)
+
+#: The display accessors of each TLV class.
+_HSRPV2_TLV_ACCESSORS = {
+    "HSRPv2GroupState": (
+        "opcode_name",
+        "state_name",
+        "ip_version_name",
+        "virtual_mac",
+    ),
+    "HSRPv2TextAuthentication": (
+        "password",
+        "auth_data_str",
+        "is_default_auth",
+    ),
+    "HSRPv2MD5Authentication": ("algorithm_name",),
+    "HSRPv2TLV": ("type_name",),
+}
+
+
+class TestHSRPv2AccessorSafety:
+    @given(data=st.one_of(_hsrpv2_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only InvalidFieldError or
+        TruncatedHeaderError, the latter only for a buffer shorter than
+        the 42-byte Group State TLV; what it accepts round-trips whole,
+        and the accessors never raise."""
+        try:
+            message = HSRPv2.decode(data)
+        except TruncatedHeaderError:
+            assert len(data) < 42
+            event("HSRPv2 rejected: truncated")
+            return
+        except InvalidFieldError as error:
+            event(f"HSRPv2 rejected: {error.field}")
+            return
+        assert bytes(message) == data
+        assert HSRPv2.decode(bytes(message)) == message
+        assert message.header_len == len(data)
+        for name in _HSRPV2_ACCESSORS:
+            getattr(message, name)
+        for tlv in message.tlvs:
+            for name in _HSRPV2_TLV_ACCESSORS[type(tlv).__name__]:
+                getattr(tlv, name)
+        event(f"HSRPv2 TLVs: {len(message.tlvs)}")
+
+    @given(message=hsrpv2_messages())
+    def test_hsrp_hands_every_message_to_hsrpv2(self, message: HSRPv2) -> None:
+        """A message's first byte is 1, which HSRP answers HSRPv2 for,
+        and HSRP decoded on it raises naming HSRPv2."""
+        raw = bytes(message)
+        assert HSRP._for_payload(raw[0]) is HSRPv2
+        with pytest.raises(InvalidFieldError, match="HSRPv2"):
+            HSRP.decode(raw)
 
 
 def _tcp_payload(frame: bytes) -> bytes:
