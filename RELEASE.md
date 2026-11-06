@@ -452,7 +452,7 @@ d=$(mktemp -d) && git archive "$SHA" | tar -x -C "$d" &&
   echo "wheel: $got bytes" || echo "wheel: FAILED: no netprotocols-$V wheel built from $SHA"
 want=$(git show "$SHA:docs/CLAIMS.md" | grep '^| 1\.5 wheel |' |
   grep -F "\`netprotocols-$V-py3-none-any.whl\`" |
-  sed -n 's/.*`netprotocols-[^`]*-py3-none-any\.whl` \([0-9,]*\) bytes.*/\1/p' |
+  sed -n "s/.*\`netprotocols-${V//./[.]}-py3-none-any[.]whl\` \([0-9,]*\) bytes.*/\1/p" |
   tail -1 | tr -d ,)
 [ -n "$got" ] && [ "$got" = "$want" ] && echo "CLAIMS: same" ||
   echo "CLAIMS: DIFFERS: got ${got:-no wheel} vs want ${want:-none} (bytes)"
@@ -556,7 +556,7 @@ Its stages, in order, and what each one guarantees:
     `skipped`.** Each step name is normalized before it is compared:
     ASCII letters are lowercased, every run of Unicode whitespace (space,
     tab, newline, vertical tab, form feed, carriage return, U+0085 and
-    every space separator, such as the no-break and ideographic spaces)
+    every separator of Unicode category Z, such as the no-break and ideographic spaces and the line and paragraph separators)
     becomes one space, and a leading or trailing space is removed. The
     regex class that does this matches the same characters in gh's gojq
     and in jq 1.7, whose `\s` differ. An upload step is one whose
