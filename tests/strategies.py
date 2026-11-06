@@ -33,6 +33,7 @@ from netprotocols import (
     LLDPTLV,
     MPLS,
     NTP,
+    NTPMAC,
     OSPF,
     OSPFLSA,
     PIM,
@@ -61,6 +62,7 @@ from netprotocols import (
     LLDPChassisID,
     LLDPPortID,
     MPLSLabel,
+    NTPControl,
     OSPFDatabaseDescription,
     OSPFHello,
     OSPFLSAHeader,
@@ -1022,6 +1024,47 @@ def ntp_messages(draw: st.DrawFn) -> NTP:
 
 
 @st.composite
+def ntp_control_messages(draw: st.DrawFn) -> NTPControl:
+    # Canonical tails only, the ones decode() splits back the same way:
+    # without a MAC the data padded to 4 bytes, with one the data padded
+    # to 8 bytes, or to 4 in an error response, then a Key ID and a 16-
+    # or 20-byte digest. decode() rejects a version outside 1-4 and a
+    # Count above 468 (the constructor does not; test_ntp_control.py
+    # covers those).
+    response = draw(st.booleans())
+    error = response and draw(st.booleans())
+    data = draw(st.binary(max_size=468))
+    end = 12 + len(data)
+    mac = draw(
+        st.none()
+        | st.builds(
+            NTPMAC,
+            st.integers(0, 0xFFFFFFFF),
+            st.binary(min_size=16, max_size=16)
+            | st.binary(min_size=20, max_size=20),
+        )
+    )
+    aligned = (end + 3) & ~3
+    if mac is not None and not error:
+        aligned = (end + 7) & ~7
+    return NTPControl(
+        leap=draw(st.integers(0, 3)),
+        version=draw(st.integers(1, 4)),
+        response=response,
+        error=error,
+        more=draw(st.booleans()),
+        opcode=draw(st.integers(0, 0x1F)),
+        sequence=draw(st.integers(0, 0xFFFF)),
+        status=draw(st.integers(0, 0xFFFF)),
+        association_id=draw(st.integers(0, 0xFFFF)),
+        offset=draw(st.integers(0, 0xFFFF)),
+        data=data,
+        padding=bytes(aligned - end),
+        mac=mac,
+    )
+
+
+@st.composite
 def hsrp_messages(draw: st.DrawFn) -> HSRP:
     # Every field is a whole byte, so any value of each is canonical
     # but the three decode() judges: Version 0, an Op Code of 0-2 and
@@ -1136,6 +1179,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "RADIUS": radius_packets(),
     "STUN": stun_messages(),
     "NTP": ntp_messages(),
+    "NTPControl": ntp_control_messages(),
     "HSRP": hsrp_messages(),
     "TLS": tls_records(),
     "BGP": bgp_messages(),

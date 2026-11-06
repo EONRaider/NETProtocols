@@ -8,7 +8,9 @@ a wrong port guess, and dispatch from UDP port 123.
 The chronyd and ntpdig exchanges in tests/fixtures/ntp.pcap (see its
 MANIFEST note) anchor the decode, round-trip and timestamp asserts; the
 cases those daemons do not send (a Kiss-o'-Death, a crypto-NAK, a
-control message, malformed extension fields) are built here.
+control message, malformed extension fields) are built here. Mode 6
+control messages, which port 123 hands to NTPControl, are covered by
+tests/test_ntp_control.py.
 """
 
 import hashlib
@@ -117,6 +119,13 @@ CONTROL_MESSAGES = {
     "mode-6-response-72": bytes.fromhex("16820001061500000000003c") + b"v" * 60,
     "mode-7-request-48": bytes.fromhex("17000310") + bytes(44),
     "mode-7-request-192": bytes.fromhex("17000310") + bytes(188),
+}
+
+#: The mode 7 messages, which no class on port 123 decodes.
+MODE_7_MESSAGES = {
+    name: message
+    for name, message in CONTROL_MESSAGES.items()
+    if message[0] & 7 == 7
 }
 
 
@@ -563,19 +572,26 @@ class TestDecodeGuard:
         )
         assert error.actual == message[0] & 7
 
+    def test_mode_6_points_to_ntp_control(self):
+        """NTP called directly refuses mode 6 and names the class that
+        decodes it."""
+        with pytest.raises(InvalidFieldError, match="NTPControl"):
+            NTP.decode(CONTROL_MESSAGES["mode-6-request-12"])
+
     @pytest.mark.parametrize(
-        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+        "message", MODE_7_MESSAGES.values(), ids=list(MODE_7_MESSAGES)
     )
-    def test_a_strict_walk_raises_on_a_control_message(self, message):
-        """Port 123 dispatches ntpq's traffic to NTP, which rejects it
+    def test_a_strict_walk_raises_on_a_mode_7_message(self, message):
+        """Port 123 dispatches ntpdc's traffic to NTP, which rejects it
         for its mode, at the NTP header, not for its length."""
         with pytest.raises(InvalidFieldError) as caught:
             decode_frame(udp_frame(message))
         error = caught.value
         assert (error.field, error.frame_offset) == ("mode", NTP_START)
+        assert error.protocol is NTP
 
     @pytest.mark.parametrize(
-        "message", CONTROL_MESSAGES.values(), ids=list(CONTROL_MESSAGES)
+        "message", MODE_7_MESSAGES.values(), ids=list(MODE_7_MESSAGES)
     )
     def test_a_lax_walk_stops_at_udp(self, message):
         """lax=True keeps Ethernet, IPv4 and UDP and says why it stopped."""
@@ -632,7 +648,7 @@ class TestDecodeGuard:
     def test_a_rejected_guess_is_reported_at_the_ntp_header(self):
         """A lax walk keeps the layers below, and says where it stopped."""
         frame = bytearray(FRAMES[SNTP[0]])
-        frame[NTP_START] = 0x26  # mode 6
+        frame[NTP_START] = 0x27  # mode 7
         packet = decode_frame(bytes(frame), lax=True)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP]
         assert isinstance(packet.stopped_by, InvalidFieldError)

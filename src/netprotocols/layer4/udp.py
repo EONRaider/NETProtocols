@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from struct import Struct
 from typing import ClassVar, Self
 
@@ -29,6 +29,16 @@ class UDP(Protocol):
     dst_port: int
     length: int
     checksum: int
+    #: The first byte of the payload, which :meth:`next_protocol` hands
+    #: to the class its port names; ``None`` when :meth:`decode` saw no
+    #: payload, or for a header built rather than decoded. Decode
+    #: context, not a wire field, so it is neither compared nor hashed.
+    #: :func:`copy.copy` and :func:`copy.deepcopy` keep it;
+    #: :func:`dataclasses.replace` builds a new header, which has it
+    #: unset.
+    _lead: int | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     _struct: ClassVar[Struct] = Struct("!HHHH")
 
@@ -39,17 +49,24 @@ class UDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte UDP header at the start of ``data``.
 
+        The first byte of the payload, when the buffer holds one and
+        the Length does not say the payload is empty, is kept as decode
+        context for :meth:`next_protocol`.
+
         :param data: The buffer, starting at the source port.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             8-byte header.
         """
         src_port, dst_port, length, checksum = cls._unpack_fixed(data)
-        return cls(
+        udp = cls(
             src_port=src_port,
             dst_port=dst_port,
             length=length,
             checksum=checksum,
         )
+        if len(data) > 8 and length != 8:
+            object.__setattr__(udp, "_lead", data[8])
+        return udp
 
     def __bytes__(self) -> bytes:
         return self._struct.pack(
@@ -84,9 +101,15 @@ class UDP(Protocol):
         The protocol is chosen by well-known port (best-effort; see
         :mod:`netprotocols.layer4._ports`) from ``registry``'s tables, or
         the default ones when it is ``None``; ``None`` when neither port
-        is recognized.
+        is recognized. The class the port names then sees the payload's
+        first byte, when :meth:`decode` kept one, and answers the class
+        that decodes it: :class:`~netprotocols.NTP` answers
+        :class:`~netprotocols.NTPControl` for a mode 6 message.
         """
-        return udp_app_class(self.src_port, self.dst_port, registry)
+        protocol = udp_app_class(self.src_port, self.dst_port, registry)
+        if protocol is None or self._lead is None:
+            return protocol
+        return protocol._for_payload(self._lead)
 
     @property
     def checksum_hex_str(self) -> str:

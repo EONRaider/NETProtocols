@@ -57,6 +57,7 @@ from netprotocols import (
     LLDPTLV,
     MPLS,
     NTP,
+    NTPMAC,
     OSPF,
     PIM,
     RADIUS,
@@ -89,6 +90,7 @@ from netprotocols import (
     LLDPChassisID,
     LLDPPortID,
     MPLSLabel,
+    NTPControl,
     Packet,
     PIMHello,
     PIMJoinPrune,
@@ -168,6 +170,7 @@ ALL_PROTOCOLS = (
     RIP,
     RADIUS,
     NTP,
+    NTPControl,
     HSRP,
     VRRP,
     VRRPv6,
@@ -1554,6 +1557,122 @@ class TestNTPAccessorSafety:
         event(f"NTP extension fields: {len(ntp.extension_fields)}")
         event(f"NTP MAC: {None if mac is None else len(bytes(mac))}")
         event(f"NTP remainder: {bool(ntp.remainder)}")
+
+
+#: NTP control messages built by hand: a read variables request, a
+#: response with variables, an error response, and a request and an
+#: error response each with a MAC.
+_NTP_CONTROL_MESSAGES = [
+    bytes(NTPControl(leap=3, opcode=2, sequence=1)),
+    bytes(
+        NTPControl(
+            leap=3,
+            response=True,
+            opcode=2,
+            sequence=1,
+            status=0xC016,
+            data=b'version="ntpd ntpsec-1.2.2"\r\n',
+            padding=bytes(3),
+        )
+    ),
+    bytes(NTPControl(response=True, error=True, opcode=2, status=0x0500)),
+    bytes(
+        NTPControl(
+            opcode=8,
+            data=b"logconfig =syncall",
+            padding=bytes(2),
+            mac=NTPMAC(3, bytes(range(16))),
+        )
+    ),
+    bytes(
+        NTPControl(
+            response=True,
+            error=True,
+            opcode=8,
+            status=0x0100,
+            mac=NTPMAC(4, bytes(range(20))),
+        )
+    ),
+]
+
+
+@st.composite
+def _ntp_control_seeded(draw: st.DrawFn) -> bytes:
+    """A captured control message with a few bytes changed anywhere, its
+    Count among them, cut anywhere and followed by nothing, 4 bytes or
+    a run of bytes that a MAC or padding could be."""
+    raw = bytearray(draw(st.sampled_from(_NTP_CONTROL_MESSAGES)))
+    for _ in range(draw(st.integers(0, 3))):
+        position = draw(st.integers(1, len(raw) - 1))
+        raw[position] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""),
+            st.just(b"\xde\xad\xbe\xef"),
+            st.binary(min_size=16, max_size=28),
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+#: NTPControl's display accessors, every one of which must answer on
+#: any decoded instance.
+_NTP_CONTROL_ACCESSORS = (
+    "mode",
+    "count",
+    "leap_name",
+    "opcode_name",
+    "system_status",
+    "error_code",
+    "error_name",
+    "variables",
+)
+
+
+def _ntp_control_rejection(data: bytes) -> str | None:
+    """What NTPControl.decode() must reject ``data`` for, judged in its
+    order: ``"version"`` outside 1-4, then ``"mode"`` other than 6, at
+    any length; then ``"truncated"``, shorter than 12 bytes; then
+    ``"count"`` above 468; then ``"truncated"``, a Count past the end;
+    or ``None``."""
+    if data:
+        if not 1 <= (data[0] >> 3) & 7 <= 4:
+            return "version"
+        if data[0] & 7 != 6:
+            return "mode"
+    if len(data) < 12:
+        return "truncated"
+    count = struct.unpack_from("!H", data, 10)[0]
+    if count > 468:
+        return "count"
+    return "truncated" if 12 + count > len(data) else None
+
+
+class TestNTPControlAccessorSafety:
+    @given(data=st.one_of(_ntp_control_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for the first reason that applies, and
+        otherwise keeps every byte: the data, padding, MAC and remainder
+        tile the message; the accessors never raise."""
+        try:
+            message = NTPControl.decode(data)
+        except TruncatedHeaderError:
+            assert _ntp_control_rejection(data) == "truncated"
+            return
+        except InvalidFieldError as error:
+            assert _ntp_control_rejection(data) == error.field
+            return
+        assert _ntp_control_rejection(data) is None
+        assert bytes(message) == data
+        assert message.header_len == len(data)
+        assert NTPControl.decode(bytes(message)) == message
+        assert message.count == struct.unpack_from("!H", data, 10)[0]
+        assert message.mac is None or not message.remainder
+        for name in _NTP_CONTROL_ACCESSORS:
+            getattr(message, name)
+        event(f"NTPControl MAC: {message.mac is not None}")
+        event(f"NTPControl remainder: {bool(message.remainder)}")
 
 
 #: Constructed HSRP messages, packed by hand, not cut from

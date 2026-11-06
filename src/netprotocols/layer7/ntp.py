@@ -121,14 +121,13 @@ NTP is reached through ``udp.port``, which is best-effort (see
 an NTP time message: a version outside 1-4 (the versions RFC 5905 and
 its predecessors, RFC 1059, RFC 1119 and RFC 1305, define), and modes 6
 and 7. Mode 0, reserved, decodes. Of the 256 first bytes 96 pass (4
-Leap Indicators, 4 versions, 6 modes), so a random datagram on port
-123 is rejected 62.5% of the time, and more often when it is shorter
-than 48 bytes. The first byte is checked before the length, so a
-rejected version or mode is reported as such (``InvalidFieldError``,
-``offset`` 0) however short the message, and ``TruncatedHeaderError``
-is left for an empty buffer and for a short one whose first byte
-passes. Nothing else is checked: a stratum RFC 5905 reserves (17-255) and a
-Kiss-o'-Death (stratum 0, :attr:`NTP.kiss_code`) decode.
+Leap Indicators, 4 versions, 6 modes). The first byte is checked before
+the length, so a rejected version or mode is reported as such
+(``InvalidFieldError``, ``offset`` 0) however short the message, and
+``TruncatedHeaderError`` is left for an empty buffer and for a short
+one whose first byte passes. Nothing else is checked: a stratum RFC
+5905 reserves (17-255) and a Kiss-o'-Death (stratum 0,
+:attr:`NTP.kiss_code`) decode.
 
 NTPv1 (RFC 1059) shares the header only by position: it has no Mode
 field, so those three bits are zero and every NTPv1 message decodes
@@ -137,26 +136,97 @@ Synchronizing Distance and an Estimated Drift Rate, which
 :attr:`NTP.root_delay` and :attr:`NTP.root_dispersion` hold, raw,
 under NTPv2-4's names.
 
-Control messages are not decoded
---------------------------------
-
-Modes 6 and 7 carry control messages: RFC 9327's mode 6, which
-``ntpq`` speaks, and ntpd's private mode 7, which ``ntpdc`` speaks.
-Their headers are not this one (a mode 6 header is 12 bytes, and a
-read-variables request may be nothing more), and reading one as a time
-message would give fields that mean nothing, so :meth:`NTP.decode`
-raises ``InvalidFieldError`` with ``field`` ``"mode"`` for every one,
-whatever its length. A strict ``decode_frame`` therefore raises on
-``ntpq`` and ``ntpdc`` traffic to or from port 123. Walk it with
-``decode_frame(frame, lax=True)``, which keeps Ethernet, IP and UDP and
-reports the rejection as ``stopped_by``, the UDP payload left
-undecoded.
-
 Construction checks only that each field fits its width, so a header
 with a version or mode decode rejects builds, and
 ``NTP.decode(bytes(message))`` raises for it, which ARCHITECTURE.md's
 round-trip guarantee allows: it covers canonical headers, which that
 one is not.
+
+Control messages
+----------------
+
+Modes 6 and 7 carry control messages: RFC 9327's mode 6, which
+``ntpq`` speaks, and ntpd's private mode 7, which ``ntpdc`` speaks.
+Their headers are not the time message's. UDP port 123 names
+:class:`NTP`, and a walk hands it the first byte of the datagram
+before choosing a header (``NTP._for_payload``): a mode 6 byte selects
+:class:`NTPControl`, and any other byte :class:`NTP`, which rejects
+mode 7 with ``InvalidFieldError``, ``field`` ``"mode"``, whatever its
+length. A strict ``decode_frame`` therefore raises on ``ntpdc`` traffic
+to or from port 123; ``decode_frame(frame, lax=True)`` keeps Ethernet,
+IP and UDP and reports the rejection as ``stopped_by``. Called
+directly, :meth:`NTP.decode` rejects mode 6 too, with a message that
+names :class:`NTPControl`, and :meth:`NTPControl.decode` rejects every
+mode but 6. The choice holds wherever :class:`NTP` is registered, a
+port named in ``decode_as`` included.
+
+A mode 6 message (RFC 9327 §2, Figure 1) is a 12-byte header, then
+``Count`` bytes of data, then padding and, optionally, a MAC::
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |LI |  VN |Mode |R|E|M| opcode  |       Sequence Number         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |            Status             |       Association ID          |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |            Offset             |            Count              |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   /                    Data (up to 468 bytes)                     /
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Padding (optional)                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   /              Authenticator (optional)                         /
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+:meth:`NTPControl.decode` judges the version (1-4) and the mode (6)
+before the length, then needs the 12-byte header, then a Count of at
+most 468, the most data RFC 9327 allows, then the Count's bytes of
+data, whole: a Count past the end of the buffer raises
+``TruncatedHeaderError`` with ``field`` ``"data"`` and reads nothing
+past the header. In a walk the buffer ends at UDP's Length, so a Count
+past the datagram is refused rather than read into Ethernet padding or
+an FCS.
+
+RFC 9327 pads the data to a multiple of 4 bytes and puts the
+authenticator, the MAC of RFC 1305 Appendix C, a 4-byte Key ID and a
+digest, after the padding, but does not say where it starts when the
+data's end is a multiple of 4 and not of 8. :meth:`NTPControl.decode`
+looks for it where ntpd and ntpsec write and read it: after the data
+padded to a multiple of 8 bytes, which both require of an
+authenticated request and send in an authenticated response; and, in
+an error response (R and E both set), after the data padded to a
+multiple of 4, since both write the MAC of an error response right
+after its 12-byte header. A MAC is found when exactly 20 or 24 bytes
+are left from there, a Key ID and a 16-byte (MD5, AES-128-CMAC) or
+20-byte (SHA-1) digest, and is kept as an :class:`NTPMAC`, with the
+bytes before it as :attr:`NTPControl.padding`. Otherwise
+:attr:`NTPControl.padding` is the bytes up to the next multiple of 4,
+or to the end of a shorter message, and :attr:`NTPControl.remainder`
+holds anything after that. The padding is not required to be zero,
+since ntpsec's responses can carry other bytes there. No digest is
+verified: that needs the key. ``bytes(NTPControl.decode(x)) == x`` for
+every buffer decode accepts.
+
+Of the 256 first bytes 16 more reach :class:`NTPControl` (4 Leap
+Indicators, 4 versions, mode 6), and those pass when the Count fits:
+a random 300-byte datagram on port 123 is rejected 62.5% of the time,
+less 16/256 x 289/65,536 for a control message that decodes, about
+62.47%, and more often when it is shorter than 48 bytes.
+
+The data stays raw. Most commands and responses carry RFC 9327 §4's
+comma-separated ``name=value`` text, which :attr:`NTPControl.variables`
+splits without raising; a read status response carries binary pairs
+of Association ID and peer status word, and a fragment of a longer
+response (the M bit set, or a nonzero Offset) holds a slice of the
+whole. The Status is kept raw as well, because what it holds depends on
+the message: a system status word in a response to association 0, a
+peer status word in a response to another association, a clock status
+word in a response to read or write clock variables, an Error Status
+Word in an error response, and zero in a command (RFC 9327 §3).
+:attr:`NTPControl.system_status` splits it as a system status word, as
+an :class:`NTPSystemStatus`, where RFC 9327 §3 says it is one, and
+:attr:`NTPControl.error_code` reads an error response's code.
 """
 
 from __future__ import annotations
@@ -167,12 +237,17 @@ from struct import Struct
 from typing import ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, hex_str
-from netprotocols.utils.exceptions import InvalidFieldError
+from netprotocols.utils.exceptions import (
+    InvalidFieldError,
+    TruncatedHeaderError,
+)
 
 __all__ = [
     "NTP",
     "NTPMAC",
+    "NTPControl",
     "NTPExtensionField",
+    "NTPSystemStatus",
     "ntp_to_datetime",
     "ntp_to_unix",
 ]
@@ -224,6 +299,87 @@ _MODE_NAMES: dict[int, str] = {
 #: mode 6; mode 7 is ntpd's private format).
 _CONTROL_MODES = frozenset({6, 7})
 
+#: The mode of an NTP control message (RFC 9327 §2).
+_MODE_CONTROL = 6
+
+#: The most data octets a control message carries (RFC 9327 §2).
+_MAX_CONTROL_DATA = 468
+
+#: The lengths of a control message's MAC: a Key ID and a 16-byte
+#: digest (MD5 or AES-128-CMAC) or a 20-byte one (SHA-1).
+_CONTROL_MAC_LENGTHS = frozenset({20, 24})
+
+#: Control message Operation Codes (RFC 9327 §2, Table 1); 0 and 13-30
+#: are reserved.
+_OPCODE_NAMES: dict[int, str] = {
+    1: "read status",
+    2: "read variables",
+    3: "write variables",
+    4: "read clock variables",
+    5: "write clock variables",
+    6: "set trap address/port",
+    7: "trap response",
+    8: "runtime configuration",
+    9: "export configuration to file",
+    10: "retrieve remote address stats",
+    11: "retrieve ordered list",
+    12: "request client-specific nonce",
+    31: "unset trap address/port",
+}
+
+#: The opcodes whose responses carry a clock status word or none, not a
+#: system or peer status word (RFC 9327 §3): read and write clock
+#: variables, and set trap address/port.
+_NON_SYSTEM_STATUS_OPCODES = frozenset({4, 5, 6})
+
+#: Error Status Word codes (RFC 9327 §3.4, Table 9); 8-255 are
+#: reserved.
+_ERROR_NAMES: dict[int, str] = {
+    0: "unspecified",
+    1: "authentication failure",
+    2: "invalid message length or format",
+    3: "invalid opcode",
+    4: "unknown Association ID",
+    5: "unknown variable name",
+    6: "invalid variable value",
+    7: "administratively prohibited",
+}
+
+#: System status word Clock Source values (RFC 9327 §3.1, Table 3);
+#: 10-63 are reserved.
+_CLOCK_SOURCE_NAMES: dict[int, str] = {
+    0: "unspecified or unknown",
+    1: "calibrated atomic clock",
+    2: "VLF or LF radio",
+    3: "HF radio",
+    4: "UHF satellite",
+    5: "local net",
+    6: "UDP/NTP",
+    7: "UDP/TIME",
+    8: "eyeball-and-wristwatch",
+    9: "telephone modem",
+}
+
+#: System Event Codes (RFC 9327 §3.1, Table 4).
+_SYSTEM_EVENT_NAMES: dict[int, str] = {
+    0: "unspecified",
+    1: "frequency correction (drift) file not available",
+    2: "frequency correction started (frequency stepped)",
+    3: "spike detected and ignored, starting stepout timer",
+    4: "frequency training started",
+    5: "clock synchronized",
+    6: "system restart",
+    7: "panic stop (required step greater than panic threshold)",
+    8: "no system peer",
+    9: "leap second insertion/deletion armed for the current month",
+    10: "leap second disarmed",
+    11: "leap second inserted or deleted",
+    12: "clock stepped (stepout timer expired)",
+    13: "kernel loop discipline status changed",
+    14: "leapseconds table loaded from file",
+    15: "leapseconds table outdated, updated file needed",
+}
+
 #: Extension Field Types: IANA's "NTP Extension Field Types" as RFC
 #: 9748 left it, the entries RFC 8915 (NTS) and RFC 7821 (UDP Checksum
 #: Complement) added. 0x0204, which Autokey shares, is named for NTS;
@@ -258,6 +414,25 @@ def _check_range(
         )
 
 
+def _check_version(owner: type, flags: int) -> None:
+    """Raise :class:`InvalidFieldError` unless ``flags`` has version 1-4.
+
+    :param owner: The class named as ``protocol`` in a raised error.
+    :param flags: The message's first byte.
+    :raises InvalidFieldError: if the version is outside 1-4.
+    """
+    version = (flags >> 3) & 0x07
+    if not 1 <= version <= 4:
+        raise InvalidFieldError(
+            f"NTP version must be 1-4, got {version}",
+            protocol=owner,
+            field="version",
+            offset=0,
+            expected="1-4",
+            actual=version,
+        )
+
+
 def _check_first_byte(owner: type, flags: int) -> None:
     """Raise :class:`InvalidFieldError` unless ``flags`` opens a time message.
 
@@ -270,19 +445,20 @@ def _check_first_byte(owner: type, flags: int) -> None:
     :raises InvalidFieldError: if the version is outside 1-4, or else
         the mode is 6 or 7.
     """
-    version, mode = (flags >> 3) & 0x07, flags & 0x07
-    if not 1 <= version <= 4:
+    _check_version(owner, flags)
+    mode = flags & 0x07
+    if mode == _MODE_CONTROL:
         raise InvalidFieldError(
-            f"NTP version must be 1-4, got {version}",
+            "NTP mode 6 is a control message: decode it with NTPControl",
             protocol=owner,
-            field="version",
+            field="mode",
             offset=0,
-            expected="1-4",
-            actual=version,
+            expected="0-5",
+            actual=mode,
         )
     if mode in _CONTROL_MODES:
         raise InvalidFieldError(
-            f"NTP mode {mode} is a control message, not decoded",
+            f"NTP mode {mode} is a private control message, not decoded",
             protocol=owner,
             field="mode",
             offset=0,
@@ -535,8 +711,8 @@ class NTP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the header and keep the rest of ``data`` as the body.
 
-        The first byte is judged before the length (see "Control
-        messages are not decoded" in the module docstring).
+        The first byte is judged before the length (see "Decoding a
+        guess" and "Control messages" in the module docstring).
 
         :param data: The buffer, starting at the LI/VN/Mode byte.
         :raises InvalidFieldError: if the version is outside 1-4 (``field``
@@ -604,6 +780,18 @@ class NTP(Protocol):
         The body is the rest of the datagram: NTP is terminal.
         """
         return self._struct.size + len(self.body)
+
+    @classmethod
+    def _for_payload(cls, lead: int) -> type[Protocol]:
+        """Return :class:`NTPControl` for a mode 6 first byte, else ``cls``.
+
+        UDP port 123 carries both formats, so a walk reads the mode in
+        ``lead`` before it chooses a header (see "Control messages" in
+        the module docstring).
+
+        :param lead: The first byte of the UDP payload.
+        """
+        return NTPControl if lead & 0x07 == _MODE_CONTROL else cls
 
     @property
     def leap_name(self) -> str:
@@ -759,6 +947,387 @@ class NTP(Protocol):
         Empty when the body is extension fields and a MAC, or nothing.
         """
         return self.body[_split_body(self.body, self.version)[2] :]
+
+
+@dataclass(frozen=True, slots=True)
+class NTPSystemStatus:
+    """A system status word, split (RFC 9327 §3.1).
+
+    :param leap: Leap Indicator, 2 bits (see :attr:`leap_name`).
+    :param clock_source: Clock Source, 6 bits: what the server
+        synchronizes to (see :attr:`clock_source_name`).
+    :param event_count: System Event Counter, 4 bits: events since the
+        System Event Code last changed, at most 15.
+    :param event_code: System Event Code, 4 bits: the latest system
+        event (see :attr:`event_name`).
+    :raises InvalidFieldError: if a field does not fit its width.
+    """
+
+    leap: int
+    clock_source: int
+    event_count: int
+    event_code: int
+
+    def __post_init__(self) -> None:
+        """Check each field's width."""
+        owner = type(self)
+        _check_range(owner, "leap", self.leap, 0, 3)
+        _check_range(owner, "clock_source", self.clock_source, 0, 0x3F)
+        _check_range(owner, "event_count", self.event_count, 0, 0x0F)
+        _check_range(owner, "event_code", self.event_code, 0, 0x0F)
+
+    @classmethod
+    def from_word(cls, word: int) -> NTPSystemStatus:
+        """Split a 16-bit status word into the four fields.
+
+        :param word: The Status field of a control message.
+        """
+        return cls(
+            leap=(word >> 14) & 0x03,
+            clock_source=(word >> 8) & 0x3F,
+            event_count=(word >> 4) & 0x0F,
+            event_code=word & 0x0F,
+        )
+
+    @property
+    def leap_name(self) -> str:
+        """Describe the Leap Indicator, as :attr:`NTP.leap_name` does."""
+        return _LEAP_NAMES[self.leap]
+
+    @property
+    def clock_source_name(self) -> str:
+        """Name the Clock Source, e.g. ``"UDP/NTP"``.
+
+        ``"reserved (n)"`` for 10-63, which RFC 9327 reserves.
+        """
+        name = _CLOCK_SOURCE_NAMES.get(self.clock_source)
+        return name if name is not None else f"reserved ({self.clock_source})"
+
+    @property
+    def event_name(self) -> str:
+        """Name the System Event Code, e.g. ``"system restart"``.
+
+        Every 4-bit code has a name, so this never raises.
+        """
+        return _SYSTEM_EVENT_NAMES[self.event_code]
+
+
+@dataclass(frozen=True, slots=True)
+class NTPControl(Protocol):
+    """An NTP control message, mode 6 (RFC 9327 §2).
+
+    The 12-byte header, then ``Count`` bytes of data, padding, and an
+    optional MAC. The data stays raw; :attr:`variables` splits the
+    ``name=value`` text most commands carry. Construction accepts any
+    value that fits each field; :meth:`decode` rejects a version outside
+    1-4 and any mode but 6, and a Count above 468 or past the buffer
+    (see "Control messages" in the module docstring).
+
+    :param leap: Leap Indicator, 2 bits. RFC 9327 §2 sets it to zero
+        and puts the server's in the system status word (see
+        :attr:`system_status`), but ntpsec's ``ntpq`` sends ``3`` and
+        its ``ntpd`` answers with its own Leap Indicator here too.
+    :param version: Version Number, 3 bits: ``2`` from ``ntpq``, which
+        a response repeats.
+    :param response: The R bit: set in a response, clear in a command.
+    :param error: The E bit: set in an error response, whose Status is
+        an Error Status Word (see :attr:`error_code`).
+    :param more: The M bit: set in every fragment of a response but the
+        last.
+    :param opcode: Operation Code, 5 bits (see :attr:`opcode_name`).
+    :param sequence: Sequence Number, which a response repeats from its
+        command, in every fragment.
+    :param status: Status, the 16-bit status word, raw: a system, peer,
+        clock or error status word by opcode, Association ID and E bit,
+        zero in a command (see :attr:`system_status` and
+        :attr:`error_code`).
+    :param association_id: Association ID: ``0`` for the system,
+        otherwise a peer association.
+    :param offset: Offset, in octets, of the first data octet within
+        the whole response; ``0`` in a command and a first fragment.
+    :param data: The data, raw, whose length is the Count field.
+    :param padding: The bytes between the data and the MAC, or, without
+        a MAC, up to the next multiple of 4 bytes, raw; RFC 9327 has
+        them zero, but ntpsec's responses can carry other bytes there.
+    :param mac: The Message Authentication Code, or ``None``.
+    :param remainder: Anything after the padding of a message without a
+        MAC, raw.
+    :raises InvalidFieldError: if a field does not fit its width, or the
+        data is longer than its 16-bit Count can say.
+    """
+
+    leap: int = 0
+    version: int = 2
+    response: bool = False
+    error: bool = False
+    more: bool = False
+    opcode: int = 0
+    sequence: int = 0
+    status: int = 0
+    association_id: int = 0
+    offset: int = 0
+    data: bytes = b""
+    padding: bytes = b""
+    mac: NTPMAC | None = None
+    remainder: bytes = b""
+
+    _struct: ClassVar[Struct] = Struct("!BBHHHHH")
+
+    def __post_init__(self) -> None:
+        """Check each header field's width and the data's length."""
+        owner = type(self)
+        _check_range(owner, "leap", self.leap, 0, 3)
+        _check_range(owner, "version", self.version, 0, 7)
+        _check_range(owner, "opcode", self.opcode, 0, 0x1F)
+        for name in ("sequence", "status", "association_id", "offset"):
+            _check_range(owner, name, getattr(self, name), 0, 0xFFFF)
+        _check_range(owner, "data", len(self.data), 0, 0xFFFF)
+
+    @classmethod
+    def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode a whole control message: header, data, padding and MAC.
+
+        The first byte is judged before the length, then the Count
+        before the data it counts. Where the MAC starts, and so whether
+        there is one, is set out under "Control messages" in the module
+        docstring.
+
+        :param data: The buffer, starting at the LI/VN/Mode byte.
+        :raises InvalidFieldError: if the version is outside 1-4
+            (``field`` ``"version"``), or else the mode is not 6
+            (``field`` ``"mode"``), both at ``offset`` 0 and at any
+            length; or if the Count is above 468 (``field``
+            ``"count"``, ``offset`` 10).
+        :raises TruncatedHeaderError: if ``data`` is empty, or its first
+            byte passes and it is shorter than the 12-byte header, or
+            the Count runs past it (``field`` ``"data"``, ``offset``
+            12).
+        """
+        if data:
+            _check_version(cls, data[0])
+            mode = data[0] & 0x07
+            if mode != _MODE_CONTROL:
+                raise InvalidFieldError(
+                    f"NTPControl mode must be 6, got {mode}",
+                    protocol=cls,
+                    field="mode",
+                    offset=0,
+                    expected=_MODE_CONTROL,
+                    actual=mode,
+                )
+        (
+            flags,
+            bits,
+            sequence,
+            status,
+            association_id,
+            offset,
+            count,
+        ) = cls._unpack_fixed(data)
+        if count > _MAX_CONTROL_DATA:
+            raise InvalidFieldError(
+                f"NTPControl count must be at most {_MAX_CONTROL_DATA}, "
+                f"got {count}",
+                protocol=cls,
+                field="count",
+                offset=10,
+                expected=f"0-{_MAX_CONTROL_DATA}",
+                actual=count,
+            )
+        end = cls._struct.size + count
+        if end > len(data):
+            raise TruncatedHeaderError(
+                f"NTPControl count {count} needs {end} bytes, buffer "
+                f"holds {len(data)}",
+                protocol=cls,
+                field="data",
+                offset=cls._struct.size,
+                expected=end,
+                actual=len(data),
+            )
+        response, error = bool(bits & 0x80), bool(bits & 0x40)
+        padding, mac, remainder = _split_control_tail(
+            bytes(data), end, response and error
+        )
+        return cls(
+            leap=flags >> 6,
+            version=(flags >> 3) & 0x07,
+            response=response,
+            error=error,
+            more=bool(bits & 0x20),
+            opcode=bits & 0x1F,
+            sequence=sequence,
+            status=status,
+            association_id=association_id,
+            offset=offset,
+            data=bytes(data[cls._struct.size : end]),
+            padding=padding,
+            mac=mac,
+            remainder=remainder,
+        )
+
+    def __bytes__(self) -> bytes:
+        """Serialize the header, then the data, padding, MAC and remainder.
+
+        The mode is written as 6 and the Count as the data's length.
+        """
+        bits = (
+            (self.response << 7)
+            | (self.error << 6)
+            | (self.more << 5)
+            | self.opcode
+        )
+        return (
+            self._struct.pack(
+                (self.leap << 6) | (self.version << 3) | _MODE_CONTROL,
+                bits,
+                self.sequence,
+                self.status,
+                self.association_id,
+                self.offset,
+                len(self.data),
+            )
+            + self.data
+            + self.padding
+            + (bytes(self.mac) if self.mac is not None else b"")
+            + self.remainder
+        )
+
+    @property
+    def header_len(self) -> int:
+        """The whole message, as ``bytes()`` writes it.
+
+        A control message ends the datagram: NTPControl is terminal.
+        """
+        mac = len(bytes(self.mac)) if self.mac is not None else 0
+        return (
+            self._struct.size
+            + len(self.data)
+            + len(self.padding)
+            + mac
+            + len(self.remainder)
+        )
+
+    @property
+    def mode(self) -> int:
+        """The mode, always ``6``."""
+        return _MODE_CONTROL
+
+    @property
+    def count(self) -> int:
+        """The Count field: the data's length in bytes."""
+        return len(self.data)
+
+    @property
+    def leap_name(self) -> str:
+        """Describe the Leap Indicator, as :attr:`NTP.leap_name` does."""
+        return _LEAP_NAMES[self.leap]
+
+    @property
+    def opcode_name(self) -> str:
+        """Name the Operation Code, e.g. ``"read variables"``.
+
+        ``"reserved (n)"`` for 0 and 13-30, which RFC 9327 reserves;
+        every 5-bit opcode has a name, so this never raises.
+        """
+        name = _OPCODE_NAMES.get(self.opcode)
+        return name if name is not None else f"reserved ({self.opcode})"
+
+    @property
+    def system_status(self) -> NTPSystemStatus | None:
+        """Split the Status as a system status word, where it is one.
+
+        A system status word is the Status of a response that is not an
+        error response, to association 0, for any opcode but read or
+        write clock variables and set trap address/port (RFC 9327 §3);
+        ``None`` for any other message.
+        """
+        if (
+            not self.response
+            or self.error
+            or self.association_id != 0
+            or self.opcode in _NON_SYSTEM_STATUS_OPCODES
+        ):
+            return None
+        return NTPSystemStatus.from_word(self.status)
+
+    @property
+    def error_code(self) -> int | None:
+        """Return the error code of an error response (RFC 9327 §3.4).
+
+        The Status's first byte, when the R and E bits are both set;
+        ``None`` otherwise.
+        """
+        if not (self.response and self.error):
+            return None
+        return self.status >> 8
+
+    @property
+    def error_name(self) -> str | None:
+        """Name the error code, e.g. ``"unknown variable name"``.
+
+        ``"reserved (n)"`` for 8-255; ``None`` unless this is an error
+        response.
+        """
+        code = self.error_code
+        if code is None:
+            return None
+        name = _ERROR_NAMES.get(code)
+        return name if name is not None else f"reserved ({code})"
+
+    @property
+    def variables(self) -> tuple[tuple[str, str | None], ...]:
+        """Split the data as ``name=value`` text (RFC 9327 §4).
+
+        Items are separated by commas outside double quotes, and each is
+        stripped of surrounding white space, the trailing CR LF
+        included; empty items are skipped. An item splits at its first
+        ``=`` into a name and a value, each stripped, the value's quotes
+        kept, and an item without one is a name with the value ``None``,
+        as in a command naming the variables it reads; an unclosed quote
+        runs to the end of the data. Bytes that are
+        not ASCII read as U+FFFD. Only this message's data is split: a
+        fragment of a longer response can begin or end inside an item.
+        Binary data, such as a read status response's association list,
+        splits into whatever its bytes spell. Never raises.
+        """
+        text = self.data.decode("ascii", "replace")
+        pieces: list[str] = []
+        start, quoted = 0, False
+        for index, char in enumerate(text):
+            if char == '"':
+                quoted = not quoted
+            elif char == "," and not quoted:
+                pieces.append(text[start:index])
+                start = index + 1
+        pieces.append(text[start:])
+        items: list[tuple[str, str | None]] = []
+        for piece in pieces:
+            item = piece.strip()
+            if item:
+                name, equals, value = item.partition("=")
+                items.append((name.strip(), value.strip() if equals else None))
+        return tuple(items)
+
+
+def _split_control_tail(
+    data: bytes, end: int, error_response: bool
+) -> tuple[bytes, NTPMAC | None, bytes]:
+    """Split what follows a control message's data.
+
+    Returns the padding, the MAC or ``None``, and the remainder (see
+    "Control messages" in the module docstring).
+
+    :param data: The whole message.
+    :param end: Where the data ends: 12 plus the Count.
+    :param error_response: Whether the R and E bits are both set.
+    """
+    aligned = (end + 3) & ~3
+    start = aligned if error_response else (end + 7) & ~7
+    if len(data) - start in _CONTROL_MAC_LENGTHS:
+        key_id = int.from_bytes(data[start : start + 4], "big")
+        return data[end:start], NTPMAC(key_id, data[start + 4 :]), b""
+    return data[end:aligned], None, data[aligned:]
 
 
 def _ascii_id(reference_id: int) -> str | None:
