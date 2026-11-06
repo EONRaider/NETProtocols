@@ -1590,17 +1590,17 @@ chronyd clients, an ntpsec ntpd queried by ntpq, HSRP messages crafted
 by Yersinia and sent across a netns veth pair, four Linux bridges whose
 STP mstpd runs in userspace, and an nginx HTTPS server answering five
 clients (headless Chromium, curl, gnutls-cli, `openssl s_client` and
-curl capped at TLS 1.2) across another. Every frame's checksums (SCTP's CRC32c, VRRP's,
-PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's where its
-Checksum field is present included), every ESP and AH ICV, every RIPv2
-and OSPF keyed-MD5 digest, every RADIUS authenticator the corpus
-holds (a reply's against its request's), every STUN MESSAGE-INTEGRITY
-and FINGERPRINT, and every NTP MAC verify internally
+curl capped at TLS 1.2) across another. Every frame's checksums (SCTP's
+CRC32c, VRRP's, PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's
+where its Checksum field is present included), every ESP and AH ICV,
+every RIPv2 and OSPF keyed-MD5 digest, every RADIUS authenticator the
+corpus holds (a reply's against its request's), every STUN
+MESSAGE-INTEGRITY and FINGERPRINT, and every NTP MAC verify internally
 (`scripts/check_fixtures.py`); HSRP, which carries no checksum of its
-own, has every message's fields checked instead, and TLS, which has
-none beyond TCP's, every record: each segment on port 443 that carries
-data must hold whole records, every ClientHello's fields must tile it,
-and every server_name must be a host name.
+own, has every message's fields checked instead, and TLS, which has none
+beyond TCP's, every record: each segment on port 443 that carries data
+must hold whole records, every ClientHello's fields must tile it, and
+every server_name must be a host name.
 
 ### 5.2 "Property-based fuzzing of every decoder"
 **Status: VERIFIED**

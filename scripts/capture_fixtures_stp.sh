@@ -71,11 +71,12 @@
 # 2") for as long as mstpd runs, so the script drives each step by
 # watching the capture and keeps a fixed selection: the first frame of
 # each kind named below, a kind being the sending port, the BPDU type
-# and version, and the CIST Flags. The kept frames are asserted at the end: their kinds,
-# step by step; their lengths; every MST BPDU's Version 1 and Version
-# 3 Lengths, MST Configuration Identifier, CIST Bridge Identifier and
-# Remaining Hops, and its MSTI messages' MSTIDs, Regional Roots and
-# priorities; and tshark's reading of each against the script's own.
+# and version, and the CIST Flags. The kept frames are asserted at the
+# end: their kinds, step by step; their lengths; every MST BPDU's
+# Version 1 and Version 3 Lengths, MST Configuration Identifier, CIST
+# Bridge Identifier and Remaining Hops, and its MSTI messages' MSTIDs,
+# Regional Roots and priorities; and tshark's reading of each against
+# the script's own.
 
 set -euo pipefail
 
