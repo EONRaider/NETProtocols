@@ -64,7 +64,7 @@ from netprotocols import (
     MPLSLabel,
     OSPFDatabaseDescription,
     OSPFExternalLSA,
-    OSPFExternalRoute,
+    OSPFExternalMetric,
     OSPFHello,
     OSPFLSAHeader,
     OSPFLSRequest,
@@ -604,8 +604,8 @@ def ospf_summary_lsas() -> st.SearchStrategy[OSPFSummaryLSA]:
 
 def ospf_external_lsas() -> st.SearchStrategy[OSPFExternalLSA]:
     """An AS-external-LSA or NSSA-LSA body record (LS type 5 or 7)."""
-    route = st.builds(
-        OSPFExternalRoute,
+    metric = st.builds(
+        OSPFExternalMetric,
         st.booleans(),
         _u(7),
         _u(24),
@@ -615,7 +615,7 @@ def ospf_external_lsas() -> st.SearchStrategy[OSPFExternalLSA]:
     return st.builds(
         OSPFExternalLSA,
         ipv4_strings(),
-        st.lists(route, min_size=1, max_size=3).map(tuple),
+        st.lists(metric, min_size=1, max_size=3).map(tuple),
     )
 
 

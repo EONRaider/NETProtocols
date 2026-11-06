@@ -57,7 +57,7 @@ frozen record:
   :class:`OSPFSummaryLSA` of :class:`OSPFSummaryTOS`
 * ``5`` AS-external-LSA (§A.4.5) and ``7`` NSSA-LSA (RFC 3101 §2.3),
   which has its layout: :attr:`OSPFLSA.external`, an
-  :class:`OSPFExternalLSA` of :class:`OSPFExternalRoute`
+  :class:`OSPFExternalLSA` of :class:`OSPFExternalMetric`
 
 Each accessor returns ``None`` for the other LS types, whose bodies
 (opaque LSAs, RFC 5250, among them) are kept raw and not checked. The
@@ -123,7 +123,7 @@ __all__ = [
     "OSPFLSA",
     "OSPFDatabaseDescription",
     "OSPFExternalLSA",
-    "OSPFExternalRoute",
+    "OSPFExternalMetric",
     "OSPFHello",
     "OSPFLSAHeader",
     "OSPFLSRequest",
@@ -255,9 +255,10 @@ _LSA_FRAMING: dict[int, tuple[int, int, str]] = {
 }
 
 #: A Router-LSA's flags (RFC 2328 §A.4.2), most significant first: Nt
-#: (NSSA translator, RFC 3101 §2.3), W (wildcard multicast receiver,
-#: RFC 1584), V (virtual link endpoint), E (AS boundary router) and B
-#: (area border router).
+#: (NSSA border router translating Type-7 LSAs unconditionally, RFC 3101
+#: Appendix B and §3.1), W (wildcard multicast receiver, RFC 1584), V
+#: (virtual link endpoint), E (AS boundary router) and B (area border
+#: router).
 _ROUTER_FLAG_NAMES = (
     (0x10, "Nt"),
     (0x08, "W"),
@@ -270,6 +271,8 @@ _E_BIT = 0x02
 _B_BIT = 0x01
 #: An AS-external-LSA entry's E bit, the top bit of its TOS byte.
 _EXTERNAL_E_BIT = 0x80
+#: An AS-external-LSA entry's TOS, the 7 bits after its E bit.
+_EXTERNAL_TOS_MASK = 0x7F
 
 #: Router link types (RFC 2328 §A.4.2).
 _ROUTER_LINK_TYPE_NAMES: dict[int, str] = {
@@ -468,8 +471,10 @@ class OSPFRouterLSA:
 
     :param flags: The flags byte: B (``0x01``, area border router), E
         (``0x02``, AS boundary router) and V (``0x04``, virtual link
-        endpoint), RFC 1584's W (``0x08``) and RFC 3101's Nt (``0x10``,
-        NSSA translator); the other bits are carried verbatim (see
+        endpoint), RFC 1584's W (``0x08``, wildcard multicast
+        receiver) and RFC 3101's Nt (``0x10``, an NSSA border router
+        translating Type-7 LSAs unconditionally, Appendix B and §3.1);
+        the other bits are carried verbatim (see
         :attr:`flags_str`).
     :param links: The router's links in the area, in wire order; their
         number is the LSA's "# links".
@@ -585,7 +590,7 @@ class OSPFSummaryLSA:
 
 
 @dataclass(frozen=True, slots=True)
-class OSPFExternalRoute:
+class OSPFExternalMetric:
     """One TOS entry of an AS-external-LSA or NSSA-LSA (RFC 2328 §A.4.5).
 
     :param e_bit: The E bit: ``True`` for a Type 2 external metric,
@@ -608,7 +613,16 @@ class OSPFExternalRoute:
     external_route_tag: int
 
     def __bytes__(self) -> bytes:
-        """Serialize this record to its exact on-wire form."""
+        """Serialize this record to its exact on-wire form.
+
+        :raises ValueError: if ``tos`` is not in ``range(0, 128)``, the
+            7 bits after the E bit.
+        """
+        if not 0 <= self.tos <= _EXTERNAL_TOS_MASK:
+            raise ValueError(
+                "an AS-external-LSA TOS must be in range(0, 128), "
+                f"got {self.tos}"
+            )
         first = (_EXTERNAL_E_BIT if self.e_bit else 0) | self.tos
         return (
             bytes([first])
@@ -630,17 +644,17 @@ class OSPFExternalLSA:
     names.
 
     :param network_mask: The destination's mask, dotted-decimal.
-    :param routes: One entry per TOS, in wire order, the TOS 0 entry
+    :param metrics: One entry per TOS, in wire order, the TOS 0 entry
         first.
     """
 
     network_mask: str
-    routes: tuple[OSPFExternalRoute, ...]
+    metrics: tuple[OSPFExternalMetric, ...]
 
     def __bytes__(self) -> bytes:
         """Serialize this record to its exact on-wire form."""
         return ipv4_to_bytes(self.network_mask) + b"".join(
-            bytes(route) for route in self.routes
+            bytes(entry) for entry in self.metrics
         )
 
 
@@ -772,16 +786,16 @@ class OSPFLSA:
         if self.header.ls_type not in _EXTERNAL_LSAS:
             return None
         body = self.body
-        routes = []
+        metrics = []
         for cursor in range(_WORD.size, len(body), _EXTERNAL_ENTRY_SIZE):
             (word,) = _WORD.unpack_from(body, cursor)
             forwarding_address, tag = _EXTERNAL_TAIL.unpack_from(
                 body, cursor + _WORD.size
             )
-            routes.append(
-                OSPFExternalRoute(
+            metrics.append(
+                OSPFExternalMetric(
                     e_bit=bool(word >> 24 & _EXTERNAL_E_BIT),
-                    tos=word >> 24 & ~_EXTERNAL_E_BIT,
+                    tos=word >> 24 & _EXTERNAL_TOS_MASK,
                     metric=word & _METRIC_MASK,
                     forwarding_address=bytes_to_ipv4(forwarding_address),
                     external_route_tag=tag,
@@ -789,7 +803,7 @@ class OSPFLSA:
             )
         return OSPFExternalLSA(
             network_mask=bytes_to_ipv4(body[: _WORD.size]),
-            routes=tuple(routes),
+            metrics=tuple(metrics),
         )
 
 

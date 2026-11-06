@@ -23,8 +23,9 @@
 #      7), which B translates into an AS-external-LSA of its own.
 #
 # B summarizes each area's networks into the others in Summary-LSAs
-# (type 3). Every frame is Ethernet -> IPv4 (protocol 89) -> OSPF with
-# no authentication (AuType 0).
+# (type 3), and into the NSSA also sends a type-3 default route
+# (0.0.0.0/0, metric 1). Every frame is Ethernet -> IPv4 (protocol 89)
+# -> OSPF with no authentication (AuType 0).
 #
 # B and C are started first, off the capture, and left until B has
 # elected itself Designated Router on links 0 and 2 (where it is

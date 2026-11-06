@@ -30,7 +30,7 @@ from netprotocols import (
     IPv6,
     OSPFDatabaseDescription,
     OSPFExternalLSA,
-    OSPFExternalRoute,
+    OSPFExternalMetric,
     OSPFHello,
     OSPFLSAHeader,
     OSPFLSRequest,
@@ -1367,6 +1367,7 @@ class TestCorpusOSPFAreas:
         """
         recorded = {
             (
+                int(entry["Options"].split()[0], 16),
                 entry["Link State ID"].split()[0],
                 entry["Advertising Router"],
                 int(entry["LS Seq Number"], 16),
@@ -1379,6 +1380,7 @@ class TestCorpusOSPFAreas:
         for _, lsa in area_lsas():
             header = lsa.header
             key = (
+                header.options,
                 header.link_state_id,
                 header.advertising_router,
                 header.ls_sequence_number,
@@ -1386,7 +1388,7 @@ class TestCorpusOSPFAreas:
                 header.length,
             )
             if key not in recorded:
-                missing.add((header.ls_type, *key[:3]))
+                missing.add((header.ls_type, *key[1:4]))
         assert missing == {
             (1, "10.0.0.2", "10.0.0.2", 0x80000005),
             (1, "10.0.0.4", "10.0.0.4", 0x80000004),
@@ -1417,8 +1419,8 @@ def transit(dr: str, interface: str) -> OSPFRouterLink:
 def external(forwarding_address: str = "0.0.0.0") -> OSPFExternalLSA:
     """A /32 with one Type 2 (E bit set) metric of 20, FRR's default
     for a redistributed connected route, and no tag."""
-    route = OSPFExternalRoute(True, 0, 20, forwarding_address, 0)
-    return OSPFExternalLSA("255.255.255.255", (route,))
+    metric = OSPFExternalMetric(True, 0, 20, forwarding_address, 0)
+    return OSPFExternalLSA("255.255.255.255", (metric,))
 
 
 MASK_26 = "255.255.255.192"
@@ -1614,7 +1616,7 @@ def as_tuples(record) -> tuple:
             r.forwarding_address,
             r.external_route_tag,
         )
-        for r in record.routes
+        for r in record.metrics
     ]
 
 
@@ -1728,21 +1730,21 @@ class TestLSABodies:
                     str(record.metric),
                 ]
             else:
-                (route,) = record.routes
+                (first,) = record.metrics
                 # An NSSA-LSA's line reads "NSSA: Forward Address: ...".
                 forwarding = entry.get("Forward Address") or entry[
                     "NSSA"
                 ].removeprefix("Forward Address: ")
                 assert entry["Metric Type"].split()[0] == (
-                    "2" if route.e_bit else "1"
+                    "2" if first.e_bit else "1"
                 )
-                assert int(entry["TOS"]) == route.tos
-                assert int(entry["Metric"]) == route.metric
-                assert forwarding == route.forwarding_address
+                assert int(entry["TOS"]) == first.tos
+                assert int(entry["Metric"]) == first.metric
+                assert forwarding == first.forwarding_address
                 assert int(entry["External Route Tag"]) == (
-                    route.external_route_tag
+                    first.external_route_tag
                 )
-            if prefix is not None and ls_type != 4:
+            if prefix is not None:
                 mask = record.network_mask
                 assert sum(bin(int(o)).count("1") for o in mask.split(".")) == (
                     prefix
@@ -1800,17 +1802,17 @@ class TestLSABodies:
         summary = OSPFSummaryLSA(
             MASK_26, 0xABCDEF, (OSPFSummaryTOS(8, 0x123456),), reserved=0x7F
         )
-        routes = (
-            OSPFExternalRoute(False, 0, 1, "0.0.0.0", 0xDEADBEEF),
-            OSPFExternalRoute(True, 0x7F, 0xFFFFFF, "10.9.84.130", 1),
+        metrics = (
+            OSPFExternalMetric(False, 0, 1, "0.0.0.0", 0xDEADBEEF),
+            OSPFExternalMetric(True, 0x7F, 0xFFFFFF, "10.9.84.130", 1),
         )
         cases = [
             (1, router),
             (2, OSPFNetworkLSA("255.255.255.0")),
             (3, summary),
             (4, summary),
-            (5, OSPFExternalLSA("0.0.0.0", routes)),
-            (7, OSPFExternalLSA("0.0.0.0", routes)),
+            (5, OSPFExternalLSA("0.0.0.0", metrics)),
+            (7, OSPFExternalLSA("0.0.0.0", metrics)),
         ]
         for ls_type, record in cases:
             lsa = make_lsa(ls_type, bytes(record))
@@ -1820,8 +1822,22 @@ class TestLSABodies:
         assert router.links[0].tos_count == 2
         assert bytes(router)[:4] == bytes.fromhex("01550002")
         assert bytes(summary)[4:12] == bytes.fromhex("7fabcdef08123456")
-        assert bytes(routes[1])[:4] == b"\xff\xff\xff\xff"
-        assert bytes(routes[0])[:4] == b"\x00\x00\x00\x01"
+        assert bytes(metrics[1])[:4] == b"\xff\xff\xff\xff"
+        assert bytes(metrics[0])[:4] == b"\x00\x00\x00\x01"
+
+    def test_an_external_tos_of_127_encodes(self):
+        """Encode the largest 7-bit TOS beside a clear E bit."""
+        metric = OSPFExternalMetric(False, 127, 1, "0.0.0.0", 0)
+        assert bytes(metric)[:4] == b"\x7f\x00\x00\x01"
+        lsa = make_lsa(5, bytes(OSPFExternalLSA("0.0.0.0", (metric,))))
+        assert lsa.external.metrics == (metric,)
+
+    @pytest.mark.parametrize("tos", [128, 255, -1])
+    def test_an_external_tos_past_7_bits_is_refused(self, tos):
+        """Refuse a TOS that would spill into the E bit, or is negative."""
+        metric = OSPFExternalMetric(False, tos, 1, "0.0.0.0", 0)
+        with pytest.raises(ValueError, match="range\\(0, 128\\)"):
+            bytes(metric)
 
     @pytest.mark.parametrize("ls_type", [1, 2, 3, 4, 5, 7, 9, 10, 11, 6, 0])
     def test_each_accessor_answers_only_its_own_types(self, ls_type):
@@ -1878,6 +1894,7 @@ class TestLSABodyFraming:
             (3, bytes(4), 0, "8 plus whole 4-byte TOS entries"),
             (3, bytes(10), 8, "Summary-LSA (IP network)"),
             (4, bytes(7), 0, "Summary-LSA (ASBR)"),
+            (4, bytes(10), 8, "Summary-LSA (ASBR) body is 10 bytes"),
             (5, bytes(4), 0, "16 plus whole 12-byte TOS entries"),
             (5, bytes(20), 16, "AS-external-LSA"),
             (7, bytes(15), 0, "NSSA-LSA"),
