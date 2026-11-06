@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Development
+
+- **The nightly mutation run's checksum survivors are killed or triaged.** The run on `master` after 2.9.0's release failed on 15 undetected mutants of `checksum.py` that the checksum PRs of 2.9.0 left behind: 9 in `_datagram_extent`, 3 in `_bounded_checksum` and 3 in `compute`. The mutation audit runs only `tests/test_checksum.py`, and the declared-length bound (#235) was pinned in other files, so none of its tests reached it. `TestDatagramBoundedChecksum` now pins the bound in `tests/test_checksum.py`, through `compute()` and `_datagram_extent()` directly: a bounded and an unbounded input, a zero Total Length, the offset and minimum boundaries, IPv4 fragments (More Fragments, a nonzero Fragment Offset, DF alone) and IPv6. 14 are killed; the 15th, `_bounded_checksum` mutant 41, makes `covered[:None]` replace `covered`, which are the same bytes, and is recorded in `scripts/mutmut_survivors.txt`.
+
 ## [2.9.0] - 2026-11-06
 
 ### Added
