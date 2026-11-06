@@ -34,8 +34,12 @@ The library registers no decoder in ``sctp.ppid``. A walk ends at SCTP,
 so ``decode_as`` accepts the table's name but no walk reads it; pass a
 registry to :meth:`~netprotocols.SCTPChunk.decode_user_data` instead::
 
+    # 46 is Diameter's PPID; MyDiameter is the caller's own decoder
+    class MyDiameter(Protocol):
+        ...
+
     reg = Registry.from_defaults()
-    reg.register("sctp.ppid", 46, Diameter)
+    reg.register("sctp.ppid", 46, MyDiameter)
     message = chunk.decode_user_data(reg)
 
 Registering a decoder is how you extend the frame walk without editing

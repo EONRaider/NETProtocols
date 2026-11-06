@@ -128,6 +128,7 @@ from strategies import (
     vrrp_headers,
 )
 from test_corpus import walk
+from test_sctp import ACCESSOR_TYPES
 
 ALL_PROTOCOLS = (
     Ethernet,
@@ -893,9 +894,10 @@ def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
     assert chunk.decode_user_data() is None
 
 
-def test_the_sctp_accessor_list_names_every_property() -> None:
-    """_SCTP_CHUNK_ACCESSORS covers every SCTPChunk property beyond the
-    display helpers the walk property reads itself."""
+def test_the_sctp_accessor_lists_name_every_property() -> None:
+    """_SCTP_CHUNK_ACCESSORS, and test_sctp.py's ACCESSOR_TYPES, cover
+    every SCTPChunk property beyond the display helpers the walk
+    property reads itself."""
     properties = {
         name
         for name, attr in vars(SCTPChunk).items()
@@ -903,6 +905,7 @@ def test_the_sctp_accessor_list_names_every_property() -> None:
     }
     display = {"length", "type_name", "flags_str", "unrecognized_action"}
     assert properties - display == set(_SCTP_CHUNK_ACCESSORS)
+    assert properties - display == set(ACCESSOR_TYPES)
 
 
 def _read_every_ospf_accessor(ospf: OSPF) -> None:

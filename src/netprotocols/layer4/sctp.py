@@ -116,6 +116,12 @@ _SACK_FIXED_LEN = 12
 _DATA_USER_DATA = 12
 _I_DATA_USER_DATA = 16
 
+#: The user data's start by chunk type, for the types that carry it.
+_USER_DATA_START: dict[int, int] = {
+    _DATA: _DATA_USER_DATA,
+    _I_DATA: _I_DATA_USER_DATA,
+}
+
 #: The State Cookie parameter type (RFC 9260 §3.3.3.1.1).
 _STATE_COOKIE = 7
 
@@ -128,7 +134,8 @@ _PPID_CLASSES: dict[int, type[Protocol]] = DEFAULT.table(TABLE_SCTP_PPID)
 #: then the extensions an INIT or INIT ACK commonly carries (RFC 4895
 #: Random, Chunk List and Requested HMAC Algorithm, RFC 4820 Padding,
 #: RFC 5061 Supported Extensions and Adaptation Layer Indication, RFC
-#: 3758 Forward-TSN-Supported). Unknown types read ``"unknown (n)"``.
+#: 3758 Forward-TSN-Supported, RFC 9653 Zero Checksum Acceptable).
+#: Unknown types read ``"unknown (n)"``.
 _PARAMETER_TYPE_NAMES: dict[int, str] = {
     5: "IPv4 Address",
     6: "IPv6 Address",
@@ -138,6 +145,7 @@ _PARAMETER_TYPE_NAMES: dict[int, str] = {
     11: "Host Name Address",
     12: "Supported Address Types",
     0x8000: "ECN Capable",
+    0x8001: "Zero Checksum Acceptable",
     0x8002: "Random",
     0x8003: "Chunk List",
     0x8004: "Requested HMAC Algorithm",
@@ -485,14 +493,14 @@ class SCTPChunk:
     def fragment_sequence_number(self) -> int | None:
         """The Fragment Sequence Number (FSN) of an I-DATA chunk.
 
-        It numbers the fragments of one message from 0, and is carried
-        only when the B bit is clear: a first fragment holds the PPID in
-        its place, and its FSN is 0 (RFC 8260 §2.1). ``None`` for other
-        chunk types, an I-DATA chunk with B set, and a value shorter
-        than 16 bytes (degrades, never raises).
+        It numbers the fragments of one message from 0. A chunk with
+        the B bit clear carries it in its fifth word; a first fragment,
+        B set, holds the PPID there instead, and its FSN is 0 (RFC 8260
+        §2.1). ``None`` for other chunk types and a value shorter than
+        16 bytes (degrades, never raises).
         """
-        if self.flags & _B_BIT:
-            return None
+        if self.type == _I_DATA and self.flags & _B_BIT:
+            return 0 if len(self.value) >= _I_DATA_USER_DATA else None
         return self._uint((_I_DATA,), 12, 4)
 
     @property
@@ -504,9 +512,7 @@ class SCTPChunk:
         12-byte (DATA) or 16-byte (I-DATA) fields before the user data
         (degrades, never raises).
         """
-        start = {_DATA: _DATA_USER_DATA, _I_DATA: _I_DATA_USER_DATA}.get(
-            self.type
-        )
+        start = _USER_DATA_START.get(self.type)
         if start is None or len(self.value) < start:
             return None
         return self.value[start:]
@@ -523,7 +529,8 @@ class SCTPChunk:
         reassembling a fragmented one is the caller's.
         :class:`~netprotocols.SCTP` names no successor layer in a
         :func:`~netprotocols.decode_frame` walk, and the walk never reads
-        the ``sctp.ppid`` table, ``decode_as`` included.
+        the ``sctp.ppid`` table, ``decode_as`` included. A caller that
+        wants lax behaviour catches :class:`~netprotocols.ProtocolError`.
 
         :param registry: The registry whose ``sctp.ppid`` table is read;
             :data:`~netprotocols.registry.DEFAULT` when ``None``.

@@ -832,17 +832,6 @@ class TestTypedFieldsOfTheCapturedAssociation:
 
 
 class TestTypedAccessorsAreTotal:
-    def test_the_table_names_every_typed_accessor(self):
-        """ACCESSOR_TYPES, and so every test below, covers every
-        property SCTPChunk has beyond its four display helpers."""
-        properties = {
-            name
-            for name, attr in vars(SCTPChunk).items()
-            if isinstance(attr, property)
-        }
-        display = {"length", "type_name", "flags_str", "unrecognized_action"}
-        assert properties - display == set(ACCESSOR_TYPES)
-
     @pytest.mark.parametrize("flags", [0x00, 0x0F, 0xFF])
     def test_a_type_without_the_field_reads_none(self, flags):
         """Every field fits a 64-byte value, so only the type decides."""
@@ -948,10 +937,19 @@ class TestIData:
                 "message_id": (12, 77),
                 "ppid": (16, 60),
                 "user_data": (16, lambda cut: cut[16:]),
-                "fragment_sequence_number": (0, None),
+                "fragment_sequence_number": (16, 0),
                 "stream_sequence_number": (0, None),
             },
         )
+
+    @pytest.mark.parametrize("flags", [0x02, 0x03, 0x0F])
+    def test_the_fsn_of_a_first_fragment_needs_16_bytes(self, flags):
+        """RFC 8260 §2.1: with B set the word holds the PPID and the FSN
+        is implicitly 0, read only when the value holds that word."""
+        value = self.value(60)
+        assert SCTPChunk(64, flags, value[:15]).fragment_sequence_number is None
+        assert SCTPChunk(64, flags, value[:16]).fragment_sequence_number == 0
+        assert SCTPChunk(64, flags, value).fragment_sequence_number == 0
 
     @pytest.mark.parametrize("flags", [0x00, 0x01, 0x0D])
     def test_a_later_fragment_carries_the_fsn(self, flags):
@@ -1099,6 +1097,10 @@ def sack_value(gaps=(), dups=(), *, num_gaps=None, num_dups=None) -> bytes:
 
 
 class TestSack:
+    """SACK (RFC 9260 §3.3.4): sctp.pcap's SACKs carry no Gap Ack Blocks
+    or Duplicate TSNs, so every chunk here is built by hand from the
+    RFC's layout, not taken from a capture."""
+
     def test_rfc_9260_example(self):
         """RFC 9260 §3.3.4's example: TSNs 10-12, 14-15 and 17
         received, so Cumulative TSN Ack 12 and blocks 2-3 and 5-5."""
@@ -1206,6 +1208,7 @@ class TestSCTPParameter:
             (11, "Host Name Address"),
             (12, "Supported Address Types"),
             (0x8000, "ECN Capable"),
+            (0x8001, "Zero Checksum Acceptable"),
             (0x8002, "Random"),
             (0x8003, "Chunk List"),
             (0x8004, "Requested HMAC Algorithm"),
@@ -1262,10 +1265,6 @@ def i_data(flags: int, word: int, data: bytes) -> SCTPChunk:
 
 
 class TestDecodeUserData:
-    def test_the_table_ships_empty(self):
-        assert DEFAULT.table(TABLE_SCTP_PPID) == {}
-        assert only_chunk(4).decode_user_data() is None
-
     def test_a_captured_data_chunk_through_a_registered_decoder(
         self, greeting_registry
     ):
@@ -1279,6 +1278,9 @@ class TestDecodeUserData:
             assert only_chunk(4).decode_user_data() == Greeting(b"hello sctp\n")
         finally:
             del DEFAULT.table(TABLE_SCTP_PPID)[GREETING_PPID]
+            del DEFAULT._own[TABLE_SCTP_PPID][GREETING_PPID]
+        assert DEFAULT.table(TABLE_SCTP_PPID) == {}
+        assert DEFAULT._own[TABLE_SCTP_PPID] == {}
         assert only_chunk(4).decode_user_data() is None
 
     @pytest.mark.parametrize("flags", [0x00, 0x01, 0x02, 0x0D, 0x0E])
