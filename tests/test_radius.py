@@ -703,6 +703,27 @@ class TestCapturedDynamicAuthorization:
         failures = check_fixtures.check_frame(bytes(frame), Counter())
         assert failure in failures
 
+    @pytest.mark.parametrize(
+        "request_index", [COA_ACK, DISCONNECT_ACK], ids=["coa", "disconnect"]
+    )
+    def test_check_fixtures_catches_a_changed_byte_in_an_ack(
+        self, check_fixtures, request_index
+    ):
+        """A changed byte in an ACK's Message-Authenticator, checked after
+        its request, fails both of the reply's keyed checks."""
+        stats = check_fixtures.Counter()
+        exchanges = check_fixtures.RadiusExchanges()
+        request = COA_FRAMES[request_index]
+        assert check_fixtures.check_frame(request, stats, exchanges) == []
+        frame = bytearray(COA_FRAMES[request_index + 1])
+        frame[-1] ^= 0x01
+        failures = check_fixtures.check_frame(bytes(frame), stats, exchanges)
+        assert "radius-response-authenticator" in failures
+        assert "radius-reply-message-authenticator" in failures
+        assert stats["radius-response-authenticator"] == 1
+        assert stats["radius-reply-message-authenticator"] == 1
+        assert stats["radius-reply-unpaired"] == 0
+
 
 #: A 4-byte Ethernet FCS a capture kept, nonzero.
 FCS = b"\xde\xad\xbe\xef"
