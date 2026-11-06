@@ -1283,7 +1283,7 @@ def _radius_vendor_specifics(draw: st.DrawFn) -> RADIUSAttribute:
     bytes."""
     vendor = draw(
         st.one_of(
-            st.sampled_from([9, 311, 429, 4846, 14122, 24757]),
+            st.sampled_from(sorted(_NONSTANDARD_VENDOR_IDS | {9, 311, 14122})),
             st.integers(0, 0xFFFFFFFF),
         )
     )
@@ -1311,6 +1311,27 @@ def _radius_vendor_specifics(draw: st.DrawFn) -> RADIUSAttribute:
 
 class TestRADIUSVendorSpecificSafety:
     @given(found=_radius_vendor_specifics())
+    @example(
+        found=RADIUSAttribute(26, (429).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (637).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (4846).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (5323).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (8164).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (16445).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
+    @example(
+        found=RADIUSAttribute(26, (24757).to_bytes(4, "big") + b"\x01\x03\x00")
+    )
     def test_every_vendor_accessor_is_total(
         self, found: RADIUSAttribute
     ) -> None:

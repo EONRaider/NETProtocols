@@ -637,10 +637,10 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   Identifiers, the Request Authenticators of the Access-Requests and
   the Status-Server (random), every authenticator and
   Message-Authenticator computed from them, the IPv4 identifications
-  and the timestamps differ in a re-capture. veth
-  does not pad and no packet is short enough to need Ethernet padding,
-  so no frame carries padding or an FCS; `tests/test_radius.py`
-  appends a 4-byte trailer to every frame. Everything here is IPv4.
+  and the timestamps differ in a re-capture. veth does not pad and no
+  packet is short enough to need Ethernet padding, so no frame carries
+  padding or an FCS; `tests/test_radius.py` appends a 4-byte trailer
+  to every frame. Everything here is IPv4.
 
 - `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
   netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s
