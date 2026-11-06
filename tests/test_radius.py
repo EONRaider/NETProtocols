@@ -6,11 +6,13 @@ sub-attributes (RFC 2865 §5.26), the RFC 6929 types kept raw, the
 extent the Length gives a packet (padding after it, a buffer cut short
 of it, a Length below the header), the authenticators verified
 against the published test secret (RFC 2865 §3, RFC 2866 §3, RFC 3579
-§3.2), and dispatch from UDP ports 1812 and 1813.
+§3.2, RFC 5176 §2.3 and §3.4), and dispatch from UDP ports 1812 and
+1813.
 
-The FreeRADIUS exchanges in tests/fixtures/radius.pcap (see its
-MANIFEST note) anchor the decode and round-trip asserts; the cases a
-real server does not send are built here.
+The FreeRADIUS exchanges in tests/fixtures/radius.pcap and
+tests/fixtures/radius_coa.pcap (see their MANIFEST notes) anchor the
+decode and round-trip asserts; the cases a real server does not send
+are built here.
 """
 
 import hashlib
@@ -528,6 +530,199 @@ class TestAuthenticators:
         frame[-1] ^= 0x01
         failures = check_fixtures.check_frame(bytes(frame), Counter())
         assert failure in failures
+
+
+#: The Dynamic Authorization capture's frames, each request followed by
+#: its reply, decoded with RFC 5176's port named.
+COA_FRAMES = pcap_frames(FIXTURES / "radius_coa.pcap")
+COA_ACK, COA_NAK, DISCONNECT_ACK, DISCONNECT_NAK = range(0, 8, 2)
+COA_REQUESTS = range(0, 8, 2)
+COA_DECODE_AS = {"udp.port": {3799: RADIUS}}
+
+#: Error-Cause (RFC 5176 §3.5) and its value Session-Context-Not-Found.
+ERROR_CAUSE = 101
+SESSION_CONTEXT_NOT_FOUND = 503
+
+
+def coa_of(index: int) -> RADIUS:
+    layer = decode_frame(COA_FRAMES[index], decode_as=COA_DECODE_AS)[RADIUS]
+    assert isinstance(layer, RADIUS)
+    return layer
+
+
+def types_of(radius: RADIUS) -> list[int]:
+    return [found.type for found in radius.parsed_attributes]
+
+
+class TestCapturedDynamicAuthorization:
+    """radius_coa.pcap: FreeRADIUS answering radclient on UDP 3799."""
+
+    def test_a_default_walk_stops_at_udp(self):
+        """UDP 3799 is not registered, so the walk ends at UDP."""
+        for frame in COA_FRAMES:
+            assert [type(layer) for layer in decode_frame(frame)] == [
+                Ethernet,
+                IPv4,
+                UDP,
+            ]
+
+    def test_every_frame_walks_to_radius_with_decode_as(self):
+        """Naming port 3799 decodes each frame to its end."""
+        for frame in COA_FRAMES:
+            packet = decode_frame(frame, decode_as=COA_DECODE_AS)
+            assert [type(layer) for layer in packet] == [
+                Ethernet,
+                IPv4,
+                UDP,
+                RADIUS,
+            ]
+            assert packet.consumed == len(frame)
+
+    def test_every_packet_round_trips_exactly(self):
+        """Each captured packet re-encodes to its bytes."""
+        for frame in COA_FRAMES:
+            raw = frame[RADIUS_START:]
+            assert bytes(RADIUS.decode(raw)) == raw
+
+    def test_codes_in_capture_order(self):
+        """Each request answered by an ACK or a NAK (RFC 5176 §2.3)."""
+        assert [coa_of(i).code_name for i in range(len(COA_FRAMES))] == [
+            "CoA-Request",
+            "CoA-ACK",
+            "CoA-Request",
+            "CoA-NAK",
+            "Disconnect-Request",
+            "Disconnect-ACK",
+            "Disconnect-Request",
+            "Disconnect-NAK",
+        ]
+
+    def test_each_reply_carries_its_requests_identifier(self):
+        """The Identifier matches a reply to its request."""
+        for request in COA_REQUESTS:
+            assert coa_of(request).identifier == coa_of(request + 1).identifier
+
+    def test_requests_go_to_3799_and_replies_come_from_it(self):
+        """RFC 5176 §3: the NAS listens on UDP 3799."""
+        for index, frame in enumerate(COA_FRAMES):
+            udp = decode_frame(frame)[UDP]
+            port = udp.dst_port if index in COA_REQUESTS else udp.src_port
+            assert port == 3799
+
+    def test_attribute_types_by_frame(self):
+        """The attributes radclient and the NAS sent, in wire order."""
+        assert [types_of(coa_of(i)) for i in range(len(COA_FRAMES))] == [
+            [1, 44, 27, 80],
+            [80],
+            [1, 44, 27],
+            [ERROR_CAUSE],
+            [1, 44, 80],
+            [80],
+            [1, 44],
+            [ERROR_CAUSE],
+        ]
+
+    def test_each_nak_carries_session_context_not_found(self):
+        """RFC 5176 §3.5: Error-Cause 503 in each NAK."""
+        for index in (COA_NAK + 1, DISCONNECT_NAK + 1):
+            found = attribute(coa_of(index), ERROR_CAUSE)
+            assert found.data == SESSION_CONTEXT_NOT_FOUND.to_bytes(4, "big")
+
+    def test_every_request_authenticator_verifies(self):
+        """RFC 5176 §2.3: MD5 over the packet with a zero Authenticator."""
+        for index in COA_REQUESTS:
+            raw = COA_FRAMES[index][RADIUS_START:]
+            digest = hashlib.md5(
+                raw[:4] + bytes(16) + raw[20:] + SECRET,
+                usedforsecurity=False,
+            ).digest()
+            assert coa_of(index).authenticator == digest
+
+    def test_every_response_authenticator_verifies(self):
+        """MD5 over the reply with its request's Authenticator."""
+        for request in COA_REQUESTS:
+            asked, reply = coa_of(request), coa_of(request + 1)
+            raw = bytes(reply)
+            digest = hashlib.md5(
+                raw[:4] + asked.authenticator + raw[20:] + SECRET,
+                usedforsecurity=False,
+            ).digest()
+            assert reply.authenticator == digest
+
+    def test_every_message_authenticator_verifies(self):
+        """RFC 5176 §3.4 for a request, its Authenticator zeroed; RFC
+        3579 §3.2 for a reply, over its request's Authenticator."""
+        checked = 0
+        for index in range(len(COA_FRAMES)):
+            radius = coa_of(index)
+            if index in COA_REQUESTS:
+                over = bytes(16)
+            else:
+                over = coa_of(index - 1).authenticator
+            raw = bytes(replace(radius, authenticator=over))
+            offset = 20
+            for found in radius.parsed_attributes:
+                if found.type == 80:
+                    zeroed = raw[: offset + 2] + bytes(16) + raw[offset + 18 :]
+                    mac = hmac.new(SECRET, zeroed, hashlib.md5).digest()
+                    assert found.data == mac
+                    checked += 1
+                offset += len(bytes(found))
+        assert checked == 4
+
+    def test_check_fixtures_verifies_every_authenticator(self, check_fixtures):
+        """The checker verifies each request alone and each reply against
+        its request, and nothing fails."""
+        stats = check_fixtures.Counter()
+        exchanges = check_fixtures.RadiusExchanges()
+        for frame in COA_FRAMES:
+            assert check_fixtures.check_frame(frame, stats, exchanges) == []
+        assert stats["radius"] == 8
+        assert stats["radius-coa-authenticator"] == 2
+        assert stats["radius-disconnect-authenticator"] == 2
+        assert stats["radius-message-authenticator"] == 2
+        assert stats["radius-response-authenticator"] == 4
+        assert stats["radius-reply-message-authenticator"] == 2
+        assert stats["radius-reply-unpaired"] == 0
+
+    @pytest.mark.parametrize(
+        "index,failure",
+        [
+            (COA_ACK, "radius-coa-authenticator"),
+            (COA_ACK, "radius-message-authenticator"),
+            (DISCONNECT_ACK, "radius-disconnect-authenticator"),
+            (DISCONNECT_ACK, "radius-message-authenticator"),
+        ],
+    )
+    def test_check_fixtures_catches_a_changed_byte(
+        self, check_fixtures, index, failure
+    ):
+        """A changed attribute byte fails each keyed check."""
+        frame = bytearray(COA_FRAMES[index])
+        frame[-1] ^= 0x01
+        failures = check_fixtures.check_frame(bytes(frame), Counter())
+        assert failure in failures
+
+    @pytest.mark.parametrize(
+        "request_index", [COA_ACK, DISCONNECT_ACK], ids=["coa", "disconnect"]
+    )
+    def test_check_fixtures_catches_a_changed_byte_in_an_ack(
+        self, check_fixtures, request_index
+    ):
+        """A changed byte in an ACK's Message-Authenticator, checked after
+        its request, fails both of the reply's keyed checks."""
+        stats = check_fixtures.Counter()
+        exchanges = check_fixtures.RadiusExchanges()
+        request = COA_FRAMES[request_index]
+        assert check_fixtures.check_frame(request, stats, exchanges) == []
+        frame = bytearray(COA_FRAMES[request_index + 1])
+        frame[-1] ^= 0x01
+        failures = check_fixtures.check_frame(bytes(frame), stats, exchanges)
+        assert "radius-response-authenticator" in failures
+        assert "radius-reply-message-authenticator" in failures
+        assert stats["radius-response-authenticator"] == 1
+        assert stats["radius-reply-message-authenticator"] == 1
+        assert stats["radius-reply-unpaired"] == 0
 
 
 #: A 4-byte Ethernet FCS a capture kept, nonzero.
