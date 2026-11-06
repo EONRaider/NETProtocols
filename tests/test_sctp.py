@@ -1097,9 +1097,8 @@ def sack_value(gaps=(), dups=(), *, num_gaps=None, num_dups=None) -> bytes:
 
 
 class TestSack:
-    """SACK (RFC 9260 §3.3.4): sctp.pcap's SACKs carry no Gap Ack Blocks
-    or Duplicate TSNs, so every chunk here is built by hand from the
-    RFC's layout, not taken from a capture."""
+    """SACK (RFC 9260 §3.3.4): every chunk here is built by hand from the
+    RFC's layout."""
 
     def test_rfc_9260_example(self):
         """RFC 9260 §3.3.4's example: TSNs 10-12, 14-15 and 17
