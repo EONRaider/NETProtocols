@@ -362,10 +362,12 @@ against their mutants (`tests/test_checksum.py`, `tests/test_tlv.py`,
 - A test meant to kill mutants of an audited module lives in that
   module's audited test file. A test elsewhere doesn't count, however
   much of the module it exercises.
-- A PR that changes an audited module runs the `mutmut run` command
-  above and `scripts/check_mutmut_survivors.py`, from a tree with no
-  `mutants/` directory, as part of its checks, not only at release
-  time.
+- The author of a PR that changes an audited module runs the
+  `mutmut run` command above and `scripts/check_mutmut_survivors.py` by
+  hand, from a tree with no `mutants/` directory, not only at release
+  time. This is a convention: CI does not
+  run the audit on a PR, since `mutation.yml` has no `pull_request`
+  trigger and runs only nightly and when dispatched.
 
 ## Releasing
 
@@ -383,8 +385,8 @@ file. Add an entry under `## [Unreleased]` in
 [`CHANGELOG.md`](CHANGELOG.md): user-facing changes under `### Added` /
 `### Changed` / `### Fixed`, test-and-tooling changes under
 `### Development`. A change merged to get a release's gates green
-before its tag goes into that release's section instead, as
-[RELEASE.md](RELEASE.md) says.
+before its tag, or before a permitted retag, goes into that release's
+section instead, as [RELEASE.md](RELEASE.md) says.
 
 ## Pull requests
 
@@ -395,6 +397,8 @@ before its tag goes into that release's section instead, as
   rebase. These are conventions: the `master` ruleset requires only the
   `lint`, `typecheck` and `build` checks and allows every merge method,
   so it enforces neither.
+- At most 3 pull requests are open at once. This too is a convention;
+  GitHub does not enforce it.
 - CI on a first-time fork PR waits for a maintainer to approve the run —
   that's expected, not a failure on your end.
 - Commits and PRs describe the change and the reasoning; the diff shows

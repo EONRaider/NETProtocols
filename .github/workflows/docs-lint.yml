@@ -43,6 +43,10 @@ jobs:
       # defaults (20s/3/1s), so a slow or briefly rate-limited external
       # host does not fail the run.
       #
+      # --include-fragments also checks each link's #fragment: against
+      # the headings of a linked Markdown file, and against the ids and
+      # anchor names of a linked HTML page.
+      #
       # --exclude skips img.shields.io, which serves the README badges
       # and intermittently rate-limits or times out under CI traffic. It
       # is the only exclusion.
@@ -55,6 +59,7 @@ jobs:
             --timeout 30
             --max-retries 3
             --retry-wait-time 10
+            --include-fragments
             --exclude '^https://img\.shields\.io'
             README.md
             ARCHITECTURE.md

@@ -68,10 +68,11 @@ Stop at the first check that fails.
 
 6. If an audited module or audited test file changed since `v$PREV`, run
    the mutation audit locally now, before cutting the branch, so that a
-   survivor is fixed on `master` before the release PR exists. Each PR
-   that changed an audited module has already run the audit as part of
-   its checks (step 7, "What the mutation audit covers"); this run checks
-   their changes together, on the tree to be released.
+   survivor is fixed on `master` before the release PR exists. The
+   author of each PR that changed an audited module is expected to have
+   run the audit by hand (step 7, "What the mutation audit covers"); that
+   is a convention, and CI does not run the audit on pull requests. This
+   run checks their changes together, on the tree to be released.
 
    ```bash
    git diff --stat "v$PREV" master -- \
@@ -114,17 +115,19 @@ itself.
 
 1. **Which numbers, with which commands.** Every figure the README's
    [Why NETProtocols](README.md#why-netprotocols) section quotes. The
-   exact command for each, with its options, run counts and environment
-   (claim 1.4's `PYTHONPATH` set to a `git archive` extract's `src` and
-   its `env -u PYTHONDONTWRITEBYTECODE`, for instance), is in the table
-   of the latest "Re-measured for" section under
+   table of the latest "Re-measured for" section under
    [Measurement baseline](docs/CLAIMS.md#measurement-baseline) in
-   `docs/CLAIMS.md`. As of 2.9.0 that is
+   `docs/CLAIMS.md` gives the command and options for each, with run
+   counts and environment where they matter (claim 1.4's `PYTHONPATH`
+   set to a `git archive` extract's `src` and its
+   `env -u PYTHONDONTWRITEBYTECODE`, for instance). As of 2.9.0 that is
    [Re-measured for 2.9.0 (2026-11-06)](docs/CLAIMS.md#re-measured-for-290-2026-11-06).
-   Run the commands as written there.
+   The table abbreviates: it names each script and its options, and the
+   invocation around them is the one below.
 
-   The scripts run under the `bench` dependency group:
-   `uv run --frozen --group bench python scripts/<script>`. `--compare`
+   The benchmark scripts run under the `bench` dependency group, through
+   `uv run --frozen --group bench python`, as in the example under item
+   2. `--compare`
    also times `dpkt` and `scapy` on the same corpus frames, and
    `benchmark_import.py` times `netprotocols`, `dpkt` and `scapy.all`; the
    versions measured are the ones `uv.lock` pins for the `bench` group.
@@ -213,7 +216,8 @@ One commit holds the release change, in these six files.
    in a follow-up commit on the branch and build again from the new
    `HEAD`, since the correction edits the README too. Do the same if a
    later README edit on the branch changes the size (2.8.0 needed such a
-   follow-up).
+   follow-up). Step 8 builds it again from the commit to be tagged when
+   that is a later `master` commit.
 
 Review fixes go on the branch as further commits.
 
@@ -318,10 +322,11 @@ both are green.
    head of `master` at dispatch time. `SHA` is the commit you mean to
    tag. `T0`, taken just before dispatching, tells the new runs apart
    from earlier dispatches on the same commit; it is read from this
-   machine's clock, which must be correct. Each `until` loop waits until
-   GitHub lists the new run on `$SHA`. If one has not ended after a
-   minute or two, `master` moved after the fetch: interrupt it and start
-   this step again.
+   machine's clock, which must be correct. `wait_run` polls every 10
+   seconds until GitHub lists the new run on `$SHA`, and gives up after
+   5 minutes with a message and a non-zero status. If it gives up,
+   `master` most likely moved after the fetch, so the dispatched run is
+   on another commit: start this step again.
 
    ```bash
    git fetch origin && SHA=$(git rev-parse origin/master) && echo "SHA=$SHA"
@@ -333,9 +338,18 @@ both are green.
        --json databaseId,createdAt \
        --jq "[.[] | select(.createdAt >= \"$T0\")] | .[0].databaseId // empty"
    }
-   until FUZZ_RUN=$(new_run fuzz.yml workflow_dispatch) && [ -n "$FUZZ_RUN" ]; do sleep 10; done
-   until MUT_RUN=$(new_run mutation.yml workflow_dispatch) && [ -n "$MUT_RUN" ]; do sleep 10; done
-   echo "fuzz $FUZZ_RUN, mutation $MUT_RUN"
+   wait_run() {  # $1 workflow file, $2 event: prints new_run's ID, or fails after 5 minutes
+     local id i
+     for i in $(seq 30); do
+       id=$(new_run "$1" "$2") && [ -n "$id" ] && { echo "$id"; return 0; }
+       sleep 10
+     done
+     echo "No $2 run of $1 on $SHA created since $T0 after 5 minutes." >&2
+     return 1
+   }
+   FUZZ_RUN=$(wait_run fuzz.yml workflow_dispatch) &&
+     MUT_RUN=$(wait_run mutation.yml workflow_dispatch) &&
+     echo "fuzz $FUZZ_RUN, mutation $MUT_RUN"
    gh run watch "$FUZZ_RUN" --exit-status
    gh run watch "$MUT_RUN" --exit-status
    ```
@@ -363,10 +377,11 @@ both are green.
    - **A test meant to kill mutants of an audited module lives in that
      module's audited test file.** A test anywhere else kills nothing,
      however much of the code it exercises.
-   - **A PR that changes an audited module runs the audit as part of its
-     checks:** CONTRIBUTING's `mutmut run` command and
+   - **The author of a PR that changes an audited module runs the audit
+     by hand:** CONTRIBUTING's `mutmut run` command and
      `scripts/check_mutmut_survivors.py`, from a tree with no `mutants/`
-     directory.
+     directory. This is a convention: `mutation.yml` has no
+     `pull_request` trigger, so CI does not run the audit on a PR.
 
    `scripts/check_mutmut_survivors.py` fails the run on any undetected
    mutant missing from `scripts/mutmut_survivors.txt`, on an entry there
@@ -380,7 +395,8 @@ both are green.
 4. **A gate fix lands on `master` by its own PR**, checked and merged as
    in steps 5 and 6. Then dispatch both gates again on the new `master`
    commit and wait for green. **A change merged to get the release gates
-   green before the tag goes into that release's CHANGELOG section:**
+   green before the tag, or before a permitted retag (step 11), goes into
+   that release's CHANGELOG section:**
    its entry goes under `## [X.Y.Z]`'s `### Development`, not under
    `## [Unreleased]`, because the tagged tree contains it and
    `release.yml` publishes that section as the release notes.
@@ -406,6 +422,21 @@ The `awk` program is `release.yml`'s own. The workflow runs it only after
 the PyPI upload, so a missing section caught there leaves a published
 version without a GitHub release.
 
+Step 4 measured the wheel on the release branch. When `$SHA` is a later
+`master` commit, gate fixes may have changed what the wheel holds, so
+build it again from `$SHA` and compare its size with the CLAIMS 1.5
+figure:
+
+```bash
+d=$(mktemp -d) && git archive "$SHA" | tar -x -C "$d" &&
+  (cd "$d" && uv build --wheel) && stat -c %s "$d"/dist/*.whl
+grep -n '^| 1.5 wheel' docs/CLAIMS.md | tail -1         # the same size, in bytes
+```
+
+If the sizes differ, correct README and CLAIMS by a PR to `master` as in
+step 7's gate fixes, pass the gates again on the new commit, and come
+back to this step with `SHA` set to it.
+
 ## 9. Tag and push
 
 The tag is lightweight. `T0` is taken again, for step 10:
@@ -419,12 +450,14 @@ git push origin "refs/tags/v$V"
 
 ## 10. Watch `release.yml`
 
-`new_run` is the function step 7 defines; in a new shell, define it
-again first.
+`new_run` and `wait_run` are the functions step 7 defines, and they
+read `SHA` and `T0`. In a new shell, define both functions again, and
+first set `SHA` to the tagged commit and `T0` to a UTC time, in the
+same `%Y-%m-%dT%H:%M:%SZ` format, at or shortly before the push:
 
 ```bash
-until RUN=$(new_run release.yml push) && [ -n "$RUN" ]; do sleep 10; done
-echo "RUN=$RUN"
+SHA=$(git rev-parse "v$V^{commit}")   # in a new shell only
+RUN=$(wait_run release.yml push) && echo "RUN=$RUN"
 gh run watch "$RUN" --exit-status
 ```
 
@@ -442,27 +475,67 @@ Its stages, in order, and what each one guarantees:
 
 ## 11. When something fails
 
-- **The retagging rule.** A tag may be moved or re-pushed only when
-  `release.yml` failed before the PyPI publish step and no file was
-  uploaded. Once anything is published, the tag is never moved, and the
-  fix goes into the next patch release. No ruleset protects tags, so
-  GitHub does not enforce this; the procedure does. Before moving or
-  re-pushing a tag, verify both conditions, on PyPI and in the run's
-  `publish` job:
+- **The retagging rule.** A tag may be moved or re-pushed only when no
+  `release.yml` run for it uploaded anything to PyPI: every run failed,
+  or was cancelled, before the PyPI publish step. Once anything is
+  published, the tag is never moved, and the fix goes into the next
+  patch release. No ruleset protects tags, so GitHub cannot refuse a
+  moved tag; the rule binds whoever tags, and the guard below is the
+  check they run before moving or re-pushing one.
+
+  Deleting a file or a release on PyPI never re-opens retagging. A
+  deleted file's name can never be uploaded again (see "What PyPI
+  accepts" below), so a rebuild would be refused, and once a release is
+  deleted PyPI answers 404 for it, which is no evidence that nothing was
+  uploaded. That is why the guard checks the runs as well as PyPI.
+
+  The guard defines two functions. `upload_not_reached` lists every job
+  named `publish` in every attempt of one run (`filter=all`, paginated)
+  and passes only if each was skipped, or ran and has an upload step
+  whose conclusion is `skipped`. The upload step is the one named
+  "Publish to PyPI"; runs from before `release.yml` named it list it as
+  "Run pypa/gh-action-pypi-publish@...", which the selector matches too.
+  A `publish` job that ran and lists no such step (an older workflow
+  that uploaded with another step, or a job cancelled before its steps
+  were recorded), and a job or step still in progress, fail the check.
+  `retag_allowed` passes only if PyPI answers 404 for the version and
+  every `release.yml` run for the tag, of all its attempts, passes
+  `upload_not_reached`; it fails if no run is found.
 
   ```bash
-  curl -s -o /dev/null -w '%{http_code}\n' "https://pypi.org/pypi/netprotocols/$V/json"   # 404
-  gh api "repos/$REPO/actions/runs/$RUN/jobs" --jq '.jobs[] | select(.name == "publish") |
-    {conclusion, upload: [.steps[] | select(.name | startswith("Run pypa/gh-action-pypi-publish")) | .conclusion]}'
+  upload_not_reached() {  # $1 run ID: passes only if no publish job of any attempt reached its upload
+    local bad
+    bad=$(gh api "repos/$REPO/actions/runs/$1/jobs?filter=all&per_page=100" --paginate --jq '
+      .jobs[] | select(.name == "publish" and .conclusion != "skipped") |
+      [.steps[]? | select(.name == "Publish to PyPI" or
+                          (.name | startswith("Run pypa/gh-action-pypi-publish")))] as $up |
+      select(($up | length) == 0 or any($up[]; .conclusion != "skipped")) |
+      "run \(.run_id) attempt \(.run_attempt): publish \(.conclusion // .status), upload step \([$up[] | .conclusion // .status])"
+    ') || { echo "Could not list the jobs of run $1." >&2; return 1; }
+    [ -z "$bad" ] || { echo "$bad" >&2; return 1; }
+  }
+  retag_allowed() {  # passes only if PyPI has no $V and no release.yml run for v$V reached its upload
+    local code runs run
+    code=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/netprotocols/$V/json")
+    [ "$code" = 404 ] || { echo "PyPI answered $code for netprotocols $V, not 404." >&2; return 1; }
+    runs=$(gh api "repos/$REPO/actions/workflows/release.yml/runs?branch=v$V&per_page=100" \
+      --paginate --jq '.workflow_runs[].id') || { echo "Could not list the runs for v$V." >&2; return 1; }
+    [ -n "$runs" ] || { echo "No release.yml run found for v$V." >&2; return 1; }
+    for run in $runs; do
+      upload_not_reached "$run" || return 1
+    done
+  }
   ```
 
-  PyPI must answer 404 for the version, and the `publish` job's upload
-  step must be absent from the list or `skipped` (a `publish` job that
-  never ran lists no steps). When the tag and the packaged version
-  differ, `release.yml`'s "Verify the tag matches the version being
-  published" step fails with a message that says to retag. That fits
-  this rule: the step runs before the publish step, so nothing has been
-  uploaded.
+  The retag commands in this section run only inside
+  `if retag_allowed; then ... else ... fi`, as written below; on a
+  refusal the block prints why and ends with a non-zero status, and the
+  tag is left as it is.
+
+  When the tag and the packaged version differ, `release.yml`'s "Verify
+  the tag matches the version being published" step fails with a message
+  that says to retag. That fits this rule: the step runs before the
+  publish step, so nothing has been uploaded.
 - **A failure before the PyPI upload** (the `ci` job, or a `publish` step
   before the upload) leaves PyPI untouched.
   - A transient cause (a runner or network error): re-run the failed
@@ -475,14 +548,19 @@ Its stages, in order, and what each one guarantees:
   - A cause in the tagged tree (code, workflow or version): a re-run
     cannot fix it. Fix it on `master` by its own PR, with its CHANGELOG
     entry in the release's section as step 7 says, pass the gates on the
-    new `master` commit (steps 7 and 8, which set `SHA` to it), check the
-    retagging rule's two conditions above, and move the tag there:
+    new `master` commit (steps 7 and 8, which set `SHA` to it), and move
+    the tag there through the retagging rule's guard above:
 
     ```bash
-    git tag -f "v$V" "$SHA"
-    git cat-file -t "v$V"     # commit
-    T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    git push --force origin "refs/tags/v$V"
+    if retag_allowed; then
+      git tag -f "v$V" "$SHA"
+      git cat-file -t "v$V"     # commit
+      T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      git push --force origin "refs/tags/v$V"
+    else
+      echo "Refusing to move v$V: the retagging rule does not allow it." >&2
+      (exit 1)
+    fi
     ```
 
     Then watch the new run as in step 10.
@@ -501,16 +579,32 @@ Its stages, in order, and what each one guarantees:
     and the SHA-256 and BLAKE2b-256 digests all match an existing file,
     `_is_duplicate_file` in the same `legacy.py` reports a duplicate and
     the handler returns HTTP 200 without storing anything.
-  - **The builds are reproducible.** A local `uv build` of a
-    `git archive` of `1e08ecb` matched PyPI's 2.9.0 wheel and sdist byte
-    for byte (SHA-256 compared on 2026-11-06), and CI's build job fails
-    when two successive wheel builds of a commit differ.
+  - **A missing file can be added only within 14 days of the release's
+    creation.** After the duplicate and deleted-name checks, the handler
+    refuses a new file for a release older than
+    `MAXIMUM_AGE_FOR_NEW_UPLOADS = dt.timedelta(days=14)`
+    ([`warehouse/constants.py`](https://raw.githubusercontent.com/pypa/warehouse/main/warehouse/constants.py))
+    with "Uploading new files to releases older than 14 days is not
+    allowed". A byte-identical duplicate still gets HTTP 200 after that,
+    because the duplicate check runs first.
+  - **The builds are reproducible, within limits.** A local `uv build`
+    of a `git archive` of `1e08ecb` matched PyPI's 2.9.0 wheel and sdist
+    byte for byte (SHA-256 compared on 2026-11-06), and CI's build job
+    fails when two successive wheel builds of a commit differ. But
+    `pyproject.toml`'s `[build-system] requires = ["hatchling"]` is not
+    pinned, so a later build, local or in a re-run, may resolve a newer
+    hatchling and differ from the files on PyPI. PyPI refuses such a
+    file with "File already exists", and the job fails.
 
   So:
   - **The upload failed partway:** re-running the failed jobs
     (`gh run rerun "$RUN" --failed`) is safe when a rebuild of the tagged
     commit is byte-identical to the files already on PyPI, which the
-    commands below compare. Otherwise the re-run fails with "File already
+    commands below compare, and when any file still missing is uploaded
+    within 14 days of the release's creation on PyPI. The local build
+    below and the re-run's build each resolve hatchling afresh, so a
+    local match is strong evidence, not proof, that the re-run will
+    match. A re-run whose rebuild differs fails with "File already
     exists": stop and decide. The tag is not moved.
 
     ```bash
@@ -585,8 +679,12 @@ Its stages, in order, and what each one guarantees:
   `scripts/mutmut_survivors.txt`. Both gates passed on #347's merge
   commit, and `v2.9.0` was tagged there rather than on the release
   branch's head. Both PRs carry milestone 2.9.0. #347's CHANGELOG entry
-  was first written under `## [Unreleased]`; it was later moved into
-  `## [2.9.0]`, as step 7's CHANGELOG rule asks.
+  was written under `## [Unreleased]`, and was moved into `## [2.9.0]`
+  only after `v2.9.0` was tagged and released. So the rule of step 7 was
+  not met: the tag's `CHANGELOG.md` has the entry under
+  `## [Unreleased]`, and the GitHub release notes, which `release.yml`
+  took from the tag's `## [2.9.0]` section, do not contain it. The
+  published release was left as it is.
 - 2.8.0 had dispatched its gates on the `release-2.8.0` branch and tagged
   that branch's head before its PR merged (the merge commit's tree is the
   same). 2.9.0 gated `master` as CONTRIBUTING asks, and a gate fix landed
