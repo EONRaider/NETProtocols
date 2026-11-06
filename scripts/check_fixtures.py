@@ -1517,6 +1517,8 @@ def _radius_message_authenticator_verifies(signed: bytes, offset: int) -> bool:
 _NTP_KEYS = {
     1: ("md5", b"np191-md5-key"),
     2: ("sha1", b"np191-sha1-key"),
+    3: ("md5", b"np272-md5-key"),
+    4: ("sha1", b"np272-sha1-key"),
 }
 
 
@@ -1553,6 +1555,8 @@ def _check_ntp(datagram: bytes, stats: Counter[str]) -> list[str]:
     :func:`_verify_icv`)."""
     ntp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["ntp"] += 1
+    if ntp and ntp[0] & 0x07 == 6:
+        return _check_ntp_control(ntp, stats)
     if len(ntp) < 48:
         return ["ntp-truncated"]
     offset = _ntp_mac_offset(ntp, stats)
@@ -1575,6 +1579,50 @@ def _check_ntp(datagram: bytes, stats: Counter[str]) -> list[str]:
     ).digest()
     if not hmac.compare_digest(digest, mac[4:]):
         return [f"ntp-{algorithm}"]
+    return []
+
+
+def _check_ntp_control(ntp: bytes, stats: Counter[str]) -> list[str]:
+    """Validate an NTP control message (mode 6, RFC 9327 §2) and verify
+    its MAC, if it carries one.
+
+    The 12-byte header's Count gives the data's length, which must fit
+    the datagram. Without a MAC the data is padded to a multiple of 4
+    bytes and the message ends there. A MAC starts where ntpd and ntpsec
+    put it: after the data padded to a multiple of 8 bytes, or, in an
+    error response (R and E set), after the data padded to a multiple of
+    4 bytes, which is right after the header when the Count is 0, as
+    ``NTPControl.decode`` looks for it. It is a 4-byte Key ID and MD5's
+    16-byte or SHA-1's 20-byte digest of the key followed by everything
+    before the MAC, as for a time message (see :func:`_check_ntp`).
+    Anything else after the data is a failure, and so is a Key ID with
+    no published key."""
+    stats["ntp-control"] += 1
+    if len(ntp) < 12:
+        return ["ntp-control-truncated"]
+    flags, count = ntp[1], struct.unpack_from("!H", ntp, 10)[0]
+    end = 12 + count
+    if end > len(ntp):
+        return ["ntp-control-truncated"]
+    aligned = (end + 3) & ~3
+    start = aligned if flags & 0xC0 == 0xC0 else (end + 7) & ~7
+    if len(ntp) == aligned:
+        return []
+    mac = ntp[start:]
+    if len(ntp) < start or len(mac) not in (20, 24):
+        return ["ntp-control-trailer"]
+    sa = _NTP_KEYS.get(struct.unpack_from("!I", mac)[0])
+    if sa is None:
+        return ["ntp-control-unknown-key"]
+    algorithm, key = sa
+    stats[f"ntp-control-{algorithm}"] += 1
+    # As in _check_ntp: this checks the MAC the sender sent, so it is not
+    # a security use.
+    digest = hashlib.new(
+        algorithm, key + ntp[:start], usedforsecurity=False
+    ).digest()
+    if not hmac.compare_digest(digest, mac[4:]):
+        return [f"ntp-control-{algorithm}"]
     return []
 
 

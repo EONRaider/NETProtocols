@@ -103,7 +103,13 @@ from netprotocols.layer7.http import (
     HTTPFraming,
     HTTPHeaderField,
 )
-from netprotocols.layer7.ntp import NTP, NTPMAC, NTPExtensionField
+from netprotocols.layer7.ntp import (
+    NTP,
+    NTPMAC,
+    NTPControl,
+    NTPExtensionField,
+    NTPSystemStatus,
+)
 from netprotocols.layer7.radius import (
     RADIUS,
     RADIUSAttribute,
@@ -239,7 +245,9 @@ __all__ = [
     "MalformedCaptureError",
     "MaxDepthExceededError",
     "NDPOption",
+    "NTPControl",
     "NTPExtensionField",
+    "NTPSystemStatus",
     "OSPFDatabaseDescription",
     "OSPFExternalLSA",
     "OSPFExternalMetric",

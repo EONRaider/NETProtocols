@@ -1573,10 +1573,10 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:135-140` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 471
+frame[cursor:cursor+layer.header_len]` for **every layer of all 492
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
-across 41 scenarios captured with tcpdump over real kernel
+across 42 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
