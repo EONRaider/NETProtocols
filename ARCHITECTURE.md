@@ -993,9 +993,9 @@ passes, or an empty buffer, can end in `TruncatedHeaderError`. So
 as `stopped_by`. `ntpq` (mode 6) traffic decodes as `NTPControl`: the
 12-byte header with the R, E and M bits by name, the opcode, sequence,
 status, association ID, offset, the data as raw bytes, its padding and
-the MAC, which follows the data padded to 8 bytes, or the header of an
-error response, as ntpd and ntpsec place it (see the module docstring
-of [`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)). `NTP.decode()`
+the MAC, which follows the data padded to 8 bytes or, in an error
+response, the data padded to 4 bytes, as ntpd and ntpsec place it (see
+the module docstring of [`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)). `NTP.decode()`
 called directly still rejects mode 6, naming `NTPControl` in its
 message. To take port 123 out of dispatch for one walk, map it to
 `WITHHELD` in `decode_as`:

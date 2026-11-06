@@ -19,9 +19,9 @@ frame.
 For each seed and each of the three sets it prints the share of walks
 that ended with ``stopped_by`` set, as a percentage to two decimals,
 and how many walks ended in a layer of a class named ``NTPControl``
-(none on a tree without one). The first line
-names the file ``netprotocols`` was imported from, which is the tree
-measured: ``PYTHONPATH`` picks another tree's ``src``.
+(none on a tree without one). The first line names the file
+``netprotocols`` was imported from, which is the tree measured:
+``PYTHONPATH`` picks another tree's ``src``.
 
 Standard library and ``netprotocols`` only.
 """

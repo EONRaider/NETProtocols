@@ -224,13 +224,14 @@ of Association ID and peer status word, and a fragment of a longer
 response (the M bit set, or a nonzero Offset) holds a slice of the
 whole. The Status is kept raw as well, because what it holds depends on
 the message: a system status word in a response to read status, read
-variables or write variables for association 0, a peer status word in
-such a response for another association, a clock status word in a
-response to read or write clock variables, an Error Status Word in an
-error response, and zero in a command (RFC 9327 §3 and §4).
-:attr:`NTPControl.system_status` splits it as a system status word, as
-an :class:`NTPSystemStatus`, only in a response to opcode 1, 2 or 3
-for association 0 that is not an error response, and
+variables or write variables, or in a trap response, for association
+0, a peer status word in such a response for another association, a
+clock status word in a response to read or write clock variables, an
+Error Status Word in an error response, and zero in a command
+(RFC 9327 §3 and §4). :attr:`NTPControl.system_status` splits it as a
+system status word, as an :class:`NTPSystemStatus`, only in a response
+to opcode 1, 2, 3 or 7 for association 0 that is not an error
+response, and
 :attr:`NTPControl.error_code` reads an error response's code.
 """
 
@@ -329,9 +330,9 @@ _OPCODE_NAMES: dict[int, str] = {
 }
 
 #: The opcodes whose response to association 0 carries a system status
-#: word (RFC 9327 §3.1 and §4): read status, read variables and write
-#: variables.
-_SYSTEM_STATUS_OPCODES = frozenset({1, 2, 3})
+#: word (RFC 9327 §3.1 and §4): read status, read variables, write
+#: variables and trap response.
+_SYSTEM_STATUS_OPCODES = frozenset({1, 2, 3, 7})
 
 #: Error Status Word codes (RFC 9327 §3.4, Table 9); 8-255 are
 #: reserved.
@@ -459,7 +460,7 @@ def _check_first_byte(owner: type, flags: int) -> None:
         )
     if mode == 7:
         raise InvalidFieldError(
-            f"NTP mode {mode} is a private control message, not decoded",
+            "NTP mode 7 is a private control message, not decoded",
             protocol=owner,
             field="mode",
             offset=0,
@@ -1240,9 +1241,9 @@ class NTPControl(Protocol):
 
         A system status word is the Status of a response that is not an
         error response, to association 0, for opcode 1 (read status), 2
-        (read variables) or 3 (write variables) (RFC 9327 §3.1 and §4);
-        ``None`` for any other message, a runtime configuration response
-        included.
+        (read variables), 3 (write variables) or 7 (trap response)
+        (RFC 9327 §3.1 and §4); ``None`` for any other message, a runtime
+        configuration response included.
         """
         if (
             not self.response

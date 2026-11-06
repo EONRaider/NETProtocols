@@ -186,19 +186,50 @@ class TestNames:
             {"response": False},
             {"error": True},
             {"association_id": 1},
-            *({"opcode": opcode} for opcode in (0, *range(4, 32))),
+            *(
+                {"opcode": opcode}
+                for opcode in (0, *range(4, 7), *range(8, 32))
+            ),
         ],
     )
     def test_where_there_is_no_system_status_word(self, fields):
         """Only a response, not an error, to association 0, for read
-        status, read variables or write variables (RFC 9327 §3.1)."""
+        status, read variables, write variables or a trap response
+        (RFC 9327 §3.1 and §4)."""
         base = {"response": True, "opcode": 2, "status": 0xC016}
         assert NTPControl(**{**base, **fields}).system_status is None
 
-    @pytest.mark.parametrize("opcode", [1, 2, 3])
+    @pytest.mark.parametrize("opcode", [1, 2, 3, 7])
     def test_where_there_is_a_system_status_word(self, opcode):
         message = NTPControl(response=True, opcode=opcode, status=0xC016)
         assert message.system_status == NTPSystemStatus(3, 0, 1, 6)
+
+    def test_a_system_trap_carries_a_system_status_word(self):
+        """Hand-built, as the capture holds no trap: a trap response
+        (opcode 7) for association 0, a system trap, whose Status is
+        the system status word 0x0615 (RFC 9327 §4)."""
+        raw = bytes.fromhex("168700050615000000000000")
+        message = NTPControl.decode(raw)
+        assert (message.response, message.error) == (True, False)
+        assert (message.opcode, message.association_id) == (7, 0)
+        assert message.opcode_name == "trap response"
+        assert message.system_status == NTPSystemStatus(0, 6, 1, 5)
+        assert bytes(message) == raw
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("168700050615000300000000", id="peer-trap"),
+            pytest.param("16c700050615000000000000", id="error"),
+        ],
+    )
+    def test_a_trap_with_no_system_status_word(self, raw):
+        """Hand-built, as the capture holds no trap: a trap response for
+        association 3, a peer trap, and an error response to opcode 7
+        carry no system status word (RFC 9327 §3.4 and §4)."""
+        message = NTPControl.decode(bytes.fromhex(raw))
+        assert message.opcode == 7
+        assert message.system_status is None
 
     @pytest.mark.parametrize(
         "name,value,high",

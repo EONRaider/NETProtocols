@@ -1592,11 +1592,11 @@ def _check_ntp_control(ntp: bytes, stats: Counter[str]) -> list[str]:
     put it: after the data padded to a multiple of 8 bytes, or, in an
     error response (R and E set), after the data padded to a multiple of
     4 bytes, which is right after the header when the Count is 0, as
-    ``NTPControl.decode`` looks for it. It is a 4-byte
-    Key ID and MD5's 16-byte or SHA-1's 20-byte digest of the key
-    followed by everything before the MAC, as for a time message (see
-    :func:`_check_ntp`). Anything else after the data is a failure, and
-    so is a Key ID with no published key."""
+    ``NTPControl.decode`` looks for it. It is a 4-byte Key ID and MD5's
+    16-byte or SHA-1's 20-byte digest of the key followed by everything
+    before the MAC, as for a time message (see :func:`_check_ntp`).
+    Anything else after the data is a failure, and so is a Key ID with
+    no published key."""
     stats["ntp-control"] += 1
     if len(ntp) < 12:
         return ["ntp-control-truncated"]
