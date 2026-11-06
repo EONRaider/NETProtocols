@@ -37,7 +37,7 @@ from netprotocols import (
     decode_frame,
 )
 from netprotocols._defaults import IPV4_ONLY_NUMBERS, install
-from netprotocols.checksum import verify
+from netprotocols.checksum import verify, verify_lsa
 from netprotocols.registry import DEFAULT, TABLE_IP_PROTO, TABLE_IP_PROTO_V6
 from test_ipip import ethernet, make_ipv4, make_ipv6
 
@@ -1222,3 +1222,156 @@ class TestCheckerCatchesTampering:
             "ospf-checksum",
             "ospf-md5-digest",
         ]
+
+
+AREA_FRAMES = pcap_frames(FIXTURES / "ospf_areas.pcap")
+#: FRR's link-state databases at the end of each segment of
+#: ``ospf_areas.pcap``, as ``show ip ospf database <type>`` printed
+#: them (tests/fixtures/MANIFEST.md).
+AREA_LSDB = (FIXTURES / "ospf_areas_lsdb.txt").read_text()
+
+
+def lsdb_entries() -> list[dict[str, str]]:
+    """Every LSA ``AREA_LSDB`` prints, each as its ``key: value`` lines.
+
+    An entry starts at its ``LS age`` line; a key that repeats within
+    one (an attached router) keeps its values comma-separated.
+    """
+    entries: list[dict[str, str]] = []
+    for line in AREA_LSDB.splitlines():
+        key, colon, value = line.strip().partition(":")
+        if not colon or line.startswith("###"):
+            continue
+        if key == "LS age":
+            entries.append({})
+        if entries:
+            entry = entries[-1]
+            value = value.strip()
+            entry[key] = f"{entry[key]},{value}" if key in entry else value
+    return entries
+
+
+def area_lsas() -> list[tuple[int, OSPFLSA]]:
+    """Every LSA in ``ospf_areas.pcap``'s updates, with its frame index."""
+    return [
+        (index, lsa)
+        for index, frame in enumerate(AREA_FRAMES)
+        for lsa in decode_frame(frame)[OSPF].lsas or ()
+    ]
+
+
+class TestCorpusOSPFAreas:
+    """``ospf_areas.pcap``: four FRR 8.4 routers in three areas.
+
+    Area 0, area 0.0.0.1 and NSSA area 0.0.0.2, with one area border
+    router; two adjacencies captured in turn (see
+    tests/fixtures/MANIFEST.md).
+    """
+
+    def test_composition(self):
+        """Pin the capture: link 2 (31 frames), then link 0 (21)."""
+        packets = [decode_frame(frame) for frame in AREA_FRAMES]
+        assert len(packets) == 52
+        for frame, packet in zip(AREA_FRAMES, packets, strict=True):
+            assert [type(layer) for layer in packet] == [Ethernet, IPv4, OSPF]
+            assert packet.consumed == len(frame)
+            assert packet[OSPF].au_type == 0
+        assert [p[OSPF].area_id for p in packets] == (
+            ["0.0.0.2"] * 31 + ["0.0.0.0"] * 21
+        )
+        for segment in (packets[:31], packets[31:]):
+            assert {p[OSPF].type for p in segment} == {1, 2, 3, 4, 5}
+        assert {p[OSPF].router_id for p in packets[:31]} == {
+            "10.0.0.2",
+            "10.0.0.4",
+        }
+        assert {p[OSPF].router_id for p in packets[31:]} == {
+            "10.0.0.1",
+            "10.0.0.2",
+        }
+
+    def test_every_packet_round_trips(self):
+        """Round-trip every captured packet both ways."""
+        for frame in AREA_FRAMES:
+            ospf = decode_frame(frame)[OSPF]
+            assert bytes(ospf) == frame[34:]
+            assert OSPF.decode(bytes(ospf)) == ospf
+            assert verify(ospf)
+            for lsa in ospf.lsas or ():
+                assert verify_lsa(lsa)
+
+    def test_the_lsas(self):
+        """Pin every LSA the updates carry, by type, ID and originator."""
+        found = {
+            (
+                ospf_area(index),
+                lsa.header.ls_type,
+                lsa.header.link_state_id,
+                lsa.header.advertising_router,
+            )
+            for index, lsa in area_lsas()
+        }
+        assert found == {
+            ("0.0.0.2", 1, "10.0.0.2", "10.0.0.2"),
+            ("0.0.0.2", 1, "10.0.0.4", "10.0.0.4"),
+            ("0.0.0.2", 2, "10.9.84.129", "10.0.0.2"),
+            ("0.0.0.2", 3, "0.0.0.0", "10.0.0.2"),
+            ("0.0.0.2", 3, "10.9.84.0", "10.0.0.2"),
+            ("0.0.0.2", 3, "10.9.84.64", "10.0.0.2"),
+            ("0.0.0.2", 7, "192.0.2.4", "10.0.0.4"),
+            ("0.0.0.0", 1, "10.0.0.1", "10.0.0.1"),
+            ("0.0.0.0", 1, "10.0.0.2", "10.0.0.2"),
+            ("0.0.0.0", 2, "10.9.84.2", "10.0.0.2"),
+            ("0.0.0.0", 3, "10.9.84.64", "10.0.0.2"),
+            ("0.0.0.0", 3, "10.9.84.128", "10.0.0.2"),
+            ("0.0.0.0", 4, "10.0.0.3", "10.0.0.2"),
+            ("0.0.0.0", 5, "192.0.2.3", "10.0.0.3"),
+            ("0.0.0.0", 5, "192.0.2.4", "10.0.0.2"),
+        }
+        assert len(area_lsas()) == 23
+
+    def test_every_lsa_header_is_in_frr_s_database(self):
+        """Find each LSA header in the database FRR recorded.
+
+        The database records only the latest instance of each LSA, so
+        three earlier instances sent in segment 1 are not there: B's and
+        D's Router-LSAs for area 0.0.0.2 from before their adjacency,
+        and D's first NSSA-LSA.
+        """
+        recorded = {
+            (
+                entry["Link State ID"].split()[0],
+                entry["Advertising Router"],
+                int(entry["LS Seq Number"], 16),
+                int(entry["Checksum"], 16),
+                int(entry["Length"]),
+            )
+            for entry in lsdb_entries()
+        }
+        missing = set()
+        for _, lsa in area_lsas():
+            header = lsa.header
+            key = (
+                header.link_state_id,
+                header.advertising_router,
+                header.ls_sequence_number,
+                header.ls_checksum,
+                header.length,
+            )
+            if key not in recorded:
+                missing.add((header.ls_type, *key[:3]))
+        assert missing == {
+            (1, "10.0.0.2", "10.0.0.2", 0x80000005),
+            (1, "10.0.0.4", "10.0.0.4", 0x80000004),
+            (7, "192.0.2.4", "10.0.0.4", 0x80000001),
+        }
+
+    def test_every_frame_passes_the_checker(self, checker):
+        """Pass every captured frame through check_fixtures."""
+        for frame in AREA_FRAMES:
+            assert checker.check_frame(frame, Counter()) == []
+
+
+def ospf_area(index: int) -> str:
+    """The area of ``ospf_areas.pcap``'s frame ``index``."""
+    return decode_frame(AREA_FRAMES[index])[OSPF].area_id
