@@ -1590,7 +1590,9 @@ def _check_ntp_control(ntp: bytes, stats: Counter[str]) -> list[str]:
     the datagram. Without a MAC the data is padded to a multiple of 4
     bytes and the message ends there. A MAC starts where ntpd and ntpsec
     put it: after the data padded to a multiple of 8 bytes, or, in an
-    error response (R and E set), right after the header. It is a 4-byte
+    error response (R and E set), after the data padded to a multiple of
+    4 bytes, which is right after the header when the Count is 0, as
+    ``NTPControl.decode`` looks for it. It is a 4-byte
     Key ID and MD5's 16-byte or SHA-1's 20-byte digest of the key
     followed by everything before the MAC, as for a time message (see
     :func:`_check_ntp`). Anything else after the data is a failure, and
@@ -1602,8 +1604,9 @@ def _check_ntp_control(ntp: bytes, stats: Counter[str]) -> list[str]:
     end = 12 + count
     if end > len(ntp):
         return ["ntp-control-truncated"]
-    start = end if flags & 0xC0 == 0xC0 else (end + 7) & ~7
-    if len(ntp) == (end + 3) & ~3:
+    aligned = (end + 3) & ~3
+    start = aligned if flags & 0xC0 == 0xC0 else (end + 7) & ~7
+    if len(ntp) == aligned:
         return []
     mac = ntp[start:]
     if len(ntp) < start or len(mac) not in (20, 24):

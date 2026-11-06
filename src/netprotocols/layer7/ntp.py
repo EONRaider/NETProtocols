@@ -203,10 +203,13 @@ are left from there, a Key ID and a 16-byte (MD5, AES-128-CMAC) or
 bytes before it as :attr:`NTPControl.padding`. Otherwise
 :attr:`NTPControl.padding` is the bytes up to the next multiple of 4,
 or to the end of a shorter message, and :attr:`NTPControl.remainder`
-holds anything after that. The padding is not required to be zero,
-since ntpsec's responses can carry other bytes there. No digest is
-verified: that needs the key. ``bytes(NTPControl.decode(x)) == x`` for
-every buffer decode accepts.
+holds anything after that. So a MAC that starts on a 4-byte but not an
+8-byte boundary of a message that is not an error response is not
+recognised: a 24-byte one reads as 4 bytes of padding and a 20-byte
+MAC made of its last 20 bytes, and a 20-byte one as remainder. The
+padding is not required to be zero, since ntpsec's responses can carry
+other bytes there. No digest is verified: that needs the key.
+``bytes(NTPControl.decode(x)) == x`` for every buffer decode accepts.
 
 Of the 256 first bytes 16 more reach :class:`NTPControl` (4 Leap
 Indicators, 4 versions, mode 6), and those pass when the Count fits:
@@ -220,12 +223,14 @@ splits without raising; a read status response carries binary pairs
 of Association ID and peer status word, and a fragment of a longer
 response (the M bit set, or a nonzero Offset) holds a slice of the
 whole. The Status is kept raw as well, because what it holds depends on
-the message: a system status word in a response to association 0, a
-peer status word in a response to another association, a clock status
-word in a response to read or write clock variables, an Error Status
-Word in an error response, and zero in a command (RFC 9327 §3).
+the message: a system status word in a response to read status, read
+variables or write variables for association 0, a peer status word in
+such a response for another association, a clock status word in a
+response to read or write clock variables, an Error Status Word in an
+error response, and zero in a command (RFC 9327 §3 and §4).
 :attr:`NTPControl.system_status` splits it as a system status word, as
-an :class:`NTPSystemStatus`, where RFC 9327 §3 says it is one, and
+an :class:`NTPSystemStatus`, only in a response to opcode 1, 2 or 3
+for association 0 that is not an error response, and
 :attr:`NTPControl.error_code` reads an error response's code.
 """
 
@@ -295,10 +300,6 @@ _MODE_NAMES: dict[int, str] = {
     7: "reserved for private use",
 }
 
-#: The control-message modes :meth:`NTP.decode` rejects (RFC 9327 for
-#: mode 6; mode 7 is ntpd's private format).
-_CONTROL_MODES = frozenset({6, 7})
-
 #: The mode of an NTP control message (RFC 9327 §2).
 _MODE_CONTROL = 6
 
@@ -327,10 +328,10 @@ _OPCODE_NAMES: dict[int, str] = {
     31: "unset trap address/port",
 }
 
-#: The opcodes whose responses carry a clock status word or none, not a
-#: system or peer status word (RFC 9327 §3): read and write clock
-#: variables, and set trap address/port.
-_NON_SYSTEM_STATUS_OPCODES = frozenset({4, 5, 6})
+#: The opcodes whose response to association 0 carries a system status
+#: word (RFC 9327 §3.1 and §4): read status, read variables and write
+#: variables.
+_SYSTEM_STATUS_OPCODES = frozenset({1, 2, 3})
 
 #: Error Status Word codes (RFC 9327 §3.4, Table 9); 8-255 are
 #: reserved.
@@ -456,7 +457,7 @@ def _check_first_byte(owner: type, flags: int) -> None:
             expected="0-5",
             actual=mode,
         )
-    if mode in _CONTROL_MODES:
+    if mode == 7:
         raise InvalidFieldError(
             f"NTP mode {mode} is a private control message, not decoded",
             protocol=owner,
@@ -1238,15 +1239,16 @@ class NTPControl(Protocol):
         """Split the Status as a system status word, where it is one.
 
         A system status word is the Status of a response that is not an
-        error response, to association 0, for any opcode but read or
-        write clock variables and set trap address/port (RFC 9327 §3);
-        ``None`` for any other message.
+        error response, to association 0, for opcode 1 (read status), 2
+        (read variables) or 3 (write variables) (RFC 9327 §3.1 and §4);
+        ``None`` for any other message, a runtime configuration response
+        included.
         """
         if (
             not self.response
             or self.error
             or self.association_id != 0
-            or self.opcode in _NON_SYSTEM_STATUS_OPCODES
+            or self.opcode not in _SYSTEM_STATUS_OPCODES
         ):
             return None
         return NTPSystemStatus.from_word(self.status)

@@ -186,16 +186,19 @@ class TestNames:
             {"response": False},
             {"error": True},
             {"association_id": 1},
-            {"opcode": 4},
-            {"opcode": 5},
-            {"opcode": 6},
+            *({"opcode": opcode} for opcode in (0, *range(4, 32))),
         ],
     )
     def test_where_there_is_no_system_status_word(self, fields):
-        """Only a response, not an error, to association 0, for an opcode
-        whose Status is a system status word."""
+        """Only a response, not an error, to association 0, for read
+        status, read variables or write variables (RFC 9327 §3.1)."""
         base = {"response": True, "opcode": 2, "status": 0xC016}
         assert NTPControl(**{**base, **fields}).system_status is None
+
+    @pytest.mark.parametrize("opcode", [1, 2, 3])
+    def test_where_there_is_a_system_status_word(self, opcode):
+        message = NTPControl(response=True, opcode=opcode, status=0xC016)
+        assert message.system_status == NTPSystemStatus(3, 0, 1, 6)
 
     @pytest.mark.parametrize(
         "name,value,high",
@@ -277,11 +280,37 @@ class TestAfterTheData:
         assert message.padding == b"\x00\x00\x00\x04"
         assert bytes(message) == raw
 
+    @pytest.mark.parametrize("digest_len", [16, 20])
+    def test_a_mac_on_a_4_byte_boundary_is_not_recognised(self, digest_len):
+        """Hand-built, as ntpd and ntpsec do not send it: a read
+        variables response with 8 bytes of data, so the data ends at
+        20, and a MAC right there, on a multiple of 4 and not of 8. A
+        SHA-1 MAC reads as its Key ID for padding and a 20-byte MAC
+        from its digest; an MD5 MAC as remainder."""
+        mac = bytes(NTPMAC(7, bytes(range(digest_len))))
+        raw = control(response=True, opcode=2, data=b"abcdefgh") + mac
+        message = NTPControl.decode(raw)
+        if digest_len == 20:
+            assert message.padding == mac[:4]
+            assert message.mac == NTPMAC(0x00010203, mac[8:])
+            assert message.remainder == b""
+        else:
+            assert (message.padding, message.mac) == (b"", None)
+            assert message.remainder == mac
+        assert bytes(message) == raw
+
     def test_an_error_responses_mac_follows_its_header(self):
         raw = control(response=True, error=True, status=0x0100)
         raw += bytes(NTPMAC(3, b"\xcd" * 16))
         message = NTPControl.decode(raw)
         assert (message.padding, message.mac) == (b"", NTPMAC(3, b"\xcd" * 16))
+
+    def test_an_error_responses_mac_follows_its_data_padded_to_4(self):
+        raw = control(response=True, error=True, status=0x0100, data=b"x")
+        raw += bytes(3) + bytes(NTPMAC(3, b"\xcd" * 16))
+        message = NTPControl.decode(raw)
+        assert message.padding == bytes(3)
+        assert message.mac == NTPMAC(3, b"\xcd" * 16)
 
     @pytest.mark.parametrize("tail_len", [4, 8, 16, 19, 21, 28])
     def test_a_tail_of_no_macs_length_is_a_remainder(self, tail_len):
@@ -608,6 +637,30 @@ class TestCapturedMessages:
         assert status.leap_name == "unknown (clock unsynchronized)"
         assert status.clock_source_name == "unspecified or unknown"
         assert status.event_name == "system restart"
+
+    def test_every_captured_rv_and_as_response_has_ntpqs_status(self):
+        """The responses to read variables and read status for
+        association 0 carry the system status word ntpq printed."""
+        for index in (
+            RV[1],
+            AS[1],
+            VERSION[1],
+            VERSION[3],
+            UNKNOWN[1],
+            PEER[1],
+        ):
+            message = control_of(index)
+            assert message.opcode in (1, 2)
+            assert message.system_status == NTPSystemStatus(3, 0, 1, 6)
+
+    def test_a_configuration_response_has_no_system_status_word(self):
+        """Capture frame 19, the ":config" response, has Status 0x0000
+        at association 0, which is not a system status word."""
+        message = control_of(MD5[1])
+        assert (message.response, message.error) == (True, False)
+        assert (message.association_id, message.status) == (0, 0)
+        assert message.opcode_name == "runtime configuration"
+        assert message.system_status is None
 
     def test_the_association_list_ntpq_showed(self):
         """The read status response's data is the association IDs and

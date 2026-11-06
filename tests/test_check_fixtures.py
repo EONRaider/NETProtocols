@@ -1514,6 +1514,20 @@ def test_a_split_tls_record_passes_in_a_session_capture() -> None:
     assert check(split, session=True) == []
 
 
+def test_an_error_responses_mac_follows_its_padded_data() -> None:
+    """A hand-built error response with a Count of 1 and an MD5 MAC
+    after the data padded to 4 bytes, where NTPControl looks for it."""
+    algorithm, key = checker._NTP_KEYS[3]
+    message = struct.pack("!BBHHHHH", 0xD6, 0xC2, 1, 0x0500, 0, 0, 1)
+    message += b"x" + bytes(3) + struct.pack("!I", 3)
+    message += hashlib.new(
+        algorithm, key + message[:16], usedforsecurity=False
+    ).digest()
+    stats: Counter[str] = Counter()
+    assert checker._check_ntp_control(message, stats) == []
+    assert stats["ntp-control-md5"] == 1
+
+
 # Failures that need the frames of a capture before them: RADIUS
 # replies, each verified against the request it answers.
 
