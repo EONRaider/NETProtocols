@@ -1496,14 +1496,15 @@ class TestLSAChecksum:
         assert not verify_lsa(OSPFLSA(flipped, lsa.body))
 
     def lsa(self, body: bytes, checksum: int | None = None) -> OSPFLSA:
-        """Build an LSA around ``body``.
+        """Build a link-local opaque LSA (LS type 9) around ``body``.
 
-        It is correctly checksummed unless a ``checksum`` is given.
+        Its body is not decoded, so any bytes construct. It is
+        correctly checksummed unless a ``checksum`` is given.
         """
         header = OSPFLSAHeader(
             ls_age=1,
             options=2,
-            ls_type=1,
+            ls_type=9,
             link_state_id="10.0.0.1",
             advertising_router="10.0.0.1",
             ls_sequence_number=0x80000001,
@@ -1519,14 +1520,14 @@ class TestLSAChecksum:
         """Verify a zero checksum byte where the generator writes 0xff.
 
         RFC 905 B.4 checks the sums, not the field: 0x00 and 0xff are
-        equal modulo 255, so the 0x31ff this LSA generates verifies
-        stored as 0x3100 too.
+        equal modulo 255, so the 0x63ff this LSA generates verifies
+        stored as 0x6300 too.
         """
-        lsa = self.lsa(b"\x01\x02\x03\x16")
-        assert lsa.header.ls_checksum == 0x31FF
+        lsa = self.lsa(b"\x01\x02\x03\xdb")
+        assert lsa.header.ls_checksum == 0x63FF
         assert verify_lsa(lsa)
-        assert verify_lsa(self.lsa(lsa.body, 0x3100))
-        assert not verify_lsa(self.lsa(lsa.body, 0x3101))
+        assert verify_lsa(self.lsa(lsa.body, 0x6300))
+        assert not verify_lsa(self.lsa(lsa.body, 0x6301))
 
     def test_a_zero_checksum_fails_though_its_sums_are_zero(self):
         """Reject an LS Checksum of 0x0000, which zeroes both sums here.
@@ -1536,7 +1537,7 @@ class TestLSAChecksum:
         the field cannot be zero and calls a zero a checksum failure.
         The zero rule is on the 16-bit value: one zero byte is fine.
         """
-        lsa = self.lsa(bytes.fromhex("8a00c200"))
+        lsa = self.lsa(bytes.fromhex("3e000700"))
         assert lsa.header.ls_checksum == 0xFFFF
         assert verify_lsa(lsa)
         assert verify_lsa(self.lsa(lsa.body, 0x00FF))
@@ -1551,8 +1552,8 @@ class TestLSAChecksum:
         The swap leaves C0 at 0 and moves C1 alone, so a check of C0 by
         itself would pass it.
         """
-        lsa = self.lsa(b"\x01\x02\x03\x16")
-        swapped = self.lsa(b"\x01\x03\x02\x16", lsa.header.ls_checksum)
+        lsa = self.lsa(b"\x01\x02\x03\xdb")
+        swapped = self.lsa(b"\x01\x03\x02\xdb", lsa.header.ls_checksum)
         assert fletcher_sums(bytes(swapped)[2:])[0] == 0
         assert not verify_lsa(swapped)
 
@@ -1562,8 +1563,8 @@ class TestLSAChecksum:
         Adding 1 to the second-to-last byte and taking 2 from the last
         moves C0 alone, so a check of C1 by itself would pass it.
         """
-        lsa = self.lsa(b"\x01\x02\x03\x16")
-        changed = self.lsa(b"\x01\x02\x04\x14", lsa.header.ls_checksum)
+        lsa = self.lsa(b"\x01\x02\x03\xdb")
+        changed = self.lsa(b"\x01\x02\x04\xd9", lsa.header.ls_checksum)
         assert fletcher_sums(bytes(changed)[2:])[1] == 0
         assert not verify_lsa(changed)
 

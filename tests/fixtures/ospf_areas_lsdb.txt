@@ -1,0 +1,1085 @@
+### segment 1, router 10.0.0.2: show ip ospf database router
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Router Link States (Area 0.0.0.0)
+
+  LS age: 23
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000004
+  Checksum: 0x956d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: Stub Network
+     (Link ID) Net: 10.9.84.0
+     (Link Data) Network Mask: 255.255.255.192
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+
+                Router Link States (Area 0.0.0.1)
+
+  LS age: 23
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000005
+  Checksum: 0x3b9e
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.65
+     (Link Data) Router Interface address: 10.9.84.65
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 23
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  Flags: 0x2 : ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.3 
+  Advertising Router: 10.0.0.3
+  LS Seq Number: 80000003
+  Checksum: 0x3a9f
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.65
+     (Link Data) Router Interface address: 10.9.84.66
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+
+                Router Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 11
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000006
+  Checksum: 0xe46d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.129
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 12
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x6  
+  Flags: 0x2 : ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.4 
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000005
+  Checksum: 0xd17d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.130
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+### segment 1, router 10.0.0.2: show ip ospf database network
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Net Link States (Area 0.0.0.0)
+
+
+                Net Link States (Area 0.0.0.1)
+
+  LS age: 23
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.65 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x7754
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.2
+
+        Attached Router: 10.0.0.3
+
+
+                Net Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 11
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x3  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.129 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xa8db
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.2
+
+        Attached Router: 10.0.0.4
+
+### segment 1, router 10.0.0.2: show ip ospf database summary
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Summary Link States (Area 0.0.0.0)
+
+  LS age: 31
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xdc02
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 31
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.128 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5a44
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+
+                Summary Link States (Area 0.0.0.1)
+
+  LS age: 31
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5fbf
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 31
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.128 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5a44
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+
+                Summary Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 31
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 0.0.0.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x2d25
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 1
+
+  LS age: 31
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x7da3
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 31
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xfae5
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+### segment 1, router 10.0.0.2: show ip ospf database asbr-summary
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                ASBR-Summary Link States (Area 0.0.0.0)
+
+  LS age: 13
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.0.0.3 (AS Boundary Router address)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xba7e
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 10
+
+
+                ASBR-Summary Link States (Area 0.0.0.1)
+
+
+                ASBR-Summary Link States (Area 0.0.0.2 [NSSA])
+
+### segment 1, router 10.0.0.2: show ip ospf database external
+
+       OSPF Router with ID (10.0.0.2)
+
+                AS External Link States 
+
+  LS age: 32
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.3 (External Network Number)
+  Advertising Router: 10.0.0.3
+  LS Seq Number: 80000001
+  Checksum: 0x41aa
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 0.0.0.0
+        External Route Tag: 0
+
+  LS age: 3
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x2b (Translated from Type-7)
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.4 (External Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000002
+  Checksum: 0x817f
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 10.9.84.130
+        External Route Tag: 0
+
+### segment 1, router 10.0.0.2: show ip ospf database nssa-external
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                NSSA-external Link States (Area 0.0.0.0)
+
+
+                NSSA-external Link States (Area 0.0.0.1)
+
+
+                NSSA-external Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 4
+  Options: 0xa  : *|-|-|-|N/P|-|E|-
+  LS Flags: 0x6  
+  LS Type: NSSA-LSA
+  Link State ID: 192.0.2.4 (External Network Number for NSSA)
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000002
+  Checksum: 0xe014
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        NSSA: Forward Address: 10.9.84.130
+        External Route Tag: 0
+
+### segment 1, router 10.0.0.4: show ip ospf database router
+
+       OSPF Router with ID (10.0.0.4)
+
+
+                Router Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 13
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x6  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000006
+  Checksum: 0xe46d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.129
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 12
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x3  
+  Flags: 0x2 : ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.4 
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000005
+  Checksum: 0xd17d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.130
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+### segment 1, router 10.0.0.4: show ip ospf database network
+
+       OSPF Router with ID (10.0.0.4)
+
+
+                Net Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 13
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x6  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.129 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xa8db
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.2
+
+        Attached Router: 10.0.0.4
+
+### segment 1, router 10.0.0.4: show ip ospf database summary
+
+       OSPF Router with ID (10.0.0.4)
+
+
+                Summary Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 32
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 0.0.0.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x2d25
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 1
+
+  LS age: 32
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x7da3
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 32
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xfae5
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+### segment 1, router 10.0.0.4: show ip ospf database asbr-summary
+
+       OSPF Router with ID (10.0.0.4)
+
+
+                ASBR-Summary Link States (Area 0.0.0.2 [NSSA])
+
+### segment 1, router 10.0.0.4: show ip ospf database external
+
+       OSPF Router with ID (10.0.0.4)
+
+                AS External Link States 
+
+  LS age: 3
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.4 (External Network Number)
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000002
+  Checksum: 0x2fb9
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 0.0.0.0
+        External Route Tag: 0
+
+### segment 1, router 10.0.0.4: show ip ospf database nssa-external
+
+       OSPF Router with ID (10.0.0.4)
+
+
+                NSSA-external Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 3
+  Options: 0xa  : *|-|-|-|N/P|-|E|-
+  LS Flags: 0xb  
+  LS Type: NSSA-LSA
+  Link State ID: 192.0.2.4 (External Network Number for NSSA)
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000002
+  Checksum: 0xe014
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        NSSA: Forward Address: 10.9.84.130
+        External Route Tag: 0
+
+### segment 2, router 10.0.0.1: show ip ospf database router
+
+       OSPF Router with ID (10.0.0.1)
+
+
+                Router Link States (Area 0.0.0.0)
+
+  LS age: 6
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  Flags: 0x0
+  LS Type: router-LSA
+  Link State ID: 10.0.0.1 
+  Advertising Router: 10.0.0.1
+  LS Seq Number: 80000003
+  Checksum: 0x4a16
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.2
+     (Link Data) Router Interface address: 10.9.84.1
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 7
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000005
+  Checksum: 0x4d0b
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.2
+     (Link Data) Router Interface address: 10.9.84.2
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+### segment 2, router 10.0.0.1: show ip ospf database network
+
+       OSPF Router with ID (10.0.0.1)
+
+
+                Net Link States (Area 0.0.0.0)
+
+  LS age: 7
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.2 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xd735
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.1
+
+        Attached Router: 10.0.0.2
+
+### segment 2, router 10.0.0.1: show ip ospf database summary
+
+       OSPF Router with ID (10.0.0.1)
+
+
+                Summary Link States (Area 0.0.0.0)
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xdc02
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.128 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5a44
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+### segment 2, router 10.0.0.1: show ip ospf database asbr-summary
+
+       OSPF Router with ID (10.0.0.1)
+
+
+                ASBR-Summary Link States (Area 0.0.0.0)
+
+  LS age: 22
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: summary-LSA
+  Link State ID: 10.0.0.3 (AS Boundary Router address)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xba7e
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 10
+
+### segment 2, router 10.0.0.1: show ip ospf database external
+
+       OSPF Router with ID (10.0.0.1)
+
+                AS External Link States 
+
+  LS age: 41
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.3 (External Network Number)
+  Advertising Router: 10.0.0.3
+  LS Seq Number: 80000001
+  Checksum: 0x41aa
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 0.0.0.0
+        External Route Tag: 0
+
+  LS age: 5
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.4 (External Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000003
+  Checksum: 0x7f80
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 10.9.84.130
+        External Route Tag: 0
+
+### segment 2, router 10.0.0.1: show ip ospf database nssa-external
+
+       OSPF Router with ID (10.0.0.1)
+
+
+                NSSA-external Link States (Area 0.0.0.0)
+
+### segment 2, router 10.0.0.2: show ip ospf database router
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Router Link States (Area 0.0.0.0)
+
+  LS age: 7
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  Flags: 0x0
+  LS Type: router-LSA
+  Link State ID: 10.0.0.1 
+  Advertising Router: 10.0.0.1
+  LS Seq Number: 80000002
+  Checksum: 0xa069
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: Stub Network
+     (Link ID) Net: 10.9.84.0
+     (Link Data) Network Mask: 255.255.255.192
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 6
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000005
+  Checksum: 0x4d0b
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.2
+     (Link Data) Router Interface address: 10.9.84.2
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+
+                Router Link States (Area 0.0.0.1)
+
+  LS age: 32
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000005
+  Checksum: 0x3b9e
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.65
+     (Link Data) Router Interface address: 10.9.84.65
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 32
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  Flags: 0x2 : ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.3 
+  Advertising Router: 10.0.0.3
+  LS Seq Number: 80000003
+  Checksum: 0x3a9f
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.65
+     (Link Data) Router Interface address: 10.9.84.66
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+
+                Router Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 20
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x3  
+  Flags: 0x3 : ABR ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.2 
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000006
+  Checksum: 0xe46d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.129
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+  LS age: 21
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x6  
+  Flags: 0x2 : ASBR
+  LS Type: router-LSA
+  Link State ID: 10.0.0.4 
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000005
+  Checksum: 0xd17d
+  Length: 36
+
+   Number of Links: 1
+
+    Link connected to: a Transit Network
+     (Link ID) Designated Router address: 10.9.84.129
+     (Link Data) Router Interface address: 10.9.84.130
+      Number of TOS metrics: 0
+       TOS 0 Metric: 10
+
+
+### segment 2, router 10.0.0.2: show ip ospf database network
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Net Link States (Area 0.0.0.0)
+
+  LS age: 6
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.2 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xd735
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.1
+
+        Attached Router: 10.0.0.2
+
+
+                Net Link States (Area 0.0.0.1)
+
+  LS age: 32
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x3  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.65 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x7754
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.2
+
+        Attached Router: 10.0.0.3
+
+
+                Net Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 20
+  Options: 0x8  : *|-|-|-|N/P|-|-|-
+  LS Flags: 0x3  
+  LS Type: network-LSA
+  Link State ID: 10.9.84.129 (address of Designated Router)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xa8db
+  Length: 32
+
+  Network Mask: /26
+        Attached Router: 10.0.0.2
+
+        Attached Router: 10.0.0.4
+
+### segment 2, router 10.0.0.2: show ip ospf database summary
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                Summary Link States (Area 0.0.0.0)
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xdc02
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.128 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5a44
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+
+                Summary Link States (Area 0.0.0.1)
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5fbf
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 40
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.128 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x5a44
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+
+                Summary Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 40
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 0.0.0.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x2d25
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 1
+
+  LS age: 40
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.0 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0x7da3
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+  LS age: 40
+  Options: 0x0  : *|-|-|-|-|-|-|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.9.84.64 (summary Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xfae5
+  Length: 28
+
+  Network Mask: /26
+        TOS: 0  Metric: 10
+
+### segment 2, router 10.0.0.2: show ip ospf database asbr-summary
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                ASBR-Summary Link States (Area 0.0.0.0)
+
+  LS age: 22
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0xb  
+  LS Type: summary-LSA
+  Link State ID: 10.0.0.3 (AS Boundary Router address)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000001
+  Checksum: 0xba7e
+  Length: 28
+
+  Network Mask: /0
+        TOS: 0  Metric: 10
+
+
+                ASBR-Summary Link States (Area 0.0.0.1)
+
+
+                ASBR-Summary Link States (Area 0.0.0.2 [NSSA])
+
+### segment 2, router 10.0.0.2: show ip ospf database external
+
+       OSPF Router with ID (10.0.0.2)
+
+                AS External Link States 
+
+  LS age: 41
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x6  
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.3 (External Network Number)
+  Advertising Router: 10.0.0.3
+  LS Seq Number: 80000001
+  Checksum: 0x41aa
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 0.0.0.0
+        External Route Tag: 0
+
+  LS age: 4
+  Options: 0x2  : *|-|-|-|-|-|E|-
+  LS Flags: 0x2b (Translated from Type-7)
+  LS Type: AS-external-LSA
+  Link State ID: 192.0.2.4 (External Network Number)
+  Advertising Router: 10.0.0.2
+  LS Seq Number: 80000003
+  Checksum: 0x7f80
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        Forward Address: 10.9.84.130
+        External Route Tag: 0
+
+### segment 2, router 10.0.0.2: show ip ospf database nssa-external
+
+       OSPF Router with ID (10.0.0.2)
+
+
+                NSSA-external Link States (Area 0.0.0.0)
+
+
+                NSSA-external Link States (Area 0.0.0.1)
+
+
+                NSSA-external Link States (Area 0.0.0.2 [NSSA])
+
+  LS age: 12
+  Options: 0xa  : *|-|-|-|N/P|-|E|-
+  LS Flags: 0x6  
+  LS Type: NSSA-LSA
+  Link State ID: 192.0.2.4 (External Network Number for NSSA)
+  Advertising Router: 10.0.0.4
+  LS Seq Number: 80000002
+  Checksum: 0xe014
+  Length: 36
+
+  Network Mask: /32
+        Metric Type: 2 (Larger than any link state path)
+        TOS: 0
+        Metric: 20
+        NSSA: Forward Address: 10.9.84.130
+        External Route Tag: 0
+

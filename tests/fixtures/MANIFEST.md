@@ -14,13 +14,14 @@ request's), every STUN MESSAGE-INTEGRITY and every NTP MAC, with the
 test keys published below, and every STUN FINGERPRINT; every TCP
 segment on port 443 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 411 frames across 39
+frames routinely leave checksums to NIC offload. 463 frames across 40
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-six scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Twenty-seven scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
-`vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `pim.pcap`, `bgp.pcap`,
+`vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `ospf_areas.pcap`,
+`pim.pcap`, `bgp.pcap`,
 `mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`,
 `stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`) are
 captured
@@ -32,7 +33,8 @@ queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN
 tunnel, a userspace SCTP
 association, IPsec ESP and AH built by a script and sent through raw
 sockets, two keepalived VRRP routers, two BIRD routers speaking RIP,
-two FRR OSPF routers, two FRR PIM-SM routers, BGP sessions between
+two FRR OSPF routers, four FRR OSPF routers in three areas, two
+FRR PIM-SM routers, BGP sessions between
 three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
@@ -71,6 +73,7 @@ rows and the notes below.
 | `rip.pcap` | 21 | RIP between two BIRD 2.14 routers on UDP 520, five scenarios of 4 frames each (each router's first Request, for the whole table, and its first Response, carrying its routes): RIPv1 broadcast (3 classful routes per Response), RIPv2 multicast with no authentication (4 routes, plus one periodic update of 7 entries, 3 of them poisoned reverse at metric 16), a plain-text password, keyed MD5 and HMAC-SHA-256 (RFC 4822, with a 20- and a 36-byte authentication trailer) — `Ethernet→IPv4→UDP→RIP`; **direct capture**, both directions (see RIP note) |
 | `tftp.pcap` | 33 | Six TFTP (RFC 1350) transfers between tftpd-hpa 5.2 and two clients, each a request to UDP 69 followed by the transfer between two ephemeral ports: an RRQ in octet mode for a 1300-byte file (DATA blocks of 512, 512 and 276 bytes, each ACKed); an RRQ for a 1024-byte file, ending in an empty DATA block 3; a WRQ of 600 bytes (ACK of block 0, then DATA of 512 and 88); an RRQ for a missing file (ERROR code 1, `File not found`) and one for a file the server cannot open (ERROR code 0, `Permission denied`), each followed by the tftp-hpa client's ACK of block 1; and curl's RRQ with RFC 2347 options `tsize` 0, `blksize` 1024 and `timeout` 6, answered by an OACK (`tsize` 1300) and ACKed with block 0, then DATA of 1024 and 276 bytes — `Ethernet→IPv4→UDP→TFTP` for the 6 requests, `Ethernet→IPv4→UDP` for the other 27, which no port names; **direct capture**, both directions (see TFTP note) |
 | `ospf.pcap` | 54 | OSPFv2 (RFC 2328) between two FRR 8.4 routers on one broadcast network in area 0, three adjacencies in turn: AuType 0 (no authentication), AuType 1 (simple password) and AuType 2 (keyed MD5), 18 frames each — 6 Hellos (one with an empty neighbor list, DR/BDR election), 5 Database Descriptions (the I/M/MS exchange, LSA headers), 2 Link State Requests, 3 Link State Updates (router, network and AS-external LSAs, 6 per adjacency) and 2 Link State Acknowledgments — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF note) |
+| `ospf_areas.pcap` | 52 | OSPFv2 (RFC 2328, RFC 3101) between four FRR 8.4 routers in three areas, two adjacencies in turn, both AuType 0: an NSSA router (10.0.0.4) joining the area border router (10.0.0.2) in NSSA area 0.0.0.2 (31 frames), then a backbone router (10.0.0.1) joining it in area 0 (21 frames) — every message type in each; their Link State Updates carry Router-LSAs, Network-LSAs, Summary-LSAs (type 3, a default route among them), an ASBR-summary-LSA (type 4), AS-external-LSAs (type 5, one translated from type 7) and NSSA-LSAs (type 7), 23 in all; FRR's link-state database at each segment's end is `ospf_areas_lsdb.txt` — `Ethernet→IPv4→OSPF`; **direct capture**, both directions (see OSPF areas note) |
 | `bgp.pcap` | 19 | BGP-4 (RFC 4271) over TCP 179 between BIRD 2.14 speakers, an eBGP (AS 65001-65002) and an iBGP (AS 65001) session: an OPEN each way on each, a KEEPALIVE each way on each, 23 UPDATEs (announcements with ORIGIN, AS_PATH, NEXT_HOP, MULTI_EXIT_DISC and, over iBGP, LOCAL_PREF; End-of-RIB markers; a five-prefix withdrawal to each peer), one segment carrying 7 messages and others 2-6, and a Cease / Administrative Shutdown NOTIFICATION to each peer — `Ethernet→IPv4→TCP→BGP` (→ `BGP` …); **direct capture**, both directions, only the segments that hold whole messages, and of those carrying nothing but a KEEPALIVE only the first per direction per session (see BGP note) |
 | `mpls.pcap` | 8 | MPLS label stacks (RFC 3032) over Ethernet: one label (`0x12345`) carrying an ICMPv4 echo; two labels (16001, 16002) carrying UDP; three labels (16001-16003, traffic classes 5/3/0) carrying an echo; an Entropy Label Indicator (7) and an entropy label (RFC 6790) carrying an echo; an IPv4 Explicit NULL bottom label (0) carrying a UDP datagram of 2 bytes of payload, zero padded to 60 bytes; an IPv6 Explicit NULL bottom label (2) carrying an IPv6 UDP datagram; EtherType `0x8848` to a multicast MAC carrying an echo; and an Ethernet pseudowire, a control word (RFC 4448 §4.6) and a whole Ethernet frame — `Ethernet→MPLS→IPv4→ICMPv4` / `→IPv4→UDP` / `→IPv6→UDP`, and `Ethernet→MPLS`, where the walk stops at the control word; **script-built label stacks around kernel-built IPv4 datagrams**, the IPv6 datagram script-built (see MPLS note) |
 | `sctp.pcap` | 16 | One SCTP association (RFC 9260) from usrsctp over raw IPv4: INIT / INIT ACK / COOKIE ECHO / COOKIE ACK, DATA + SACK each way, HEARTBEAT + HEARTBEAT ACK from each end, SHUTDOWN / SHUTDOWN ACK / SHUTDOWN COMPLETE; then one script-built packet carrying an unknown chunk type (63) — `Ethernet→IPv4→SCTP`; **direct capture**, both directions (see SCTP note) |
@@ -398,6 +401,43 @@ suite, and later reused as fuzz seeds and pcap-replay goldens.
   IPv6) are covered by constructed frames in `tests/test_ospf.py`. How
   B's two router LSAs are packed into updates varied between runs (one
   update, or one each); this capture has them together.
+
+- `ospf_areas.pcap` was produced by
+  `scripts/capture_fixtures_ospf_areas.sh`: FRR 8.4's `zebra` and
+  `ospfd` in each of four netns (`npospfar-a` to `npospfar-d`), joined
+  by three veth pairs in 10.9.84.0/24, with 2 s hello and 8 s dead
+  intervals. Router B (10.0.0.2, priority 10) is the area border router
+  of area 0 (10.9.84.0/26, with A, 10.0.0.1), area 0.0.0.1
+  (10.9.84.64/26, with C, 10.0.0.3) and NSSA area 0.0.0.2
+  (10.9.84.128/26, with D, 10.0.0.4). C redistributes its connected
+  192.0.2.3/32 (RFC 5737), so it originates an AS-external-LSA and B
+  describes it to the backbone in an ASBR-summary-LSA; D redistributes
+  192.0.2.4/32 as an NSSA-LSA, which B translates into an
+  AS-external-LSA of its own (RFC 3101 §3), with D's interface address
+  as the forwarding address. B and C are started first, off the
+  capture; then D comes up on link 2 and, once that adjacency has
+  converged, A on link 0, each captured on B's side of its veth pair
+  from just before the router starts until both ends are Full and the
+  new router holds every LSA of its area, plus 4 s for the delayed
+  acknowledgments, before any daemon is stopped. The two captures are
+  concatenated, link 2 then link 0. Right after each capture stops,
+  the script records `show ip ospf database <type>` for each LSA type
+  from both routers on that link into `ospf_areas_lsdb.txt`, which is
+  folded in with the pcap; `tests/test_ospf.py` checks every captured
+  LSA body against the values it records. **What ospfd built: every
+  OSPF byte**, LSAs and their LS checksums included. **What the kernel
+  built:** the IPv4 and Ethernet headers. `check_fixtures` verifies the
+  IPv4 header checksums, every OSPF packet checksum and every LSA's
+  Fletcher checksum. The script asserts every frame: IPv4 protocol 89
+  with no padding, OSPFv2 with AuType 0, no LLS block and no L bit,
+  every update's LSAs filling it, each segment in its own area with
+  every message type, and exactly the LSAs listed in the script. Three
+  LSAs were sent in two instances in segment 1, and the database
+  records only the later of each: D's NSSA-LSA (sequence numbers
+  `0x80000001` and `0x80000002`, the same body), and the Router-LSAs
+  for area 0.0.0.2 of D (`0x80000004`, a stub link, from before the
+  adjacency, and `0x80000005`, a transit link) and of B (`0x80000005`
+  and `0x80000006`, likewise).
 
 ### OSPF test secrets
 
