@@ -652,7 +652,11 @@ class OSPFExternalLSA:
     metrics: tuple[OSPFExternalMetric, ...]
 
     def __bytes__(self) -> bytes:
-        """Serialize this record to its exact on-wire form."""
+        """Serialize this record to its exact on-wire form.
+
+        :raises ValueError: if a metric's ``tos`` is not in
+            ``range(0, 128)``.
+        """
         return ipv4_to_bytes(self.network_mask) + b"".join(
             bytes(entry) for entry in self.metrics
         )
