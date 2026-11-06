@@ -491,8 +491,8 @@ unless the Security Association uses a confidentiality-free transform
 (e.g. NULL, RFC 2410, or AES-GMAC, RFC 4543), and at an offset only
 the SA determines, so the decoder never reads it).
 
-`BGP`, `STUN`, `TLS`, `MPLS` and `LLC` are the five exceptions: they
-answer from decode context rather than from a wire field alone. A BGP
+`BGP`, `STUN`, `TLS`, `MPLS`, `LLC` and `UDP` are the six exceptions:
+they answer from decode context rather than from a wire field alone. A BGP
 message carries no payload: a TCP segment can hold several messages
 back to back, each decoded as its own layer, so `BGP.next_protocol()`
 names the next message *beside* it — `BGP` when the bytes after this
@@ -509,14 +509,20 @@ Identifier 0x0001) beside STP's BPDUs (0x0000), so `LLC.decode()`
 records, for a DSAP 0x42 PDU it would dispatch, whether the two octets
 after its Control are present and not 0x0000, and `LLC.next_protocol()`
 then answers `None`, whatever `llc.dsap` holds at 0x42; fewer than two
-octets still reach `STP`, which reports the truncation. Only the bytes
-can say, and `next_protocol()` is handed none, so each `decode()`
-records what it saw on the instance in a field kept out of the
-dataclass's comparison and hash (`compare=False`, the mechanism `HTTP`
-uses for its `_message` parse cache). Two equal headers compare equal
-however they were found, and can still chain differently. The rules of
-the decode contract hold for all five unchanged; see *Port-based
-dispatch is best-effort* below,
+octets still reach `STP`, which reports the truncation. UDP port 123
+carries NTP's time messages and its mode 6 control messages, whose
+headers differ, so `UDP.decode()` records the first byte of its
+payload and `UDP.next_protocol()` hands it to the class its port
+names, through that class's `_for_payload()`: `NTP` answers
+`NTPControl` for a mode 6 byte and itself otherwise, and every other
+class answers itself, so the registry still names one class per port.
+Only the bytes can say, and `next_protocol()` is handed none, so each
+`decode()` records what it saw on the instance in a field kept out of
+the dataclass's comparison and hash (`compare=False`, the mechanism
+`HTTP` uses for its `_message` parse cache). Two equal headers compare
+equal however they were found, and can still chain differently. The
+rules of the decode contract hold for all six unchanged; see
+*Port-based dispatch is best-effort* below,
 [`_base.py`](src/netprotocols/_base.py)'s *Decode context in
 next_protocol*, the module docstrings of
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py),
@@ -963,28 +969,44 @@ transfer is the caller's, as reassembly is for `HTTP` and `BGP`. A
 server that answers from port 69 itself, which RFC 1350 does not allow,
 has its replies dispatched by the source-port fallback.
 
-NTP on UDP 123 (RFC 5905) rejects less: of the first byte's 256
-values, 96 are a time message, a version from 1 to 4 and a mode other
-than 6 or 7, the control messages (RFC 9327's mode 6, ntpd's private
-mode 7) whose headers `NTP.decode()` does not read; anything shorter
-than the 48-byte header is rejected too. Measured the same way, the
-walk stopped for 61.2-62.9% of the 300-byte payloads (`random.Random`
-seeds 0-2), against the 62.5% the first byte predicts, and for
-65.5-66.3% of the 0-600 byte ones, padded or not: padding never makes
-a payload 48 bytes long. Past the first byte any 47 bytes are a
-header, and the stratum, the Reference ID and the timestamps are not
-judged, so a Kiss-o'-Death and a reserved stratum decode.
+NTP on UDP 123 (RFC 5905, RFC 9327) rejects less: of the first byte's
+256 values, 96 are a time message, a version from 1 to 4 and a mode
+other than 6 or 7, which `NTP.decode()` reads, and 16 a mode 6 control
+message, which the walk hands to `NTPControl` (see below); mode 7,
+ntpd's private control message, is rejected. A time message needs the
+48-byte header, and a control message its 12-byte header and a Count of
+at most 468 that fits the datagram, which a random 300-byte payload's
+two Count bytes give 289 times in 65,536, so the first byte and the
+Count predict 62.47% rejected. Measured the same way, by
+[`scripts/measure_port_guard.py`](scripts/measure_port_guard.py)
+(`random.Random` seeds 0-2, per seed 10,000 random 300-byte payloads
+and, from the generator seeded again, 10,000 of uniformly random
+length 0-600, the latter walked unpadded and padded), the walk stopped
+for 61.14-62.88% of the 300-byte payloads and for 65.44-66.32% of the
+0-600 byte ones, padded or not, against 61.15-62.90% and 65.45-66.34%
+on the tree before `NTPControl`: padding never makes a payload 48 bytes
+long, and is past UDP's Length, which ends the control message's
+buffer. One or two payloads of each 10,000 decoded as `NTPControl`.
+Past the first byte any 47 bytes are a time message's header, and the
+stratum, the Reference ID and the timestamps are not judged, so a
+Kiss-o'-Death and a reserved stratum decode.
 
-The first byte is judged before the length, so every control message
+The first byte is judged before the length, so a mode 7 message
 raises `InvalidFieldError` with `field` `"mode"`, however long, and a
-bad version raises with `field` `"version"`; only a time message's
-first byte, or an empty buffer, can end in `TruncatedHeaderError`.
-That makes real traffic fail a strict walk: `ntpq` (mode 6, a 12-byte
-request and longer responses) and `ntpdc` (mode 7) talk to port 123,
-and `decode_frame()` raises on every one of their messages. Walk them
-with `lax=True`, which keeps Ethernet, IP and UDP and reports the
-rejection as `stopped_by`. A typed way to take a port out of dispatch for one
-walk, and decoding mode 6, are planned follow-ups.
+bad version raises with `field` `"version"`; only a first byte that
+passes, or an empty buffer, can end in `TruncatedHeaderError`. So
+`ntpdc` (mode 7) traffic to port 123 fails a strict walk: walk it with
+`lax=True`, which keeps Ethernet, IP and UDP and reports the rejection
+as `stopped_by`. `ntpq` (mode 6) traffic decodes as `NTPControl`: the
+12-byte header with the R, E and M bits by name, the opcode, sequence,
+status, association ID, offset, the data as raw bytes, its padding and
+the MAC, which follows the data padded to 8 bytes or, in an error
+response, the data padded to 4 bytes, as ntpd and ntpsec place it (see
+the module docstring of [`layer7/ntp.py`](src/netprotocols/layer7/ntp.py)).
+`NTP.decode()` called directly still rejects mode 6, naming `NTPControl` in its
+message. To take port 123 out of dispatch for one walk, map it to
+`WITHHELD` in `decode_as`:
+`decode_frame(frame, decode_as={"udp.port": {123: WITHHELD}})`.
 
 HSRP on UDP 1985 (RFC 2281) rejects far more, though less than BGP and
 STUN below: its first three bytes must be a Version of 0, one of the

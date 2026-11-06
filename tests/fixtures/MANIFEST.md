@@ -14,19 +14,17 @@ request's), every STUN MESSAGE-INTEGRITY and every NTP MAC, with the
 test keys published below, and every STUN FINGERPRINT; every TCP
 segment on port 443 that carries data holds whole TLS records. Frames
 used as checksum ground truth were captured **inbound only** — outbound
-frames routinely leave checksums to NIC offload. 480 frames across 41
+frames routinely leave checksums to NIC offload. 509 frames across 43
 scenarios. Addresses are as-captured from the capture host's network.
 
-Twenty-eight scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
+Thirty scenarios (`vlan_icmp.pcap`, `dhcp.pcap`, `gre.pcap`,
 `gre_csum.pcap`, `gre6.pcap`, `dns_tcp.pcap`, `ipip.pcap`,
 `vxlan.pcap`, `esp.pcap`, `ah.pcap`, `sctp.pcap`, `vrrp.pcap`,
 `vrrp_rfc9568.pcap`, `rip.pcap`, `ospf.pcap`, `ospf_areas.pcap`,
-`pim.pcap`, `bgp.pcap`,
-`mpls.pcap`, `lldp.pcap`, `llc.pcap`, `tftp.pcap`, `radius.pcap`,
-`stun.pcap`, `ntp.pcap`, `hsrp.pcap`, `tls.pcap`, `stp.pcap`) are
-captured
-separately by
-their own `scripts/capture_fixtures_*.sh` over
+`pim.pcap`, `bgp.pcap`, `mpls.pcap`, `lldp.pcap`, `llc.pcap`,
+`tftp.pcap`, `radius.pcap`, `radius_coa.pcap`, `stun.pcap`, `ntp.pcap`,
+`ntp_control.pcap`, `hsrp.pcap`, `tls.pcap`, `stp.pcap`) are captured
+separately by their own `scripts/capture_fixtures_*.sh` over
 purpose-built topologies — real kernel vlan devices, a DHCP
 server/client, kernel GRE tunnels over IPv4 and IPv6, a DNS server
 queried over TCP, kernel IP-in-IP encapsulation, a kernel VXLAN
@@ -39,9 +37,11 @@ three BIRD speakers, MPLS label stacks built by a script around
 kernel-built IPv4 datagrams and sent through a raw socket, two lldpd
 LLDP agents, two STP bridges with lldpd speaking CDP, a tftpd-hpa
 server with tftp-hpa and curl clients, a FreeRADIUS server answering
-radclient, coturn answering STUN clients, a chronyd NTP server
-queried by ntpdig and chronyd clients, HSRP messages crafted by
-Yersinia and sent between two netns, an nginx HTTPS server
+radclient, a FreeRADIUS server listening as a NAS for radclient's
+CoA-Requests and Disconnect-Requests, coturn answering STUN clients,
+a chronyd NTP server queried by ntpdig and chronyd clients, an ntpsec
+ntpd queried by ntpq over NTP's control protocol, HSRP messages crafted
+by Yersinia and sent between two netns, an nginx HTTPS server
 answering Chromium, curl, gnutls-cli and openssl s_client, and four
 Linux bridges whose STP mstpd runs in userspace — see their
 rows and the notes below.
@@ -84,8 +84,10 @@ rows and the notes below.
 | `pim.pcap` | 13 | PIM-SM (RFC 7761) between two FRR 8.4 routers (zebra + pimd) on the link between them: Hello ×3 (R1's with Holdtime, LAN Prune Delay, DR Priority, Generation ID and Address List; R2's without an Address List; R2's Holdtime-0 goodbye), Register ×2 (a data Register carrying the source's UDP datagram, a Null-Register), Register-Stop ×1, and Join/Prune ×7 — (*,G) and (S,G) joins, (S,G) and (*,G) prunes, and one message joining (*,G) while pruning (S,G,rpt) — `Ethernet→IPv4→PIM`; **direct capture**, a selection of one frame of each kind, R1's outbound Hello and Registers among them (see PIM note) |
 | `llc.pcap` | 14 | Frames whose type/length field is not an EtherType: in all but the last it is an IEEE 802.3 Length, and in all but the raw IPX one an 802.2 LLC header follows it. Five 802.1D BPDUs from two Linux bridges (Configuration BPDUs from each, the root's with Topology Change and with Topology Change + Acknowledgment, and a 21-byte Topology Change Notification) — `Ethernet→LLC→STP` (DSAP 0x42; no RST or MST BPDU: those are in `stp.pcap`); CDPv1 and CDPv2 from lldpd 1.0.18, and a CDPv1 frame whose odd-length PDU ends in the byte 0xA9 — `Ethernet→LLC→SNAP→CDP` (OUI 00-00-0C, PID 0x2000); and six script-built frames: RFC 1042 ARP padded to 60 bytes and RFC 1042 ICMPv4 echo — `Ethernet→LLC→SNAP→ARP` / `→IPv4→ICMPv4`; IEEE 802.1H (OUI 00-00-F8) ARP; RFC 1042 ARP behind an 802.1Q tag (VID 30) — `Ethernet→VLAN→LLC→SNAP→ARP`; Novell raw 802.3 IPX — `Ethernet→LLC`; and a type/length value of 1501 — `Ethernet`; **direct capture**, both directions, a selection of one frame of each kind (see LLC note) |
 | `radius.pcap` | 12 | RADIUS (RFC 2865, RFC 2866) between radclient and a FreeRADIUS 3.2.5 server, six requests each followed by its reply: an Access-Request with a PAP password (User-Name, User-Password, NAS-IP-Address, NAS-Port, a Cisco (vendor 9) Cisco-AVPair Vendor-Specific, Message-Authenticator) and its Access-Accept (Framed-IP-Address, Reply-Message, a Cisco-AVPair and a WISPr (vendor 14122) WISPr-Bandwidth-Max-Down Vendor-Specific, Message-Authenticator); the same with a wrong password and its Access-Reject; an Access-Request with a CHAP-Password and the Cisco-AVPair Vendor-Specific, and its Access-Accept with the same attributes as the PAP one's, the Cisco-AVPair and WISPr-Bandwidth-Max-Down Vendor-Specifics among them; an Accounting-Request Start (Acct-Status-Type, Acct-Session-Id, Framed-IP-Address, a USR (vendor 429) USR-Connect-Speed in USR's own sub-attribute format, ...) and Stop (session time, octet and packet counters, Acct-Terminate-Cause, a Microsoft (vendor 311) MS-Acct-Auth-Type), each answered by an attribute-less Accounting-Response; and a Status-Server (RFC 5997) answered by an Access-Accept — `Ethernet→IPv4→UDP→RADIUS`, on UDP 1812 and 1813; **direct capture**, both directions (see RADIUS note) |
+| `radius_coa.pcap` | 8 | RADIUS Dynamic Authorization (RFC 5176) between radclient and a FreeRADIUS 3.2.5 server listening as a NAS on UDP 3799, four requests each followed by its reply: a CoA-Request (User-Name, Acct-Session-Id, Session-Timeout, Message-Authenticator) for the session the NAS holds and its CoA-ACK (Message-Authenticator); a CoA-Request for a session it does not hold (the same attributes, without the Message-Authenticator) and its CoA-NAK (Error-Cause 503, Session-Context-Not-Found); a Disconnect-Request (User-Name, Acct-Session-Id, Message-Authenticator) for the held session and its Disconnect-ACK (Message-Authenticator); and a Disconnect-Request for the other session (no Message-Authenticator) and its Disconnect-NAK (Error-Cause 503) — `Ethernet→IPv4→UDP→RADIUS` with `decode_as={"udp.port": {3799: RADIUS}}`, `Ethernet→IPv4→UDP` without it, UDP 3799 not being registered; **direct capture**, both directions (see RADIUS note) |
 | `stun.pcap` | 12 | STUN (RFC 8489, RFC 5389) between clients and coturn 4.6.1 in STUN-only mode on port 3478, every response carrying SOFTWARE and FINGERPRINT: a Binding Request and its Success Response (XOR-MAPPED-ADDRESS, MAPPED-ADDRESS, RESPONSE-ORIGIN) from `turnutils_stunclient`; its RFC 5780 request (CHANGE-REQUEST, RESPONSE-PORT) and the error 420 it draws; a request with an unknown comprehension-required attribute (0x7FF0) and the error 420 naming it in UNKNOWN-ATTRIBUTES; two requests in one TCP segment and the two responses in one segment back (`Ethernet→IPv4→TCP→STUN→STUN`); and, from a server requiring the long-term credential mechanism, an unauthenticated request, the error 401 with REALM and NONCE, the authenticated request (USERNAME, REALM, NONCE, MESSAGE-INTEGRITY) and its Success Response with MESSAGE-INTEGRITY — `Ethernet→IPv4→UDP→STUN` otherwise; **direct capture**, both directions, data segments only over TCP (see STUN note) |
 | `ntp.pcap` | 17 | NTP on UDP 123 from a chronyd 4.5 server at `local stratum 8` (Reference ID 127.127.1.1), eight scenarios: an ntpdig (ntpsec) NTPv4 client request and the server's answer (modes 3 and 4, the bare 48-byte header); the same with a symmetric-key MAC, MD5 (Key ID 1, 20 bytes) and SHA-1 (Key ID 2, 24 bytes), each way; a chronyd client speaking NTPv3 (RFC 1305) and the NTPv3 answer; a chronyd client sending chrony's experimental extension field 0xF323 (RFC 7822 framing, 28 bytes) and the answer carrying one back; an NTS (RFC 8915) request (Unique Identifier, NTS Cookie, NTS Authenticator) and answer (Unique Identifier, NTS Authenticator); a chronyd symmetric active peer (mode 1) and the server's symmetric passive answers (mode 2), once unsynchronized (stratum 0) and once synchronized to the server (stratum 9, Reference ID 10.9.191.1); and one broadcast (mode 5) to 10.9.191.255 — `Ethernet→IPv4→UDP→NTP`; **direct capture**, both directions, a selection (see NTP note) |
+| `ntp_control.pcap` | 21 | NTP control messages (RFC 9327, mode 6) between ntpq and an ntpsec 1.2.2 ntpd with two associations (the LOCAL refclock and an unreachable server), seven ntpq runs: `rv`, a read variables request and the system variables in one response, system status word `0xc016`; `as`, a read status request and the association list (IDs 17767 and 17768, peer status words `0x9014` and `0x8011`); `rv 0 version`, a read status exchange, then a read variables request naming `version` and its answer; `rv 0 nosuchvar`, the same with an unknown variable, answered by an error response (E bit, error code 5); `rv &1`, a read status exchange, then the peer variables of association 17767 in two fragments, the first with the M bit set and 468 bytes of data, the second at Offset 468; and `:config` authenticated with key 3 (MD5) and key 4 (SHA-1), the first answered "Config Succeeded" and the second refused with error code 1, each request and response ending in a 20- or 24-byte MAC, the error response's right after its 12-byte header — `Ethernet→IPv4→UDP→NTPControl`; **direct capture**, both directions, every mode 6 datagram (see NTP control note) |
 | `hsrp.pcap` | 12 | HSRPv1 (RFC 2281) messages crafted by Yersinia 0.8.2, every one to 224.0.0.2 (TTL 1) from and to UDP 1985 with Hellotime 3 and Holdtime 10, staging an election and a failover in two standby groups: group 1 (virtual IP 10.9.195.254, the default authentication data `cisco`) — R1 (10.9.195.11, priority 120) and R2 (10.9.195.12, priority 100) Hellos in Speak, R1 in Standby then Active, R2 in Standby, R1's Resign from Active, R2 in Speak then Active, then R3 (10.9.195.13, priority 200) preempting with a Coup and its Active Hello; group 2 (virtual IP 10.9.195.253, the configured password `spark`) — R4 (10.9.195.21, priority 110) Active and R5 (10.9.195.22, priority 90) Standby — 10 Hellos, 1 Coup, 1 Resign in all — `Ethernet→IPv4→UDP→HSRP`; **direct capture of script-built frames**, every byte Yersinia's (see HSRP note) |
 | `tls.pcap` | 15 | TLS (RFC 9846, RFC 5246) on TCP 443 between an nginx 1.24 server (OpenSSL 3.0, a self-signed ECDSA P-256 certificate for `tls.np196.test`) and five clients, each segment a whole number of records: from curl (OpenSSL 3.0, a 512-byte ClientHello with SNI), gnutls-cli (GnuTLS 3.8, record version TLS 1.2, SNI) and `openssl s_client -noservername` (no server_name), the ClientHello and the server's TLS 1.3 flight (ServerHello, ChangeCipherSpec and four encrypted records in one segment); from headless Chromium 153 (BoringSSL), whose ClientHello spans two segments and is not in the corpus, the server's flight and the client's ChangeCipherSpec and Finished; and every data segment of curl capped at TLS 1.2 — ClientHello; ServerHello, Certificate, ServerKeyExchange, ServerHelloDone; ClientKeyExchange, ChangeCipherSpec and the encrypted Finished; ChangeCipherSpec and Finished back; application data each way; the client's close_notify Alert — `Ethernet→IPv4→TCP→TLS` (→ `TLS` …, up to 6 records a segment); **direct capture**, both directions, a selection of the session in `tls/` (see TLS note) |
 | `stp.pcap` | 17 | BPDUs from mstpd 0.2.0 running the STP of four Linux bridges, to `01:80:c2:00:00:00`: ten MST BPDUs (IEEE 802.1Q MSTP, Protocol Version 3, BPDU Type 0x02, 151-byte frames), each with Version 1 Length 0, Version 3 Length 96 and two MSTI Configuration Messages (MSTIDs 1 and 2), MST Configuration Identifier Format Selector 0, Name `NETProtocols`, Revision Level 7 and Digest `f92468d366cf3c647eb33c03b166ad59` (VLANs 10-19 on MSTI 1, 20-29 on MSTI 2) — six between bridges A and B inside the region (each one's first, with Proposal; B's agreement as root port with Topology Change; A's with Topology Change, then without; B's without), three from B to the RSTP bridge C and one from B to the 802.1D bridge D before B falls back to 802.1D on that port; two RST BPDUs from C (Protocol Version 2, 53-byte frames: its proposal, then its agreement); and 802.1D BPDUs: D's Configuration BPDU and Topology Change Notification, and B's Configuration BPDUs to D plain, with Topology Change, and with Topology Change + Acknowledgment — `Ethernet→LLC→STP` (DSAP 0x42); **direct capture**, both directions on B's three ports, a selection of one frame of each kind (see STP note) |
@@ -684,6 +686,41 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   padding or an FCS; `tests/test_radius.py` appends a 4-byte trailer
   to every frame. Everything here is IPv4.
 
+- `radius_coa.pcap` was produced by
+  `scripts/capture_fixtures_radius_coa.sh`: FreeRADIUS 3.2.5
+  (`freeradius -X`, in the foreground, on a copy of the packaged
+  configuration with the EAP module and every enabled site left out and
+  a site of the script's own: a `listen { type = coa }` on UDP 3799 and
+  a virtual server whose `recv-coa` section, which FreeRADIUS runs for
+  both CoA-Requests and Disconnect-Requests, answers ACK for the
+  User-Name `np237-user` with the Acct-Session-Id `np237-0001` and NAK
+  for anything else) in netns `npcoa-s` and radclient 3.2.5 in netns
+  `npcoa-c`, 10.9.237.0/24, over a veth pair with offload disabled on
+  both ends and tcpdump on the server's side. **radclient and
+  FreeRADIUS built every RADIUS byte**, the Request and Response
+  Authenticators and the Message-Authenticators included; **the kernel
+  built the UDP header** (its checksum computed in software, and
+  verified by `check_fixtures`), **the IPv4 header and the Ethernet
+  header**. Each request is sent once (`radclient -r 1`) and answered
+  before the next is sent, so the capture is exactly the eight frames
+  in request, reply order, which the script asserts, frame by frame,
+  with the attribute types each one carries, the Error-Cause of each
+  NAK and the Identifier pairing. radclient adds a
+  Message-Authenticator to a CoA-Request or Disconnect-Request only
+  when asked (`Message-Authenticator = 0x00`), and the script asks for
+  one in the first CoA-Request and the first Disconnect-Request; the
+  site adds one to each ACK (`&Message-Authenticator := 0x00`, which
+  FreeRADIUS computes when it encodes the reply) and an Error-Cause of
+  503 (Session-Context-Not-Found, RFC 5176 §3.5) to each NAK, without a
+  Message-Authenticator. The shared secret is radius.pcap's (see
+  RADIUS test secrets). The Identifiers, the client's ports, every
+  authenticator and Message-Authenticator computed over them, the IPv4
+  identifications and the timestamps differ in a re-capture. UDP 3799
+  is not registered for RADIUS, so a default walk stops at UDP;
+  `decode_as={"udp.port": {3799: RADIUS}}` decodes them. veth does
+  not pad and no packet is short enough to need Ethernet padding, so
+  no frame carries padding or an FCS. Everything here is IPv4.
+
 - `llc.pcap` was produced by `scripts/capture_fixtures_llc.sh`: three
   netns, A and B each holding a Linux bridge with STP on (802.1D, 1 s
   hello time, 2 s forward delay; A at priority 0x1000, so the root),
@@ -895,20 +932,65 @@ independently, in `scripts/check_fixtures.py` and `tests/test_stun.py`.
   header behind IPv4's 20 bytes and UDP's 8 already fills Ethernet's
   46-byte minimum payload. No frame carries an FCS either, since
   tcpdump on a veth device captures none. `tests/test_ntp.py` builds
-  the trailers, a crypto-NAK, a Kiss-o'-Death and the control messages
-  the decoder rejects (an ntpq mode 6 request and response, and mode 7
-  requests of 48 and 192 bytes), none of which these daemons send.
+  the trailers, a crypto-NAK, a Kiss-o'-Death and control messages,
+  none of which these daemons send: a mode 6 request and response,
+  which a walk decodes as `NTPControl` and only `NTP.decode()` called
+  directly rejects, and mode 7 requests of 48 and 192 bytes, which
+  `NTP.decode()` and a walk reject.
+
+- `ntp_control.pcap` was produced by
+  `scripts/capture_fixtures_ntp_control.sh`: an ntpsec 1.2.2 ntpd
+  (`disable ntp` and `disable kernel`, so it never adjusts the system
+  clock; the LOCAL refclock at stratum 8 and a `server` line for the
+  client's address, unanswered, so that it has two associations; keys
+  3 and 4 trusted, key 3 the control key; `restrict 10.9.172.2`, without
+  which this ntpd answered no mode 6 query) in netns `np272-s` at
+  10.9.172.1, and ntpq (ntpsec 1.2.2) in netns `np272-c` at
+  10.9.172.2, over a veth pair on 10.9.172.0/24. Seven ntpq runs, each
+  captured to its own scratch file with tcpdump on the server's side
+  of the pair, offload disabled on both ends: `rv`, `as`,
+  `rv 0 version`, `rv 0 nosuchvar`, `rv &1`, and
+  `:config logconfig =syncall` with `-a 3` and with `-a 4`. The script
+  keeps every mode 6 datagram (ntpd's own mode 3 polls of the
+  unreachable server are left out), asserts the selection exactly by
+  sender, opcode, R, E and M bits and MAC length, verifies each MAC with
+  the published keys, and checks the headers against what ntpq printed
+  during the run: the system status word `c016`, the association IDs
+  and peer status words of `as` (which ntpq sorts by ID and ntpd sends
+  newest first), the `version` variable, the error codes ntpq names
+  UNKNOWNVAR (5) and PERMISSION (1), the peer association's status word
+  `9014`, and "Config Succeeded". `tests/test_ntp_control.py` holds the
+  same values. **ntpq and ntpd built every NTP byte**, MACs included;
+  **the kernel built the UDP header** (its checksum computed in
+  software, and verified by `check_fixtures`), **the IPv4 header and the
+  Ethernet header**. ntpq sends version 2 with Leap Indicator 3, and
+  ntpd, unsynchronized, answers with Leap Indicator 3, which RFC 9327
+  §2 sets to zero. ntpd pads the data to a multiple of 4 bytes with
+  whatever its buffer held, so the padding is not always zeros (the
+  second peer fragment's is `30 2e`). An authenticated request and
+  response put the MAC after the data padded to 8 bytes, and the error
+  response after its 12-byte header. `check_fixtures` checks every
+  message's Count against its datagram and its padding, and verifies
+  every MAC with the published keys: the digest of the key followed by
+  the message before the MAC. A re-capture differs in the clock
+  variables, the association IDs, the digests, the IPv4 identification
+  and the client's source ports. The 12-byte requests make 54-byte
+  frames, which tcpdump on a veth device captures without Ethernet
+  padding, and no frame carries an FCS.
 
 ### NTP test keys
 
 Published so anyone can verify the captures: these keys protect
-nothing. `check_fixtures` and `tests/test_ntp.py` both hard-code them,
-independently, and verify every MAC in `ntp.pcap` with them.
+nothing. `check_fixtures`, `tests/test_ntp.py` and
+`tests/test_ntp_control.py` hard-code them, independently, and verify
+every MAC in `ntp.pcap` and `ntp_control.pcap` with them.
 
-| Key ID | Algorithm | Key (ASCII) |
-|---|---|---|
-| 1 | MD5 | `np191-md5-key` |
-| 2 | SHA-1 | `np191-sha1-key` |
+| Key ID | Algorithm | Key (ASCII) | Capture |
+|---|---|---|---|
+| 1 | MD5 | `np191-md5-key` | `ntp.pcap` |
+| 2 | SHA-1 | `np191-sha1-key` | `ntp.pcap` |
+| 3 | MD5 | `np272-md5-key` | `ntp_control.pcap` |
+| 4 | SHA-1 | `np272-sha1-key` | `ntp_control.pcap` |
 
 ### RIP test keys
 
@@ -980,7 +1062,8 @@ an unreadable payload is counted and not failed, and fails as
 for; one whose exchange has unanswered requests, but none of a Code it
 answers, is counted `radius-reply-code-mismatch` and not checked, and
 fails as `unchecked-radius-reply-code-mismatch` inside such a payload.
-`radius.pcap`'s six replies all pair and verify. `tests/test_radius.py`
+`radius.pcap`'s six replies and `radius_coa.pcap`'s four all pair and
+verify. `tests/test_radius.py`
 also pairs each reply with its request and verifies those, and unhides
 each User-Password (RFC 2865 §5.2) and checks the CHAP-Password (§5.3).
 The values are also hard-coded, independently, in
@@ -988,7 +1071,7 @@ The values are also hard-coded, independently, in
 
 | What | Value |
 |---|---|
-| shared secret (client `10.9.193.2`) | `np193-radius-secret` |
+| shared secret (clients `10.9.193.2` and `10.9.237.2`) | `np193-radius-secret` |
 | user | `np193-user` |
 | its password (PAP and CHAP) | `np193-pass` |
 | the wrong password (PAP, rejected) | `np193-wrong` |
