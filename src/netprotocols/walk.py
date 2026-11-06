@@ -204,7 +204,9 @@ def decode_frame(
         makes the key dispatch to nothing for this call, as if it were
         never registered: ``{"udp.port": {1812: WITHHELD}}`` ends the
         walk at UDP for a datagram to or from port 1812 whose other port
-        names no class.
+        names no class. The walk never reads ``sctp.ppid``, so entries
+        for it are accepted and change nothing; that table is read by
+        :meth:`~netprotocols.SCTPChunk.decode_user_data`.
 
     :raises MaxDepthExceededError: if the chain is longer than
         ``max_depth`` (strict mode only).
@@ -215,8 +217,8 @@ def decode_frame(
         one of :data:`~netprotocols.registry.TABLES`, whatever ``lax``
         says.
     :raises InvalidRegistryKeyError: if ``decode_as`` names an
-        ``llc.dsap`` or ``llc.snap`` key outside the range that table
-        accepts, such as a DSAP above 0xFF (see "Key ranges" in
+        ``llc.dsap``, ``llc.snap`` or ``sctp.ppid`` key outside the range
+        that table accepts, such as a DSAP above 0xFF (see "Key ranges" in
         :mod:`netprotocols.registry`), whatever ``lax`` says.
     :raises TypeError: if ``decode_as`` maps a key to ``None``, whatever
         ``lax`` says.
