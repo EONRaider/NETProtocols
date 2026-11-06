@@ -6,21 +6,31 @@
 #
 #     sudo env PATH=/path/to/mstpd/sbin:$PATH scripts/capture_fixtures_stp.sh
 #
-# Linux bridges speak RSTP and MSTP only through a userspace daemon,
-# here mstpd (https://github.com/mstpd/mstpd, built from a release tag;
-# see tests/fixtures/MANIFEST.md). The kernel hands a bridge's STP to
+# THIS SCRIPT RUNS IN THE INITIAL NETWORK NAMESPACE, the host's own,
+# not in a netns of its own as the other capture scripts do. Linux
+# bridges speak RSTP and MSTP only through a userspace daemon, here
+# mstpd (https://github.com/mstpd/mstpd, built from a release tag; see
+# tests/fixtures/MANIFEST.md), and the kernel hands a bridge's STP to
 # userspace (stp_state 2, BR_USER_STP) only when its /sbin/bridge-stp
 # helper says so, and only for a bridge in the initial network
 # namespace: in any other netns, stp_state 1 always means the kernel's
-# own 802.1D STP (net/bridge/br_stp_if.c, br_stp_start()). So, unlike
-# the other capture scripts, this one works in the initial netns. It
-# creates four bridges and three veth pairs there, every one named
-# npmstp-*, and a /sbin/bridge-stp that claims only bridges named
-# npmstp-* (any other bridge gets the kernel's STP, as with no helper
-# at all), and removes all of them on exit. It refuses to run if
-# /sbin/bridge-stp already exists, if mstpd is already running, or if
-# any npmstp-* link exists. mstpd runs in the foreground (-d), so it
-# writes no pidfile.
+# own 802.1D STP (net/bridge/br_stp_if.c, br_stp_start()).
+#
+# What it creates in the initial netns, and removes on exit (normal or
+# not, from an EXIT trap):
+#   - four bridges and three veth pairs, every link named npmstp-*,
+#     with no IP addresses;
+#   - /sbin/bridge-stp, a helper marked with a comment line of its own
+#     that claims only bridges named npmstp-* for userspace STP (any
+#     other bridge gets the kernel's STP, as with no helper at all);
+#     it is removed only if it still carries that mark;
+#   - one mstpd process, in the foreground (-d), so no pidfile, and
+#     tcpdump processes on B's three ports;
+#   - a scratch directory from mktemp -d.
+# It leaves only tests/fixtures/staging/stp.pcap. It refuses to run,
+# touching nothing, if /sbin/bridge-stp exists without its mark (it
+# never overwrites another helper), if mstpd is already running, or if
+# any npmstp-* link exists.
 #
 # The four bridges, B in the middle:
 #

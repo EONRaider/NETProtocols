@@ -752,17 +752,23 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   2.71, automake 1.16.5, gcc 13.3, Ubuntu 24.04), then `make install
   DESTDIR=<dir>` into a staging tree outside the repository, with its
   `sbin` put on `PATH` for the run; mstpd has no package in this
-  environment's apt. Kernel 6.18.44, tcpdump 4.99.4, tshark 4.2.2. A
-  Linux bridge hands its STP to userspace (`stp_state` 2) only when
-  the kernel's `/sbin/bridge-stp` helper says so, and only in the
-  initial network namespace: in any other netns `stp_state 1` is the
-  kernel's own 802.1D STP. So, unlike the other capture scripts, this
-  one runs in the initial netns: it creates four bridges and three
-  veth pairs there, all named `npmstp-*` (no IP addresses), and a
-  temporary `/sbin/bridge-stp` that claims only bridges named
-  `npmstp-*`, and removes them all on exit; it refuses to run if
-  `/sbin/bridge-stp` already exists, if mstpd is running or if an
-  `npmstp-*` link exists. One mstpd, in the foreground, runs all four
+  environment's apt. Kernel 6.18.44, tcpdump 4.99.4, tshark 4.2.2.
+  **The script runs in the initial network namespace** (the host's
+  own), unlike every other capture script: a Linux bridge hands its
+  STP to userspace (`stp_state` 2) only when the kernel's
+  `/sbin/bridge-stp` helper says so, and only in the initial netns; in
+  any other netns `stp_state 1` is the kernel's own 802.1D STP. There
+  it creates four bridges and three veth pairs, every link named
+  `npmstp-*` (no IP addresses), a temporary `/sbin/bridge-stp`,
+  marked as the script's by a comment line, that claims only bridges
+  named `npmstp-*` (any other bridge keeps the kernel's STP), one
+  mstpd and three tcpdump processes, and a `mktemp -d` scratch
+  directory; an EXIT trap removes them all, the helper only while it
+  still carries the mark, and leaves only
+  `tests/fixtures/staging/stp.pcap`. It refuses to run, touching
+  nothing, if a `/sbin/bridge-stp` without that mark exists (it never
+  overwrites another helper), if mstpd is running or if an `npmstp-*`
+  link exists. One mstpd, in the foreground, runs all four
   bridges: A (`npmstp-bra`) and B (`npmstp-brb`) forced to MSTP in
   one region (Name `NETProtocols`, Revision Level 7; VLANs 10-19 to
   FID 1 to MSTI 1, 20-29 to FID 2 to MSTI 2), A at CIST priority
@@ -797,13 +803,16 @@ every ESP SA uses NULL encryption (RFC 2410). Sequence numbers are
   the CIST External Root Path Cost (0: A is the CIST root); once B has
   heard A, its CIST Internal Root Path Cost is 2000 and its CIST
   Remaining Hops 19, A's 0 and 20. B sends MST BPDUs to C, an RSTP
-  bridge and so another region, as to A; C's RST BPDUs carry Root
-  Path Cost 2000. To D, B sends MST BPDUs until its migration delay
+  bridge and so another region, as to A; C's first RST BPDU, its
+  proposal, names C itself root at Root Path Cost 0, and its
+  agreement names A at Root Path Cost 2000. To D, B sends MST BPDUs until its migration delay
   ends, then 802.1D Configuration BPDUs; D sends a TCN as soon as its
   port is up, and repeats it until B acknowledges it. No MSTI message
   sets the Master flag. `check_fixtures` counts each MST BPDU as an RST BPDU (type
   0x02, Protocol Version 2 or more, 36 octets or more, Version 1
-  Length 0) and checks nothing past the RST prefix.
+  Length 0) and checks nothing past the RST prefix;
+  `tests/test_stp.py` checks every MST BPDU's Version 3 information
+  field by field against a `struct` decode and this topology.
 
 - `stun.pcap` was produced by `scripts/capture_fixtures_stun.sh`:
   coturn 4.6.1's `turnserver` in STUN-only mode (`--stun-only`, no TLS
