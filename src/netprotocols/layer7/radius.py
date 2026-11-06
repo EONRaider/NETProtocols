@@ -69,16 +69,56 @@ Attributes
 ----------
 Every attribute is a :class:`RADIUSAttribute` of its type and its raw
 ``data``; :attr:`RADIUSAttribute.type_name` names the types of RFC 2865
-§5, RFC 2866 §5 and RFC 3579 §3, and RFC 2869 §5's Event-Timestamp
+§5, RFC 2866 §5 and RFC 3579 §3, RFC 2869 §5's Event-Timestamp
 (55), Connect-Info (77), Acct-Interim-Interval (85) and NAS-Port-Id
-(87); every other type is ``"unknown (n)"``.
+(87), and RFC 6929 §3's Extended-Type-1 to -4 (241-244) and
+Long-Extended-Type-1 and -2 (245, 246); every other type is
+``"unknown (n)"``.
 :attr:`RADIUSAttribute.value` decodes the commonest: User-Name (1) as
 UTF-8 text, NAS-IP-Address (4) and Framed-IP-Address (8) as
 :class:`~ipaddress.IPv4Address`, NAS-Port (5) as an integer.
-User-Password (2) and Vendor-Specific (26) are named and kept raw: the
-first is obfuscated with the shared secret, the second holds a vendor's
-own attributes, not decoded here. Every other type is kept raw, with
-``value`` ``None``.
+User-Password (2), obfuscated with the shared secret, and
+Vendor-Specific (26) are named and their ``value`` is the raw bytes.
+Every other type is kept raw, with ``value`` ``None``; the RFC 6929
+types 241-246 among them, so their Extended-Type, the
+Extended-Vendor-Specific attributes they carry (RFC 6929 §4) and the
+fragments of a Long Extended Type are not decoded.
+
+Vendor-Specific
+---------------
+
+A Vendor-Specific (26) value is a 4-byte Vendor-Id, a Private
+Enterprise Number (RFC 2865 §5.26, read as all four bytes as RFC 6929
+§2.6 recommends), then a String that RFC 2865 §5.26 says SHOULD be a
+list of sub-attributes, each a Vendor-Type byte, a Vendor-Length byte
+that counts the two header bytes too, and a value::
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  Type (26)    |  Length       |            Vendor-Id
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+        Vendor-Id (cont)           |  Vendor-Type  | Vendor-Length |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |    Value ...
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+:attr:`RADIUSAttribute.vendor_id` reads the Vendor-Id and
+:attr:`RADIUSAttribute.vendor_name` names a few well-known ones.
+:attr:`RADIUSAttribute.vendor_attributes` walks the String with
+:func:`~netprotocols._tlv.walk_kind_length_value`, as
+:attr:`RADIUS.parsed_attributes` walks the attribute list, into
+:class:`RADIUSVendorAttribute`. It first checks, for every vendor,
+that the value holds a Vendor-Id and a String of at least one byte, and
+raises :class:`~netprotocols.InvalidFieldError` otherwise. It is then
+``None`` for the vendors whose FreeRADIUS 3.2.5 dictionary gives
+another sub-attribute format (USR 429, Alcatel-ESAM 637, Lucent 4846,
+Telrad 5323, Starent 8164, Kineto 16445 and WiMAX 24757), whose String
+stays raw in ``data``, and raises
+:class:`~netprotocols.InvalidFieldError` for any other vendor's String
+the sub-attributes do not tile. The sub-attributes' values are kept
+raw. In every case ``data`` holds the attribute's bytes, so
+``bytes(attribute)`` is the attribute as it was on the wire.
 
 Out of scope
 ------------
@@ -109,7 +149,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, Self, cast
 
 from netprotocols._base import Protocol, bytes_to_ipv4
 from netprotocols._tlv import walk_kind_length_value
@@ -118,7 +158,7 @@ from netprotocols.utils.exceptions import (
     TruncatedHeaderError,
 )
 
-__all__ = ["RADIUS", "RADIUSAttribute"]
+__all__ = ["RADIUS", "RADIUSAttribute", "RADIUSVendorAttribute"]
 
 #: The header's length, and the shortest packet (RFC 2865 §3).
 _HEADER_LEN = 20
@@ -152,7 +192,8 @@ _CODE_NAMES: dict[int, str] = {
 
 #: Attribute types (IANA "RADIUS Attribute Types"): RFC 2865 §5 for
 #: 1-39 and 60-63, RFC 2866 §5 for the accounting attributes 40-51, RFC
-#: 2869 §5 for 55, 77, 85 and 87, RFC 3579 §3 for 79 and 80.
+#: 2869 §5 for 55, 77, 85 and 87, RFC 3579 §3 for 79 and 80, RFC 6929
+#: §3 for 241-246.
 _TYPE_NAMES: dict[int, str] = {
     1: "User-Name",
     2: "User-Password",
@@ -213,7 +254,47 @@ _TYPE_NAMES: dict[int, str] = {
     80: "Message-Authenticator",
     85: "Acct-Interim-Interval",
     87: "NAS-Port-Id",
+    241: "Extended-Type-1",
+    242: "Extended-Type-2",
+    243: "Extended-Type-3",
+    244: "Extended-Type-4",
+    245: "Long-Extended-Type-1",
+    246: "Long-Extended-Type-2",
 }
+
+#: The Vendor-Id's length, and the shortest Vendor-Specific value: the
+#: Vendor-Id and a String of at least one byte (RFC 2865 §5.26, a Length
+#: of at least 7).
+_VENDOR_ID_LEN = 4
+_MIN_VENDOR_DATA = _VENDOR_ID_LEN + 1
+
+#: Vendor-Ids (IANA "Private Enterprise Numbers") named by
+#: :attr:`RADIUSAttribute.vendor_name`, in FreeRADIUS 3.2.5's spelling
+#: (each dictionary's ``VENDOR`` line); a display table only.
+_VENDOR_NAMES: dict[int, str] = {
+    9: "Cisco",
+    311: "Microsoft",
+    429: "USR",
+    637: "Alcatel-ESAM",
+    2636: "Juniper",
+    4846: "Lucent",
+    5323: "Telrad",
+    8164: "Starent",
+    10415: "3GPP",
+    14122: "WISPr",
+    16445: "Kineto",
+    24757: "WiMAX",
+}
+
+#: Vendors whose Vendor-Specific String is not RFC 2865 §5.26's
+#: recommended 1-byte Vendor-Type and 1-byte Vendor-Length, from the
+#: ``format=`` of their ``VENDOR`` line in FreeRADIUS 3.2.5's
+#: dictionaries: USR (429, ``format=4,0``), Alcatel-ESAM (637), Lucent
+#: (4846) and Kineto (16445, each ``format=2,1``), Starent (8164,
+#: ``format=2,2``, or ``format=1,1`` in dictionary.starent.vsa1), and
+#: Telrad (5323) and WiMAX (24757, each ``format=1,1,c``, a continuation
+#: byte after the Vendor-Length).
+_NONSTANDARD_VENDORS = frozenset({429, 637, 4846, 5323, 8164, 16445, 24757})
 
 #: The attribute types :attr:`RADIUSAttribute.value` decodes.
 _USER_NAME = 1
@@ -264,6 +345,19 @@ _READERS: dict[int, Callable[[bytes], _Value]] = {
 }
 
 
+def _check_data(owner: type, data: bytes) -> None:
+    """Raise :class:`InvalidFieldError` if ``data`` exceeds 253 bytes."""
+    if len(data) > _MAX_DATA:
+        raise InvalidFieldError(
+            f"{owner.__name__} data must be at most {_MAX_DATA} bytes, "
+            f"got {len(data)}",
+            protocol=owner,
+            field="data",
+            expected=f"<={_MAX_DATA}",
+            actual=len(data),
+        )
+
+
 def _check_width(owner: type, name: str, value: int, bits: int) -> None:
     """Raise :class:`InvalidFieldError` unless ``value`` fits ``bits``."""
     top = (1 << bits) - 1
@@ -275,6 +369,34 @@ def _check_width(owner: type, name: str, value: int, bits: int) -> None:
             expected=f"0-{top}",
             actual=value,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RADIUSVendorAttribute:
+    """One sub-attribute of a Vendor-Specific (RFC 2865 §5.26).
+
+    :param type: Vendor-Type, ``0``-``255``, the vendor's own numbering
+        (Cisco-AVPair is ``1`` under Cisco, vendor ``9``).
+    :param data: The value, kept raw: at most 253 bytes, the
+        Vendor-Length byte counting the 2-byte header too.
+    :raises InvalidFieldError: if ``type`` does not fit a byte, or ``data``
+        is longer than 253 bytes.
+
+    ``bytes(sub_attribute)`` is the on-wire sub-attribute: Vendor-Type,
+    Vendor-Length, then the value.
+    """
+
+    type: int
+    data: bytes = b""
+
+    def __post_init__(self) -> None:
+        """Check the type's width and the data's length."""
+        _check_width(type(self), "type", self.type, 8)
+        _check_data(type(self), self.data)
+
+    def __bytes__(self) -> bytes:
+        """Serialize the sub-attribute: Vendor-Type, Vendor-Length, data."""
+        return bytes([self.type, 2 + len(self.data)]) + self.data
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,15 +422,7 @@ class RADIUSAttribute:
     def __post_init__(self) -> None:
         """Check the type's width and the data's length."""
         _check_width(type(self), "type", self.type, 8)
-        if len(self.data) > _MAX_DATA:
-            raise InvalidFieldError(
-                f"RADIUSAttribute data must be at most {_MAX_DATA} bytes, "
-                f"got {len(self.data)}",
-                protocol=type(self),
-                field="data",
-                expected=f"<={_MAX_DATA}",
-                actual=len(self.data),
-            )
+        _check_data(type(self), self.data)
 
     def __bytes__(self) -> bytes:
         """Serialize the attribute: Type, Length, then the data."""
@@ -331,13 +445,94 @@ class RADIUSAttribute:
         replaced; an :class:`~ipaddress.IPv4Address` for NAS-IP-Address
         (4) and Framed-IP-Address (8); an ``int`` for NAS-Port (5); the
         raw ``bytes`` for User-Password (2), hidden with the shared
-        secret (RFC 2865 §5.2), and Vendor-Specific (26), a vendor's own
-        attributes. ``None`` for every other type, and for an address or
-        integer whose data is not 4 bytes: read :attr:`data` instead.
-        Never raises.
+        secret (RFC 2865 §5.2), and Vendor-Specific (26), which
+        :attr:`vendor_id` and :attr:`vendor_attributes` read. ``None``
+        for every other type, and for an address or integer whose data
+        is not 4 bytes: read :attr:`data` instead. Never raises.
         """
         reader = _READERS.get(self.type)
         return None if reader is None else reader(self.data)
+
+    @property
+    def vendor_id(self) -> int | None:
+        """The Vendor-Id of a Vendor-Specific (26), e.g. ``9`` for Cisco.
+
+        All four bytes, unsigned (RFC 2865 §5.26, RFC 6929 §2.6).
+        ``None`` for any other type, and for a Vendor-Specific whose
+        data is shorter than 4 bytes. Never raises.
+        """
+        if self.type != _VENDOR_SPECIFIC or len(self.data) < _VENDOR_ID_LEN:
+            return None
+        return int.from_bytes(self.data[:_VENDOR_ID_LEN], "big")
+
+    @property
+    def vendor_name(self) -> str | None:
+        """Name the Vendor-Id, e.g. ``"Cisco"``; a display helper.
+
+        Falls back to ``"unknown (n)"`` for a Vendor-Id not named here,
+        and is ``None`` where :attr:`vendor_id` is (degrades, never
+        raises).
+        """
+        vendor = self.vendor_id
+        if vendor is None:
+            return None
+        return _VENDOR_NAMES.get(vendor, f"unknown ({vendor})")
+
+    @property
+    def vendor_attributes(self) -> tuple[RADIUSVendorAttribute, ...] | None:
+        """The sub-attributes of a Vendor-Specific (26), in wire order.
+
+        Walked on demand from the String after the Vendor-Id, in the
+        format RFC 2865 §5.26 recommends. ``None`` for any other type.
+        For a Vendor-Specific, the length check below comes first, for
+        every vendor; past it, ``None`` for a vendor whose format is
+        another (see the module docstring), whose String stays raw in
+        :attr:`data`.
+
+        :raises InvalidFieldError: if :attr:`data` is shorter than 5
+            bytes, a Vendor-Id and a String of at least one byte, for
+            any vendor (``field`` ``"data"``, ``offset`` ``None``), or
+            if, for a vendor in the recommended format, a Vendor-Length
+            is below 2 or runs past the String, or a Vendor-Type has no
+            Vendor-Length after it (``field`` ``"data"``, ``offset``
+            relative to :attr:`data`; bounded, so it never hangs or
+            over-reads).
+        """
+        if self.type != _VENDOR_SPECIFIC:
+            return None
+        if len(self.data) < _MIN_VENDOR_DATA:
+            raise InvalidFieldError(
+                f"RADIUSAttribute Vendor-Specific data must be at least "
+                f"{_MIN_VENDOR_DATA} bytes, got {len(self.data)}",
+                protocol=type(self),
+                field="data",
+                expected=f">={_MIN_VENDOR_DATA}",
+                actual=len(self.data),
+            )
+        if self.vendor_id in _NONSTANDARD_VENDORS:
+            return None
+        try:
+            return tuple(
+                RADIUSVendorAttribute(kind, data)
+                for kind, data in walk_kind_length_value(
+                    self.data[_VENDOR_ID_LEN:],
+                    lone_byte_kinds=frozenset(),
+                    terminator_kind=None,
+                    min_option_length=None,
+                    length_includes_header=True,
+                    protocol=type(self),
+                    field="data",
+                )
+            )
+        except InvalidFieldError as error:
+            raise InvalidFieldError(
+                str(error),
+                protocol=type(self),
+                field="data",
+                offset=_VENDOR_ID_LEN + cast(int, error.offset),
+                expected=error.expected,
+                actual=error.actual,
+            ) from None
 
 
 @dataclass(frozen=True, slots=True)

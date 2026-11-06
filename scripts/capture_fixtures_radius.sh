@@ -9,17 +9,24 @@
 # 1813 (accounting), one at a time, each waiting for its answer:
 #
 #   pap-accept   Access-Request, PAP, the right password (User-Name,
-#                User-Password, NAS-IP-Address, NAS-Port), answered by
-#                an Access-Accept carrying a Framed-IP-Address
+#                User-Password, NAS-IP-Address, NAS-Port, and a Cisco
+#                (vendor 9) Cisco-AVPair), answered by an Access-Accept
+#                carrying a Framed-IP-Address, a Cisco-AVPair and a
+#                WISPr (vendor 14122) WISPr-Bandwidth-Max-Down
 #   pap-reject   the same with a wrong password, answered by an
 #                Access-Reject (after FreeRADIUS's 1-second reject delay)
 #   chap-accept  Access-Request, CHAP (RFC 2865 §5.3, the Request
-#                Authenticator as the challenge), the right password,
-#                answered by an Access-Accept
+#                Authenticator as the challenge), the right password and
+#                the Cisco-AVPair, answered by an Access-Accept carrying
+#                the Cisco-AVPair and the WISPr-Bandwidth-Max-Down
 #   acct-start   Accounting-Request, Acct-Status-Type Start (RFC 2866),
-#                answered by an Accounting-Response
+#                with a USR (vendor 429) USR-Connect-Speed, which
+#                FreeRADIUS encodes in USR's own format (a 4-byte
+#                Vendor-Type, no Vendor-Length), answered by an
+#                Accounting-Response
 #   acct-stop    Accounting-Request, Acct-Status-Type Stop, with session
-#                time and octet and packet counters, answered by an
+#                time and octet and packet counters and a Microsoft
+#                (vendor 311) MS-Acct-Auth-Type, answered by an
 #                Accounting-Response
 #   status       Status-Server (RFC 5997), with the Message-Authenticator
 #                it requires, answered by an Access-Accept
@@ -50,8 +57,8 @@
 # and runs `freeradius -X -d <copy>` in the foreground.
 #
 # The script asserts the composition exactly, frame by frame: sender,
-# ports, Code, Identifier pairing and which attributes each frame
-# carries, and stops otherwise.
+# ports, Code, Identifier pairing, which attributes each frame carries
+# and the Vendor-Id of each Vendor-Specific, and stops otherwise.
 
 set -euo pipefail
 
@@ -108,13 +115,13 @@ ip link set "$C" netns "$NSC"
 ip -n "$NSS" addr add "$SERVER/24" dev "$S"
 ip -n "$NSC" addr add "$CLIENT/24" dev "$C"
 for pair in "$NSS $S" "$NSC $C"; do
-    set -- $pair
-    ip netns exec "$1" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 \
+    read -r ns dev <<<"$pair"
+    ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 \
         >/dev/null 2>&1 || true
-    ip netns exec "$1" ethtool -K "$2" tx off rx off tso off gso off gro off \
+    ip netns exec "$ns" ethtool -K "$dev" tx off rx off tso off gso off gro off \
         >/dev/null 2>&1 || true
-    ip -n "$1" link set lo up
-    ip -n "$1" link set "$2" up
+    ip -n "$ns" link set lo up
+    ip -n "$ns" link set "$dev" up
 done
 sleep 1
 
@@ -143,7 +150,9 @@ EOF
 {
     echo "$USER	Cleartext-Password := \"$PASSWORD\""
     echo "	Framed-IP-Address = 10.9.193.50,"
-    echo "	Reply-Message = \"np193 test user\""
+    echo "	Reply-Message = \"np193 test user\","
+    echo "	Cisco-AVPair = \"shell:priv-lvl=15\","
+    echo "	WISPr-Bandwidth-Max-Down = 1000000"
     echo
     cat "$RADDB/mods-config/files/authorize"
 } >"$WORK/authorize"
@@ -216,21 +225,27 @@ send() {  # name command port attributes
     sed 's/^/      /' "$WORK/$1.out"
 }
 
+AVPAIR="Cisco-AVPair = \"audit-session-id=np193-0001\""
 send pap-accept auth 1812 "User-Name = \"$USER\", \
-User-Password = \"$PASSWORD\", NAS-IP-Address = $CLIENT, NAS-Port = 7"
+User-Password = \"$PASSWORD\", NAS-IP-Address = $CLIENT, NAS-Port = 7, \
+$AVPAIR"
 send pap-reject auth 1812 "User-Name = \"$USER\", \
-User-Password = \"$WRONG\", NAS-IP-Address = $CLIENT, NAS-Port = 7"
+User-Password = \"$WRONG\", NAS-IP-Address = $CLIENT, NAS-Port = 7, \
+$AVPAIR"
 send chap-accept auth 1812 "User-Name = \"$USER\", \
-CHAP-Password = \"$PASSWORD\", NAS-IP-Address = $CLIENT, NAS-Port = 7"
+CHAP-Password = \"$PASSWORD\", NAS-IP-Address = $CLIENT, NAS-Port = 7, \
+$AVPAIR"
 send acct-start acct 1813 "Acct-Status-Type = Start, \
 Acct-Session-Id = \"np193-0001\", User-Name = \"$USER\", \
-NAS-IP-Address = $CLIENT, NAS-Port = 7, Framed-IP-Address = 10.9.193.50"
+NAS-IP-Address = $CLIENT, NAS-Port = 7, Framed-IP-Address = 10.9.193.50, \
+USR-Connect-Speed = 33600-BPS"
 send acct-stop acct 1813 "Acct-Status-Type = Stop, \
 Acct-Session-Id = \"np193-0001\", User-Name = \"$USER\", \
 NAS-IP-Address = $CLIENT, NAS-Port = 7, Framed-IP-Address = 10.9.193.50, \
 Acct-Session-Time = 42, Acct-Input-Octets = 1234, \
 Acct-Output-Octets = 5678, Acct-Input-Packets = 12, \
-Acct-Output-Packets = 34, Acct-Terminate-Cause = User-Request"
+Acct-Output-Packets = 34, Acct-Terminate-Cause = User-Request, \
+MS-Acct-Auth-Type = PAP"
 send status status 1812 "Message-Authenticator = 0x00"
 
 sleep 1
@@ -264,8 +279,8 @@ if cursor != len(data):
 
 
 def describe(frame):
-    """(from server, server port, code, identifier, attribute types) of
-    one frame, read independently of netprotocols."""
+    """(from server, server port, code, identifier, attribute types,
+    Vendor-Ids) of one frame, read independently of netprotocols."""
     ihl = (frame[14] & 0x0F) * 4
     ip, udp = frame[14:], frame[14 + ihl :]
     if ip[9] != 17:
@@ -275,9 +290,11 @@ def describe(frame):
     code, identifier, length = struct.unpack_from("!BBH", radius)
     if length != len(radius):
         sys.exit(f"RADIUS Length {length} is not the datagram's {len(radius)}")
-    types, offset = [], 20
+    types, vendors, offset = [], [], 20
     while offset < length:
         types.append(radius[offset])
+        if radius[offset] == 26:
+            vendors.extend(struct.unpack_from("!I", radius, offset + 2))
         offset += radius[offset + 1]
     if offset != length:
         sys.exit("the attributes overrun the RADIUS Length")
@@ -285,34 +302,37 @@ def describe(frame):
     if (ip[12:16], ip[16:20]) not in ((SERVER, CLIENT), (CLIENT, SERVER)):
         sys.exit("a frame between unexpected addresses")
     port = sport if from_server else dport
-    return from_server, port, code, identifier, sorted(set(types))
+    return from_server, port, code, identifier, sorted(set(types)), vendors
 
 
-#: Per frame: from the server?, its port, Code, and the attribute types
-#: it carries (sorted, distinct). 1 User-Name, 2 User-Password, 3
-#: CHAP-Password, 4 NAS-IP-Address, 5 NAS-Port, 8 Framed-IP-Address, 18
-#: Reply-Message, 40 Acct-Status-Type, 42/43 Acct-Input/Output-Octets, 44
-#: Acct-Session-Id, 46 Acct-Session-Time, 47/48 Acct-Input/Output-
-#: Packets, 49 Acct-Terminate-Cause, 80 Message-Authenticator.
-REQUEST = [1, 2, 4, 5, 80]
-START = [1, 4, 5, 8, 40, 44]
-STOP = [1, 4, 5, 8, 40, 42, 43, 44, 46, 47, 48, 49]
+#: Per frame: from the server?, its port, Code, the attribute types it
+#: carries (sorted, distinct) and the Vendor-Id of each Vendor-Specific
+#: (26), in wire order. 1 User-Name, 2 User-Password, 3 CHAP-Password, 4
+#: NAS-IP-Address, 5 NAS-Port, 8 Framed-IP-Address, 18 Reply-Message, 26
+#: Vendor-Specific, 40 Acct-Status-Type, 42/43 Acct-Input/Output-Octets,
+#: 44 Acct-Session-Id, 46 Acct-Session-Time, 47/48 Acct-Input/Output-
+#: Packets, 49 Acct-Terminate-Cause, 80 Message-Authenticator. Vendors:
+#: 9 Cisco, 311 Microsoft, 429 USR, 14122 WISPr.
+REQUEST = [1, 2, 4, 5, 26, 80]
+ACCEPT = [8, 18, 26, 80]
+START = [1, 4, 5, 8, 26, 40, 44]
+STOP = [1, 4, 5, 8, 26, 40, 42, 43, 44, 46, 47, 48, 49]
 EXPECTED = [
-    (False, 1812, 1, REQUEST),
-    (True, 1812, 2, [8, 18, 80]),
-    (False, 1812, 1, REQUEST),
-    (True, 1812, 3, [18, 80]),
-    (False, 1812, 1, [1, 3, 4, 5, 80]),
-    (True, 1812, 2, [8, 18, 80]),
-    (False, 1813, 4, START),
-    (True, 1813, 5, []),
-    (False, 1813, 4, STOP),
-    (True, 1813, 5, []),
-    (False, 1812, 12, [80]),
-    (True, 1812, 2, [80]),
+    (False, 1812, 1, REQUEST, [9]),
+    (True, 1812, 2, ACCEPT, [9, 14122]),
+    (False, 1812, 1, REQUEST, [9]),
+    (True, 1812, 3, [18, 80], []),
+    (False, 1812, 1, [1, 3, 4, 5, 26, 80], [9]),
+    (True, 1812, 2, ACCEPT, [9, 14122]),
+    (False, 1813, 4, START, [429]),
+    (True, 1813, 5, [], []),
+    (False, 1813, 4, STOP, [311]),
+    (True, 1813, 5, [], []),
+    (False, 1812, 12, [80], []),
+    (True, 1812, 2, [80], []),
 ]
 seen = [describe(frame) for frame in records]
-got = [(f, p, c, t) for f, p, c, _, t in seen]
+got = [(f, p, c, t, v) for f, p, c, _, t, v in seen]
 if got != EXPECTED:
     sys.exit(f"[!] Unexpected capture:\n  {got}\nexpected\n  {EXPECTED}")
 for request, response in zip(seen[::2], seen[1::2]):
