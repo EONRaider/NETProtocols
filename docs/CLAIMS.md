@@ -809,10 +809,51 @@ and optimization to its end (#250).
 - 1.7's audit, 3.1's simulation and 4.1's dpkt dates were re-checked
   for this release; see those sections.
 
+### Re-measured for 2.9.0 (2026-11-06)
+
+Every number the README quotes, re-measured before tagging 2.9.0 on the
+same machine and method as 2.8.0 (see above: i7-1355U, CPython 3.12.12,
+every timed run `taskset -c 2 uv run --frozen --group bench python
+scripts/...`; `dpkt 1.9.8`, `scapy 2.8.0`), with one change: each run
+waited for the one-minute load average to fall under 1.0 (the runs
+started at 0.78-0.88; 2.8.0 required under 1.5). A first pass that
+started its third decode run at a load average of 2.01 was discarded
+and repeated, and agreed within noise. The corpus grew from 394 frames
+in 36 scenarios to 411 in 39. This release adds declared-length
+bounding to the walk (#235, `Packet.trailer`), whose prototype
+measured a 2-5% cost; it has not been profiled here (#250).
+
+| Claim | Command | Result |
+|---|---|---|
+| 1.1 / 1.2 decode | `benchmark.py --compare --repetitions 30 --trials 9`, three runs | netprotocols 157,935 / 146,273 / 147,812 f/s; dpkt 238,630 / 223,273 / 228,578; scapy 51,097 / 50,465 / 48,678. dpkt faster by 1.51×, 1.53×, 1.55×; against scapy 3.09×, 2.90×, 3.04×. Quoted: the median-ratio run (dpkt: 146,273 against 223,273; scapy: 147,812 against 48,678), **dpkt 1.53× faster**, **3.0×** against scapy. netprotocols decodes 406 of 411 frames, dpkt 410, scapy 411 |
+| 1.3 encode | `benchmark_encode.py` (whole frame), three runs | netprotocols 795,976 / 778,961 / 780,010 ops/s; dpkt 591,285 / 568,686 / 577,459; scapy 1,124,478 / 1,107,503 / 1,100,467. Against dpkt: 1.346×, 1.370×, 1.351×. Quoted: the median-ratio run, **1.35×** |
+| 1.4 import | `PYTHONPATH=<git archive>/src env -u PYTHONDONTWRITEBYTECODE taskset -c 2 ... benchmark_import.py` after an untimed warm-up, three invocations (warm) | netprotocols 55.0 / 54.4 / 54.8 ms (117 modules); `scapy.all` 228.5 / 228.1 / 226.9 ms. Best of three: **54.4 ms** against **226.9 ms** (**4.2×**); dpkt 20.3 ms (117 modules) |
+| 1.5 wheel | `uv build --wheel` on a `git archive` of the release commit | `netprotocols-2.9.0-py3-none-any.whl` 300,212 bytes (293.2 KiB), **9.2×** smaller than `scapy-2.8.0-py3-none-any.whl`'s 2,762,122 |
+| 1.6 depth | `benchmark.py --depth` | deeper on **175 of 411** frames, the same on 230, 6 skipped |
+
+- **Not re-measured:** the per-capture decode figures the README quotes
+  (the routing captures' three fifths, the 140-frame 2.4.0 corpus's
+  1.21×, LLDP's 5×, the Tier 4 captures' 1.5×, the TLS capture's 2×)
+  came from a per-file harness this release did not repeat, so they
+  remain the 2.8.0 figures and the README says so.
+- **netprotocols' lead over scapy fell from 3.3× to 3.0×** while dpkt's rose from 1.51×
+  to 1.53×; the three runs read 2.90-3.09× against scapy. Whether
+  #235's bounding is the cause was not isolated.
+- **Depth did not move:** the 17 new frames add no frame on which
+  netprotocols decodes further.
+- **Encode** reads 1.35× (from 1.34×); at one decimal that is 1.4×, so
+  the README quotes 1.35×.
+- 1.7's audit, 3.1's simulation and 4.1's dpkt dates were **not
+  re-run** for 2.9.0 and keep their 2026-11-04 dates.
+
 ## 1. Performance
 
-### 1.1 "3.3× faster than scapy at decoding"
-**Status: VERIFIED for 2.8.0**
+### 1.1 "3.0× faster than scapy at decoding"
+**Status: VERIFIED for 2.9.0**
+
+*Re-measured for 2.9.0 (2026-11-06, the 411-frame corpus; see above):
+the median-ratio run, 147,812 against scapy 2.8.0's 48,678, **3.0×**
+(2.90-3.09× across three runs).*
 
 *Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
 the median-ratio run, 149,090 against scapy 2.8.0's 45,723, **3.3×**
@@ -859,7 +900,11 @@ README should pick the number they are willing to defend on someone
 else's.
 
 ### 1.2 "dpkt decodes 1.5× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
-**Status: VERIFIED for 2.8.0 — the 15% claim no longer holds, on the 265-, 293-, 379- or 394-frame corpus**
+**Status: VERIFIED for 2.9.0 — the 15% claim no longer holds, on the 265-, 293-, 379-, 394- or 411-frame corpus**
+
+*Re-measured for 2.9.0 (2026-11-06, the 411-frame corpus; see above):
+**dpkt 1.53× faster** on the median-ratio run (146,273 against
+223,273; 1.51-1.55× across three runs).*
 
 *Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
 **dpkt 1.51× faster** on the median-ratio run (149,090 against
@@ -938,8 +983,14 @@ have shipped it while it briefly was. From 2.5.0 the defensible form is
 further into the stack on 79 of its 265 frames" (1.6); for 2.6.0, on
 94 of its 293; for 2.7.0, "about 1.4× faster", on 153 of its 379.
 
-### 1.3 "1.3× faster than dpkt at re-encoding a whole frame"
-**Status: VERIFIED for 2.8.0**
+### 1.3 "1.35× faster than dpkt at re-encoding a whole frame"
+**Status: VERIFIED for 2.9.0**
+
+*Re-measured for 2.9.0 (2026-11-06; see above): the same whole-frame
+workload, best of 9 × 20,000 pinned to one core, the median-ratio run:
+netprotocols 780,010 ops/s, dpkt 577,459, **1.35×**; scapy 2.8.0
+1,100,467. The other two runs read 1.35× and 1.37× (795,976 against
+591,285; 778,961 against 568,686).*
 
 *Re-measured for 2.8.0 (2026-11-04; see above), after the correction
 below: `bytes(decode_frame(FRAME))` on a 42-byte Ethernet/IPv4/UDP
@@ -1030,8 +1081,12 @@ Ethernet header alone) and scapy, whose `bytes()` returns the bytes it
 was built from, reads faster than both because it does no repack. A
 modest win, not a wide one, and none over scapy.
 
-### 1.4 "Imports in 55 ms; scapy takes about 235 ms"
-**Status: VERIFIED for 2.8.0**
+### 1.4 "Imports in 54 ms; scapy takes about 227 ms"
+**Status: VERIFIED for 2.9.0**
+
+*Re-measured for 2.9.0 (2026-11-06, warm; see above): best of three,
+netprotocols **54.4 ms** (117 modules), `scapy.all` 2.8.0 **226.9 ms**,
+**4.2×**; dpkt 20.3 ms.*
 
 *Re-measured for 2.8.0 (2026-11-04, warm; see above): best of three,
 netprotocols **55.2 ms** (117 modules), `scapy.all` 2.8.0 **235.3 ms**,
@@ -1101,8 +1156,12 @@ on the measuring machine simply by being imported, unchanged from the
 original measurement. A codec that turns bytes into objects should
 never touch the host.
 
-### 1.5 "9.5× smaller wheel than scapy"
-**Status: VERIFIED for 2.8.0**
+### 1.5 "9.2× smaller wheel than scapy"
+**Status: VERIFIED for 2.9.0**
+
+*Re-measured for 2.9.0 (2026-11-06): `netprotocols-2.9.0-py3-none-any.whl`
+is 300,212 bytes (293.2 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
+2,762,122 (2.63 MiB), **9.2× smaller**.*
 
 *Re-measured for 2.8.0 (2026-11-04): `netprotocols-2.8.0-py3-none-any.whl`
 is 291,949 bytes (285.1 KiB) against `scapy-2.8.0-py3-none-any.whl`'s
@@ -1147,7 +1206,10 @@ since the version on file. Both move with releases — re-check before
 quoting.
 
 ### 1.6 "Decodes further into the stack than dpkt, on the same bytes"
-**Status: VERIFIED for 2.8.0**
+**Status: VERIFIED for 2.9.0**
+
+*Re-measured for 2.9.0 (2026-11-06, the 411-frame corpus; see above):
+**175 deeper, 230 not deeper**, 6 skipped; the 17 new frames add none.*
 
 *Re-measured for 2.8.0 (2026-11-04, the 394-frame corpus; see above):
 **175 deeper, 213 not deeper**, 6 skipped; the 22 new are the 15 TLS
