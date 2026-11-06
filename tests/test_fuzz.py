@@ -27,6 +27,7 @@ import contextlib
 import importlib.util
 import struct
 import sys
+from dataclasses import replace
 from ipaddress import IPv6Address
 from pathlib import Path
 
@@ -59,6 +60,7 @@ from netprotocols import (
     NTP,
     NTPMAC,
     OSPF,
+    OSPFLSA,
     PIM,
     RADIUS,
     RIP,
@@ -112,6 +114,7 @@ from netprotocols import (
     peek_server_name,
 )
 from strategies import (
+    OSPF_LSA_BODIES,
     ROUND_TRIP_STRATEGIES,
     bgp_path_attributes,
     bgp_prefixes,
@@ -122,6 +125,8 @@ from strategies import (
     http_wire,
     lldp_lldpdus,
     mpls_stacks,
+    ospf_lsa_headers,
+    ospf_lsas,
     ospf_packets,
     pim_headers,
     sctp_chunks,
@@ -936,12 +941,42 @@ def _read_every_ospf_accessor(ospf: OSPF) -> None:
     if ospf.lsas is not None:
         raw = len(ospf.lsas).to_bytes(4, "big")
         assert raw + b"".join(map(bytes, ospf.lsas)) == ospf.body
+    for lsa in ospf.lsas or ():
+        _read_every_lsa_accessor(lsa)
     headers = [lsa.header for lsa in ospf.lsas or ()]
     headers += ospf.ls_acknowledgments or ()
     for header in headers:
         assert header.ls_type_name
         _ = header.options_str, header.ls_checksum_hex_str
         _ = header.ls_sequence_number_hex_str
+
+
+#: Each LSA body accessor and the LS types it answers for.
+_LSA_ACCESSORS = {
+    "router": {1},
+    "network": {2},
+    "summary": {3, 4},
+    "external": {5, 7},
+}
+
+
+def _read_every_lsa_accessor(lsa: OSPFLSA) -> None:
+    """Read every LSA body accessor and its records' display helpers:
+    the one for the LSA's type re-encodes to its body, the others are
+    None."""
+    for name, ls_types in _LSA_ACCESSORS.items():
+        record = getattr(lsa, name)
+        if lsa.header.ls_type not in ls_types:
+            assert record is None
+            continue
+        assert bytes(record) == lsa.body
+    router = lsa.router
+    if router is not None:
+        _ = router.flags_str, router.v, router.e, router.b
+        assert router.link_count == len(router.links)
+        for link in router.links:
+            assert link.type_name
+            assert link.tos_count == len(link.tos)
 
 
 #: OSPF-shaped buffers: a version-2 header with a plausible Packet
@@ -988,6 +1023,57 @@ class TestOSPFAccessorSafety:
     def test_built_packets(self, ospf: OSPF) -> None:
         _read_every_ospf_accessor(ospf)
         assert OSPF.decode(bytes(ospf) + b"\xde\xad") == ospf
+
+
+class TestOSPFLSABodies:
+    """The constructor checks a decoded LS type's body framing, so it
+    raises only InvalidFieldError, and an LSA it accepts answers every
+    body accessor; a body built from records parses back to them."""
+
+    @given(
+        ls_type=st.sampled_from([1, 2, 3, 4, 5, 7, 9]),
+        body=st.one_of(
+            st.binary(max_size=64),
+            st.lists(
+                st.sampled_from([0, 0, 1, 2, 3, 4, 12, 0xFF]), max_size=64
+            ).map(bytes),
+        ),
+        header=ospf_lsa_headers(),
+    )
+    def test_arbitrary_bodies(self, ls_type, body, header) -> None:
+        header = replace(header, ls_type=ls_type, length=20 + len(body))
+        try:
+            lsa = OSPFLSA(header, body)
+        except InvalidFieldError as error:
+            assert error.field == "body"
+            assert error.offset is None
+            return
+        _read_every_lsa_accessor(lsa)
+
+    @given(data=st.data(), ls_type=st.sampled_from(sorted(OSPF_LSA_BODIES)))
+    def test_records_round_trip(self, data, ls_type) -> None:
+        record = data.draw(OSPF_LSA_BODIES[ls_type])
+        body = bytes(record)
+        header = replace(
+            data.draw(ospf_lsa_headers()),
+            ls_type=ls_type,
+            length=20 + len(body),
+        )
+        lsa = OSPFLSA(header, body)
+        accessor = next(
+            name for name, types in _LSA_ACCESSORS.items() if ls_type in types
+        )
+        assert getattr(lsa, accessor) == record
+        _read_every_lsa_accessor(lsa)
+
+    @given(lsa=ospf_lsas())
+    def test_drawn_lsas_decode_in_an_update(self, lsa: OSPFLSA) -> None:
+        body = (1).to_bytes(4, "big") + bytes(lsa)
+        ospf = OSPF.decode(
+            struct.pack("!BBH", 2, 4, 24 + len(body)) + bytes(20) + body
+        )
+        assert ospf.lsas == (lsa,)
+        _read_every_lsa_accessor(ospf.lsas[0])
 
 
 #: Bytes from a small alphabet, so AFI 0xFFFF, authentication type 3,

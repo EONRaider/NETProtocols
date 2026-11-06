@@ -447,7 +447,10 @@ file or a registration, not a protocol, and leave `protocol` unset.
 `offset` is relative to whatever buffer the error was found in. An
 error raised by `decode()` is relative to that call's `data` argument,
 whatever `field` names: OSPF's framing errors name `field="body"` (or
-`"auth_trailer"`) and still count from the start of the OSPF header,
+`"auth_trailer"`), an LSA body's among them (a Router-LSA whose links
+or TOS entries do not walk its body, a Network-, Summary-,
+AS-external- or NSSA-LSA without whole entries), and still count from
+the start of the OSPF header,
 which is what lets `decode_frame` rebase them. An error raised later,
 by an accessor that parses a raw `bytes` attribute on demand
 (`options`, `body`, `sections`, `chunks`), is relative to that
@@ -1378,7 +1381,8 @@ src/netprotocols/
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),
-│                   ospf.py (OSPFv2: OSPF + its message records),
+│                   ospf.py (OSPFv2: OSPF + its message and LSA
+│                   body records),
 │                   pim.py (PIM-SM),
 │                   vrrp.py (VRRPv2/v3: VRRP + VRRPv6),
 │                   ipv6_ext.py (Hop-by-Hop, Routing, Fragment,
