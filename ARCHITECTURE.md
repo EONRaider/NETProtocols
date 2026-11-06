@@ -1322,8 +1322,9 @@ src/netprotocols/
 ├── __init__.py     public API re-exports, __version__, registry install
 ├── _base.py        Protocol ABC, decode contract, address helpers
 ├── _tlv.py         walk_kind_length_value(): shared TCP/IPv4/IPv6
-│                   options, PIM Hello options, RADIUS attributes and
-│                   STUN attributes TLV walker
+│                   options, PIM Hello options, RADIUS attributes,
+│                   STUN attributes and SCTP INIT/INIT ACK
+│                   parameters TLV walker
 ├── _enums.py       EtherType, LLCSAP, IPProtocol, ARPOperation,
 │                   ARPHardwareType (imports nothing)
 ├── registry.py     public dispatch tables: register(), Registry

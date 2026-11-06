@@ -1,12 +1,16 @@
 """SCTP (RFC 9260): the common header, the chunk walk that bounds the
-packet, the chunk accessor, and dispatch from IPv4/IPv6 protocol 132.
+packet, the chunk accessors, the typed DATA, INIT, INIT ACK, SACK and
+I-DATA (RFC 8260) fields, and dispatch from IPv4/IPv6 protocol 132.
 
 The real association in tests/fixtures/sctp.pcap (see its MANIFEST
-note) anchors the decode and round-trip asserts; the edge cases a real
-stack never sends are built here. CRC32c itself is tested in
+note) anchors the decode, round-trip and typed-field asserts, each
+field cross-checked against a ``struct`` decode of the captured bytes;
+the edge cases a real stack never sends, and every I-DATA chunk (the
+capture has none), are built here. CRC32c itself is tested in
 test_checksum.py, where the mutation audit's test selection reaches it.
 """
 
+import struct
 import zlib
 from dataclasses import replace
 
@@ -25,6 +29,7 @@ from netprotocols import (
     IPv6HopByHopOptions,
     Packet,
     SCTPChunk,
+    SCTPParameter,
     TruncatedHeaderError,
     compute,
     decode_frame,
@@ -625,3 +630,582 @@ class TestDamagedPacketsKeepTheirHeader:
         assert chain is not None
         assert [type(layer) for layer in chain] == [IPv4]
         assert isinstance(chain.stopped_by, TruncatedHeaderError)
+
+
+#: Each typed chunk accessor and the chunk types that carry its field.
+ACCESSOR_TYPES: dict[str, frozenset[int]] = {
+    "immediate": frozenset({0, 64}),
+    "unordered": frozenset({0, 64}),
+    "beginning_fragment": frozenset({0, 64}),
+    "ending_fragment": frozenset({0, 64}),
+    "tsn": frozenset({0, 64}),
+    "stream_id": frozenset({0, 64}),
+    "stream_sequence_number": frozenset({0}),
+    "message_id": frozenset({64}),
+    "ppid": frozenset({0, 64}),
+    "fragment_sequence_number": frozenset({64}),
+    "user_data": frozenset({0, 64}),
+    "initiate_tag": frozenset({1, 2}),
+    "a_rwnd": frozenset({1, 2, 3}),
+    "outbound_streams": frozenset({1, 2}),
+    "inbound_streams": frozenset({1, 2}),
+    "initial_tsn": frozenset({1, 2}),
+    "parameters": frozenset({1, 2}),
+    "state_cookie": frozenset({2}),
+    "cumulative_tsn_ack": frozenset({3}),
+    "num_gap_ack_blocks": frozenset({3}),
+    "num_duplicate_tsns": frozenset({3}),
+    "gap_ack_blocks": frozenset({3}),
+    "duplicate_tsns": frozenset({3}),
+}
+
+
+def only_chunk(index: int) -> SCTPChunk:
+    (only,) = sctp_of(index).parsed_chunks
+    return only
+
+
+class TestTypedFieldsOfTheCapturedAssociation:
+    """Every typed field of the capture's INIT, INIT ACK, DATA and SACK
+    chunks, asserted as a concrete value and cross-checked against a
+    ``struct`` decode of the captured value, and against the field it
+    must agree with elsewhere in the association."""
+
+    def test_init(self):
+        init = only_chunk(0)
+        assert struct.unpack_from("!IIHHI", init.value) == (
+            init.initiate_tag,
+            init.a_rwnd,
+            init.outbound_streams,
+            init.inbound_streams,
+            init.initial_tsn,
+        )
+        assert init.initiate_tag == 0xFF09BA55
+        assert init.a_rwnd == 131072
+        assert (init.outbound_streams, init.inbound_streams) == (10, 2048)
+        assert init.initial_tsn == 0x8F24E2D4
+        # Every packet the server sends carries the client's tag.
+        assert sctp_of(1).verification_tag == init.initiate_tag
+        assert init.state_cookie is None  # an INIT ACK's alone
+
+    def test_init_parameters(self):
+        init = only_chunk(0)
+        parameters = init.parameters
+        assert parameters is not None
+        assert [p.type for p in parameters] == [
+            0x8000,
+            0xC000,
+            0x8008,
+            0x8002,
+            0x8004,
+            0x8003,
+            12,
+        ]
+        assert [p.type_name for p in parameters] == [
+            "ECN Capable",
+            "Forward-TSN-Supported",
+            "Supported Extensions",
+            "Random",
+            "Requested HMAC Algorithm",
+            "Chunk List",
+            "Supported Address Types",
+        ]
+        by_type = {p.type: p.value for p in parameters}
+        # FORWARD-TSN, AUTH, ASCONF, ASCONF-ACK and RE-CONFIG.
+        assert by_type[0x8008] == bytes([192, 15, 193, 128, 130])
+        assert len(by_type[0x8002]) == 32
+        assert by_type[0x8004] == b"\x00\x01"  # SHA-1 (RFC 4895 §3.3)
+        assert by_type[0x8003] == bytes([128, 193])
+        assert by_type[12] == struct.pack("!HH", 5, 6)  # IPv4 and IPv6
+        # The 5- and 2-byte values are padded inside the chunk, so the
+        # parameters re-encode to exactly the captured bytes.
+        assert b"".join(map(bytes, parameters)) == init.value[16:]
+
+    def test_init_parameters_against_a_struct_walk(self):
+        init = only_chunk(0)
+        walked, at = [], 16
+        while at < len(init.value):
+            type_, length = struct.unpack_from("!HH", init.value, at)
+            walked.append((type_, init.value[at + 4 : at + length]))
+            at += length + -length % 4
+        assert init.parameters is not None
+        assert [(p.type, p.value) for p in init.parameters] == walked
+
+    def test_init_ack(self):
+        ack = only_chunk(1)
+        assert struct.unpack_from("!IIHHI", ack.value) == (
+            ack.initiate_tag,
+            ack.a_rwnd,
+            ack.outbound_streams,
+            ack.inbound_streams,
+            ack.initial_tsn,
+        )
+        assert ack.initiate_tag == 0x3ACA38F7
+        assert ack.a_rwnd == 131072
+        assert (ack.outbound_streams, ack.inbound_streams) == (10, 2048)
+        assert ack.initial_tsn == 0x87C74B24
+        assert sctp_of(2).verification_tag == ack.initiate_tag
+
+    def test_init_ack_state_cookie_is_what_cookie_echo_returns(self):
+        ack = only_chunk(1)
+        assert ack.parameters is not None
+        assert [p.type for p in ack.parameters] == [
+            0x8000,
+            0xC000,
+            0x8008,
+            0x8002,
+            0x8004,
+            0x8003,
+            7,
+        ]
+        cookie = ack.state_cookie
+        assert cookie is not None
+        assert len(cookie) == 324
+        assert cookie.startswith(b"KAME-BSD 1.1")
+        assert cookie == ack.parameters[-1].value
+        # The last parameter: type 7, length 4 + 324, nothing after it.
+        at = len(ack.value) - 4 - 324
+        assert struct.unpack_from("!HH", ack.value, at) == (7, 4 + 324)
+        assert cookie == ack.value[at + 4 :]
+        assert cookie == only_chunk(2).value  # the COOKIE ECHO
+        assert b"".join(map(bytes, ack.parameters)) == ack.value[16:]
+
+    @pytest.mark.parametrize(
+        "index,tsn", [(4, 0x8F24E2D4), (6, 0x87C74B24)], ids=["c2s", "s2c"]
+    )
+    def test_data(self, index, tsn):
+        data = only_chunk(index)
+        assert struct.unpack_from("!IHHI", data.value) == (
+            data.tsn,
+            data.stream_id,
+            data.stream_sequence_number,
+            data.ppid,
+        )
+        assert data.tsn == tsn
+        assert (data.stream_id, data.stream_sequence_number) == (0, 0)
+        assert data.ppid == 0  # no application identifier
+        assert data.user_data == b"hello sctp\n" == data.value[12:]
+        assert data.flags == 0x03
+        assert (data.beginning_fragment, data.ending_fragment) == (True, True)
+        assert (data.unordered, data.immediate) == (False, False)
+        assert data.message_id is None
+        assert data.fragment_sequence_number is None
+
+    def test_each_side_starts_at_its_initial_tsn(self):
+        assert only_chunk(4).tsn == only_chunk(0).initial_tsn
+        assert only_chunk(6).tsn == only_chunk(1).initial_tsn
+
+    @pytest.mark.parametrize(
+        "index,data_index,a_rwnd",
+        [(5, 4, 130805), (7, 6, 131072)],
+        ids=["s2c", "c2s"],
+    )
+    def test_sack(self, index, data_index, a_rwnd):
+        sack = only_chunk(index)
+        assert struct.unpack_from("!IIHH", sack.value) == (
+            sack.cumulative_tsn_ack,
+            sack.a_rwnd,
+            sack.num_gap_ack_blocks,
+            sack.num_duplicate_tsns,
+        )
+        assert sack.cumulative_tsn_ack == only_chunk(data_index).tsn
+        assert sack.a_rwnd == a_rwnd
+        assert (sack.num_gap_ack_blocks, sack.num_duplicate_tsns) == (0, 0)
+        assert sack.gap_ack_blocks == ()
+        assert sack.duplicate_tsns == ()
+
+    @pytest.mark.parametrize("index", range(len(FRAMES)))
+    def test_every_other_field_of_every_captured_chunk_is_none(self, index):
+        for chunk_ in sctp_of(index).parsed_chunks:
+            for name, types in ACCESSOR_TYPES.items():
+                if chunk_.type not in types:
+                    assert getattr(chunk_, name) is None, name
+
+
+class TestTypedAccessorsAreTotal:
+    def test_the_table_names_every_typed_accessor(self):
+        """ACCESSOR_TYPES, and so every test below, covers every
+        property SCTPChunk has beyond its four display helpers."""
+        properties = {
+            name
+            for name, attr in vars(SCTPChunk).items()
+            if isinstance(attr, property)
+        }
+        display = {"length", "type_name", "flags_str", "unrecognized_action"}
+        assert properties - display == set(ACCESSOR_TYPES)
+
+    @pytest.mark.parametrize("flags", [0x00, 0x0F, 0xFF])
+    def test_a_type_without_the_field_reads_none(self, flags):
+        """Every field fits a 64-byte value, so only the type decides."""
+        for type_ in range(256):
+            chunk_ = SCTPChunk(type_, flags, bytes(64))
+            for name, types in ACCESSOR_TYPES.items():
+                if type_ not in types:
+                    assert getattr(chunk_, name) is None, (type_, name)
+
+    @pytest.mark.parametrize("type_", sorted({0, 1, 2, 3, 64}))
+    def test_an_empty_value_reads_none_but_for_the_flags(self, type_):
+        chunk_ = SCTPChunk(type_, 0x0F)
+        for name in ACCESSOR_TYPES:
+            expected_some = name in (
+                "immediate",
+                "unordered",
+                "beginning_fragment",
+                "ending_fragment",
+            ) and type_ in (0, 64)
+            assert (getattr(chunk_, name) is not None) == expected_some, name
+
+
+def assert_cut_fields(type_, flags, value, fields):
+    """Cut ``value`` at every length and check each field reads its
+    value from the cut exactly when the cut holds its ``need`` bytes.
+
+    :param fields: ``{name: (need, expected)}``.
+    """
+    for cut in range(len(value) + 1):
+        chunk_ = SCTPChunk(type_, flags, value[:cut])
+        for name, (need, expected) in fields.items():
+            got = getattr(chunk_, name)
+            if cut < need:
+                assert got is None, (name, cut)
+            elif callable(expected):
+                assert got == expected(value[:cut]), (name, cut)
+            else:
+                assert got == expected, (name, cut)
+
+
+class TestDataTruncation:
+    VALUE = struct.pack("!IHHI", 0x01020304, 7, 0xBEEF, 46) + b"user data"
+
+    def test_every_field_at_every_cut(self):
+        assert_cut_fields(
+            0,
+            0x03,
+            self.VALUE,
+            {
+                "tsn": (4, 0x01020304),
+                "stream_id": (6, 7),
+                "stream_sequence_number": (8, 0xBEEF),
+                "ppid": (12, 46),
+                "user_data": (12, lambda cut: cut[12:]),
+            },
+        )
+
+    def test_the_user_data_may_be_empty(self):
+        assert SCTPChunk(0, 3, self.VALUE[:12]).user_data == b""
+
+    @pytest.mark.parametrize(
+        "flags,expected",
+        [
+            (0x00, (False, False, False, False)),
+            (0x08, (True, False, False, False)),
+            (0x04, (False, True, False, False)),
+            (0x02, (False, False, True, False)),
+            (0x01, (False, False, False, True)),
+            (0xFF, (True, True, True, True)),
+            (0xF0, (False, False, False, False)),  # reserved bits only
+        ],
+    )
+    @pytest.mark.parametrize("type_", [0, 64])
+    def test_flags_by_name(self, type_, flags, expected):
+        chunk_ = SCTPChunk(type_, flags, self.VALUE)
+        assert (
+            chunk_.immediate,
+            chunk_.unordered,
+            chunk_.beginning_fragment,
+            chunk_.ending_fragment,
+        ) == expected
+
+
+class TestIData:
+    """I-DATA (RFC 8260 §2.1): sctp.pcap holds none, so every chunk here
+    is built by hand from the RFC's layout, not taken from a capture."""
+
+    @staticmethod
+    def value(word: int, data: bytes = b"fragment") -> bytes:
+        # TSN, Stream Identifier, Reserved (nonzero: ignored), MID, and
+        # the PPID or FSN word.
+        return struct.pack("!IHHII", 0xA0B0C0D0, 3, 0xFFFF, 77, word) + data
+
+    def test_a_first_fragment_carries_the_ppid(self):
+        value = self.value(60)
+        assert_cut_fields(
+            64,
+            0x02,
+            value,
+            {
+                "tsn": (4, 0xA0B0C0D0),
+                "stream_id": (6, 3),
+                "message_id": (12, 77),
+                "ppid": (16, 60),
+                "user_data": (16, lambda cut: cut[16:]),
+                "fragment_sequence_number": (0, None),
+                "stream_sequence_number": (0, None),
+            },
+        )
+
+    @pytest.mark.parametrize("flags", [0x00, 0x01, 0x0D])
+    def test_a_later_fragment_carries_the_fsn(self, flags):
+        value = self.value(5)
+        assert_cut_fields(
+            64,
+            flags,
+            value,
+            {
+                "tsn": (4, 0xA0B0C0D0),
+                "stream_id": (6, 3),
+                "message_id": (12, 77),
+                "fragment_sequence_number": (16, 5),
+                "user_data": (16, lambda cut: cut[16:]),
+                "ppid": (0, None),
+            },
+        )
+
+    def test_the_i_u_b_e_flags(self):
+        chunk_ = SCTPChunk(64, 0x0F, self.value(1))
+        assert chunk_.flags_str == "I U B E"
+        assert chunk_.immediate and chunk_.unordered
+        assert chunk_.beginning_fragment and chunk_.ending_fragment
+
+    def test_a_data_chunk_has_no_fsn_whatever_its_b_bit(self):
+        for flags in (0x00, 0x02):
+            assert (
+                SCTPChunk(0, flags, bytes(32)).fragment_sequence_number is None
+            )
+
+
+def init_value(parameters: bytes = b"") -> bytes:
+    return struct.pack("!IIHHI", 0x11223344, 4660, 5, 6, 1000) + parameters
+
+
+class TestInitTruncation:
+    @pytest.mark.parametrize("type_", [1, 2])
+    def test_every_field_at_every_cut(self, type_):
+        parameter = bytes(SCTPParameter(9, struct.pack("!I", 60000)))
+        assert_cut_fields(
+            type_,
+            0,
+            init_value(parameter),
+            {
+                "initiate_tag": (4, 0x11223344),
+                "a_rwnd": (8, 4660),
+                "outbound_streams": (10, 5),
+                "inbound_streams": (12, 6),
+                "initial_tsn": (16, 1000),
+            },
+        )
+
+    @pytest.mark.parametrize("type_", [1, 2])
+    @pytest.mark.parametrize("cut", range(16))
+    def test_no_parameters_before_the_fixed_fields_end(self, type_, cut):
+        assert SCTPChunk(type_, 0, init_value()[:cut]).parameters is None
+
+    @pytest.mark.parametrize("type_", [1, 2])
+    def test_only_the_fixed_fields_is_no_parameters(self, type_):
+        assert SCTPChunk(type_, 0, init_value()).parameters == ()
+
+
+class TestParameters:
+    def parameters_of(self, raw: bytes, type_: int = 1):
+        return SCTPChunk(type_, 0, init_value(raw)).parameters
+
+    def test_inner_padding_is_skipped(self):
+        first = SCTPParameter(0x8008, b"\xc0\x0f\xc1")
+        second = SCTPParameter(5, bytes([10, 0, 0, 1]))
+        raw = bytes(first) + bytes(second)
+        assert len(raw) == 8 + 8
+        assert self.parameters_of(raw) == (first, second)
+
+    def test_the_last_parameter_needs_no_padding(self):
+        """RFC 9260 §3.2: the chunk length leaves out the last
+        parameter's padding."""
+        last = SCTPParameter(0x8008, b"\xc0\x0f\xc1\x80\x82")
+        assert self.parameters_of(bytes(last)[:-3]) == (last,)
+
+    def test_padding_kept_after_the_last_parameter_is_skipped(self):
+        last = SCTPParameter(0x8008, b"\xc0")
+        assert self.parameters_of(bytes(last)) == (last,)
+
+    @pytest.mark.parametrize("length", [0, 1, 2, 3])
+    def test_a_length_below_four(self, length):
+        raw = struct.pack("!HH", 5, length) + bytes(8)
+        assert self.parameters_of(raw) is None
+
+    def test_a_length_past_the_value(self):
+        raw = struct.pack("!HH", 5, 12) + bytes(4)
+        assert self.parameters_of(raw) is None
+        assert self.parameters_of(raw + bytes(4)) is not None
+
+    @pytest.mark.parametrize("left", [1, 2, 3])
+    def test_bytes_too_few_for_a_parameter_header(self, left):
+        raw = bytes(SCTPParameter(9, bytes(4))) + b"\x00" * left
+        assert self.parameters_of(raw) is None
+
+    def test_many_minimal_parameters_walk(self):
+        raw = bytes(SCTPParameter(0xC000)) * 4096
+        parameters = self.parameters_of(raw)
+        assert parameters is not None
+        assert len(parameters) == 4096
+
+
+class TestStateCookie:
+    COOKIE = SCTPParameter(7, b"opaque cookie")
+
+    def test_an_init_ack_without_one(self):
+        raw = bytes(SCTPParameter(5, bytes(4)))
+        assert SCTPChunk(2, 0, init_value(raw)).state_cookie is None
+        assert SCTPChunk(2, 0, init_value()).state_cookie is None
+
+    def test_the_first_of_two_is_read(self):
+        raw = bytes(self.COOKIE) + bytes(SCTPParameter(7, b"second"))
+        assert SCTPChunk(2, 0, init_value(raw)).state_cookie == b"opaque cookie"
+
+    def test_an_init_has_none_even_when_it_carries_one(self):
+        chunk_ = SCTPChunk(1, 0, init_value(bytes(self.COOKIE)))
+        assert chunk_.parameters == (self.COOKIE,)
+        assert chunk_.state_cookie is None
+
+    def test_parameters_that_do_not_walk(self):
+        raw = bytes(self.COOKIE) + b"\x00\x05\x00\x02"
+        chunk_ = SCTPChunk(2, 0, init_value(raw))
+        assert chunk_.parameters is None
+        assert chunk_.state_cookie is None
+
+    def test_an_init_ack_cut_short_of_its_fixed_fields(self):
+        assert SCTPChunk(2, 0, init_value()[:15]).state_cookie is None
+
+
+def sack_value(gaps=(), dups=(), *, num_gaps=None, num_dups=None) -> bytes:
+    return (
+        struct.pack(
+            "!IIHH",
+            12,
+            4660,
+            len(gaps) if num_gaps is None else num_gaps,
+            len(dups) if num_dups is None else num_dups,
+        )
+        + b"".join(struct.pack("!HH", *gap) for gap in gaps)
+        + b"".join(struct.pack("!I", dup) for dup in dups)
+    )
+
+
+class TestSack:
+    def test_rfc_9260_example(self):
+        """RFC 9260 §3.3.4's example: TSNs 10-12, 14-15 and 17
+        received, so Cumulative TSN Ack 12 and blocks 2-3 and 5-5."""
+        sack = SCTPChunk(3, 0, sack_value([(2, 3), (5, 5)]))
+        assert sack.cumulative_tsn_ack == 12
+        assert sack.a_rwnd == 4660
+        assert (sack.num_gap_ack_blocks, sack.num_duplicate_tsns) == (2, 0)
+        assert sack.gap_ack_blocks == ((2, 3), (5, 5))
+        assert sack.duplicate_tsns == ()
+
+    def test_duplicates_follow_the_blocks(self):
+        sack = SCTPChunk(3, 0, sack_value([(2, 3)], [19, 19, 0xFFFFFFFF]))
+        assert sack.gap_ack_blocks == ((2, 3),)
+        assert sack.duplicate_tsns == (19, 19, 0xFFFFFFFF)
+
+    def test_every_field_at_every_cut(self):
+        value = sack_value([(2, 3), (0xFFFE, 0xFFFF)], [19, 21])
+        assert len(value) == 12 + 8 + 8
+        assert_cut_fields(
+            3,
+            0,
+            value,
+            {
+                "cumulative_tsn_ack": (4, 12),
+                "a_rwnd": (8, 4660),
+                "num_gap_ack_blocks": (10, 2),
+                "num_duplicate_tsns": (12, 2),
+                "gap_ack_blocks": (20, ((2, 3), (0xFFFE, 0xFFFF))),
+                "duplicate_tsns": (28, (19, 21)),
+            },
+        )
+
+    def test_more_blocks_declared_than_the_value_holds(self):
+        """A count the value cannot hold reads None, never the blocks
+        that fit, and neither do the duplicates after them."""
+        sack = SCTPChunk(3, 0, sack_value([(2, 3), (5, 5)], num_gaps=3))
+        assert sack.num_gap_ack_blocks == 3
+        assert sack.gap_ack_blocks is None
+        assert sack.duplicate_tsns is None
+        assert sack.cumulative_tsn_ack == 12
+
+    def test_more_duplicates_declared_than_the_value_holds(self):
+        sack = SCTPChunk(3, 0, sack_value([(2, 3)], [19, 20], num_dups=5))
+        assert sack.gap_ack_blocks == ((2, 3),)
+        assert sack.duplicate_tsns is None
+
+    def test_the_largest_counts_read_none_at_once(self):
+        sack = SCTPChunk(3, 0, sack_value(num_gaps=0xFFFF, num_dups=0xFFFF))
+        assert sack.gap_ack_blocks is None
+        assert sack.duplicate_tsns is None
+
+    def test_bytes_after_the_declared_lists_are_ignored(self):
+        sack = SCTPChunk(3, 0, sack_value([(1, 1)], [9]) + bytes(7))
+        assert sack.gap_ack_blocks == ((1, 1),)
+        assert sack.duplicate_tsns == (9,)
+
+
+class TestSCTPParameter:
+    def test_bytes_pads_to_a_multiple_of_four(self):
+        assert bytes(SCTPParameter(0x8008, b"\xc0\x0f\xc1\x80\x82")) == (
+            b"\x80\x08\x00\x09\xc0\x0f\xc1\x80\x82\x00\x00\x00"
+        )
+        assert bytes(SCTPParameter(0xC000)) == b"\xc0\x00\x00\x04"
+
+    def test_length_excludes_padding(self):
+        assert SCTPParameter(7, b"abcde").length == 9
+
+    def test_the_largest_value_fits_the_length_field(self):
+        assert SCTPParameter(7, bytes(65531)).length == 0xFFFF
+
+    def test_a_value_too_long_for_the_length_field(self):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            SCTPParameter(7, bytes(65532))
+        err = excinfo.value
+        assert err.protocol is SCTPParameter
+        assert err.field == "value"
+        assert (err.expected, err.actual) == ("<=65531", 65532)
+        assert str(err) == (
+            "SCTP parameter value must be at most 65531 bytes, got 65532"
+        )
+
+    @pytest.mark.parametrize("number", [-1, 0x10000])
+    def test_the_type_is_16_bits(self, number):
+        with pytest.raises(InvalidFieldError) as excinfo:
+            SCTPParameter(number)
+        err = excinfo.value
+        assert err.field == "type"
+        assert (err.expected, err.actual) == ("0-65535", number)
+        assert str(err) == (
+            f"SCTP parameter type must be within 0-65535, got {number}"
+        )
+
+    def test_the_type_range_edges_are_accepted(self):
+        assert bytes(SCTPParameter(0))[:2] == b"\x00\x00"
+        assert bytes(SCTPParameter(0xFFFF))[:2] == b"\xff\xff"
+
+    @pytest.mark.parametrize(
+        "type_,name",
+        [
+            (5, "IPv4 Address"),
+            (6, "IPv6 Address"),
+            (7, "State Cookie"),
+            (8, "Unrecognized Parameter"),
+            (9, "Cookie Preservative"),
+            (11, "Host Name Address"),
+            (12, "Supported Address Types"),
+            (0x8000, "ECN Capable"),
+            (0x8002, "Random"),
+            (0x8003, "Chunk List"),
+            (0x8004, "Requested HMAC Algorithm"),
+            (0x8005, "Padding"),
+            (0x8008, "Supported Extensions"),
+            (0xC000, "Forward-TSN-Supported"),
+            (0xC006, "Adaptation Layer Indication"),
+            (0x1234, "unknown (4660)"),
+        ],
+    )
+    def test_type_names(self, type_, name):
+        assert SCTPParameter(type_).type_name == name
