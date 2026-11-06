@@ -1213,27 +1213,65 @@ def _read_every_radius_attribute(radius: RADIUS) -> None:
     event(f"RADIUS attributes: {len(attributes)}")
 
 
+#: The Vendor-Ids whose sub-attributes are in a format other than RFC
+#: 2865 §5.26's (FreeRADIUS 3.2.5's dictionaries): USR, Alcatel-ESAM,
+#: Lucent, Telrad, Starent, Kineto and WiMAX.
+_NONSTANDARD_VENDOR_IDS = frozenset({429, 637, 4846, 5323, 8164, 16445, 24757})
+
+#: The reference walk's answer for a Vendor-Specific it rejects.
+_RAISES = "raises"
+
+
+def _reference_vendor_walk(
+    found: RADIUSAttribute,
+) -> tuple[tuple[int, bytes], ...] | str | None:
+    """Walk a RADIUS attribute's Vendor-Specific String independently
+    of netprotocols: ``None`` for a type other than 26, ``_RAISES`` for
+    data under 5 bytes, ``None`` for a non-standard Vendor-Id,
+    ``_RAISES`` for a String the sub-attributes do not tile, and the
+    ``(Vendor-Type, value)`` pairs otherwise."""
+    if found.type != 26:
+        return None
+    if len(found.data) < 5:
+        return _RAISES
+    if int.from_bytes(found.data[:4], "big") in _NONSTANDARD_VENDOR_IDS:
+        return None
+    string, offset, pairs = found.data[4:], 0, []
+    while offset < len(string):
+        if offset + 1 == len(string):
+            return _RAISES
+        length = string[offset + 1]
+        if length < 2 or offset + length > len(string):
+            return _RAISES
+        pairs.append((string[offset], string[offset + 2 : offset + length]))
+        offset += length
+    return tuple(pairs)
+
+
 def _read_vendor_attributes(found: RADIUSAttribute) -> None:
     """Read a RADIUS attribute's Vendor-Specific accessors: the
     Vendor-Id is its first 4 bytes or None, never raising; the
-    sub-attribute walk is None, tiles the String after the Vendor-Id
-    exactly, or raises InvalidFieldError."""
+    sub-attribute walk raises InvalidFieldError, is None, or is the
+    sub-attributes exactly where _reference_vendor_walk says so."""
     vendor = found.vendor_id
     name = found.vendor_name
-    assert (vendor is None) == (name is None)
-    if vendor is not None:
-        assert vendor == int.from_bytes(found.data[:4])
+    if found.type == 26 and len(found.data) >= 4:
+        assert vendor == int.from_bytes(found.data[:4], "big")
+        assert name is not None
+    else:
+        assert (vendor, name) == (None, None)
+    expected = _reference_vendor_walk(found)
     try:
         subs = found.vendor_attributes
     except InvalidFieldError:
-        assert found.type == 26
+        assert expected == _RAISES
         event("RADIUS Vendor-Specific: malformed")
         return
     if subs is None:
+        assert expected is None
         event(f"RADIUS Vendor-Specific: kept raw ({found.type == 26})")
         return
-    assert b"".join(map(bytes, subs)) == found.data[4:]
-    assert bytes(found) == bytes([26, 2 + len(found.data)]) + found.data
+    assert tuple((sub.type, sub.data) for sub in subs) == expected
     event(f"RADIUS Vendor-Specific sub-attributes: {len(subs)}")
 
 
@@ -1276,9 +1314,11 @@ class TestRADIUSVendorSpecificSafety:
     def test_every_vendor_accessor_is_total(
         self, found: RADIUSAttribute
     ) -> None:
-        """A Vendor-Specific's accessors answer, or the sub-attribute
-        walk raises InvalidFieldError (see _read_vendor_attributes),
-        and the attribute round-trips inside a packet."""
+        """A Vendor-Specific's sub-attribute walk raises
+        InvalidFieldError, is None, or is the sub-attributes exactly
+        where an independent reference walk says so (see
+        _read_vendor_attributes), and the attribute round-trips inside
+        a packet."""
         _read_vendor_attributes(found)
         attributes = bytes(found)
         radius = RADIUS(

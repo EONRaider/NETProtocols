@@ -108,15 +108,17 @@ that counts the two header bytes too, and a value::
 :attr:`RADIUSAttribute.vendor_attributes` walks the String with
 :func:`~netprotocols._tlv.walk_kind_length_value`, as
 :attr:`RADIUS.parsed_attributes` walks the attribute list, into
-:class:`RADIUSVendorAttribute`, and raises
-:class:`~netprotocols.InvalidFieldError` for a value too short to hold a
-Vendor-Id and a String, or a String the sub-attributes do not tile.
-It is ``None`` for the vendors whose FreeRADIUS 3.2.5 dictionary gives
+:class:`RADIUSVendorAttribute`. It first checks, for every vendor,
+that the value holds a Vendor-Id and a String of at least one byte, and
+raises :class:`~netprotocols.InvalidFieldError` otherwise. It is then
+``None`` for the vendors whose FreeRADIUS 3.2.5 dictionary gives
 another sub-attribute format (USR 429, Alcatel-ESAM 637, Lucent 4846,
 Telrad 5323, Starent 8164, Kineto 16445 and WiMAX 24757), whose String
-stays raw in ``data``. The sub-attributes' values are kept raw. In every
-case ``data`` holds the attribute's bytes, so ``bytes(attribute)`` is
-the attribute as it was on the wire.
+stays raw in ``data``, and raises
+:class:`~netprotocols.InvalidFieldError` for any other vendor's String
+the sub-attributes do not tile. The sub-attributes' values are kept
+raw. In every case ``data`` holds the attribute's bytes, so
+``bytes(attribute)`` is the attribute as it was on the wire.
 
 Out of scope
 ------------
@@ -481,16 +483,20 @@ class RADIUSAttribute:
         """The sub-attributes of a Vendor-Specific (26), in wire order.
 
         Walked on demand from the String after the Vendor-Id, in the
-        format RFC 2865 §5.26 recommends. ``None`` for any other type,
-        and for a vendor whose format is another (see the module
-        docstring), whose String stays raw in :attr:`data`.
+        format RFC 2865 §5.26 recommends. ``None`` for any other type.
+        For a Vendor-Specific, the length check below comes first, for
+        every vendor; past it, ``None`` for a vendor whose format is
+        another (see the module docstring), whose String stays raw in
+        :attr:`data`.
 
         :raises InvalidFieldError: if :attr:`data` is shorter than 5
-            bytes, a Vendor-Id and a String of at least one byte
-            (``field`` ``"data"``), or if a Vendor-Length is below 2 or
-            runs past the String, or a Vendor-Type has no Vendor-Length
-            after it (``field`` ``"data"``, ``offset`` relative to
-            :attr:`data`; bounded, so it never hangs or over-reads).
+            bytes, a Vendor-Id and a String of at least one byte, for
+            any vendor (``field`` ``"data"``, ``offset`` ``None``), or
+            if, for a vendor in the recommended format, a Vendor-Length
+            is below 2 or runs past the String, or a Vendor-Type has no
+            Vendor-Length after it (``field`` ``"data"``, ``offset``
+            relative to :attr:`data`; bounded, so it never hangs or
+            over-reads).
         """
         if self.type != _VENDOR_SPECIFIC:
             return None

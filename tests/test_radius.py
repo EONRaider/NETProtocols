@@ -381,7 +381,7 @@ class TestCapturedPackets:
         """The Vendor-Specifics radclient and FreeRADIUS sent, by frame.
 
         The Access-Reject has none: ``attr_filter.access_reject`` lets
-        only Reply-Message and Message-Authenticator through.
+        none of the user entry's Vendor-Specifics through.
         """
         for index in range(len(FRAMES)):
             assert vendor_specifics(index) == CAPTURED_VSAS.get(index, [])

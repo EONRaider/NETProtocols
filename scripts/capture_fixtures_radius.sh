@@ -16,8 +16,9 @@
 #   pap-reject   the same with a wrong password, answered by an
 #                Access-Reject (after FreeRADIUS's 1-second reject delay)
 #   chap-accept  Access-Request, CHAP (RFC 2865 §5.3, the Request
-#                Authenticator as the challenge), the right password,
-#                answered by an Access-Accept
+#                Authenticator as the challenge), the right password and
+#                the Cisco-AVPair, answered by an Access-Accept carrying
+#                the Cisco-AVPair and the WISPr-Bandwidth-Max-Down
 #   acct-start   Accounting-Request, Acct-Status-Type Start (RFC 2866),
 #                with a USR (vendor 429) USR-Connect-Speed, which
 #                FreeRADIUS encodes in USR's own format (a 4-byte
@@ -56,8 +57,8 @@
 # and runs `freeradius -X -d <copy>` in the foreground.
 #
 # The script asserts the composition exactly, frame by frame: sender,
-# ports, Code, Identifier pairing and which attributes each frame
-# carries, and stops otherwise.
+# ports, Code, Identifier pairing, which attributes each frame carries
+# and the Vendor-Id of each Vendor-Specific, and stops otherwise.
 
 set -euo pipefail
 
