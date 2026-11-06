@@ -20,8 +20,11 @@ Later command blocks set `MS`, `BODY`, `PR`, `HEAD_SHA`, `SHA`, `T0`,
 blocks after them reuse those values.
 
 The blocks assume bash. zsh does not word-split an unquoted `$runs`, so
-step 11's guard would treat every run ID as one, and the `(exit 1)` that
-ends a refused retag closes an interactive shell that has `set -e` on.
+step 11's guard would treat every run ID as one.
+
+Do not turn on `set -e` in that shell. The `(exit 1)` that ends a
+refused block, such as a refused retag, closes an interactive shell
+that has it on, in bash as in zsh.
 
 ## 1. Check the preconditions
 
@@ -430,22 +433,30 @@ Step 4 measured the wheel on the release branch. When `$SHA` is a later
 `master` commit, gate fixes may have changed what the wheel holds, so
 build it again from `$SHA` and compare its size with the last CLAIMS
 1.5 row and with the size README states, both read from `$SHA` rather
-than from the working tree. CLAIMS gives the size in bytes; README gives
-it in KiB to one decimal, as "**A 293.2 KiB wheel**". Each comparison
-prints `same`, or `DIFFERS: got ... vs want ...`:
+than from the working tree. CLAIMS gives the size in bytes, in the 1.5
+wheel row that names `netprotocols-X.Y.Z-py3-none-any.whl`; README gives
+it in KiB to one decimal, in its `**A N KiB wheel …` line. Each
+comparison prints `same`, or `DIFFERS: got ... vs want ...`, where a
+failed build reads as `got no wheel` and a missing row or line as
+`want none`. The first line clears what an earlier pass set, so a stale
+size is never compared:
 
 ```bash
+d= got= want= got_kib= want_kib=
 d=$(mktemp -d) && git archive "$SHA" | tar -x -C "$d" &&
-  (cd "$d" && uv build --wheel) && got=$(stat -c %s "$d"/dist/*.whl) &&
-  echo "wheel: $got bytes"
-want=$(git show "$SHA:docs/CLAIMS.md" | grep '^| 1.5 wheel' | tail -1 |
-  sed -n 's/.*-py3-none-any\.whl` \([0-9,]*\) bytes.*/\1/p' | tr -d ,)
+  (cd "$d" && uv build --wheel) &&
+  got=$(stat -c %s "$d/dist/netprotocols-$V-py3-none-any.whl") &&
+  echo "wheel: $got bytes" || echo "wheel: FAILED: no netprotocols-$V wheel built from $SHA"
+want=$(git show "$SHA:docs/CLAIMS.md" | grep '^| 1\.5 wheel |' |
+  sed -n "s/.*\`netprotocols-${V//./\\.}-py3-none-any\.whl\` \([0-9,]*\) bytes.*/\1/p" |
+  tail -1 | tr -d ,)
 [ -n "$got" ] && [ "$got" = "$want" ] && echo "CLAIMS: same" ||
-  echo "CLAIMS: DIFFERS: got $got vs want $want"
-got_kib=$(awk -v b="$got" 'BEGIN { printf "%.1f", b / 1024 }')
-want_kib=$(git show "$SHA:README.md" | sed -n 's/.*\*\*A \([0-9.]*\) KiB wheel.*/\1/p' | head -1)
-[ -n "$got" ] && [ "$got_kib" = "$want_kib" ] && echo "README: same" ||
-  echo "README: DIFFERS: got $got_kib KiB vs want $want_kib KiB"
+  echo "CLAIMS: DIFFERS: got ${got:-no wheel} vs want ${want:-none} (bytes)"
+[ -z "$got" ] || got_kib=$(awk -v b="$got" 'BEGIN { printf "%.1f", b / 1024 }')
+want_kib=$(git show "$SHA:README.md" |
+  sed -n 's/.*\*\*A \([0-9.]*\) KiB wheel.*/\1/p' | head -1)
+[ -n "$got_kib" ] && [ "$got_kib" = "$want_kib" ] && echo "README: same" ||
+  echo "README: DIFFERS: got ${got_kib:-no wheel} vs want ${want_kib:-none} (KiB)"
 ```
 
 If either differs, correct README and CLAIMS by a PR to `master` as in
@@ -466,17 +477,33 @@ git push origin "refs/tags/v$V"
 ## 10. Watch `release.yml`
 
 `new_run` and `wait_run` are the functions step 7 defines, and they
-read `SHA` and `T0`. In a new shell, export `V` and `REPO` again as at
-the top of this file, define both functions again, and first set `SHA`
-to the tagged commit and `T0` to a UTC time, in the same
-`%Y-%m-%dT%H:%M:%SZ` format, at or shortly before the push. Left as
-written, the `T0` placeholder matches no run, and `wait_run` gives up:
+read `SHA` and `T0`. In the shell that ran step 9, or step 11's retag,
+both are already set: skip to the second block.
+
+**Only in a new shell:** export `V` and `REPO` again as at the top of
+this file, define both functions again, and run this block after
+replacing the placeholder with a UTC time, in the same
+`%Y-%m-%dT%H:%M:%SZ` format, at or shortly before the push:
 
 ```bash
-SHA=$(git rev-parse "v$V^{commit}")   # in a new shell only
-T0=YYYY-MM-DDTHH:MM:SSZ               # in a new shell only: UTC, at or before the push
-RUN=$(wait_run release.yml push) && echo "RUN=$RUN"
-gh run watch "$RUN" --exit-status
+SHA=$(git rev-parse "v$V^{commit}") && echo "SHA=$SHA"
+T0=YYYY-MM-DDTHH:MM:SSZ
+```
+
+Then, in either shell, find the run and watch it. The block refuses to
+start while `T0` is unset or still holds the placeholder: an unset `T0`
+would match an older `push` run on the same commit, and the placeholder
+would match none:
+
+```bash
+RUN=
+if [[ $T0 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+  RUN=$(wait_run release.yml push) && echo "RUN=$RUN" &&
+    gh run watch "$RUN" --exit-status
+else
+  echo "T0 is \"$T0\", not a UTC time: set it as in the block above." >&2
+  (exit 1)
+fi
 ```
 
 Its stages, in order, and what each one guarantees:
@@ -517,17 +544,21 @@ Its stages, in order, and what each one guarantees:
     look like a run that uploaded nothing.
   - **Every job is `completed`.**
   - **No job has an upload step whose conclusion is anything but
-    `skipped`.** An upload step is one named "Publish to PyPI"; one whose
-    name starts with "Run pypa/gh-action-pypi-publish", as runs from
-    before `release.yml` named the step list it; or one whose name
-    contains `uv publish` or `twine upload`. v1.0.0's runs uploaded with
-    `uv publish`. A job that uploads under another name, such as a
-    renamed `publish` job, is caught by its step.
+    `skipped`.** Step names are compared in lower case, with leading and
+    trailing spaces trimmed. An upload step is one named "publish to
+    pypi"; one whose name starts with "run pypa/gh-action-pypi-publish",
+    as runs from before `release.yml` named the step list it; or one
+    whose name contains `uv publish` or `twine upload`. v1.0.0's runs
+    uploaded with `uv publish`. A job that uploads under another name,
+    such as a renamed `publish` job, is caught by its step, whatever the
+    case or spacing of the step's name.
   - **A `publish` job that was not skipped lists an upload step.** One
     that ran and lists none (an older workflow that uploaded with another
     step, or a job cancelled before its steps were recorded) fails the
     check.
-  - **Some attempt lists a job named `publish`.** The exception is a run
+  - **Some attempt lists a job named `publish`.** The name must match
+    exactly; the guard quotes each job name as JSON, so a name with a
+    newline in it cannot pass for `publish`. The exception is a run
     that lists no jobs at all and concluded `failure` or
     `startup_failure`, which is how GitHub records a run that never
     started a job, such as one with an invalid workflow file. A run that
@@ -551,18 +582,19 @@ Its stages, in order, and what each one guarantees:
     esac
     jobs=$(gh api "repos/$REPO/actions/runs/$1/jobs?filter=all&per_page=100" --paginate --jq '
       (.jobs // error("no jobs array in the response"))[] |
-      [.steps[]? | select(.name == "Publish to PyPI" or
-                          (.name | startswith("Run pypa/gh-action-pypi-publish")) or
-                          (.name | contains("uv publish")) or
-                          (.name | contains("twine upload")))] as $up |
-      "job \(.name)",
+      [.steps[]? | (.name | ascii_downcase | gsub("^\\s+|\\s+$"; "")) as $n |
+       select($n == "publish to pypi" or
+              ($n | startswith("run pypa/gh-action-pypi-publish")) or
+              ($n | contains("uv publish")) or
+              ($n | contains("twine upload")))] as $up |
+      "job \(.name | @json)",
       (select(.status != "completed" or any($up[]; .conclusion != "skipped") or
               (.name == "publish" and .conclusion != "skipped" and ($up | length) == 0)) |
        "bad run \(.run_id) attempt \(.run_attempt): job \(.name) \(.conclusion // .status), upload steps \([$up[] | "\(.name): \(.conclusion // .status)"])")
     ') || { echo "Could not list the jobs of run $1." >&2; return 1; }
     bad=$(printf '%s\n' "$jobs" | sed -n 's/^bad //p')
     [ -z "$bad" ] || { echo "$bad" >&2; return 1; }
-    printf '%s\n' "$jobs" | grep -qx 'job publish' && return 0
+    printf '%s\n' "$jobs" | grep -qxF 'job "publish"' && return 0
     if [ -z "$jobs" ]; then
       case "$run" in "completed failure" | "completed startup_failure") return 0 ;; esac
     fi
@@ -615,7 +647,10 @@ Its stages, in order, and what each one guarantees:
         [ "$(git cat-file -t "v$V")" = commit ] &&
         T0=$(date -u +%Y-%m-%dT%H:%M:%SZ) &&
         git push --force origin "refs/tags/v$V" ||
-        { echo "Stopped: SHA is empty, or one of these commands failed." >&2; (exit 1); }
+        { echo "Stopped: SHA is empty, or one of these commands failed." >&2
+          [ -z "$SHA" ] || echo "The local tag v$V may already point at $SHA;" \
+            "git fetch --force origin \"refs/tags/v$V:refs/tags/v$V\" restores it." >&2
+          (exit 1); }
     else
       echo "Refusing to move v$V: the retagging rule does not allow it." >&2
       (exit 1)
@@ -646,8 +681,9 @@ Its stages, in order, and what each one guarantees:
     `MAXIMUM_AGE_FOR_NEW_UPLOADS = dt.timedelta(days=14)`
     ([`warehouse/constants.py`](https://github.com/pypi/warehouse/blob/0fac80550625bdc75baab04c303eddf249b93ab0/warehouse/constants.py), line 32)
     with "Uploading new files to releases older than 14 days is not
-    allowed" (`legacy.py` lines 1252-1260). A byte-identical duplicate still gets HTTP 200 after that,
-    because the duplicate check runs first.
+    allowed" (`legacy.py` lines 1252-1260). A byte-identical duplicate
+    still gets HTTP 200 after that, because the duplicate check runs
+    first.
   - **The builds are reproducible, within limits.** A local `uv build`
     of a `git archive` of `1e08ecb` matched PyPI's 2.9.0 wheel and sdist
     byte for byte (SHA-256 compared on 2026-11-06), and CI's build job
