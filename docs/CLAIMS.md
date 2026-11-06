@@ -836,7 +836,7 @@ measured a 2-5% cost; it has not been profiled here (#250).
   1.21×, LLDP's 5×, the Tier 4 captures' 1.5×, the TLS capture's 2×)
   came from a per-file harness this release did not repeat, so they
   remain the 2.8.0 figures and the README says so.
-- **Scapy's lead fell from 3.3× to 3.0×** while dpkt's rose from 1.51×
+- **netprotocols' lead over scapy fell from 3.3× to 3.0×** while dpkt's rose from 1.51×
   to 1.53×; the three runs read 2.90-3.09× against scapy. Whether
   #235's bounding is the cause was not isolated.
 - **Depth did not move:** the 17 new frames add no frame on which
