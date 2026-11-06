@@ -355,11 +355,14 @@ both are green.
      echo "No $2 run of $1 on $SHA created since $T0 after 5 minutes." >&2
      return 1
    }
+   FUZZ_RUN= MUT_RUN=
    FUZZ_RUN=$(wait_run fuzz.yml workflow_dispatch) &&
      MUT_RUN=$(wait_run mutation.yml workflow_dispatch) &&
-     echo "fuzz $FUZZ_RUN, mutation $MUT_RUN"
-   gh run watch "$FUZZ_RUN" --exit-status
-   gh run watch "$MUT_RUN" --exit-status
+     echo "fuzz $FUZZ_RUN, mutation $MUT_RUN" &&
+     gh run watch "$FUZZ_RUN" --exit-status &&
+     gh run watch "$MUT_RUN" --exit-status &&
+     echo "Both gates passed." ||
+     { echo "A gate run was not found or did not pass: do not tag." >&2; (exit 1); }
    ```
 
    Both workflows key their concurrency group on the triggering event, so
