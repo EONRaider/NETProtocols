@@ -1144,6 +1144,25 @@ The values are also hard-coded, independently, in
   whether it sends other TLVs. `check_fixtures`
   reads an HSRPv2 message on 1985 (first byte 1) or 2029 with
   `_check_hsrpv2`, and has none in the corpus to read.
+  **The corpus holds no HSRP Advertise (Op Code 3) either**, for the
+  same reasons: Yersinia 0.8.2 sends Hello, Coup and Resign only, and
+  no open-source sender of the interface-state Advertise exists.
+  `HSRPAdvertise` is therefore tested only against hand-built vectors
+  in `tests/test_hsrp_advertise.py` (and `tests/test_check_fixtures.py`,
+  `tests/test_fuzz.py` and `tests/conftest.py`'s
+  `raw_hsrp_advertise`), packed field by field with `struct` in the
+  layout of packet-hsrp.c at commit 6f7207a6, each labelled as
+  hand-built; tshark 4.2.2 decodes the four of
+  `tests/test_hsrp_advertise.py`'s `VECTORS`, wrapped in
+  Ethernet/IPv4/UDP from and to port 1985 to 224.0.0.2 with TTL 1, as
+  HSRP Advertise messages with good IPv4 and UDP checksums and the
+  fields the tests expect, and a fifth with a distinct value in every
+  field at the offsets and widths the tests give. packet-hsrp.c gives
+  no value for the TLV Length, which the vectors set to 14, the bytes
+  from the TLV Type to the end; what a Cisco router puts there, and in
+  the Reserved fields, is unknown here. `check_fixtures` reads a
+  datagram on 1985 that opens with `00 03` with
+  `_check_hsrp_advertise`, and has none in the corpus to read.
 - `tls.pcap` was produced by `scripts/capture_fixtures_tls.sh`. nginx
   1.24 (nginx-light, OpenSSL 3.0.13) serves HTTPS on 10.9.196.2:443 in
   one netns, with session tickets off and a self-signed ECDSA P-256

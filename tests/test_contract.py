@@ -32,6 +32,7 @@ from netprotocols import (
     VRRP,
     VXLAN,
     Ethernet,
+    HSRPAdvertise,
     HSRPv2,
     ICMPv4,
     InvalidFieldError,
@@ -70,6 +71,7 @@ class TestTruncation:
             (STUN, "raw_stun_message"),
             (NTP, "raw_ntp_message"),
             (HSRP, "raw_hsrp_hello"),
+            (HSRPAdvertise, "raw_hsrp_advertise"),
             (HSRPv2, "raw_hsrpv2_hello"),
             (TLS, "raw_tls_client_hello"),
             (VRRP, "raw_vrrpv2_advert"),
@@ -455,6 +457,27 @@ class TestDamagedPayload:
         assert packet.stopped_by is None
         assert packet.consumed == 20
         assert bytes(packet) == raw_hsrp_hello
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    @pytest.mark.parametrize(
+        "trailer",
+        [
+            pytest.param(b"\xde\xad\xbe\xef", id="fcs"),
+            pytest.param(bytes(30), id="padding"),
+            pytest.param(b"\x04\x1c\x01\x00" + bytes(26), id="md5-tlv"),
+        ],
+    )
+    def test_an_hsrp_advertise_leaves_what_follows_it(
+        self, raw_hsrp_advertise, trailer, lax
+    ):
+        """An Advertise is always 16 bytes, so whatever follows it is
+        left undecoded."""
+        raw = raw_hsrp_advertise + trailer
+        packet = decode_frame(raw, start=HSRPAdvertise, lax=lax)
+        assert [type(layer) for layer in packet] == [HSRPAdvertise]
+        assert packet.stopped_by is None
+        assert packet.consumed == 16
+        assert bytes(packet) == raw_hsrp_advertise
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(

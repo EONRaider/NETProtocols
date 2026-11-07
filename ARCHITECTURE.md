@@ -511,13 +511,17 @@ after its Control are present and not 0x0000, and `LLC.next_protocol()`
 then answers `None`, whatever `llc.dsap` holds at 0x42; fewer than two
 octets still reach `STP`, which reports the truncation. UDP port 123
 carries NTP's time messages and its mode 6 control messages, whose
-headers differ, so `UDP.decode()` records the first byte of its
-payload and `UDP.next_protocol()` hands it to the class its port
-names, through that class's `_for_payload()`: `NTP` answers
-`NTPControl` for a mode 6 byte and itself otherwise, `HSRP` answers
-`HSRPv2` for a first byte of 1, which opens every HSRPv2 message on
-UDP port 1985, and itself otherwise, and every other class answers
-itself, so the registry still names one class per port.
+headers differ, so `UDP.decode()` records the first two bytes of its
+payload, as one 16-bit integer whose low byte is 0 when the payload
+ends after its first, and `UDP.next_protocol()` hands them to the
+class its port names, through that class's `_for_payload()`: `NTP`
+answers `NTPControl` for a mode 6 first byte and itself otherwise,
+`HSRP` answers `HSRPv2` for a first byte of 1, which opens every HSRPv2
+message on UDP port 1985, `HSRPAdvertise` for the two bytes `00 03`,
+Version 0 and Op Code 3, which open every Advertise, and itself
+otherwise, and every other class answers itself, so the registry still
+names one class per port. The integer is kept in one
+`compare=False` field, `_lead`, whatever the port.
 Only the bytes can say, and `next_protocol()` is handed none, so each
 `decode()` records what it saw on the instance in a field kept out of
 the dataclass's comparison and hash (`compare=False`, the mechanism
@@ -600,6 +604,7 @@ flowchart LR
   U -->|1812, 1813| RAD[RADIUS]
   U -->|123| NT[NTP]
   U -->|1985| HS[HSRP]
+  U -->|1985 with first bytes 00 03| HSA[HSRPAdvertise]
   U -->|2029, or 1985 with first byte 1| HS2[HSRPv2]
   T -->|179| BGP[BGP message]
   BGP -->|another message in the segment| BGP
@@ -1038,19 +1043,16 @@ judged.
 The guard is also what keeps HSRPv2 (Cisco's TLV-based successor,
 sent to 224.0.0.102 on the same port) from being read as HSRPv1: an
 HSRPv2 message starts with its Group State TLV's Type, 1, where HSRPv1
-has its Version, 0. UDP port 1985 therefore reads the first byte before
-choosing a header, as port 123 does for NTP's control messages:
-`UDP.next_protocol()` hands it to `HSRP._for_payload()`, which answers
-`HSRPv2` for a first byte of exactly 1 and `HSRP` for any other, which
-`HSRP.decode()` then judges as before, so every byte but 0 and 1 is
-still rejected at `version`. `HSRP.decode()` called directly on an
-HSRPv2 message still raises at `version`, naming `HSRPv2` in its
-message. HSRP for IPv6, the HSRPv2 format sent to ff02::66, uses UDP
-port 2029, which names `HSRPv2` directly. Cisco's Op Code 3
-interface-state Advertise, version 0 but laid out as a TLV, is
-rejected at `opcode`, before the length, however short it is, and is
-not decoded, so as with ntpd's mode 7 a strict walk raises on it: walk
-such traffic with `lax=True`.
+has its Version, 0. UDP port 1985 therefore reads the first two bytes
+before choosing a header, as port 123 does for NTP's control messages:
+`UDP.next_protocol()` hands them to `HSRP._for_payload()`, which
+answers `HSRPv2` for a first byte of exactly 1, `HSRPAdvertise` for
+`00 03` (below), and `HSRP` for any other, which `HSRP.decode()` then
+judges as before, so every first byte but 0 and 1 is still rejected at
+`version`. `HSRP.decode()` called directly on an HSRPv2 message still
+raises at `version`, naming `HSRPv2` in its message. HSRP for IPv6,
+the HSRPv2 format sent to ff02::66, uses UDP port 2029, which names
+`HSRPv2` directly.
 
 `HSRPv2.decode()` judges the Group State TLV's first eight bytes, each
 as soon as it is in the buffer and before the length: a Type of 1, a
@@ -1065,11 +1067,12 @@ Length, a Text Authentication TLV (Type 3) of other than 8 bytes or an
 MD5 Authentication TLV (Type 4) of other than 28 rejecting it.
 Measured as above, by `scripts/measure_port_guard.py --one-generator
 --port 1985 --count HSRP --count HSRPv2` and `--port 2029`, the walks
-to port 1985 are unchanged by `HSRPv2`: on this tree as on the tree
-before it, 89,998 of the 90,000 ended with `stopped_by` set and the
-same two decoded an HSRP layer, and none decoded HSRPv2, since every payload whose first byte is
-1 that the tree before rejected at `version` is now rejected by
-`HSRPv2.decode()` instead. Every one of the 90,000 walks to port 2029
+to port 1985 are unchanged by `HSRPv2`: on the tree that added it as on
+the tree before it, 89,998 of the 90,000 ended with `stopped_by` set
+and the same two decoded an HSRP layer, and none decoded HSRPv2, since
+every payload whose first byte is 1 that the tree before rejected at
+`version` is rejected by `HSRPv2.decode()` instead. Every one of the
+90,000 walks to port 2029
 ended with `stopped_by` set and none decoded an HSRPv2 layer, where on
 the tree before, with nothing registered there, every walk ended at UDP
 with none set. With the eight judged bytes forced to values they
@@ -1078,6 +1081,35 @@ random 300-byte payloads: the walk of the 258 bytes after the Group
 State TLV is what turns away the rest, almost all of them for a TLV
 whose Length runs past the datagram. Past those bytes the Identifier,
 the Priority, the timers and the address are not judged.
+
+Cisco's Op Code 3 interface-state Advertise, version 0 like HSRPv1 but
+16 bytes laid out as a TLV, opens with `00 03`, and the walk hands it
+to `HSRPAdvertise`; `HSRP.decode()` called directly on one still
+raises at `opcode`, naming `HSRPAdvertise` in its message.
+`HSRPAdvertise.decode()` judges four fields, each as soon as its bytes
+are in the buffer and before the length: a Version of 0, an Op Code of
+3, a 2-byte TLV Type of 1 or 2 and a State of 1-3, so random bytes
+pass 1 x 1 x 2 x 3 of the 2^40 values of those five bytes, about 6 in
+2^40, one in 183 billion. That is stronger than HSRPv1's 18 in 2^24
+and a little stronger than STUN's 1 in 2^36 below, though weaker than
+HSRPv2's; only then are the 16 bytes held against the buffer. Measured
+by `scripts/measure_port_guard.py --port 1985 --count HSRP --count
+HSRPv2 --count HSRPAdvertise --one-generator`, and with the 0-600 byte
+payloads from a generator seeded again (without `--one-generator`),
+the walks to port 1985 are unchanged by `HSRPAdvertise`: on this tree
+as on the tree before it, 89,998 of the 90,000 one-generator walks and
+all 90,000 reseeded ones ended with `stopped_by` set, the same two
+one-generator walks decoded an HSRP layer and none decoded HSRPv2 or
+HSRPAdvertise. Of those payloads one, a 300-byte payload of seed 2 in
+both draws, opens with `00 03`; the tree before rejected it at
+`HSRP.decode()`'s `opcode`, and `HSRPAdvertise.decode()` rejects it at
+`tlv_type`. With the Version and Op Code forced to 0 and 3
+(`random.Random(0)`), `HSRPAdvertise.decode()` rejected all 100,000
+random 300-byte payloads, 99,999 at `tlv_type` and 1 at `state`, near
+the 0.04 acceptances expected; with all four judged fields forced to
+values they accept, it accepted all 100,000. Past those fields any 11
+bytes are an Advertise: the TLV Length, the Reserved fields and the
+active and passive group counts are not judged.
 
 BGP on TCP 179 (RFC 4271) has the strongest guard of any port entry:
 every message opens with a 16-byte Marker of all ones, which random
@@ -1447,7 +1479,8 @@ src/netprotocols/
 │                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages),
 │                   hsrp.py (HSRPv1 Hello, Coup and Resign;
-│                   HSRPv2 and HSRP for IPv6 with their TLVs),
+│                   the Op Code 3 Advertise; HSRPv2 and HSRP
+│                   for IPv6 with their TLVs),
 │                   tls.py (TLS records, the ClientHello and its
 │                   SNI: TLS + TLSClientHello + TLSExtension, and
 │                   peek_server_name + TLSServerNamePeek for a

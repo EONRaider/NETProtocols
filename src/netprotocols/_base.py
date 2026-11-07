@@ -173,12 +173,13 @@ bottom label where RFC 3032 reserves that label for one, and otherwise
 by the first nibble after the stack, read as an IP version. ``LLC``
 gates DSAP 0x42 on the payload's first two octets: a Protocol
 Identifier other than STP's 0x0000, such as GARP's, ends the walk.
-``UDP`` keeps the first byte of its payload and hands it to the class
-its port names, through that class's ``_for_payload()``, which may
-answer another class: ``NTP`` answers ``NTPControl`` for a mode 6
-first byte, so UDP port 123 reads the mode before choosing a header,
-and ``HSRP`` answers ``HSRPv2`` for a first byte of 1, so UDP port 1985
-reads the version before choosing one.
+``UDP`` keeps the first two bytes of its payload, as a 16-bit integer,
+and hands them to the class its port names, through that class's
+``_for_payload()``, which may answer another class: ``NTP`` answers
+``NTPControl`` for a mode 6 first byte, so UDP port 123 reads the mode
+before choosing a header, and ``HSRP`` answers ``HSRPv2`` for a first
+byte of 1 and ``HSRPAdvertise`` for the first two bytes ``00 03``, so
+UDP port 1985 reads the version and the Op Code before choosing one.
 Each ``decode()`` records what only the bytes could tell it on the
 instance, in a ``compare=False`` field outside its comparison and
 hash, so two equal headers compare equal wherever they were found,
@@ -419,12 +420,14 @@ class Protocol(ABC):
 
         A port table names one class for a port, and
         :meth:`~netprotocols.UDP.next_protocol` hands that class the
-        first byte of the datagram's payload, so that a port carrying
-        two message formats can pick between them before either is
-        decoded (see "Decode context in next_protocol" above). This
-        answers ``cls`` itself; :class:`~netprotocols.NTP` and
+        first two bytes of the datagram's payload, so that a port
+        carrying several message formats can pick between them before
+        any is decoded (see "Decode context in next_protocol" above).
+        This answers ``cls`` itself; :class:`~netprotocols.NTP` and
         :class:`~netprotocols.HSRP` override it.
 
-        :param lead: The first byte of the payload.
+        :param lead: The first two bytes of the payload as a big-endian
+            16-bit integer, its low byte 0 when the payload holds only
+            one.
         """
         return cls
