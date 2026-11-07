@@ -498,13 +498,25 @@ raises: `STUN.attribute()`, which reads the attributes up to the first
 that does not fit, `RADIUSAttribute.value`, `RADIUSAttribute.vendor_id`
 and `vendor_name`, `SCTPChunk.state_cookie`, which is `None` wherever
 `parameters` raises, and the scalar fields of `SCTPChunk` (`tsn`,
-`initiate_tag`, `a_rwnd`, ...). Two kinds of accessor sit outside the
-split. `RADIUS`'s packet-level lookups (`user_name`, `nas_ip_address`,
-`nas_port`, `framed_ip_address`) read through `parsed_attributes` and
-raise as it does. A list read from inside one value, whose number of
-entries a count or a fixed entry size gives, is a typed view of that
-value and degrades: `SCTPChunk.gap_ack_blocks` and `duplicate_tsns`,
-`CDP.addresses` and `management_addresses`, and `IPv6Routing.segments`.
+`initiate_tag`, `a_rwnd`, ...). These accessors sit outside the
+split:
+
+- `NTP.extension_fields` walks type-length-value fields and never
+  raises: its walk ends where what is left has a MAC's length, at a
+  Length RFC 7822 §3 does not allow, or at the end of the body.
+- `PIM.address_list` reads encoded addresses to the end of the Address
+  List option's value and raises `TruncatedHeaderError` for an address
+  that runs past it (and `InvalidFieldError` for a family or encoding
+  it cannot size).
+- `RADIUS`'s packet-level lookups (`user_name`, `nas_ip_address`,
+  `nas_port`, `framed_ip_address`) read through `parsed_attributes`
+  and raise as it does.
+- Lists whose entries a count or a fixed entry size gives:
+  `IGMP.group_records` raises `InvalidFieldError` for a report that
+  ends before its record count or a record that runs past the message,
+  while `CDP.addresses` and
+  `management_addresses`, `IPv6Routing.segments`, and
+  `SCTPChunk.gap_ack_blocks` and `duplicate_tsns` degrade to `None`.
 
 ## Walking a frame: the next_protocol() chain
 

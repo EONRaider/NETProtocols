@@ -748,9 +748,10 @@ def _raise_parameter_error(raw: bytes, offset: int) -> NoReturn:
         fixed bytes.
     :param offset: Where in ``raw`` the parameter that does not walk
         starts.
-    :raises InvalidFieldError: on every call, naming the failure: fewer
-        than 4 bytes left for the parameter header, a parameter length
-        below 4, or otherwise a parameter length past the end of ``raw``.
+    :raises InvalidFieldError: if fewer than 4 bytes remain at
+        ``offset`` for the parameter header, if the parameter length is
+        below 4, or if the parameter length runs past the end of
+        ``raw``.
     """
     left = len(raw) - offset
     at = _INIT_FIXED_LEN + offset
