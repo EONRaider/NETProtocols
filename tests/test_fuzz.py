@@ -537,10 +537,47 @@ class TestDirectlyBuiltDecodesPassValidation:
                 assert_constructor_accepts(layer)
 
     @given(data=fuzz_input)
+    # Each example is refused by a decode() check the constructor
+    # repeats, so a decode() without that check builds an instance its
+    # constructor rejects. TCP: a data offset of 4.
+    @example(data=bytes.fromhex("0050c00100000001000000024018200000000000"))
+    # OSPF: a Hello whose body is not 20 bytes plus whole neighbours.
+    @example(
+        data=bytes.fromhex("0201002d0a00000100000000000000000000000000000000")
+        + bytes(21)
+    )
+    # OSPF: version 3, and a Packet Length shorter than the header (type
+    # 0, which has no body framing to check).
+    @example(
+        data=bytes.fromhex("0301002c0a00000100000000000000000000000000000000")
+        + bytes(20)
+    )
+    @example(data=bytes.fromhex("02000010") + bytes(40))
+    # VRRP: two addresses declared, one present.
+    @example(data=bytes.fromhex("31016402000100000a000001"))
+    # PIM: version 3.
+    @example(data=bytes.fromhex("3100000000000000"))
+    # VRRP: version 1.
+    @example(data=bytes.fromhex("1101640000010000"))
+    # BGP: an OPEN whose Length runs past the buffer.
+    @example(data=b"\xff" * 16 + bytes.fromhex("001d01"))
+    # BGP: a KEEPALIVE whose Length, 18, is shorter than its header.
+    @example(data=b"\xff" * 16 + bytes.fromhex("001204"))
+    # UDP and RIP: a well-formed RIP Response, with and without its UDP
+    # header.
+    @example(
+        data=bytes.fromhex("0208020800200000")
+        + bytes.fromhex("02020000")
+        + bytes(20)
+    )
+    @example(data=bytes.fromhex("02020000") + bytes(20))
     def test_every_class_on_the_raw_bytes(self, data: bytes) -> None:
         for protocol in DIRECTLY_BUILT:
-            with contextlib.suppress(ProtocolError):
-                assert_constructor_accepts(protocol.decode(data))
+            try:
+                header = protocol.decode(data)
+            except ProtocolError:
+                continue
+            assert_constructor_accepts(header)
 
     def test_the_corpus(self) -> None:
         checked = 0
