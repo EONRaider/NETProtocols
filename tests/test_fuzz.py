@@ -1385,15 +1385,15 @@ _RADIUS_PACKETS = [
 @st.composite
 def _radius_seeded(draw: st.DrawFn) -> bytes:
     """A captured RADIUS packet, a few bytes changed (the Length and
-    the attribute headers among them), cut anywhere and followed by
-    nothing, an FCS-like 4 bytes or up to 23 more: well-formed and
-    broken attribute lists, and Lengths near the buffer's, which free
-    bytes rarely reach."""
+    the attribute headers among them), whole or cut anywhere, and
+    followed by nothing, an FCS-like 4 bytes or up to 23 more:
+    well-formed and broken attribute lists, and Lengths near the
+    buffer's, which free bytes rarely reach."""
     raw = bytearray(draw(st.sampled_from(_RADIUS_PACKETS)))
     for _ in range(draw(st.integers(0, 3))):
         position = draw(st.integers(0, len(raw) - 1))
         raw[position] = draw(st.integers(0, 255))
-    cut = draw(st.integers(0, len(raw)))
+    cut = draw(st.one_of(st.just(len(raw)), st.integers(0, len(raw))))
     tail = draw(
         st.one_of(
             st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=23)
@@ -1420,6 +1420,8 @@ def _read_every_radius_attribute(radius: RADIUS) -> None:
     _ = (radius.user_name, radius.nas_ip_address)
     _ = (radius.nas_port, radius.framed_ip_address)
     event(f"RADIUS attributes: {len(attributes)}")
+    vendor_specific = any(found.type == 26 for found in attributes)
+    event(f"RADIUS Vendor-Specific reached: {vendor_specific}")
 
 
 #: The Vendor-Ids whose sub-attributes are in a format other than RFC
@@ -1572,7 +1574,9 @@ class TestRADIUSAccessorSafety:
         except ProtocolError:
             length = int.from_bytes(data[2:4]) if len(data) >= 4 else 0
             assert len(data) < 20 or not 20 <= length <= len(data)
+            event("RADIUS decode: rejected")
             return
+        event("RADIUS decode: accepted")
         assert bytes(radius) == data[: radius.length]
         assert RADIUS.decode(bytes(radius)) == radius
         assert radius.code_name
