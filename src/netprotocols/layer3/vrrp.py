@@ -71,6 +71,7 @@ from netprotocols._base import (
     hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
+    slot_setters,
 )
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -252,20 +253,55 @@ class VRRP(Protocol):
                 actual=len(data),
             )
         to_str = bytes_to_ipv6 if cls._ipv6 else bytes_to_ipv4
-        return cls(
-            version=version,
-            type=ver_type & 0x0F,
-            vrid=vrid,
-            priority=priority,
-            count_ip_addrs=count,
-            adver_word=adver_word,
-            checksum=checksum,
-            addresses=tuple(
+        addresses = tuple(
+            [
                 to_str(bytes(data[offset : offset + width]))
                 for offset in range(cls._struct.size, addresses_end, width)
-            ),
-            auth_data=bytes(data[addresses_end:end]),
+            ]
         )
+        auth_data = bytes(data[addresses_end:end])
+        if cls is not VRRP and cls is not VRRPv6:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                version=version,
+                type=ver_type & 0x0F,
+                vrid=vrid,
+                priority=priority,
+                count_ip_addrs=count,
+                adver_word=adver_word,
+                checksum=checksum,
+                addresses=addresses,
+                auth_data=auth_data,
+            )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the version is checked above, the type is a nibble,
+        # one address is read per count, and the authentication data is
+        # sliced to the version's length after the buffer is confirmed
+        # to hold it.
+        (
+            set_version,
+            set_type,
+            set_vrid,
+            set_priority,
+            set_count_ip_addrs,
+            set_adver_word,
+            set_checksum,
+            set_addresses,
+            set_auth_data,
+        ) = _VRRP_SETTERS
+        advert = object.__new__(cls)
+        set_version(advert, version)
+        set_type(advert, ver_type & 0x0F)
+        set_vrid(advert, vrid)
+        set_priority(advert, priority)
+        set_count_ip_addrs(advert, count)
+        set_adver_word(advert, adver_word)
+        set_checksum(advert, checksum)
+        set_addresses(advert, addresses)
+        set_auth_data(advert, auth_data)
+        return advert
 
     def __bytes__(self) -> bytes:
         """Serialize the advert, re-encoding its address strings."""
@@ -366,6 +402,21 @@ class VRRP(Protocol):
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x5af6"``."""
         return hex_str(self.checksum, 6)
+
+
+#: The slot setters :meth:`VRRP.decode` builds its instance with.
+_VRRP_SETTERS = slot_setters(
+    VRRP,
+    "version",
+    "type",
+    "vrid",
+    "priority",
+    "count_ip_addrs",
+    "adver_word",
+    "checksum",
+    "addresses",
+    "auth_data",
+)
 
 
 @dataclass(frozen=True, slots=True)

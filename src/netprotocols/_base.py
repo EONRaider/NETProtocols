@@ -40,10 +40,19 @@ are valid by construction.
 
 The three headers that carry addresses (``Ethernet``, ``ARP``,
 ``IPv4``) build their decoded instance directly, with
-``object.__new__`` plus ``object.__setattr__`` per field, skipping
-``__init__`` and ``__post_init__``. Every public constructor still
-validates, and every ``__post_init__`` check skipped this way holds for
-what ``decode()`` produces (documented at each site).
+``object.__new__`` plus one slot setter per field (see
+:func:`slot_setters`), skipping ``__init__`` and ``__post_init__``.
+``TCP``, ``UDP``, ``OSPF``, ``PIM``, ``VRRP`` (and ``VRRPv6``), ``RIP``
+and ``BGP`` do the same, but only when ``decode()`` is called on one
+of those classes itself: their ``decode()`` runs every check of their
+wire framing itself, at the offset it reports, so their
+``__post_init__`` would only repeat it (``UDP`` has none, and skips
+only ``__init__``). Called on any other subclass of them, which may
+add fields or checks of its own, ``decode()`` builds the instance
+through that subclass's constructor, ``__init__`` and
+``__post_init__`` included. Every public constructor still validates,
+and every ``__post_init__`` check skipped this way holds for what
+``decode()`` produces (documented at each site).
 
 ``HTTP`` takes the same path: its ``__post_init__`` re-parses
 ``head + raw_body`` to check that the two are one complete, exactly
@@ -194,6 +203,7 @@ from __future__ import annotations
 
 import socket
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from ipaddress import AddressValueError, IPv6Address
 from struct import Struct
 from struct import error as StructError
@@ -213,6 +223,7 @@ __all__ = [
     "ipv4_to_bytes",
     "ipv6_to_bytes",
     "mac_to_bytes",
+    "slot_setters",
 ]
 
 
@@ -317,6 +328,26 @@ def bytes_to_ipv6(data: bytes) -> str:
     head = ":".join(parts[:best_start])
     tail = ":".join(parts[best_start + best_len :])
     return f"{head}::{tail}"
+
+
+#: Stores one field's value on an instance: ``setter(instance, value)``.
+FieldSetter = Callable[[Any, Any], None]
+
+
+def slot_setters(cls: type, *names: str) -> tuple[FieldSetter, ...]:
+    r"""Return a setter for each of ``names``, slotted fields of ``cls``.
+
+    Each is the ``__set__`` of the field's slot descriptor, which stores
+    the value as ``object.__setattr__(instance, name, value)`` does,
+    bypassing a frozen dataclass's ``__setattr__``, without looking the
+    name up. It accepts an instance of ``cls`` or of any subclass.
+
+    :param cls: A slotted class that defines every one of ``names``.
+    :param \*names: The fields, in the order the setters are returned.
+    :raises KeyError: if ``cls`` itself does not define a slot for one
+        of ``names``.
+    """
+    return tuple(vars(cls)[name].__set__ for name in names)
 
 
 def hex_str(value: int, width: int) -> str:

@@ -14,6 +14,7 @@ from netprotocols._base import (
     hex_str,
     ipv4_to_bytes,
     mac_to_bytes,
+    slot_setters,
 )
 from netprotocols._enums import ARPHardwareType, ARPOperation, EtherType
 from netprotocols.layer2.ethernet import _ethertype_enum, _ethertype_name
@@ -81,17 +82,27 @@ class ARP(Protocol):
         # constructor's validators, so the instance is built directly,
         # without __post_init__ (see "Decode-path construction" in
         # _base.py).
+        (
+            set_htype,
+            set_ptype,
+            set_hlen,
+            set_plen,
+            set_oper,
+            set_sha,
+            set_spa,
+            set_tha,
+            set_tpa,
+        ) = _ARP_SETTERS
         header = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(header, "htype", htype)
-        set_field(header, "ptype", ptype)
-        set_field(header, "hlen", hlen)
-        set_field(header, "plen", plen)
-        set_field(header, "oper", oper)
-        set_field(header, "sha", bytes_to_mac(sha))
-        set_field(header, "spa", bytes_to_ipv4(spa))
-        set_field(header, "tha", bytes_to_mac(tha))
-        set_field(header, "tpa", bytes_to_ipv4(tpa))
+        set_htype(header, htype)
+        set_ptype(header, ptype)
+        set_hlen(header, hlen)
+        set_plen(header, plen)
+        set_oper(header, oper)
+        set_sha(header, bytes_to_mac(sha))
+        set_spa(header, bytes_to_ipv4(spa))
+        set_tha(header, bytes_to_mac(tha))
+        set_tpa(header, bytes_to_ipv4(tpa))
         return header
 
     def __bytes__(self) -> bytes:
@@ -196,3 +207,18 @@ class ARP(Protocol):
         See :attr:`spa_address`.
         """
         return IPv4Address(self.tpa)
+
+
+#: The slot setters :meth:`ARP.decode` builds its instance with.
+_ARP_SETTERS = slot_setters(
+    ARP,
+    "htype",
+    "ptype",
+    "hlen",
+    "plen",
+    "oper",
+    "sha",
+    "spa",
+    "tha",
+    "tpa",
+)

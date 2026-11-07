@@ -27,9 +27,10 @@ import contextlib
 import importlib.util
 import struct
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, fields, replace
 from ipaddress import IPv6Address
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from hypothesis import assume, event, example, given
@@ -498,6 +499,230 @@ class TestPacketProperties:
             layers, consumed = walk(data)
             if layers:
                 assert bytes(Packet(*layers)) == bytes(data[:consumed])
+
+
+#: The classes whose decode() builds its instance without __init__ or
+#: __post_init__ (see "Decode-path construction" in _base.py).
+DIRECTLY_BUILT = (
+    Ethernet,
+    ARP,
+    IPv4,
+    TCP,
+    UDP,
+    OSPF,
+    PIM,
+    VRRP,
+    VRRPv6,
+    RIP,
+    BGP,
+)
+
+
+def assert_constructor_accepts(header: Protocol) -> None:
+    """Rebuild a decoded header through its constructor, which validates
+    every field, and check the rebuilt header equals it."""
+    rebuilt = replace(header)
+    assert rebuilt == header
+    assert bytes(rebuilt) == bytes(header)
+
+
+class TestDirectlyBuiltDecodesPassValidation:
+    """A decode() that skips __post_init__ must produce only instances
+    __post_init__ accepts: a constructor given the same field values
+    raises nothing."""
+
+    @given(data=fuzz_input)
+    def test_every_layer_of_a_walk(self, data: bytes) -> None:
+        for layer in decode_frame(data, lax=True).layers:
+            if isinstance(layer, DIRECTLY_BUILT):
+                assert_constructor_accepts(layer)
+
+    @given(data=fuzz_input)
+    # Each example is refused by a decode() check the constructor
+    # repeats, so a decode() without that check builds an instance its
+    # constructor rejects. TCP: a data offset of 4.
+    @example(data=bytes.fromhex("0050c00100000001000000024018200000000000"))
+    # OSPF: a Hello whose body is not 20 bytes plus whole neighbours.
+    @example(
+        data=bytes.fromhex("0201002d0a00000100000000000000000000000000000000")
+        + bytes(21)
+    )
+    # OSPF: version 3, and a Packet Length shorter than the header (type
+    # 0, which has no body framing to check).
+    @example(
+        data=bytes.fromhex("0301002c0a00000100000000000000000000000000000000")
+        + bytes(20)
+    )
+    @example(data=bytes.fromhex("02000010") + bytes(40))
+    # VRRP: two addresses declared, one present.
+    @example(data=bytes.fromhex("31016402000100000a000001"))
+    # PIM: version 3.
+    @example(data=bytes.fromhex("3100000000000000"))
+    # VRRP: version 1.
+    @example(data=bytes.fromhex("1101640000010000"))
+    # BGP: an OPEN whose Length runs past the buffer.
+    @example(data=b"\xff" * 16 + bytes.fromhex("001d01"))
+    # BGP: a KEEPALIVE whose Length, 18, is shorter than its header.
+    @example(data=b"\xff" * 16 + bytes.fromhex("001204"))
+    # UDP and RIP: a well-formed RIP Response, with and without its UDP
+    # header.
+    @example(
+        data=bytes.fromhex("0208020800200000")
+        + bytes.fromhex("02020000")
+        + bytes(20)
+    )
+    @example(data=bytes.fromhex("02020000") + bytes(20))
+    def test_every_class_on_the_raw_bytes(self, data: bytes) -> None:
+        for protocol in DIRECTLY_BUILT:
+            try:
+                header = protocol.decode(data)
+            except ProtocolError:
+                continue
+            assert_constructor_accepts(header)
+
+    def test_the_corpus(self) -> None:
+        checked = 0
+        for frame in CORPUS_FRAMES:
+            for layer in decode_frame(frame, lax=True).layers:
+                if isinstance(layer, DIRECTLY_BUILT):
+                    assert_constructor_accepts(layer)
+                    checked += 1
+        assert checked > len(CORPUS_FRAMES)
+
+    @pytest.mark.parametrize(
+        "cls",
+        [cls for cls in DIRECTLY_BUILT if cls is not VRRPv6],
+        ids=lambda c: c.__name__,
+    )
+    def test_a_subclass_decodes_the_same_fields(self, cls) -> None:
+        """decode() called on a subclass, here one without slots of its
+        own, builds an instance of that subclass with the same fields."""
+        decoded = 0
+        for frame in CORPUS_FRAMES:
+            for layer in decode_frame(frame, lax=True).layers:
+                if type(layer) is cls:
+                    assert_a_subclass_decodes_alike(cls, bytes(layer))
+                    decoded += 1
+        assert decoded
+
+    @given(header=vrrp_headers(VRRPv6))
+    def test_a_vrrpv6_subclass_decodes_the_same_fields(self, header) -> None:
+        assert_a_subclass_decodes_alike(VRRPv6, bytes(header))
+
+
+def assert_a_subclass_decodes_alike(cls: type[Protocol], raw: bytes) -> None:
+    """Decode ``raw`` with ``cls`` and with a subclass that adds no
+    slots, and check both hold the same fields."""
+    subclass = type(f"Other{cls.__name__}", (cls,), {})
+    other = subclass.decode(raw)
+    assert type(other) is subclass
+    assert vars_of(other) == vars_of(cls.decode(raw))
+
+
+def vars_of(header: Protocol) -> dict[str, object]:
+    """Every dataclass field of ``header``, compared or not."""
+    return {f.name: getattr(header, f.name) for f in fields(header)}
+
+
+#: The classes whose decode() builds the instance directly only when
+#: called on the class itself, and through the constructor when called
+#: on any other subclass (see "Decode-path construction" in _base.py).
+FAST_PATH_ONLY_FOR_ITSELF = (TCP, UDP, OSPF, PIM, VRRP, VRRPv6, RIP, BGP)
+
+
+def raw_header(cls: type[Protocol]) -> bytes:
+    """The bytes of the first corpus header of exactly ``cls``, or of a
+    built one where the corpus has none."""
+    if cls is VRRPv6:
+        return bytes(VRRPv6(3, 1, 1, 100, 1, 100, 0, ("2001:db8::1",)))
+    for frame in CORPUS_FRAMES:
+        for layer in decode_frame(frame, lax=True).layers:
+            if type(layer) is cls:
+                return bytes(layer)
+    raise AssertionError(f"no {cls.__name__} in the corpus")
+
+
+class RejectedBySubclass(InvalidFieldError):
+    """What a test subclass's __post_init__ raises."""
+
+
+class TestDecodeIntoASubclass:
+    """decode() called on a subclass the library does not define runs
+    that subclass's __init__ and __post_init__; called on the library's
+    own class, it builds the instance without either."""
+
+    @pytest.mark.parametrize(
+        "cls",
+        [cls for cls in FAST_PATH_ONLY_FOR_ITSELF if cls is not VRRPv6],
+        ids=lambda c: c.__name__,
+    )
+    def test_a_subclass_field_gets_its_default(self, cls) -> None:
+        tagged = dataclass(frozen=True, slots=True)(
+            type(
+                f"Tagged{cls.__name__}",
+                (cls,),
+                {"__annotations__": {"tag": "str"}, "tag": "untagged"},
+            )
+        )
+        raw = raw_header(cls)
+        header = tagged.decode(raw)
+        assert type(header) is tagged
+        assert header.tag == "untagged"
+        library = vars_of(cls.decode(raw))
+        assert {k: v for k, v in vars_of(header).items() if k != "tag"} == (
+            library
+        )
+
+    @pytest.mark.parametrize(
+        "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
+    )
+    def test_a_subclass_post_init_runs(self, cls) -> None:
+        def reject(self) -> None:
+            raise RejectedBySubclass("rejected", protocol=type(self))
+
+        strict = dataclass(frozen=True, slots=True)(
+            type(f"Strict{cls.__name__}", (cls,), {"__post_init__": reject})
+        )
+        with pytest.raises(RejectedBySubclass):
+            strict.decode(raw_header(cls))
+
+    @pytest.mark.parametrize(
+        "cls,raw,context",
+        [
+            (
+                UDP,
+                bytes.fromhex("0208020800200000") + bytes.fromhex("0202"),
+                "_lead",
+            ),
+            (BGP, (b"\xff" * 16 + bytes.fromhex("001304")) * 2, "_followed"),
+        ],
+        ids=["UDP", "BGP"],
+    )
+    def test_a_subclass_keeps_the_decode_context(
+        self, cls, raw, context
+    ) -> None:
+        """The context decode() records outside the compared fields, UDP's
+        first payload bytes and whether another BGP message follows,
+        reaches a subclass's instance too."""
+        other = dataclass(frozen=True, slots=True)(
+            type(f"Other{cls.__name__}", (cls,), {})
+        )
+        expected = getattr(cls.decode(raw), context)
+        assert expected
+        assert getattr(other.decode(raw), context) == expected
+
+    @pytest.mark.parametrize(
+        "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
+    )
+    def test_the_library_class_skips_its_constructor(self, cls) -> None:
+        raw = raw_header(cls)
+        expected = vars_of(cls.decode(raw))
+        spy = mock.Mock(side_effect=AssertionError("__init__ ran"))
+        with mock.patch.object(cls, "__init__", spy):
+            header = cls.decode(raw)
+        spy.assert_not_called()
+        assert type(header) is cls
+        assert vars_of(header) == expected
 
 
 class TestNDPAccessorSafety:

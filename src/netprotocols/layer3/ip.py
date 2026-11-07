@@ -23,6 +23,7 @@ from netprotocols._base import (
     hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
+    slot_setters,
 )
 from netprotocols._enums import IPProtocol
 from netprotocols._tlv import walk_kind_length_value
@@ -367,22 +368,37 @@ class IPv4(Protocol):
         # addresses, the IHL is 4 bits (so <= 15) and is rejected below
         # 5 above, and the options are sliced to exactly ihl * 4 bytes
         # after the buffer is confirmed to hold them.
+        (
+            set_version,
+            set_ihl,
+            set_dscp,
+            set_ecn,
+            set_total_length,
+            set_identification,
+            set_flags,
+            set_fragment_offset,
+            set_ttl,
+            set_protocol,
+            set_checksum,
+            set_src,
+            set_dst,
+            set_options,
+        ) = _IPV4_SETTERS
         header = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(header, "version", ver_ihl >> 4)
-        set_field(header, "ihl", ihl)
-        set_field(header, "dscp", dscp_ecn >> 2)
-        set_field(header, "ecn", dscp_ecn & 0b11)
-        set_field(header, "total_length", total_length)
-        set_field(header, "identification", identification)
-        set_field(header, "flags", flags_frag >> 13)
-        set_field(header, "fragment_offset", flags_frag & 0x1FFF)
-        set_field(header, "ttl", ttl)
-        set_field(header, "protocol", protocol)
-        set_field(header, "checksum", checksum)
-        set_field(header, "src", bytes_to_ipv4(src))
-        set_field(header, "dst", bytes_to_ipv4(dst))
-        set_field(header, "options", bytes(data[cls._struct.size : ihl * 4]))
+        set_version(header, ver_ihl >> 4)
+        set_ihl(header, ihl)
+        set_dscp(header, dscp_ecn >> 2)
+        set_ecn(header, dscp_ecn & 0b11)
+        set_total_length(header, total_length)
+        set_identification(header, identification)
+        set_flags(header, flags_frag >> 13)
+        set_fragment_offset(header, flags_frag & 0x1FFF)
+        set_ttl(header, ttl)
+        set_protocol(header, protocol)
+        set_checksum(header, checksum)
+        set_src(header, bytes_to_ipv4(src))
+        set_dst(header, bytes_to_ipv4(dst))
+        set_options(header, bytes(data[cls._struct.size : ihl * 4]))
         return header
 
     def __bytes__(self) -> bytes:
@@ -519,6 +535,26 @@ class IPv4(Protocol):
                 protocol=type(self),
             )
         )
+
+
+#: The slot setters :meth:`IPv4.decode` builds its instance with.
+_IPV4_SETTERS = slot_setters(
+    IPv4,
+    "version",
+    "ihl",
+    "dscp",
+    "ecn",
+    "total_length",
+    "identification",
+    "flags",
+    "fragment_offset",
+    "ttl",
+    "protocol",
+    "checksum",
+    "src",
+    "dst",
+    "options",
+)
 
 
 @dataclass(frozen=True, slots=True)
