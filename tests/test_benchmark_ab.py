@@ -542,7 +542,9 @@ class TestVerdict:
             raise ab.ComparisonError("recorded")
 
         monkeypatch.setattr(ab, "compare", record)
-        status = ab.main(["--base-src", "src", "--fixtures", str(fixtures)])
+        status = ab.main(
+            ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        )
         assert status == 2
         assert seen == [16]
 
@@ -557,7 +559,9 @@ class TestVerdict:
         fixtures = tmp_path / "fixtures"
         if kind == "empty":
             fixtures.mkdir()
-        status = ab.main(["--base-src", "src", "--fixtures", str(fixtures)])
+        status = ab.main(
+            ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        )
         assert status == 2
         err = capsys.readouterr().err
         assert (

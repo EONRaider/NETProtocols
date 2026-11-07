@@ -384,6 +384,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     :param argv: The command line, without the program name.
     :returns: 0 within the threshold, 1 over it, 2 when the comparison
         cannot run.
+    :raises SystemExit: if the command line is invalid, as
+        :meth:`argparse.ArgumentParser.error` exits with status 2.
     """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
