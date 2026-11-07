@@ -134,6 +134,8 @@ from strategies import (
     sctp_chunks,
     sctp_headers,
     stp_headers,
+    stp_mst_config_ids,
+    stp_msti_messages,
     tls_client_hellos,
     tls_records,
     vrrp_headers,
@@ -2430,15 +2432,17 @@ class TestDeclaredLengthBounds:
 
 
 #: The 802.3 frames of the LLC fixture (BPDUs, CDP, RFC 1042, 802.1H,
-#: a tagged frame, Novell raw 802.3, the 1501 frame).
+#: a tagged frame, Novell raw 802.3, the 1501 frame), and of the STP
+#: fixture (MST, RST, Configuration and TCN BPDUs).
 _LLC_FRAMES = pcap_frames(FIXTURES / "llc.pcap")
+_STP_FRAMES = pcap_frames(FIXTURES / "stp.pcap")
 
 
 @st.composite
 def llc_frames(draw: st.DrawFn) -> bytes:
     """A captured 802.3 frame, its Length redrawn now and then, a few
     bytes changed, and a trailer of zeros or random bytes appended."""
-    frame = bytearray(draw(st.sampled_from(_LLC_FRAMES)))
+    frame = bytearray(draw(st.sampled_from(_LLC_FRAMES + _STP_FRAMES)))
     if draw(st.booleans()):
         frame[12:14] = draw(st.integers(0, 1600)).to_bytes(2, "big")
     for _ in range(draw(st.integers(0, 4))):
@@ -2659,26 +2663,88 @@ _STP_ACCESSORS = (
     "max_age_seconds",
     "hello_time_seconds",
     "forward_delay_seconds",
+    "version_3_length",
+    "mst_config_id",
+    "cist_internal_root_path_cost",
+    "cist_bridge_priority",
+    "cist_bridge_mac",
+    "cist_bridge_id_str",
+    "cist_regional_root_priority",
+    "cist_regional_root_mac",
+    "cist_regional_root_id_str",
+    "cist_external_root_path_cost",
+    "cist_remaining_hops",
+    "msti_messages",
 )
 
-#: The BPDUs of the LLC fixture, after their Ethernet and LLC headers,
-#: and an RST BPDU built from the first with its type and version
-#: changed and a Version 1 Length added (no RST capture exists).
-_BPDUS = [frame[17:] for frame in _LLC_FRAMES[:5]]
-_BPDUS.append(b"\x00\x00\x02\x02" + _BPDUS[0][4:] + b"\x00")
+#: The accessors of the two MST records.
+_MST_CONFIG_ID_ACCESSORS = ("name_str", "digest_hex_str")
+_MSTI_ACCESSORS = (
+    "msti_id",
+    "regional_root_priority_component",
+    "regional_root_id_str",
+    "bridge_priority_component",
+    "port_priority_component",
+    "topology_change",
+    "proposal",
+    "learning",
+    "forwarding",
+    "agreement",
+    "master",
+    "port_role",
+    "port_role_name",
+)
+
+
+def _read_every_stp_accessor(stp: STP) -> None:
+    """Read every accessor of ``stp`` and of its MST records: the MST
+    ones are None exactly when ``mst`` is empty, and the records
+    re-encode to their octets of ``mst``."""
+    for name in _STP_ACCESSORS:
+        getattr(stp, name)
+    config_id, mstis = stp.mst_config_id, stp.msti_messages
+    if stp.port_role == 0:
+        assert stp.port_role_name == ("Master" if stp.mst else "Unknown")
+    if not stp.mst:
+        assert config_id is None and mstis is None
+        assert stp.cist_regional_root_id_str is None
+        assert stp.cist_external_root_path_cost is None
+        return
+    assert stp.cist_regional_root_id_str == stp.bridge_id_str
+    assert stp.cist_external_root_path_cost == stp.root_path_cost
+    assert config_id is not None and mstis is not None
+    for name in _MST_CONFIG_ID_ACCESSORS:
+        getattr(config_id, name)
+    for message in mstis:
+        for name in _MSTI_ACCESSORS:
+            getattr(message, name)
+    assert stp.version_3_length == len(stp.mst) - 2
+    assert bytes(config_id) == stp.mst[2:53]
+    assert b"".join(map(bytes, mstis)) == stp.mst[66:]
+
+
+#: The BPDUs of the LLC and STP fixtures, after their Ethernet and LLC
+#: headers: Configuration, TCN, RST and MST BPDUs.
+_BPDUS = [frame[17:] for frame in _LLC_FRAMES[:5] + _STP_FRAMES]
 
 
 @st.composite
 def bpdus(draw: st.DrawFn) -> bytes:
-    """A BPDU of the fixture, cut, a few bytes changed (the type among
-    them, now and then), and a trailer of zeros or random bytes."""
+    """A BPDU of the fixtures, cut, a few bytes changed (the type, the
+    version and an MST BPDU's Version 3 Length among them, now and
+    then), and a trailer of zeros or random bytes."""
     bpdu = bytearray(draw(st.sampled_from(_BPDUS)))
     for _ in range(draw(st.integers(0, 3))):
         position = draw(st.integers(0, len(bpdu) - 1))
         bpdu[position] = draw(st.integers(0, 255))
     if draw(st.booleans()):
         bpdu[3] = draw(st.sampled_from([0x00, 0x02, 0x80, 0x01]))
-    cut = draw(st.integers(0, len(bpdu)))
+    if draw(st.booleans()):
+        bpdu[2] = draw(st.sampled_from([0, 2, 3, 4]))
+    if len(bpdu) >= 38 and draw(st.booleans()):
+        length = draw(st.sampled_from([0, 2, 63, 64, 80, 95, 96, 97, 112]))
+        bpdu[36:38] = length.to_bytes(2, "big")
+    cut = draw(st.one_of(st.just(len(bpdu)), st.integers(0, len(bpdu))))
     trailer = draw(st.one_of(st.binary(max_size=12), st.just(bytes(8))))
     return bytes(bpdu[:cut]) + trailer
 
@@ -2693,13 +2759,13 @@ class TestSTPAccessorSafety:
             stp = STP.decode(data)
         except ProtocolError:
             return
-        for name in _STP_ACCESSORS:
-            getattr(stp, name)
+        _read_every_stp_accessor(stp)
         assert bytes(stp) == data[: stp.header_len]
         assert STP.decode(bytes(stp)) == stp
         assert (stp.proposal is None) == (stp.bpdu_type != 0x02)
         assert (stp.topology_change_ack is None) == (stp.bpdu_type != 0x00)
         event(f"BPDU type: {stp.bpdu_type_name}")
+        event(f"MST part: {bool(stp.mst)}")
 
     @given(data=st.data())
     def test_trailing_bytes_stay_out_of_the_bpdu(
@@ -2714,8 +2780,36 @@ class TestSTPAccessorSafety:
             decoded = STP.decode(wire + trailer)
             assert decoded == header, trailer
             assert decoded.header_len == len(wire), trailer
-        for name in _STP_ACCESSORS:
-            getattr(header, name)
+        _read_every_stp_accessor(header)
+        event(f"MST part: {bool(header.mst)}")
+
+    @given(
+        config_id=stp_mst_config_ids(),
+        mstis=st.lists(stp_msti_messages(), max_size=4),
+        cist=st.binary(min_size=13, max_size=13),
+        version=st.integers(3, 0xFF),
+    )
+    def test_mst_records_round_trip(
+        self, config_id, mstis, cist, version
+    ) -> None:
+        """An MST part built from records decodes back to them, and so
+        does the BPDU carrying it in a walk."""
+        mst = (
+            struct.pack("!H", 64 + 16 * len(mstis))
+            + bytes(config_id)
+            + cist
+            + b"".join(map(bytes, mstis))
+        )
+        bpdu = b"\x00\x00" + bytes((version,)) + _BPDUS[5][3:36] + mst
+        stp = STP.decode(bpdu)
+        assert stp.mst == mst
+        assert stp.mst_config_id == config_id
+        assert stp.msti_messages == tuple(mstis)
+        _read_every_stp_accessor(stp)
+        frame = bytes(12) + (3 + len(bpdu)).to_bytes(2, "big") + b"BB\x03"
+        packet = decode_frame(frame + bpdu + bytes(4))
+        assert packet[STP] == stp
+        assert packet.consumed == len(frame) + len(bpdu)
 
 
 class TestVRRPAccessorSafety:

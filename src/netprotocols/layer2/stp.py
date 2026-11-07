@@ -1,4 +1,4 @@
-"""Spanning Tree BPDUs (IEEE 802.1D, 802.1w): STP and RSTP.
+"""Spanning Tree BPDUs (IEEE 802.1D, 802.1w, 802.1Q): STP, RSTP and MSTP.
 
 Bridges running the Spanning Tree Protocol exchange Bridge Protocol
 Data Units in 802.2 LLC UI frames to DSAP and SSAP 0x42 (the Bridge
@@ -23,7 +23,8 @@ BPDU Type  BPDU                                     Octets  Version
 =========  =======================================  ======  =========
 ``0x00``   Configuration BPDU (802.1D §9.3.1)       35      0
 ``0x80``   Topology Change Notification (§9.3.2)    4       0
-``0x02``   RST BPDU (802.1w, 802.1D-2004 §9.3.3)    36      2 (3: MST)
+``0x02``   RST BPDU (802.1w, 802.1D-2004 §9.3.3)    36      2
+``0x02``   MST BPDU (802.1Q §14.5 e), below)        102+    3
 =========  =======================================  ======  =========
 
 A Configuration BPDU and an RST BPDU carry the same 31 octets after
@@ -50,9 +51,10 @@ bits "shall be transmitted as 0 and ignored on receipt", so a flag
 accessor answers ``None`` in a type that does not define its bit, as
 :class:`~netprotocols.VRRP`'s per-version accessors do, and the raw
 octet stays in :attr:`STP.flags`. The Port Role encodes 1 as Alternate
-or Backup, 2 as Root and 3 as Designated; 0 is Unknown here, the name
-IEEE 802.1D-2004 gave it, which 802.1Q replaced with Master (the
-draft's §14.2.9 NOTE).
+or Backup, 2 as Root and 3 as Designated. 0 is Unknown in an RST BPDU,
+IEEE 802.1D-2004's name for it, and Master in an MST BPDU that passes
+validation (see "MST BPDUs") and in an MSTI Configuration Message,
+802.1Q's name for it (the draft's §14.2.9 NOTE).
 
 The bit positions, the role values and the field layout are from the
 BPDU encoding text of the IEEE 802.1 working group's public document
@@ -107,16 +109,20 @@ unknown type as data, and here such a PDU ends the walk with the error,
 or, lax, on ``stopped_by``. A buffer shorter than its type needs (4, 35 or 36
 bytes) raises :class:`~netprotocols.TruncatedHeaderError`. Everything
 else is carried verbatim: the version, unused flag bits, a nonzero
-Version 1 Length, timer values no bridge would send.
+Version 1 Length, timer values no bridge would send. Nothing past the
+RST prefix raises: Version 3 information that fails validation is
+left undecoded (see "MST BPDUs").
 
 Length, and the bytes after the BPDU
 ------------------------------------
 A BPDU has no length field, but its type gives its exact length, which
-is :attr:`STP.header_len`: 4, 35 or 36 octets, never what follows. In
-a frame walk the 802.3 Length before the LLC header already ends the
-buffer at the end of the PDU (see :mod:`netprotocols.layer2.llc`), so
-Ethernet's zero padding and an FCS never reach :meth:`STP.decode`; a
-direct call leaves them, too, undecoded. What can reach it is a PDU
+is :attr:`STP.header_len`: 4, 35 or 36 octets, or, for an MST BPDU
+that passes validation, 38 plus its Version 3 Length (see "MST
+BPDUs"), never what follows. In a frame walk the 802.3 Length before
+the LLC header already ends the buffer at the end of the PDU (see
+:mod:`netprotocols.layer2.llc`), so Ethernet's zero padding and an FCS
+never reach :meth:`STP.decode`; a direct call leaves them, too,
+undecoded. What can reach it is a PDU
 longer than its BPDU: "Additional octets in received BPDUs identified
 by the validation procedure (14.5) as STP Configuration BPDUs shall be
 ignored", says the draft's §14.4, which says the same of RST BPDUs,
@@ -142,34 +148,68 @@ such a frame ends the walk at :class:`~netprotocols.SNAP`; reaching
 ``(0x00000C << 16) | 0x010B``, and would leave the TLVs, which
 Wireshark reads from offset 36 of the BPDU, after the layer.
 
-MSTP is decoded only as far as its RST prefix
----------------------------------------------
-An MST BPDU (802.1s, now 802.1Q; Protocol Version 3, type 0x02) is an
-RST BPDU followed by a two-octet Version 3 Length, the MST
-Configuration Identifier, the CIST's internal fields and up to 64 MSTI
-Configuration Messages. :class:`STP` decodes its first 36 octets, the
-RST BPDU an 802.1w bridge would read from it, carries its version (3)
-verbatim, and leaves the Version 3 information after ``header_len``,
-undecoded and not kept in the layer. That is the draft's reading for
-an implementation of version 2: under §14.6 i), it interprets a PDU of
-version 3 as if it carried version 2, ignoring the parameters and
-octets version 2 does not define; and even an MST bridge decodes a
-version 3 BPDU as MST only when §14.5 e) holds (102 or more octets, a
-Version 1 Length of 0, a Version 3 Length of a whole number of MSTI
-messages), and otherwise, by §14.5 d), as an RST BPDU.
+MST BPDUs
+---------
+An MST BPDU (IEEE 802.1Q MSTP; Protocol Version 3, BPDU Type 0x02)
+is an RST BPDU followed by the Version 3 information: a two-octet
+Version 3 Length, the 51-octet MST Configuration Identifier, the
+CIST's 13 octets of internal fields and 0 to 64 MSTI Configuration
+Messages of 16 octets each. In it the RST prefix's fields carry the
+CIST's external priority information (802.1Q §14.4, Figure 14-1): the
+Root Identifier is the CIST Root Identifier, the Root Path Cost the
+CIST External Root Path Cost and the Bridge Identifier the CIST
+Regional Root Identifier. The sending bridge's own identifier is the
+CIST Bridge Identifier, in the Version 3 information.
 
-The Version 3 Length is not read. On the wire it is unreliable:
-Wireshark's ``packet-bpdu.c`` notes a Cisco C3550 IOS release that
-appears to send it as a count of MSTI messages rather than of octets,
-and MST BPDUs whose Version 3 Length is 0 and whose format selector
-octet holds the length instead. In a walk, a caller recovers the
-Version 3 information from the frame, after the layer and up to where
-the 802.3 Length ends the PDU::
+:meth:`STP.decode` reads the Version 3 information when the BPDU
+passes the validation of IEEE 802.1Q §14.5 e): a type 0x02 BPDU of
+Protocol Version 3 or greater, 102 or more octets long, whose Version
+1 Length is 0 and whose Version 3 Length is 64 octets plus a whole
+number, 0 to 64, of 16-octet MSTI Configuration Messages, all of them
+inside the buffer. It keeps those ``2 + Version 3 Length`` octets
+verbatim in :attr:`STP.mst`, and :attr:`STP.header_len` counts them,
+so the BPDU ends where its Version 3 Length puts the end; octets after
+it stay after the layer, as for the other types. A BPDU of version 4
+or above that passes the validation decodes as an MST BPDU too, and its
+SPT information, from the Version 4 Length on, stays after the layer.
+In a walk the 802.3 Length has already ended the buffer at the end of
+the PDU, so the validation reads the PDU's own length and a Version 3
+Length running past it fails. A direct call has no such bound: the
+octets after the RST prefix are read as Version 3 information only if
+they pass the same validation, and anything after the Version 3
+Length's end, such as Ethernet padding or an FCS, is left undecoded.
 
-    v3 = frame[packet.consumed : 14 + packet[Ethernet].length]
+A version 3 BPDU that fails the validation decodes as an RST BPDU, as
+§14.5 d) and §14.6 i) prescribe: its first 36 octets, with
+:attr:`STP.mst` empty and the octets after them left after the layer.
+So do the two encodings Wireshark's ``packet-bpdu.c`` handles beside
+the standard one, a Version 3 Length counting MSTI messages rather
+than octets, and an alternative format with a Version 3 Length of 0,
+in which the format selector octet holds the BPDU's length less 39 and
+each MSTI message takes 26 octets: each holds a Version 3 Length below
+64.
 
-Behind one VLAN tag the Length is the tag's, 4 bytes later:
-``frame[packet.consumed : 18 + packet[VLAN].length]``.
+The Version 3 information is read through accessors that parse
+:attr:`STP.mst` on demand and answer ``None`` while it is empty, for
+any STP or RSTP BPDU and any MST BPDU that fails the validation:
+:attr:`STP.version_3_length`, :attr:`STP.mst_config_id` (an
+:class:`STPMSTConfigurationIdentifier`), the CIST internal fields
+:attr:`STP.cist_internal_root_path_cost`,
+:attr:`STP.cist_bridge_priority`, :attr:`STP.cist_bridge_mac`,
+:attr:`STP.cist_bridge_id_str` and :attr:`STP.cist_remaining_hops`,
+and :attr:`STP.msti_messages` (a tuple of :class:`STPMSTIMessage`).
+Under the same rule, :attr:`STP.cist_regional_root_priority`,
+:attr:`STP.cist_regional_root_mac` and
+:attr:`STP.cist_regional_root_id_str` read the RST prefix's Bridge
+Identifier (:attr:`STP.bridge_priority`, :attr:`STP.bridge_mac`,
+:attr:`STP.bridge_id_str`), and
+:attr:`STP.cist_external_root_path_cost` its Root Path Cost
+(:attr:`STP.root_path_cost`); the CIST Root Identifier is the prefix's
+Root Identifier, read through :attr:`STP.root_priority`,
+:attr:`STP.root_mac` and :attr:`STP.root_id_str`. An MSTI message's
+Regional Root Identifier carries its MSTID in its system ID extension
+(:attr:`STPMSTIMessage.msti_id`). Each record re-encodes with
+``bytes()`` to its octets in :attr:`STP.mst`.
 """
 
 from __future__ import annotations
@@ -185,7 +225,7 @@ from netprotocols.utils.exceptions import (
 )
 from netprotocols.utils.mac import validate_mac_addr
 
-__all__ = ["STP"]
+__all__ = ["STP", "STPMSTConfigurationIdentifier", "STPMSTIMessage"]
 
 #: The BPDU Types (802.1D-2004 §9.3) and their lengths in octets.
 _CONFIGURATION = 0x00
@@ -214,8 +254,7 @@ _VERSION_NAMES: dict[int, str] = {
 
 #: Port Role values of an RST BPDU (see the module docstring): 1-3 as
 #: Wireshark's role_vals names them; 0, which role_vals does not name,
-#: is 802.1D-2004's Unknown, which 802.1Q calls Master (the draft's
-#: §14.2.9 NOTE).
+#: is 802.1D-2004's Unknown.
 _ROLE_NAMES: dict[int, str] = {
     0: "Unknown",
     1: "Alternate or Backup",
@@ -231,6 +270,41 @@ _LEARNING = 0x10
 _FORWARDING = 0x20
 _AGREEMENT = 0x40
 _TCA = 0x80
+
+#: The Master flag of an MSTI Configuration Message (802.1Q §14.4.1).
+_MASTER = 0x80
+
+#: Port Role values of an MSTI Configuration Message and of the CIST
+#: Flags of an MST BPDU that passes validation: those of
+#: ``_ROLE_NAMES``, with 0 named Master, as 802.1Q names it (the
+#: draft's §14.2.9 NOTE).
+_MSTI_ROLE_NAMES: dict[int, str] = {
+    0: "Master",
+    1: "Alternate or Backup",
+    2: "Root",
+    3: "Designated",
+}
+
+#: The Version 3 information of an MST BPDU (802.1Q §14.4.1), as kept
+#: in :attr:`STP.mst`: the Version 3 Length, the MST Configuration
+#: Identifier, the CIST internal fields, then the MSTI Configuration
+#: Messages.
+_V3_LENGTH = Struct("!H")
+_CONFIG_ID = Struct("!B32sH16s")
+_CIST = Struct("!IH6sB")
+_MSTI = Struct("!BH6sIBBB")
+_CONFIG_ID_AT = _V3_LENGTH.size
+_CIST_AT = _CONFIG_ID_AT + _CONFIG_ID.size
+_MSTIS_AT = _CIST_AT + _CIST.size
+
+#: The smallest Version 3 Length, which covers no MSTI message, and the
+#: most MSTI messages a BPDU carries.
+_V3_FIXED = _MSTIS_AT - _V3_LENGTH.size
+_MAX_MSTIS = 64
+
+#: The octets an MST BPDU must hold to pass validation (802.1Q §14.5
+#: e)): the RST prefix and the Version 3 information without MSTIs.
+_MST_MIN = _LENGTHS[_RST] + _MSTIS_AT
 
 #: The fields after the 4-octet prefix that a TCN does not carry, with
 #: the largest value each holds: an RST BPDU carries all of them, a
@@ -253,13 +327,266 @@ def _seconds(value: int | None) -> float | None:
     return None if value is None else value / 256
 
 
+def _valid_version_3_length(length: int) -> bool:
+    """Say whether a Version 3 Length is 64 plus whole MSTI messages.
+
+    :param length: The Version 3 Length, in octets.
+    """
+    messages, rest = divmod(length - _V3_FIXED, _MSTI.size)
+    return length >= _V3_FIXED and not rest and messages <= _MAX_MSTIS
+
+
+def _check_width(cls: type, name: str, value: int, limit: int) -> None:
+    """Check that ``value`` fits in 0 to ``limit``.
+
+    :param cls: The class to attach to a raised error.
+    :param name: The field name to attach to a raised error.
+    :param value: The value to check.
+    :param limit: The largest value allowed.
+    :raises InvalidFieldError: if ``value`` is outside 0-``limit``.
+    """
+    if not 0 <= value <= limit:
+        raise InvalidFieldError(
+            f"{cls.__name__} {name} must be within 0-{limit:#x}, got {value}",
+            protocol=cls,
+            field=name,
+            expected=f"0-{limit:#x}",
+            actual=value,
+        )
+
+
+def _check_size(cls: type, name: str, value: bytes, size: int) -> None:
+    """Check that ``value`` is exactly ``size`` octets.
+
+    :param cls: The class to attach to a raised error.
+    :param name: The field name to attach to a raised error.
+    :param value: The octets to check.
+    :param size: The number of octets required.
+    :raises InvalidFieldError: if ``value`` is not ``size`` octets.
+    """
+    if len(value) != size:
+        raise InvalidFieldError(
+            f"{cls.__name__} {name} must be {size} octets, got {len(value)}",
+            protocol=cls,
+            field=name,
+            expected=size,
+            actual=len(value),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class STPMSTConfigurationIdentifier:
+    """An MST BPDU's MST Configuration Identifier (802.1Q §13.8).
+
+    Two bridges are in the same MST region when their identifiers are
+    equal. ``bytes()`` gives its 51 octets.
+
+    :param format_selector: Configuration Identifier Format Selector,
+        one octet, ``0`` in the encoding 802.1Q defines.
+    :param name: Configuration Name, its 32 octets verbatim, padded
+        with zero octets on send (see :attr:`name_str`).
+    :param revision_level: Revision Level, two octets.
+    :param digest: Configuration Digest, the 16-octet HMAC-MD5 of the
+        VID to MSTID table (see :attr:`digest_hex_str`).
+    :raises InvalidFieldError: if ``format_selector`` or
+        ``revision_level`` is too wide for its octets, or ``name`` is
+        not 32 octets or ``digest`` 16.
+    """
+
+    format_selector: int
+    name: bytes
+    revision_level: int
+    digest: bytes
+
+    def __post_init__(self) -> None:
+        """Check the widths of the fields (see the class)."""
+        cls = type(self)
+        _check_width(cls, "format_selector", self.format_selector, 0xFF)
+        _check_size(cls, "name", self.name, 32)
+        _check_width(cls, "revision_level", self.revision_level, 0xFFFF)
+        _check_size(cls, "digest", self.digest, 16)
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return _CONFIG_ID.pack(
+            self.format_selector, self.name, self.revision_level, self.digest
+        )
+
+    @property
+    def name_str(self) -> str:
+        """:attr:`name` up to its first zero octet, as UTF-8 text.
+
+        Invalid UTF-8 is replaced with U+FFFD (degrades, never raises).
+        """
+        return self.name.split(b"\x00", 1)[0].decode("utf-8", "replace")
+
+    @property
+    def digest_hex_str(self) -> str:
+        """:attr:`digest` as 32 lowercase hex digits."""
+        return self.digest.hex()
+
+
+@dataclass(frozen=True, slots=True)
+class STPMSTIMessage:
+    """One MSTI Configuration Message of an MST BPDU (802.1Q §14.4.1).
+
+    ``bytes()`` gives its 16 octets.
+
+    :param flags: The MSTI Flags octet, kept raw: the RST BPDU's bits
+        (Topology Change, Proposal, Port Role, Learning, Forwarding,
+        Agreement) and Master (``0x80``); read them through
+        :attr:`topology_change` and the other flag accessors.
+    :param regional_root_priority: The MSTI Regional Root Identifier's
+        two priority octets: the four-bit priority and the MSTID in
+        its system ID extension.
+    :param regional_root_mac: The MSTI Regional Root Identifier's MAC
+        address.
+    :param internal_root_path_cost: MSTI Internal Root Path Cost (4
+        octets).
+    :param bridge_priority: The MSTI Bridge Priority octet: the
+        sending bridge's priority for the MSTI in its four high bits.
+    :param port_priority: The MSTI Port Priority octet: the sending
+        port's priority for the MSTI in its four high bits.
+    :param remaining_hops: MSTI Remaining Hops (1 octet).
+    :raises InvalidFieldError: if a value is too wide for its octets.
+    :raises InvalidMACAddressError: if ``regional_root_mac`` is not a
+        MAC address.
+    """
+
+    flags: int
+    regional_root_priority: int
+    regional_root_mac: str
+    internal_root_path_cost: int
+    bridge_priority: int
+    port_priority: int
+    remaining_hops: int
+
+    def __post_init__(self) -> None:
+        """Check the widths of the fields and the MAC (see the class)."""
+        cls = type(self)
+        _check_width(cls, "flags", self.flags, 0xFF)
+        _check_width(
+            cls, "regional_root_priority", self.regional_root_priority, 0xFFFF
+        )
+        validate_mac_addr(
+            self.regional_root_mac, protocol=cls, field="regional_root_mac"
+        )
+        _check_width(
+            cls,
+            "internal_root_path_cost",
+            self.internal_root_path_cost,
+            0xFFFFFFFF,
+        )
+        for name in ("bridge_priority", "port_priority", "remaining_hops"):
+            _check_width(cls, name, getattr(self, name), 0xFF)
+
+    def __bytes__(self) -> bytes:
+        """Serialize this record to its exact on-wire form."""
+        return _MSTI.pack(
+            self.flags,
+            self.regional_root_priority,
+            mac_to_bytes(self.regional_root_mac),
+            self.internal_root_path_cost,
+            self.bridge_priority,
+            self.port_priority,
+            self.remaining_hops,
+        )
+
+    @property
+    def msti_id(self) -> int:
+        """The MSTID: the Regional Root Identifier's 12-bit extension."""
+        return self.regional_root_priority & 0x0FFF
+
+    @property
+    def regional_root_priority_component(self) -> int:
+        """The Regional Root's settable priority, a multiple of 4096."""
+        return self.regional_root_priority & 0xF000
+
+    @property
+    def regional_root_id_str(self) -> str:
+        """The Regional Root Identifier as ``"0/1/02:00:00:00:a0:00"``.
+
+        Priority, MSTID and MAC, :attr:`STP.root_id_str`'s form.
+        """
+        return (
+            f"{self.regional_root_priority_component}/{self.msti_id}/"
+            f"{self.regional_root_mac}"
+        )
+
+    @property
+    def bridge_priority_component(self) -> int:
+        """The sending bridge's priority for the MSTI, a multiple of 4096.
+
+        :attr:`bridge_priority`'s four high bits, in the scale of
+        :attr:`STP.bridge_priority_component`.
+        """
+        return (self.bridge_priority & 0xF0) << 8
+
+    @property
+    def port_priority_component(self) -> int:
+        """The sending port's priority for the MSTI, a multiple of 16.
+
+        :attr:`port_priority`'s four high bits, in the 8-bit form of
+        :attr:`STP.port_priority`.
+        """
+        return self.port_priority & 0xF0
+
+    @property
+    def topology_change(self) -> bool:
+        """The Topology Change flag."""
+        return bool(self.flags & _TC)
+
+    @property
+    def proposal(self) -> bool:
+        """The Proposal flag."""
+        return bool(self.flags & _PROPOSAL)
+
+    @property
+    def learning(self) -> bool:
+        """The Learning flag."""
+        return bool(self.flags & _LEARNING)
+
+    @property
+    def forwarding(self) -> bool:
+        """The Forwarding flag."""
+        return bool(self.flags & _FORWARDING)
+
+    @property
+    def agreement(self) -> bool:
+        """The Agreement flag."""
+        return bool(self.flags & _AGREEMENT)
+
+    @property
+    def master(self) -> bool:
+        """The Master flag."""
+        return bool(self.flags & _MASTER)
+
+    @property
+    def port_role(self) -> int:
+        """The two-bit Port Role.
+
+        0 Master, 1 Alternate or Backup, 2 Root, 3 Designated.
+        """
+        return (self.flags & _ROLE_MASK) >> 2
+
+    @property
+    def port_role_name(self) -> str:
+        """Display name of :attr:`port_role`, e.g. ``"Designated"``.
+
+        Every two-bit role has a name, so this never raises.
+        """
+        return _MSTI_ROLE_NAMES[self.port_role]
+
+
 @dataclass(frozen=True, slots=True)
 class STP(Protocol):
-    """A Spanning Tree BPDU: Configuration, TCN or RST (802.1D-2004 §9.3).
+    """A Spanning Tree BPDU: Configuration, TCN, RST or MST (802.1D, 802.1Q).
 
     The fields after :attr:`bpdu_type` are ``None`` exactly where the
     type does not carry them: all of them in a Topology Change
     Notification, :attr:`version_1_length` in a Configuration BPDU.
+    :attr:`mst` is empty but in an MST BPDU that passes validation
+    (see "MST BPDUs" in the module).
 
     :param protocol_id: Protocol Identifier, always ``0``; anything else
         raises :class:`~netprotocols.InvalidFieldError`.
@@ -270,10 +597,14 @@ class STP(Protocol):
         :class:`~netprotocols.InvalidFieldError`.
     :param flags: The Flags octet, kept raw; read its bits through
         :attr:`topology_change` and the other flag accessors.
-    :param root_priority: The Root Identifier's two priority octets.
-    :param root_mac: The Root Identifier's MAC address.
-    :param root_path_cost: Root Path Cost (4 octets).
-    :param bridge_priority: The Bridge Identifier's two priority octets.
+    :param root_priority: The Root Identifier's two priority octets (in
+        an MST BPDU, the CIST Root Identifier's).
+    :param root_mac: The Root Identifier's MAC address (in an MST BPDU,
+        the CIST Root's).
+    :param root_path_cost: Root Path Cost (4 octets; in an MST BPDU, the
+        CIST External Root Path Cost).
+    :param bridge_priority: The Bridge Identifier's two priority octets
+        (in an MST BPDU, the CIST Regional Root Identifier's).
     :param bridge_mac: The Bridge Identifier's MAC address: the sending
         bridge's (in an MST BPDU, the CIST Regional Root's).
     :param port_id: Port Identifier: priority and Port Number.
@@ -283,6 +614,13 @@ class STP(Protocol):
     :param forward_delay: Forward Delay, in 1/256 s.
     :param version_1_length: An RST BPDU's Version 1 Length octet,
         transmitted as ``0``; ``None`` in the other types.
+    :param mst: An MST BPDU's Version 3 information, verbatim: the
+        Version 3 Length and the ``Version 3 Length`` octets after it,
+        read through :attr:`mst_config_id` and the other MST
+        accessors. Empty (the default) in any other BPDU; when set, the
+        BPDU must be of type 0x02, version 3 or greater, with a Version
+        1 Length of 0, and the Version 3 Length must be 64 plus 0 to 64
+        whole MSTI messages of 16 octets and agree with ``len(mst)``.
     """
 
     protocol_id: int
@@ -300,6 +638,7 @@ class STP(Protocol):
     hello_time: int | None = None
     forward_delay: int | None = None
     version_1_length: int | None = None
+    mst: bytes = b""
 
     #: The prefix every BPDU has: Protocol Identifier, Protocol Version
     #: Identifier and BPDU Type.
@@ -313,24 +652,64 @@ class STP(Protocol):
 
         :raises InvalidFieldError: if the Protocol Identifier is nonzero,
             the BPDU Type is unknown, a field is present that the type
-            does not carry or absent that it does, or a value is too wide
-            for its octets.
+            does not carry or absent that it does, a value is too wide
+            for its octets, or ``mst`` is set but fails the conditions
+            given for it.
         :raises InvalidMACAddressError: if ``root_mac`` or ``bridge_mac``
             is not a MAC address.
         """
         self._check_prefix(self.protocol_id, self.bpdu_type, offset=None)
-        self._check_octets("version", self.version, 0xFF)
+        _check_width(type(self), "version", self.version, 0xFF)
         fields = [*_BODY_LIMITS, ("version_1_length", 0xFF)]
         for index, (name, limit) in enumerate(fields):
             self._check_presence(name, index)
             value = getattr(self, name)
             if value is not None:
-                self._check_octets(name, value, limit)
+                _check_width(type(self), name, value, limit)
         for name in ("root_mac", "bridge_mac"):
             self._check_presence(name, 0)
             value = getattr(self, name)
             if value is not None:
                 validate_mac_addr(value, protocol=type(self), field=name)
+        if self.mst:
+            self._check_mst()
+
+    def _check_mst(self) -> None:
+        """Check that a set :attr:`mst` passes the MST validation.
+
+        :raises InvalidFieldError: if the BPDU is not of type 0x02,
+            version 3 or greater, with a Version 1 Length of 0, or the
+            Version 3 Length is not 64 plus 0 to 64 whole MSTI messages
+            or does not agree with ``len(mst)``.
+        """
+        mst = self.mst
+        if (
+            self.bpdu_type != _RST
+            or self.version < 3
+            or self.version_1_length != 0
+        ):
+            raise InvalidFieldError(
+                "STP mst needs a type 0x02 BPDU of version 3 or greater "
+                "with a Version 1 Length of 0",
+                protocol=type(self),
+                field="mst",
+                expected="type 0x02, version >= 3, Version 1 Length 0",
+                actual=(self.bpdu_type, self.version, self.version_1_length),
+            )
+        length = (
+            _V3_LENGTH.unpack_from(mst)[0]
+            if len(mst) >= _V3_LENGTH.size
+            else -1
+        )
+        if not _valid_version_3_length(length) or len(mst) != 2 + length:
+            raise InvalidFieldError(
+                "STP mst must be a Version 3 Length of 64 plus whole MSTI "
+                f"messages and that many octets, got {len(mst)} octets",
+                protocol=type(self),
+                field="mst",
+                expected="2 + Version 3 Length octets",
+                actual=len(mst),
+            )
 
     def _check_presence(self, name: str, index: int) -> None:
         """Check that field ``name`` is set iff the type carries it.
@@ -351,24 +730,6 @@ class STP(Protocol):
                 field=name,
                 expected="a value" if expected else None,
                 actual=getattr(self, name),
-            )
-
-    @classmethod
-    def _check_octets(cls, name: str, value: int, limit: int) -> None:
-        """Check that ``value`` fits in 0 to ``limit``.
-
-        :param name: The field name to attach to a raised error.
-        :param value: The value to check.
-        :param limit: The largest value allowed.
-        :raises InvalidFieldError: if ``value`` is outside 0-``limit``.
-        """
-        if not 0 <= value <= limit:
-            raise InvalidFieldError(
-                f"STP {name} must be within 0-{limit:#x}, got {value}",
-                protocol=cls,
-                field=name,
-                expected=f"0-{limit:#x}",
-                actual=value,
             )
 
     @classmethod
@@ -431,6 +792,13 @@ class STP(Protocol):
         if bpdu_type == _TCN:
             return cls(protocol_id, version, bpdu_type)
         body = cls._body.unpack_from(data, 4)
+        version_1_length = data[35] if bpdu_type == _RST else None
+        mst = b""
+        if version_1_length == 0 and version >= 3 and len(data) >= _MST_MIN:
+            (length,) = _V3_LENGTH.unpack_from(data, 36)
+            end = 36 + _V3_LENGTH.size + length
+            if _valid_version_3_length(length) and end <= len(data):
+                mst = bytes(data[36:end])
         return cls(
             protocol_id,
             version,
@@ -446,11 +814,12 @@ class STP(Protocol):
             max_age=body[8],
             hello_time=body[9],
             forward_delay=body[10],
-            version_1_length=data[35] if bpdu_type == _RST else None,
+            version_1_length=version_1_length,
+            mst=mst,
         )
 
     def __bytes__(self) -> bytes:
-        """Serialize the BPDU: 4, 35 or 36 octets, as its type has."""
+        """Serialize the BPDU: 4, 35 or 36 octets, then :attr:`mst`."""
         head = self._struct.pack(self.protocol_id, self.version, self.bpdu_type)
         if self.bpdu_type == _TCN:
             return head
@@ -471,12 +840,15 @@ class STP(Protocol):
         )
         if self.version_1_length is None:
             return head + body
-        return head + body + bytes((self.version_1_length,))
+        return head + body + bytes((self.version_1_length,)) + self.mst
 
     @property
     def header_len(self) -> int:
-        """The header's length in bytes: 4 for TCN, 35 Configuration, 36 RST."""
-        return _LENGTHS[self.bpdu_type]
+        """The header's length in bytes: 4 TCN, 35 Configuration, 36 RST.
+
+        An MST BPDU adds the octets of :attr:`mst`.
+        """
+        return _LENGTHS[self.bpdu_type] + len(self.mst)
 
     @property
     def bpdu_type_name(self) -> str:
@@ -545,7 +917,8 @@ class STP(Protocol):
     def port_role(self) -> int | None:
         """An RST BPDU's two-bit Port Role; ``None`` in the other types.
 
-        1 Alternate or Backup, 2 Root, 3 Designated, 0 Unknown.
+        1 Alternate or Backup, 2 Root, 3 Designated; 0 Unknown, or
+        Master in an MST BPDU with :attr:`mst` set.
         """
         if self.flags is None or self.bpdu_type != _RST:
             return None
@@ -555,11 +928,14 @@ class STP(Protocol):
     def port_role_name(self) -> str | None:
         """Display name of :attr:`port_role`, e.g. ``"Designated"``.
 
-        Every two-bit role has a name, so this never raises; ``None``
-        when :attr:`port_role` is.
+        Role 0 is ``"Master"`` in an MST BPDU with :attr:`mst` set and
+        ``"Unknown"`` otherwise. Every two-bit role has a name, so this
+        never raises; ``None`` when :attr:`port_role` is.
         """
         role = self.port_role
-        return None if role is None else _ROLE_NAMES[role]
+        if role is None:
+            return None
+        return (_MSTI_ROLE_NAMES if self.mst else _ROLE_NAMES)[role]
 
     @property
     def root_priority_component(self) -> int | None:
@@ -638,6 +1014,139 @@ class STP(Protocol):
     def forward_delay_seconds(self) -> float | None:
         """:attr:`forward_delay` in seconds."""
         return _seconds(self.forward_delay)
+
+    @property
+    def version_3_length(self) -> int | None:
+        """An MST BPDU's Version 3 Length, in octets.
+
+        ``None`` while :attr:`mst` is empty.
+        """
+        if not self.mst:
+            return None
+        return int(_V3_LENGTH.unpack_from(self.mst)[0])
+
+    @property
+    def mst_config_id(self) -> STPMSTConfigurationIdentifier | None:
+        """An MST BPDU's MST Configuration Identifier, parsed.
+
+        ``None`` while :attr:`mst` is empty.
+        """
+        if not self.mst:
+            return None
+        selector, name, revision, digest = _CONFIG_ID.unpack_from(
+            self.mst, _CONFIG_ID_AT
+        )
+        return STPMSTConfigurationIdentifier(selector, name, revision, digest)
+
+    def _cist(self) -> tuple[int, int, bytes, int] | None:
+        """Unpack the CIST internal fields, or ``None`` with no MST."""
+        if not self.mst:
+            return None
+        cost, priority, mac, hops = _CIST.unpack_from(self.mst, _CIST_AT)
+        return cost, priority, mac, hops
+
+    @property
+    def cist_internal_root_path_cost(self) -> int | None:
+        """An MST BPDU's CIST Internal Root Path Cost (4 octets).
+
+        ``None`` while :attr:`mst` is empty.
+        """
+        cist = self._cist()
+        return None if cist is None else cist[0]
+
+    @property
+    def cist_bridge_priority(self) -> int | None:
+        """The CIST Bridge Identifier's two priority octets.
+
+        The sending bridge's own; ``None`` while :attr:`mst` is empty.
+        """
+        cist = self._cist()
+        return None if cist is None else cist[1]
+
+    @property
+    def cist_bridge_mac(self) -> str | None:
+        """The CIST Bridge Identifier's MAC address.
+
+        ``None`` while :attr:`mst` is empty.
+        """
+        cist = self._cist()
+        return None if cist is None else bytes_to_mac(cist[2])
+
+    @property
+    def cist_bridge_id_str(self) -> str | None:
+        """The CIST Bridge Identifier in :attr:`root_id_str`'s form."""
+        return _bridge_id_str(self.cist_bridge_priority, self.cist_bridge_mac)
+
+    @property
+    def cist_regional_root_priority(self) -> int | None:
+        """The CIST Regional Root Identifier's two priority octets.
+
+        :attr:`bridge_priority`, which holds them in an MST BPDU;
+        ``None`` while :attr:`mst` is empty.
+        """
+        return self.bridge_priority if self.mst else None
+
+    @property
+    def cist_regional_root_mac(self) -> str | None:
+        """The CIST Regional Root Identifier's MAC address.
+
+        :attr:`bridge_mac`, which holds it in an MST BPDU; ``None``
+        while :attr:`mst` is empty.
+        """
+        return self.bridge_mac if self.mst else None
+
+    @property
+    def cist_regional_root_id_str(self) -> str | None:
+        """The CIST Regional Root Identifier in :attr:`root_id_str`'s form.
+
+        :attr:`bridge_id_str` in an MST BPDU; ``None`` while :attr:`mst`
+        is empty.
+        """
+        return _bridge_id_str(
+            self.cist_regional_root_priority, self.cist_regional_root_mac
+        )
+
+    @property
+    def cist_external_root_path_cost(self) -> int | None:
+        """An MST BPDU's CIST External Root Path Cost (4 octets).
+
+        :attr:`root_path_cost`, which holds it in an MST BPDU; ``None``
+        while :attr:`mst` is empty.
+        """
+        return self.root_path_cost if self.mst else None
+
+    @property
+    def cist_remaining_hops(self) -> int | None:
+        """An MST BPDU's CIST Remaining Hops (1 octet).
+
+        ``None`` while :attr:`mst` is empty.
+        """
+        cist = self._cist()
+        return None if cist is None else cist[3]
+
+    @property
+    def msti_messages(self) -> tuple[STPMSTIMessage, ...] | None:
+        """An MST BPDU's MSTI Configuration Messages, in wire order.
+
+        Empty for an MST BPDU that carries none; ``None`` while
+        :attr:`mst` is empty.
+        """
+        if not self.mst:
+            return None
+        return tuple(
+            STPMSTIMessage(
+                flags=flags,
+                regional_root_priority=priority,
+                regional_root_mac=bytes_to_mac(mac),
+                internal_root_path_cost=cost,
+                bridge_priority=bridge,
+                port_priority=port,
+                remaining_hops=hops,
+            )
+            for flags, priority, mac, cost, bridge, port, hops in (
+                _MSTI.iter_unpack(self.mst[_MSTIS_AT:])
+            )
+        )
 
 
 def _bridge_id_str(priority: int | None, mac: str | None) -> str | None:

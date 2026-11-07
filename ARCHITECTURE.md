@@ -272,7 +272,14 @@ wire, and VRRPv3's pseudo-header carries the message's length.
 BPDU Type gives its exact length (4, 35 or 36 octets), so it leaves
 whatever follows undecoded, including the extra octets of a PDU longer
 than its BPDU, which a receiver ignores (§14.4 of the IEEE 802.1 draft
-the module cites). See
+the module cites). An MST BPDU adds its Version 3 information, which
+`STP` keeps raw in `mst` and parses through accessors, when the BPDU
+passes IEEE 802.1Q §14.5 e) (102 or more octets, a Version 1 Length of
+0, a Version 3 Length of 64 plus whole 16-octet MSTI messages, all
+inside the buffer): the Version 3 Length then ends the BPDU, so in a
+walk the 802.3 Length bounds what validation reads, and decoded on its
+own Ethernet padding and an FCS after it stay undecoded. A BPDU that
+fails the validation decodes as its 36-octet RST prefix. See
 [`layer2/stp.py`](src/netprotocols/layer2/stp.py)'s module docstring.
 
 `LLDP` has no length for the whole LLDPDU either, but bounds itself
@@ -1420,7 +1427,7 @@ src/netprotocols/
 │                   cdp.py (Cisco Discovery Protocol, after SNAP),
 │                   lldp.py (LLDP, IEEE 802.1AB),
 │                   mpls.py (MPLS label stack: MPLS + MPLSLabel),
-│                   stp.py (802.1D / 802.1w BPDUs)
+│                   stp.py (802.1D / 802.1w / 802.1Q MST BPDUs)
 ├── layer3/         ip.py (IPv4 + IPv6), icmp.py (ICMPv4 + ICMPv6),
 │                   igmp.py, gre.py, esp.py (IPsec ESP),
 │                   ah.py (IPsec AH: AH + AHv6),

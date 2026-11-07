@@ -1573,10 +1573,10 @@ do differently.
 **Status: VERIFIED**
 
 `tests/test_corpus.py:135-140` asserts `bytes(layer) ==
-frame[cursor:cursor+layer.header_len]` for **every layer of all 492
+frame[cursor:cursor+layer.header_len]` for **every layer of all 509
 frames** (`tcp_https.pcap`'s five bare ACKs from port 443, on which a
 strict walk raises at the empty payload TLS is handed, walked lax),
-across 42 scenarios captured with tcpdump over real kernel
+across 43 scenarios captured with tcpdump over real kernel
 VLAN, GRE, IP-in-IP, VXLAN and DHCP topologies, a userspace SCTP
 association, keepalived VRRP routers, BIRD RIP routers and BGP
 speakers, FRR OSPF and PIM-SM routers, script-built IPsec ESP and AH,
@@ -1585,21 +1585,22 @@ LLDP agents, Linux STP bridges with lldpd speaking CDP over IEEE
 802.3 LLC/SNAP framing, a tftpd-hpa server with tftp-hpa and curl
 clients, a FreeRADIUS server answering radclient, a FreeRADIUS server
 listening as a NAS for radclient's CoA and Disconnect requests, coturn
-answering STUN clients, a chronyd NTP server queried by ntpdig and chronyd
-clients, HSRP messages crafted by Yersinia and sent across a netns
-veth pair, and an nginx HTTPS server answering five clients (headless
-Chromium, curl, gnutls-cli, `openssl s_client` and curl capped at TLS
-1.2) across another. Every frame's checksums (SCTP's CRC32c, VRRP's,
-PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's where its
-Checksum field is present included), every ESP and AH ICV, every RIPv2
-and OSPF keyed-MD5 digest, every RADIUS authenticator the corpus
-holds (a reply's against its request's), every STUN MESSAGE-INTEGRITY
-and FINGERPRINT, and every NTP MAC verify internally
+answering STUN clients, a chronyd NTP server queried by ntpdig and
+chronyd clients, an ntpsec ntpd queried by ntpq, HSRP messages crafted
+by Yersinia and sent across a netns veth pair, four Linux bridges whose
+STP mstpd runs in userspace, and an nginx HTTPS server answering five
+clients (headless Chromium, curl, gnutls-cli, `openssl s_client` and
+curl capped at TLS 1.2) across another. Every frame's checksums (SCTP's
+CRC32c, VRRP's, PIM's, CDP's, OSPF's packet and LSA checksums, and GRE's
+where its Checksum field is present included), every ESP and AH ICV,
+every RIPv2 and OSPF keyed-MD5 digest, every RADIUS authenticator the
+corpus holds (a reply's against its request's), every STUN
+MESSAGE-INTEGRITY and FINGERPRINT, and every NTP MAC verify internally
 (`scripts/check_fixtures.py`); HSRP, which carries no checksum of its
-own, has every message's fields checked instead, and TLS, which has
-none beyond TCP's, every record: each segment on port 443 that carries
-data must hold whole records, every ClientHello's fields must tile it,
-and every server_name must be a host name.
+own, has every message's fields checked instead, and TLS, which has none
+beyond TCP's, every record: each segment on port 443 that carries data
+must hold whole records, every ClientHello's fields must tile it, and
+every server_name must be a host name.
 
 ### 5.2 "Property-based fuzzing of every decoder"
 **Status: VERIFIED**

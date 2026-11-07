@@ -11,6 +11,7 @@ that wants "an arbitrary valid `SomeProtocol`" can draw from here
 instead of hand-rolling field values.
 """
 
+import struct
 from collections.abc import Mapping
 from dataclasses import replace
 
@@ -93,6 +94,8 @@ from netprotocols import (
     PIMRegisterStop,
     Protocol,
     SCTPChunk,
+    STPMSTConfigurationIdentifier,
+    STPMSTIMessage,
     STUNAttribute,
     TLSClientHello,
     TLSExtension,
@@ -251,15 +254,68 @@ def cdp_pdus(draw: st.DrawFn) -> CDP:
     )
 
 
+def stp_mst_config_ids() -> st.SearchStrategy[STPMSTConfigurationIdentifier]:
+    """An MST Configuration Identifier record."""
+    return st.builds(
+        STPMSTConfigurationIdentifier,
+        _u(8),
+        st.binary(min_size=32, max_size=32),
+        _u(16),
+        st.binary(min_size=16, max_size=16),
+    )
+
+
+def stp_msti_messages() -> st.SearchStrategy[STPMSTIMessage]:
+    """An MSTI Configuration Message record."""
+    return st.builds(
+        STPMSTIMessage,
+        _u(8),
+        _u(16),
+        mac_strings(),
+        _u(32),
+        _u(8),
+        _u(8),
+        _u(8),
+    )
+
+
+@st.composite
+def stp_msts(draw: st.DrawFn) -> bytes:
+    """An MST BPDU's Version 3 information that passes validation, built
+    from the records the MST accessors return."""
+    messages = draw(st.lists(stp_msti_messages(), max_size=4))
+    cist = struct.pack(
+        "!IH6sB",
+        draw(_u(32)),
+        draw(_u(16)),
+        draw(st.binary(min_size=6, max_size=6)),
+        draw(_u(8)),
+    )
+    return (
+        struct.pack("!H", 64 + 16 * len(messages))
+        + bytes(draw(stp_mst_config_ids()))
+        + cist
+        + b"".join(bytes(message) for message in messages)
+    )
+
+
 @st.composite
 def stp_headers(draw: st.DrawFn) -> STP:
     """A canonical BPDU of each type: a TCN carries nothing after its
-    type, a Configuration BPDU no Version 1 Length."""
+    type, a Configuration BPDU no Version 1 Length, and an RST BPDU of
+    version 3 or greater with a Version 1 Length of 0 now and then an
+    MST part."""
     bpdu_type = draw(st.sampled_from([0x00, 0x02, 0x80]))
     version = draw(st.integers(0, 0xFF))
     if bpdu_type == 0x80:
         return STP(protocol_id=0, version=version, bpdu_type=bpdu_type)
     u16 = st.integers(0, 0xFFFF)
+    version_1_length = None
+    mst = b""
+    if bpdu_type == 0x02:
+        version_1_length = draw(st.one_of(st.just(0), st.integers(0, 0xFF)))
+        if version >= 3 and version_1_length == 0 and draw(st.booleans()):
+            mst = draw(stp_msts())
     return STP(
         protocol_id=0,
         version=version,
@@ -275,9 +331,8 @@ def stp_headers(draw: st.DrawFn) -> STP:
         max_age=draw(u16),
         hello_time=draw(u16),
         forward_delay=draw(u16),
-        version_1_length=(
-            draw(st.integers(0, 0xFF)) if bpdu_type == 0x02 else None
-        ),
+        version_1_length=version_1_length,
+        mst=mst,
     )
 
 
