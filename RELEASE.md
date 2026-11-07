@@ -118,7 +118,9 @@ in; Rule 3 requires each comparative number to name the competitor's
 version and the Python version. Measure on the release branch before
 making the release commit (step 4), which carries the figures. The
 wheel size is the exception: step 4 measures it from the release commit
-itself.
+itself. Item 3's check of decode time against the last release comes
+before every figure: a release that fails it stops there until the
+slowdown is fixed or accepted.
 
 1. **Which numbers, with which commands.** Every figure the README's
    [Why NETProtocols](README.md#why-netprotocols) section quotes. The
@@ -160,14 +162,65 @@ itself.
      --compare --repetitions 30 --trials 9
    ```
 
-3. **A figure that is not re-measured is marked as not repeated for
+3. **Check decode time against the last release, before any figure.**
+   CI's benchmark gate compares each pull request only with its
+   merge-base, so slowdowns that each stay under its threshold can add
+   up across a release. `scripts/benchmark_ab.py` compares the release
+   branch with `v$PREV` on this machine, under item 2's load gate and
+   core. The head is the working tree's `src`, so the tree must be clean.
+   Step 1's fifth check showed that `v$PREV` is the latest tag;
+   `git describe --tags --abbrev=0` names the same tag on the release
+   branch:
+
+   ```bash
+   git status --porcelain                                 # nothing
+   git describe --tags --abbrev=0                         # v$PREV
+   until awk '{ exit !($1 < 1.0) }' /proc/loadavg; do sleep 15; done
+   taskset -c 2 uv run --frozen --group bench python scripts/benchmark_ab.py \
+     --base "v$PREV"; echo "benchmark_ab exit: $?"
+   ```
+
+   The script's defaults apply: 16 pairs, and a failure when the median
+   ratio of head time over base time is more than 5% above 1.0, the
+   threshold CI's gate uses (CLAIMS 1.7). The release keeps it, so the
+   drift across a release is held to the bound each pull request is held
+   to. Both trees decode the release branch's `tests/fixtures`, and every
+   frame either tree raises on, such as a capture for a decoder `v$PREV`
+   lacks, is dropped for both; the script prints how many.
+   - **Exit 0:** the median is within the threshold. Go on to item 1's
+     measurements.
+   - **Exit 1:** the median is more than 5% above 1.0. Stop the release:
+     measure no figure and make no release commit. A run that started
+     above the load threshold is discarded and repeated, as item 2 says;
+     any other exit 1 stands. Find the change:
+     `git log --first-parent --oneline "v$PREV"..HEAD` lists the merges
+     since the release, each PR's `benchmark` job printed its own median,
+     and a run with `--base` set to one of those merge commits compares
+     the release branch with it, so a median near 1.0 there puts the
+     slowdown at or before that commit. Then either fix it on `master` by its
+     own PR, checked and merged as in steps 5 and 6, delete the release
+     branch (`git switch master && git branch -D "release-$V"`) and start
+     again from step 1, or the maintainer accepts the slowdown, with its
+     reason (a correctness fix that costs decode time, for instance)
+     recorded with the result, and the release goes on.
+   - **Exit 2:** the comparison could not run. The message says why: a
+     `v$PREV` the clone lacks (`git fetch origin --tags`), a tree that
+     fails to load, or no fixtures. Fix the cause and run it again. The
+     release does not go on without an exit 0 or an accepted exit 1.
+
+   Record the result in the `### Re-measured for X.Y.Z` section that
+   step 4 adds to `docs/CLAIMS.md`, as a row of its command table: the
+   command, the base tag, the pairs, the frames dropped, the median and
+   quartiles and the exit status, with the reason for an accepted exit 1.
+   The CHANGELOG entry of step 4 says the same.
+4. **A figure that is not re-measured is marked as not repeated for
    this release, with the version it was last measured in** (Rule 4). It
    is never carried over silently. README and CLAIMS each name the
    figures not repeated and the version each was last measured in, and
    the CHANGELOG entry says the same.
-4. **The maintainer approves the numbers before they are committed.**
-   Show each previous figure, the new one and the individual runs, and
-   wait for approval.
+5. **The maintainer approves the numbers before they are committed.**
+   Show item 3's result, each previous figure, the new one and the
+   individual runs, and wait for approval.
 
 ## 4. Make the `chore(release): X.Y.Z` commit
 
@@ -189,15 +242,17 @@ One commit holds the release change, in these six files.
    `## [Unreleased]`, so that everything unreleased moves under the new
    heading and `## [Unreleased]` is left empty. Add a `### Development`
    entry to the new section recording the re-measurement: corpus,
-   machine, method, competitor versions, each new figure against the
-   previous one, and what was not repeated. `release.yml` publishes this
+   machine, method, competitor versions, step 3's decode-time check
+   against `v$PREV`, each new figure against the previous one, and what
+   was not repeated. `release.yml` publishes this
    section as the GitHub release notes.
 4. In `README.md`, update the figures and the "re-measured for" date in
    [Why NETProtocols](README.md#why-netprotocols), and the list of
    versions on PyPI in [Roadmap](README.md#roadmap).
 5. In `docs/CLAIMS.md`, add a `### Re-measured for X.Y.Z (YYYY-MM-DD)`
    section after the previous one under Measurement baseline (method,
-   command table, what was not re-measured), and update the heading and
+   command table with step 3's decode-time check as a row, what was not
+   re-measured), and update the heading and
    the `**Status: VERIFIED for X.Y.Z**` line of each re-measured claim.
 6. Commit:
 
