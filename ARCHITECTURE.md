@@ -479,6 +479,33 @@ All five fields default to `None` and adding them never changes a
 message string — every existing `str(err)` and `match=` assertion
 holds unchanged.
 
+**Walks raise; lookups and display helpers degrade.** An accessor that
+walks a sequence of type-length-value items, each item's length
+locating the next, and returns the items as a tuple raises
+`InvalidFieldError` when the bytes do not walk: a length below the
+item header, a length past the end, or bytes left over too few for a
+header. `TCP.parsed_options`, `RADIUS.parsed_attributes`,
+`RADIUSAttribute.vendor_attributes`, `STUN.parsed_attributes` and
+`SCTPChunk.parameters` are such walks. A walk answers `None`, without
+raising, only where there is nothing in its format to walk:
+`vendor_attributes` for an attribute other than a Vendor-Specific and
+for a vendor whose sub-attributes are in another format, and
+`parameters` for a chunk other than an INIT or INIT ACK and for a value
+shorter than the 16 fixed bytes before the parameters, as SCTP's other
+INIT fields are `None` for a value too short to hold them. A lookup or
+a display helper degrades to `None` (or `"unknown (n)"`) and never
+raises: `STUN.attribute()`, which reads the attributes up to the first
+that does not fit, `RADIUSAttribute.value`, `RADIUSAttribute.vendor_id`
+and `vendor_name`, `SCTPChunk.state_cookie`, which is `None` wherever
+`parameters` raises, and the scalar fields of `SCTPChunk` (`tsn`,
+`initiate_tag`, `a_rwnd`, ...). Two kinds of accessor sit outside the
+split. `RADIUS`'s packet-level lookups (`user_name`, `nas_ip_address`,
+`nas_port`, `framed_ip_address`) read through `parsed_attributes` and
+raise as it does. A list read from inside one value, whose number of
+entries a count or a fixed entry size gives, is a typed view of that
+value and degrades: `SCTPChunk.gap_ack_blocks` and `duplicate_tsns`,
+`CDP.addresses` and `management_addresses`, and `IPv6Routing.segments`.
+
 ## Walking a frame: the next_protocol() chain
 
 A captured frame is a chain of headers, each one naming what it

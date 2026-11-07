@@ -823,21 +823,16 @@ class TestSCTPChunkAccessorSafety:
             ),
         )
     )
-    def test_typed_accessors_never_raise(self, chunk: SCTPChunk) -> None:
-        """Every typed accessor answers a value or None for any value of
-        the five chunk types they read. Parsed parameters tile the value
-        after the 16 fixed bytes: each but the last padded to 4 bytes,
-        and the last with its padding or without it."""
+    def test_typed_accessors_answer_and_parameters_tile_or_raise(
+        self, chunk: SCTPChunk
+    ) -> None:
+        """Every typed accessor but parameters answers a value or None
+        for any value of the five chunk types they read. The parameters
+        either tile the value after the 16 fixed bytes exactly, each but
+        the last padded to 4 bytes and the last with its padding or
+        without it, or raise InvalidFieldError, where the reference walk
+        says so."""
         _read_every_sctp_chunk_accessor(chunk)
-        parameters = chunk.parameters
-        if parameters is not None:
-            rest = len(chunk.value) - 16
-            padded = [len(bytes(parameter)) for parameter in parameters]
-            if parameters:
-                assert sum(padded[:-1]) + parameters[-1].length <= rest
-            assert rest <= sum(padded)
-            for parameter in parameters:
-                assert parameter.type_name
         blocks = chunk.gap_ack_blocks
         if blocks is not None:
             assert len(blocks) == chunk.num_gap_ack_blocks
@@ -875,8 +870,8 @@ class TestSCTPChunkAccessorSafety:
         assert list(sctp.parsed_chunks) == chunks
 
 
-#: Every typed SCTPChunk accessor, each of which must answer a value or
-#: None on any chunk.
+#: Every typed SCTPChunk accessor but parameters, each of which must
+#: answer a value or None on any chunk.
 _SCTP_CHUNK_ACCESSORS = (
     "immediate",
     "unordered",
@@ -894,7 +889,6 @@ _SCTP_CHUNK_ACCESSORS = (
     "outbound_streams",
     "inbound_streams",
     "initial_tsn",
-    "parameters",
     "state_cookie",
     "cumulative_tsn_ack",
     "num_gap_ack_blocks",
@@ -905,16 +899,81 @@ _SCTP_CHUNK_ACCESSORS = (
 
 
 def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
-    """Read every typed accessor, and decode the user data through the
+    """Read every typed accessor, check the parameters against
+    _reference_parameter_walk, and decode the user data through the
     default, empty ``sctp.ppid`` table."""
     for name in _SCTP_CHUNK_ACCESSORS:
         getattr(chunk, name)
+    _read_sctp_parameters(chunk)
     assert chunk.decode_user_data() is None
 
 
+def _reference_parameter_walk(
+    chunk: SCTPChunk,
+) -> tuple[tuple[int, bytes], ...] | str | None:
+    """Walk an INIT or INIT ACK's parameters independently of
+    netprotocols: ``None`` for another chunk type or a value shorter
+    than the 16 fixed bytes, ``_RAISES`` for parameters that do not
+    tile the rest of the value, and the ``(type, value)`` pairs
+    otherwise. The padding after each parameter is skipped unread, and
+    the value may end inside the last parameter's padding."""
+    if chunk.type not in (1, 2) or len(chunk.value) < 16:
+        return None
+    rest, offset, pairs = chunk.value[16:], 0, []
+    while offset < len(rest):
+        if len(rest) - offset < 4:
+            return _RAISES
+        type_ = int.from_bytes(rest[offset : offset + 2])
+        length = int.from_bytes(rest[offset + 2 : offset + 4])
+        if length < 4 or offset + length > len(rest):
+            return _RAISES
+        pairs.append((type_, rest[offset + 4 : offset + length]))
+        offset += length + -length % 4
+    return tuple(pairs)
+
+
+def _read_sctp_parameters(chunk: SCTPChunk) -> None:
+    """Read an SCTP chunk's parameters: they raise InvalidFieldError, are
+    None, or are the parameters exactly where _reference_parameter_walk
+    says so, and they tile the value after the 16 fixed bytes. The
+    State Cookie never raises: it is an INIT ACK's first State Cookie
+    parameter's value, and None wherever the parameters raise."""
+    expected = _reference_parameter_walk(chunk)
+    cookie = chunk.state_cookie
+    try:
+        parameters = chunk.parameters
+    except InvalidFieldError as error:
+        assert expected == _RAISES
+        assert error.field == "value"
+        assert error.offset is not None
+        assert 16 <= error.offset < len(chunk.value)
+        assert cookie is None
+        event("SCTP parameters: malformed")
+        return
+    if parameters is None:
+        assert expected is None
+        event("SCTP parameters: none")
+        return
+    assert tuple((p.type, p.value) for p in parameters) == expected
+    cookies = [p.value for p in parameters if p.type == 7]
+    if chunk.type == 2 and cookies:
+        assert cookie == cookies[0]
+    else:
+        assert cookie is None
+    rest = len(chunk.value) - 16
+    padded = [len(bytes(parameter)) for parameter in parameters]
+    if parameters:
+        assert sum(padded[:-1]) + parameters[-1].length <= rest
+    assert rest <= sum(padded)
+    for parameter in parameters:
+        assert parameter.type_name
+    event(f"SCTP parameters: {len(parameters)}")
+
+
 def test_the_sctp_accessor_lists_name_every_property() -> None:
-    """_SCTP_CHUNK_ACCESSORS, and test_sctp.py's ACCESSOR_TYPES, cover
-    every SCTPChunk property beyond the display helpers the walk
+    """_SCTP_CHUNK_ACCESSORS and parameters, which
+    _read_sctp_parameters reads, and test_sctp.py's ACCESSOR_TYPES,
+    cover every SCTPChunk property beyond the display helpers the walk
     property reads itself."""
     properties = {
         name
@@ -922,7 +981,7 @@ def test_the_sctp_accessor_lists_name_every_property() -> None:
         if isinstance(attr, property)
     }
     display = {"length", "type_name", "flags_str", "unrecognized_action"}
-    assert properties - display == set(_SCTP_CHUNK_ACCESSORS)
+    assert properties - display == {*_SCTP_CHUNK_ACCESSORS, "parameters"}
     assert properties - display == set(ACCESSOR_TYPES)
 
 

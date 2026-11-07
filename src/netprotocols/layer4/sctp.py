@@ -67,7 +67,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, NoReturn, Self, cast
 
 from netprotocols._base import Protocol, hex_str
 from netprotocols._tlv import walk_kind_length_value
@@ -291,10 +291,12 @@ class SCTPChunk:
 
     Typed accessors read the fields of DATA (RFC 9260 §3.3.1), INIT
     (§3.3.2), INIT ACK (§3.3.3), SACK (§3.3.4) and I-DATA (RFC 8260
-    §2.1) chunks out of :attr:`value`. Each one never raises: it is
-    ``None`` for a chunk of a type that has no such field, and for a
-    value too short to hold it, so a field before the cut still reads
-    from a value cut short. Fields shared by several types (``tsn``,
+    §2.1) chunks out of :attr:`value`. Each one is ``None`` for a
+    chunk of a type that has no such field, and for a value too short
+    to hold it, so a field before the cut still reads from a value cut
+    short. Each one but :attr:`parameters` never raises;
+    :attr:`parameters` raises when the parameters after the fixed
+    fields do not walk. Fields shared by several types (``tsn``,
     ``stream_id``, ``ppid``, ``user_data``, ``a_rwnd``) read each
     type's own layout.
     """
@@ -608,21 +610,26 @@ class SCTPChunk:
 
         They come in wire order, each value without its padding
         (RFC 9260 §3.2.1). ``()`` for a value of exactly the 16 fixed
-        bytes. ``None`` for other chunk types, a value shorter than 16
-        bytes, and parameters that do not walk: a length below 4, a
-        length past the value, or 1-3 bytes left over for a parameter
-        header (degrades, never raises). Padding the value ends before
-        completing, after the last parameter, is accepted.
+        bytes. ``None`` for other chunk types and a value shorter than
+        16 bytes. Padding the value ends before completing, after the
+        last parameter, is accepted.
+
+        :raises InvalidFieldError: if the parameters do not walk: a
+            parameter length below 4, a length past the value, or 1-3
+            bytes left over for a parameter header (``field``
+            ``"value"``, ``offset`` relative to :attr:`value`; bounded,
+            so it never hangs or over-reads).
         """
         if self.type not in (_INIT, _INIT_ACK):
             return None
         if len(self.value) < _INIT_FIXED_LEN:
             return None
+        raw = self.value[_INIT_FIXED_LEN:]
         try:
             return tuple(
                 SCTPParameter(type_, value)
                 for type_, value in walk_kind_length_value(
-                    self.value[_INIT_FIXED_LEN:],
+                    raw,
                     lone_byte_kinds=frozenset(),
                     terminator_kind=None,
                     min_option_length=None,
@@ -633,8 +640,8 @@ class SCTPChunk:
                     align=4,
                 )
             )
-        except InvalidFieldError:
-            return None
+        except InvalidFieldError as error:
+            _raise_parameter_error(raw, cast(int, error.offset))
 
     @property
     def state_cookie(self) -> bytes | None:
@@ -643,12 +650,16 @@ class SCTPChunk:
         The first State Cookie parameter's value (RFC 9260
         §3.3.3.1.1), which the peer echoes back in its COOKIE ECHO.
         ``None`` for other chunk types, INIT included, for parameters
-        that do not walk (see :attr:`parameters`), and for an INIT ACK
-        without a State Cookie (degrades, never raises).
+        that do not walk (where :attr:`parameters` raises), and for an
+        INIT ACK without a State Cookie (degrades, never raises).
         """
         if self.type != _INIT_ACK:
             return None
-        for parameter in self.parameters or ():
+        try:
+            parameters = self.parameters or ()
+        except InvalidFieldError:
+            return None
+        for parameter in parameters:
             if parameter.type == _STATE_COOKIE:
                 return parameter.value
         return None
@@ -725,6 +736,53 @@ class SCTPChunk:
             int.from_bytes(value[at : at + 4])
             for at in range(start, start + 4 * count, 4)
         )
+
+
+def _raise_parameter_error(raw: bytes, offset: int) -> NoReturn:
+    """Raise the error for the parameter at ``offset`` that does not walk.
+
+    The error names ``field="value"`` with an ``offset`` relative to
+    :attr:`SCTPChunk.value`.
+
+    :param raw: The parameters, the INIT or INIT ACK value after its 16
+        fixed bytes.
+    :param offset: Where in ``raw`` the parameter that does not walk
+        starts.
+    :raises InvalidFieldError: on every call, naming the failure: fewer
+        than 4 bytes left for the parameter header, a parameter length
+        below 4, or otherwise a parameter length past the end of ``raw``.
+    """
+    left = len(raw) - offset
+    at = _INIT_FIXED_LEN + offset
+    if left < _PARAMETER_HEADER.size:
+        raise InvalidFieldError(
+            f"SCTP parameter header needs {_PARAMETER_HEADER.size} bytes, "
+            f"{left} remain",
+            protocol=SCTPChunk,
+            field="value",
+            offset=at,
+            expected=_PARAMETER_HEADER.size,
+            actual=left,
+        ) from None
+    _, length = _PARAMETER_HEADER.unpack_from(raw, offset)
+    if length < _PARAMETER_HEADER.size:
+        raise InvalidFieldError(
+            "SCTP parameter length must be at least "
+            f"{_PARAMETER_HEADER.size}, got {length}",
+            protocol=SCTPChunk,
+            field="value",
+            offset=at,
+            expected=f">={_PARAMETER_HEADER.size}",
+            actual=length,
+        ) from None
+    raise InvalidFieldError(
+        f"SCTP parameter declares {length} bytes, {left} remain",
+        protocol=SCTPChunk,
+        field="value",
+        offset=at,
+        expected=length,
+        actual=left,
+    ) from None
 
 
 def _walk_chunks(
