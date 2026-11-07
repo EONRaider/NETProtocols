@@ -1665,25 +1665,25 @@ def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     """Validate an HSRPv1 message (RFC 2281 §5.1).
 
     HSRP carries no checksum of its own, and the UDP checksum already
-    covers every HSRP byte, so this checks the message's fields
-    instead. It must be the whole UDP payload, 20 bytes, or 50 when an
-    MD5 Authentication TLV follows them, sent from and to port 1985,
-    with Version 0, an Op Code of Hello, Coup or Resign and a State the
-    RFC defines; a
-    Hello's Holdtime must exceed its Hellotime, which the RFC says only
-    for Hellos. Two further rules are this corpus's conventions, not
-    RFC 2281 requirements: the Reserved byte must be zero, which every
-    sender captured here transmits, and the Authentication Data must be
-    a clear-text password, printable ASCII padded with NUL bytes. The
-    Holdtime rule too is on what the sender transmitted, not on what a
-    receiver requires: nothing in RFC 2281 tells a receiver to drop a
-    message that breaks it, or any of the conventions. A 50-byte
-    message's last 30 bytes must be an MD5 Authentication TLV as
-    Wireshark's packet-hsrp.c reads it, Type 4 and Length 28, with the
-    Algorithm 1 (MD5) and the Padding byte zero, as packet-hsrp.c
-    describes it; its digest is not verified, and every such message
-    counts as ``hsrp-md5``. HSRPv2 is checked by :func:`_check_hsrpv2`
-    instead, and an Advertise by :func:`_check_hsrp_advertise`."""
+    covers every HSRP byte, so this checks the message's fields instead.
+    It must be the whole UDP payload, 20 bytes, or 50 when an MD5
+    Authentication TLV follows them, sent from and to port 1985, with
+    Version 0, an Op Code of Hello, Coup or Resign and a State the RFC
+    defines; a Hello's Holdtime must exceed its Hellotime, which the RFC
+    says only for Hellos. Two further rules are this corpus's
+    conventions, not RFC 2281 requirements: the Reserved byte must be
+    zero, which every sender captured here transmits, and the
+    Authentication Data must be a clear-text password, printable ASCII
+    padded with NUL bytes. The Holdtime rule too is on what the sender
+    transmitted, not on what a receiver requires: nothing in RFC 2281
+    tells a receiver to drop a message that breaks it, or any of the
+    conventions. A 50-byte message's last 30 bytes must be an MD5
+    Authentication TLV as Wireshark's packet-hsrp.c reads it, Type 4 and
+    Length 28, with the Algorithm 1 (MD5) and the Padding byte zero, as
+    packet-hsrp.c describes it; its digest is not verified, and every
+    such message counts as ``hsrp-md5``. HSRPv2 is checked by
+    :func:`_check_hsrpv2` instead, and an Advertise by
+    :func:`_check_hsrp_advertise`."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrp"] += 1
     if len(hsrp) not in (20, _HSRP_MD5_LENGTH):

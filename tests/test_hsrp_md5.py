@@ -471,6 +471,15 @@ class TestConstruction:
             case _:
                 pytest.fail("positional pattern did not match")
 
+    def test_a_ten_field_positional_pattern_still_matches(self):
+        """A pattern of the ten wire fields matches a message carrying
+        the TLV, which is bound by no position."""
+        match HSRP.decode(MESSAGE):
+            case HSRP(0, 0, 16, 3, 10, 110, 1, 0, _, vip):
+                assert vip == "192.0.2.254"
+            case _:
+                pytest.fail("ten-field positional pattern did not match")
+
 
 # --- scripts/check_fixtures.py ----------------------------------------
 

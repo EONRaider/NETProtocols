@@ -1194,10 +1194,14 @@ The values are also hard-coded, independently, in
   every byte of it in this repository is hand-built, and what the
   tests show is packet-hsrp.c's reading, not a router's. Nothing here
   shows what a Cisco router puts in the Authentication Data, the
-  Padding or the Flags beside the TLV, which all but one of the
-  vectors set to zero, or that a router sends the TLV only in a 50-byte
-  message. The digest is not verified, here or by `check_fixtures`: no
-  sender available here computes it as IOS does,
+  Padding or the Flags beside the TLV, or that a router sends the TLV
+  only in a 50-byte message. All but one of the five `VECTORS`, and
+  `raw_hsrp_md5_hello`, carry Authentication Data of 8 NUL bytes,
+  Padding 0 and Flags 0; `distinct` carries `np-hsrp`, Padding 0x5a
+  and Flags 0xabcd; `HSRP_MD5`, `HELLO` with `MD5_TLV` and the first
+  fuzz seed message with `_HSRP_MD5_TLV` carry the clear-text password
+  `cisco` beside the TLV, Padding 0 and Flags 0. The digest is not verified, here or by
+  `check_fixtures`: no sender available here computes it as IOS does,
   and no primary source says which bytes it covers. `check_fixtures`
   checks a 50-byte HSRPv1 message's TLV structurally, its Type 4, Length
   28, Algorithm 1 and zero Padding (`_check_hsrp_md5`), and has none in
