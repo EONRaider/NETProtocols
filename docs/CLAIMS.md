@@ -1868,7 +1868,7 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 262 sites in `src/` that raise a
+`protocol` is set at every one of the 263 sites in `src/` that raise a
 decode or validation error but `random_mac`'s (`utils/mac.py`), which
 belongs to no protocol (verified by an AST sweep, not just by eye);
 `validate_mac_addr` and `validate_ipv4_addr` forward the `protocol=`
@@ -1880,7 +1880,7 @@ that builds `InvalidFieldError`,
 `MaxDepthExceededError`, directly or through the `_malformed` helpers of
 `layer7/bgp.py` and `layer7/tls.py` and `walk.py`'s `_too_deep`; every
 direct constructor call among them passes `protocol=`, except
-`random_mac`'s. The claim covers only those. `src/` holds 295 `raise`
+`random_mac`'s. The claim covers only those. `src/` holds 296 `raise`
 statements in all, and the other 33 fall outside it: `pcap.py`'s 18
 `MalformedCaptureError` raises, which describe the capture file rather
 than a protocol and set no `protocol`; the three registry errors in
@@ -1892,7 +1892,7 @@ and caught within the module; six stdlib raises (`ValueError` in
 `registry.py`, `OSError` in `_base.py`, `KeyError` in `packet.py`); and
 three bare re-raises (two in `walk.py`, one in `layer3/pim.py`).
 Reproduce the count from the repository root with `python3`; it prints
-`262 of 295`:
+`263 of 296`:
 
 ```python
 import ast, pathlib
@@ -1910,7 +1910,7 @@ print(sum(n.exc is not None and name(n.exc) in NAMES for n in raises),
 
 The same rule gives 60 at `534f889`, 203 at `824893d`, 206 at
 `343427b`, 228 at `f12daf0`, 230 at `2705353`, 259 of 292 at
-`9da02d7` and 262 of 295 at `7dda273`.
+`9da02d7`, 262 of 295 at `7dda273` and 263 of 296 at `95693af`.
 
 `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
