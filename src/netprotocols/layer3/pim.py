@@ -959,13 +959,18 @@ class PIM(Protocol):
                 actual=version,
             )
         body = bytes(data[cls._struct.size :])
-        return cls(
-            version=version,
-            type=type_,
-            reserved=reserved,
-            checksum=checksum,
-            body=body[: _message_end(type_, body)],
-        )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the version is checked above, the type is a nibble,
+        # and the other fields are unpacked from their own widths.
+        message = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(message, "version", version)
+        set_field(message, "type", type_)
+        set_field(message, "reserved", reserved)
+        set_field(message, "checksum", checksum)
+        set_field(message, "body", body[: _message_end(type_, body)])
+        return message
 
     def __bytes__(self) -> bytes:
         """Serialize to the on-wire form."""

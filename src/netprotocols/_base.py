@@ -41,12 +41,13 @@ are valid by construction.
 The three headers that carry addresses (``Ethernet``, ``ARP``,
 ``IPv4``) build their decoded instance directly, with
 ``object.__new__`` plus ``object.__setattr__`` per field, skipping
-``__init__`` and ``__post_init__``. ``OSPF``, ``BGP`` and ``VRRP`` do
-the same: their ``decode()`` runs every check of their wire framing
-itself, at the offset it reports, so their ``__post_init__`` would
-only repeat it. Every public constructor still validates, and every
-``__post_init__`` check skipped this way holds for what ``decode()``
-produces (documented at each site).
+``__init__`` and ``__post_init__``. ``TCP``, ``UDP``, ``OSPF``,
+``PIM``, ``VRRP``, ``RIP`` and ``BGP`` do the same: their ``decode()``
+runs every check of their wire framing itself, at the offset it
+reports, so their ``__post_init__`` would only repeat it (``UDP`` has
+none, and skips only ``__init__``). Every public constructor still
+validates, and every ``__post_init__`` check skipped this way holds
+for what ``decode()`` produces (documented at each site).
 
 ``HTTP`` takes the same path: its ``__post_init__`` re-parses
 ``head + raw_body`` to check that the two are one complete, exactly

@@ -502,7 +502,19 @@ class TestPacketProperties:
 
 #: The classes whose decode() builds its instance without __init__ or
 #: __post_init__ (see "Decode-path construction" in _base.py).
-DIRECTLY_BUILT = (Ethernet, ARP, IPv4, OSPF, BGP, VRRP, VRRPv6)
+DIRECTLY_BUILT = (
+    Ethernet,
+    ARP,
+    IPv4,
+    TCP,
+    UDP,
+    OSPF,
+    PIM,
+    VRRP,
+    VRRPv6,
+    RIP,
+    BGP,
+)
 
 
 def assert_constructor_accepts(header: Protocol) -> None:

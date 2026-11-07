@@ -68,26 +68,23 @@ class UDP(Protocol):
         """
         if len(data) > 9:
             src_port, dst_port, length, checksum, lead = _LEAD.unpack_from(data)
-            udp = cls(
-                src_port=src_port,
-                dst_port=dst_port,
-                length=length,
-                checksum=checksum,
-            )
-            if length != 8:
-                if length == 9:
-                    lead &= 0xFF00
-                object.__setattr__(udp, "_lead", lead)
-            return udp
-        src_port, dst_port, length, checksum = cls._unpack_fixed(data)
-        udp = cls(
-            src_port=src_port,
-            dst_port=dst_port,
-            length=length,
-            checksum=checksum,
-        )
-        if len(data) > 8 and length != 8:
-            object.__setattr__(udp, "_lead", data[8] << 8)
+            if length == 8:
+                lead = None
+            elif length == 9:
+                lead &= 0xFF00
+        else:
+            src_port, dst_port, length, checksum = cls._unpack_fixed(data)
+            lead = data[8] << 8 if len(data) > 8 and length != 8 else None
+        # UDP has no __post_init__, and every field is unpacked from its
+        # own wire width, so the instance is built directly, without
+        # __init__ (see "Decode-path construction" in _base.py).
+        udp = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(udp, "src_port", src_port)
+        set_field(udp, "dst_port", dst_port)
+        set_field(udp, "length", length)
+        set_field(udp, "checksum", checksum)
+        set_field(udp, "_lead", lead)
         return udp
 
     def __bytes__(self) -> bytes:

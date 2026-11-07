@@ -448,12 +448,16 @@ class RIP(Protocol):
                 expected="1-255",
                 actual=command,
             )
-        return cls(
-            command=command,
-            version=version,
-            reserved=reserved,
-            body=bytes(data[cls._struct.size :]),
-        )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): each header field is unpacked from its own width.
+        rip = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(rip, "command", command)
+        set_field(rip, "version", version)
+        set_field(rip, "reserved", reserved)
+        set_field(rip, "body", bytes(data[cls._struct.size :]))
+        return rip
 
     def __bytes__(self) -> bytes:
         """Serialize the header and the body, verbatim."""

@@ -230,19 +230,28 @@ class TCP(Protocol):
                 expected=data_offset * 4,
                 actual=len(data),
             )
-        return cls(
-            src_port=src_port,
-            dst_port=dst_port,
-            seq=seq,
-            ack=ack,
-            data_offset=data_offset,
-            reserved=(offset_flags >> 9) & 0b111,
-            flags=offset_flags & 0x1FF,
-            window=window,
-            checksum=checksum,
-            urgent_pointer=urgent_pointer,
-            options=bytes(data[cls._struct.size : data_offset * 4]),
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the data offset is 4 bits (so <= 15) and is rejected
+        # below 5 above, and the options are sliced to exactly
+        # data_offset * 4 bytes after the buffer is confirmed to hold
+        # them.
+        header = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(header, "src_port", src_port)
+        set_field(header, "dst_port", dst_port)
+        set_field(header, "seq", seq)
+        set_field(header, "ack", ack)
+        set_field(header, "data_offset", data_offset)
+        set_field(header, "reserved", (offset_flags >> 9) & 0b111)
+        set_field(header, "flags", offset_flags & 0x1FF)
+        set_field(header, "window", window)
+        set_field(header, "checksum", checksum)
+        set_field(header, "urgent_pointer", urgent_pointer)
+        set_field(
+            header, "options", bytes(data[cls._struct.size : data_offset * 4])
         )
+        return header
 
     def __bytes__(self) -> bytes:
         return (
