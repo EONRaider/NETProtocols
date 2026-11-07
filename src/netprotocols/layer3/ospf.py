@@ -1196,6 +1196,23 @@ class OSPF(Protocol):
             )
         body = bytes(data[size:packet_length])
         cls._check_body(type_, body, base=size)
+        auth_trailer = bytes(data[packet_length:end])
+        if cls is not OSPF:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                version=version,
+                type=type_,
+                packet_length=packet_length,
+                router_id=bytes_to_ipv4(router_id),
+                area_id=bytes_to_ipv4(area_id),
+                checksum=checksum,
+                instance_id=instance_id,
+                au_type=au_type,
+                authentication=authentication,
+                body=body,
+                auth_trailer=auth_trailer,
+            )
         # Every check __post_init__ runs holds here, so the instance is
         # built directly, without it (see "Decode-path construction" in
         # _base.py): the version and the body's framing are checked
@@ -1227,7 +1244,7 @@ class OSPF(Protocol):
         set_au_type(header, au_type)
         set_authentication(header, authentication)
         set_body(header, body)
-        set_auth_trailer(header, bytes(data[packet_length:end]))
+        set_auth_trailer(header, auth_trailer)
         return header
 
     def __bytes__(self) -> bytes:

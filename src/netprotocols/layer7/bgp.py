@@ -845,6 +845,16 @@ class BGP(Protocol):
                 expected=length,
                 actual=len(data),
             )
+        body = bytes(data[_HEADER_LEN:length])
+        rest = data[length : length + 16]
+        followed = bool(rest) and _MARKER.startswith(rest)
+        if cls is not BGP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            message = cls(marker=_MARKER, length=length, type=type_, body=body)
+            if followed:
+                object.__setattr__(message, "_followed", True)
+            return message
         # Every check __post_init__ runs holds here, so the instance is
         # built directly, without it (see "Decode-path construction" in
         # _base.py): the Marker is 16 bytes, the Type a byte, and the
@@ -861,9 +871,8 @@ class BGP(Protocol):
         set_marker(message, _MARKER)
         set_length(message, length)
         set_type(message, type_)
-        set_body(message, bytes(data[_HEADER_LEN:length]))
-        rest = data[length : length + 16]
-        set_followed(message, bool(rest) and _MARKER.startswith(rest))
+        set_body(message, body)
+        set_followed(message, followed)
         return message
 
     def __bytes__(self) -> bytes:

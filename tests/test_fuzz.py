@@ -27,9 +27,10 @@ import contextlib
 import importlib.util
 import struct
 import sys
-from dataclasses import fields, replace
+from dataclasses import dataclass, fields, replace
 from ipaddress import IPv6Address
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from hypothesis import assume, event, example, given
@@ -594,8 +595,8 @@ class TestDirectlyBuiltDecodesPassValidation:
         ids=lambda c: c.__name__,
     )
     def test_a_subclass_decodes_the_same_fields(self, cls) -> None:
-        """decode() builds an instance of the class it is called on, a
-        subclass without slots of its own included."""
+        """decode() called on a subclass, here one without slots of its
+        own, builds an instance of that subclass with the same fields."""
         decoded = 0
         for frame in CORPUS_FRAMES:
             for layer in decode_frame(frame, lax=True).layers:
@@ -621,6 +622,82 @@ def assert_a_subclass_decodes_alike(cls: type[Protocol], raw: bytes) -> None:
 def vars_of(header: Protocol) -> dict[str, object]:
     """Every dataclass field of ``header``, compared or not."""
     return {f.name: getattr(header, f.name) for f in fields(header)}
+
+
+#: The classes whose decode() builds the instance directly only when
+#: called on the class itself, and through the constructor when called
+#: on any other subclass (see "Decode-path construction" in _base.py).
+FAST_PATH_ONLY_FOR_ITSELF = (TCP, UDP, OSPF, PIM, VRRP, VRRPv6, RIP, BGP)
+
+
+def raw_header(cls: type[Protocol]) -> bytes:
+    """The bytes of the first corpus header of exactly ``cls``, or of a
+    built one where the corpus has none."""
+    if cls is VRRPv6:
+        return bytes(VRRPv6(3, 1, 1, 100, 1, 100, 0, ("2001:db8::1",)))
+    for frame in CORPUS_FRAMES:
+        for layer in decode_frame(frame, lax=True).layers:
+            if type(layer) is cls:
+                return bytes(layer)
+    raise AssertionError(f"no {cls.__name__} in the corpus")
+
+
+class RejectedBySubclass(InvalidFieldError):
+    """What a test subclass's __post_init__ raises."""
+
+
+class TestDecodeIntoASubclass:
+    """decode() called on a subclass the library does not define runs
+    that subclass's __init__ and __post_init__; called on the library's
+    own class, it builds the instance without either."""
+
+    @pytest.mark.parametrize(
+        "cls",
+        [cls for cls in FAST_PATH_ONLY_FOR_ITSELF if cls is not VRRPv6],
+        ids=lambda c: c.__name__,
+    )
+    def test_a_subclass_field_gets_its_default(self, cls) -> None:
+        tagged = dataclass(frozen=True, slots=True)(
+            type(
+                f"Tagged{cls.__name__}",
+                (cls,),
+                {"__annotations__": {"tag": "str"}, "tag": "untagged"},
+            )
+        )
+        raw = raw_header(cls)
+        header = tagged.decode(raw)
+        assert type(header) is tagged
+        assert header.tag == "untagged"
+        library = vars_of(cls.decode(raw))
+        assert {k: v for k, v in vars_of(header).items() if k != "tag"} == (
+            library
+        )
+
+    @pytest.mark.parametrize(
+        "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
+    )
+    def test_a_subclass_post_init_runs(self, cls) -> None:
+        def reject(self) -> None:
+            raise RejectedBySubclass("rejected", protocol=type(self))
+
+        strict = dataclass(frozen=True, slots=True)(
+            type(f"Strict{cls.__name__}", (cls,), {"__post_init__": reject})
+        )
+        with pytest.raises(RejectedBySubclass):
+            strict.decode(raw_header(cls))
+
+    @pytest.mark.parametrize(
+        "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
+    )
+    def test_the_library_class_skips_its_constructor(self, cls) -> None:
+        raw = raw_header(cls)
+        expected = vars_of(cls.decode(raw))
+        spy = mock.Mock(side_effect=AssertionError("__init__ ran"))
+        with mock.patch.object(cls, "__init__", spy):
+            header = cls.decode(raw)
+        spy.assert_not_called()
+        assert type(header) is cls
+        assert vars_of(header) == expected
 
 
 class TestNDPAccessorSafety:

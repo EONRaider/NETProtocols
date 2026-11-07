@@ -75,6 +75,18 @@ class UDP(Protocol):
         else:
             src_port, dst_port, length, checksum = cls._unpack_fixed(data)
             lead = data[8] << 8 if len(data) > 8 and length != 8 else None
+        if cls is not UDP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            udp = cls(
+                src_port=src_port,
+                dst_port=dst_port,
+                length=length,
+                checksum=checksum,
+            )
+            if lead is not None:
+                object.__setattr__(udp, "_lead", lead)
+            return udp
         # UDP has no __post_init__, and every field is unpacked from its
         # own wire width, so the instance is built directly, without
         # __init__ (see "Decode-path construction" in _base.py).

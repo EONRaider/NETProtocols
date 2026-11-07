@@ -230,6 +230,23 @@ class TCP(Protocol):
                 expected=data_offset * 4,
                 actual=len(data),
             )
+        options = bytes(data[cls._struct.size : data_offset * 4])
+        if cls is not TCP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                src_port=src_port,
+                dst_port=dst_port,
+                seq=seq,
+                ack=ack,
+                data_offset=data_offset,
+                reserved=(offset_flags >> 9) & 0b111,
+                flags=offset_flags & 0x1FF,
+                window=window,
+                checksum=checksum,
+                urgent_pointer=urgent_pointer,
+                options=options,
+            )
         # Every check __post_init__ runs holds here, so the instance is
         # built directly, without it (see "Decode-path construction" in
         # _base.py): the data offset is 4 bits (so <= 15) and is rejected
@@ -260,7 +277,7 @@ class TCP(Protocol):
         set_window(header, window)
         set_checksum(header, checksum)
         set_urgent_pointer(header, urgent_pointer)
-        set_options(header, bytes(data[cls._struct.size : data_offset * 4]))
+        set_options(header, options)
         return header
 
     def __bytes__(self) -> bytes:

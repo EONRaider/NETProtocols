@@ -960,6 +960,17 @@ class PIM(Protocol):
                 actual=version,
             )
         body = bytes(data[cls._struct.size :])
+        body = body[: _message_end(type_, body)]
+        if cls is not PIM:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                version=version,
+                type=type_,
+                reserved=reserved,
+                checksum=checksum,
+                body=body,
+            )
         # Every check __post_init__ runs holds here, so the instance is
         # built directly, without it (see "Decode-path construction" in
         # _base.py): the version is checked above, the type is a nibble,
@@ -976,7 +987,7 @@ class PIM(Protocol):
         set_type(message, type_)
         set_reserved(message, reserved)
         set_checksum(message, checksum)
-        set_body(message, body[: _message_end(type_, body)])
+        set_body(message, body)
         return message
 
     def __bytes__(self) -> bytes:

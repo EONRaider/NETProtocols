@@ -453,6 +453,13 @@ class RIP(Protocol):
                 expected="1-255",
                 actual=command,
             )
+        body = bytes(data[cls._struct.size :])
+        if cls is not RIP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                command=command, version=version, reserved=reserved, body=body
+            )
         # Every check __post_init__ runs holds here, so the instance is
         # built directly, without it (see "Decode-path construction" in
         # _base.py): each header field is unpacked from its own width.
@@ -466,7 +473,7 @@ class RIP(Protocol):
         set_command(rip, command)
         set_version(rip, version)
         set_reserved(rip, reserved)
-        set_body(rip, bytes(data[cls._struct.size :]))
+        set_body(rip, body)
         return rip
 
     def __bytes__(self) -> bytes:
