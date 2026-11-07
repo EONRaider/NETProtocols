@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Same-machine A/B decode benchmark: a head tree against a base tree.
 
-    uv run --frozen python scripts/benchmark_ab.py \\
+    git fetch origin
+    uv run --frozen --python 3.12 python scripts/benchmark_ab.py \\
         --base "$(git merge-base origin/master HEAD)"
     uv run --frozen python scripts/benchmark_ab.py --base HEAD
     uv run --frozen python scripts/benchmark_ab.py --base-src ../other/src
+
+The first compares this working tree's ``src``, the head, with its
+merge-base with ``origin/master``, on Python 3.12, the interpreter of
+the CI ``benchmark`` job; on a clean tree the head is ``HEAD``.
 
 The base is a git revision of this repository (``--base``), whose
 ``src`` directory is exported with ``git archive`` into a temporary
@@ -260,7 +265,7 @@ def compare(
         ``site`` or bytecode writing on, the trees see different frame
         counts, no frame is left, or a timed run decodes a different
         number of frames, or rejects any, than the probes predict, or a
-        time is not a positive finite number.
+        time is missing or not a positive finite number.
     """
     probes = {
         "base": run_worker(base, fixtures, "probe"),
@@ -315,11 +320,6 @@ def compare(
             )
             check_timed(name, timed, total - len(skipped))
             seconds[name] = timed["seconds"]
-        if not all(math.isfinite(t) and t > 0 for t in seconds.values()):
-            raise ComparisonError(
-                f"pair {number + 1} measured {seconds}; each time must be "
-                "a positive finite number of seconds"
-            )
         ratio = seconds["head"] / seconds["base"]
         measured.append({"first": order[0], **seconds, "ratio": ratio})
         print(
@@ -347,8 +347,9 @@ def check_timed(name: str, timed: dict[str, Any], expected: int) -> None:
     :param timed: The worker's ``time`` result.
     :param expected: The number of frames left after the skips.
     :raises ComparisonError: if the run imported a module from outside
-        its tree, decoded other than ``expected`` frames, or rejected
-        any.
+        its tree, decoded other than ``expected`` frames, rejected any,
+        or reports no time, or one that is not a positive finite number
+        of seconds; a ``bool`` is not a number of seconds.
     """
     if timed["outside"]:
         raise ComparisonError(
@@ -359,6 +360,16 @@ def check_timed(name: str, timed: dict[str, Any], expected: int) -> None:
         raise ComparisonError(
             f"{name} timed {timed['frames']} frames and rejected "
             f"{timed['rejected']}; the probes predict {expected} and 0"
+        )
+    seconds = timed.get("seconds")
+    if (
+        isinstance(seconds, bool)
+        or not isinstance(seconds, (int, float))
+        or not (math.isfinite(seconds) and seconds > 0)
+    ):
+        raise ComparisonError(
+            f"{name} measured {seconds!r}; the time must be a positive "
+            "finite number of seconds"
         )
 
 
@@ -421,6 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--repetitions must be at least 1")
     if args.trials < 1:
         parser.error("--trials must be at least 1")
+    if not math.isfinite(args.threshold):
+        parser.error("--threshold must be a finite number")
 
     with tempfile.TemporaryDirectory(prefix="benchmark-ab-") as scratch:
         base_dir, head_dir = Path(scratch, "base"), Path(scratch, "head")
