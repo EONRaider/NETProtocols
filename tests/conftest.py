@@ -374,6 +374,20 @@ def raw_hsrpv2_hello() -> bytes:
     )
 
 
+@pytest.fixture
+def raw_hsrpv2_interface_state() -> bytes:
+    """A hand-built HSRPv2 Hello in the layout of Wireshark's
+    packet-hsrp.c: the Group State TLV of :func:`raw_hsrpv2_hello`, then
+    an Interface State TLV (Type 2, Length 4: 1 active group, 0
+    passive). No capture holds HSRPv2."""
+    return (
+        bytes.fromhex("01280200060400010200 0a09c30b 00000064")
+        + bytes.fromhex("00000bb8 00002710 c0000201")
+        + bytes(12)
+        + bytes.fromhex("0204 0001 0000")
+    )
+
+
 def tls_client_hello_record() -> bytes:
     """A constructed TLS record holding a ClientHello (RFC 9846 §4.2.2):
     record version 0x0301, ClientHello version 0x0303, a Random of
