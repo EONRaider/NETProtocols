@@ -913,8 +913,8 @@ branch against 1.44-1.47× on master `d68b7fb`, three alternating runs
 each. The routing captures moved most: dpkt leads by 1.14× on OSPF
 (1.58× on master), 1.16× on BGP (1.60×), 1.01× on PIM (2.26×), 1.08×
 on RIP (1.38×) and 0.98× on VRRP (1.30×). The same-job A/B runner puts
-the branch's corpus decode time at 0.850 of master's and the routing
-captures' at 0.677 (16 pairs, medians). The heading and status stand
+the branch's corpus decode time at 0.856 of master's and the routing
+captures' at 0.687 (16 pairs, medians). The heading and status stand
 until the next release re-measures them on the release machine
 (Rule 4).*
 
