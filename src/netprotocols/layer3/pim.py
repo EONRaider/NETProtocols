@@ -40,8 +40,9 @@ walk the IP header's declared length ends the buffer ``decode``
 receives, so an Ethernet sender's padding and a captured FCS are the
 packet's :attr:`~netprotocols.Packet.trailer`. Decoded on its own, or
 in a walk that no IP length bounds, the buffer can hold them after the
-message, and ``decode`` bounds the message by its own structure, using
-the same parser :attr:`PIM.message` does:
+message, and ``decode`` bounds the message by its own structure, reading
+the fields :attr:`PIM.message`'s parser reads, without building the
+typed message:
 
 * A message whose parser knows where it ends (Register-Stop, Join/Prune,
   Graft, Graft-Ack, Assert) ends there; whatever follows is left
@@ -105,7 +106,6 @@ from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.packet import Packet
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
-    ProtocolError,
     TruncatedHeaderError,
 )
 from netprotocols.walk import decode_frame
@@ -1029,14 +1029,114 @@ class PIM(Protocol):
 def _message_end(type_: int, body: bytes) -> int:
     """Find where in ``body`` the message of type ``type_`` ends.
 
-    That is what its parser reads, or all of ``body`` when it has no
-    parser or the parser cannot read it.
+    That is where its parser in ``_PARSERS`` stops reading, or all of
+    ``body`` when it has no parser or the parser cannot read it. The
+    end is found from the same fields the parser reads, without building
+    the typed message.
     """
-    parser = _PARSERS.get(type_)
-    if parser is None:
+    sizer = _SIZERS.get(type_)
+    if sizer is None:
         return len(body)
-    try:
-        _, end = parser(body)
-    except ProtocolError:
-        return len(body)
-    return end
+    end = sizer(body)
+    return len(body) if end is None else end
+
+
+def _encoded_end(body: bytes, cursor: int, fixed: int) -> int | None:
+    """Return where the encoded address at ``body[cursor:]`` ends.
+
+    ``None`` where :func:`_read_encoded` raises: the address runs past
+    ``body``, or its family or encoding is not native IPv4 or IPv6.
+
+    :param body: The buffer holding the encoded address.
+    :param cursor: Where in ``body`` the encoded address starts.
+    :param fixed: How many bytes of fixed fields precede the address,
+        as for :func:`_read_encoded`.
+    """
+    if cursor + fixed > len(body):
+        return None
+    width = _ADDRESS_LENGTHS.get(body[cursor])
+    if width is None or body[cursor + 1] != _NATIVE_ENCODING:
+        return None
+    end = cursor + fixed + width
+    return end if end <= len(body) else None
+
+
+def _hello_end(body: bytes) -> int | None:
+    """Return where :func:`_parse_hello` ends the Hello, or ``None``.
+
+    ``None`` where it raises: an option that does not walk before the
+    zero tail starts.
+    """
+    zero_tail = len(bytes(body).rstrip(b"\x00"))
+    cursor = 0
+    while cursor < len(body):
+        if cursor + _OPTION_HEADER.size > len(body):
+            return cursor if cursor >= zero_tail else None
+        option_type, length = _OPTION_HEADER.unpack_from(body, cursor)
+        end = cursor + _OPTION_HEADER.size + length
+        if end > len(body):
+            return cursor if cursor >= zero_tail else None
+        if option_type == 0 and cursor >= zero_tail:
+            return cursor
+        cursor = end
+    return cursor
+
+
+def _register_end(body: bytes) -> int:
+    """Return where :func:`_parse_register` ends a Register: all of it."""
+    return len(body)
+
+
+def _register_stop_end(body: bytes) -> int | None:
+    """Return where :func:`_parse_register_stop` ends, or ``None``."""
+    cursor = _encoded_end(body, 0, 4)
+    return None if cursor is None else _encoded_end(body, cursor, 2)
+
+
+def _join_prune_end(body: bytes) -> int | None:
+    """Return where :func:`_parse_join_prune` ends, or ``None``.
+
+    Bounded: every group set and source advances the cursor, and the
+    walk stops at the first one that runs past ``body``.
+    """
+    cursor = _encoded_end(body, 0, 2)
+    if cursor is None or cursor + _JOIN_PRUNE_FIXED.size > len(body):
+        return None
+    num_groups = body[cursor + 1]
+    cursor += _JOIN_PRUNE_FIXED.size
+    for _ in range(num_groups):
+        group_end = _encoded_end(body, cursor, 4)
+        if group_end is None or group_end + _SOURCE_COUNTS.size > len(body):
+            return None
+        num_joined, num_pruned = _SOURCE_COUNTS.unpack_from(body, group_end)
+        cursor = group_end + _SOURCE_COUNTS.size
+        for _ in range(num_joined + num_pruned):
+            source_end = _encoded_end(body, cursor, 4)
+            if source_end is None:
+                return None
+            cursor = source_end
+    return cursor
+
+
+def _assert_end(body: bytes) -> int | None:
+    """Return where :func:`_parse_assert` ends, or ``None``."""
+    cursor = _encoded_end(body, 0, 4)
+    if cursor is not None:
+        cursor = _encoded_end(body, cursor, 2)
+    if cursor is None or cursor + _ASSERT_METRICS.size > len(body):
+        return None
+    return cursor + _ASSERT_METRICS.size
+
+
+#: Where each parser in ``_PARSERS`` ends a message, by message type:
+#: the end it returns, or ``None`` where it raises a
+#: :class:`~netprotocols.ProtocolError`.
+_SIZERS: dict[int, Callable[[bytes], int | None]] = {
+    0: _hello_end,
+    1: _register_end,
+    2: _register_stop_end,
+    3: _join_prune_end,
+    5: _assert_end,
+    6: _join_prune_end,
+    7: _join_prune_end,
+}
