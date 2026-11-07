@@ -2,14 +2,14 @@
 """Same-machine A/B decode benchmark: a head tree against a base tree.
 
     git fetch origin
-    uv run --frozen --python 3.12 python scripts/benchmark_ab.py \\
+    uv run --isolated --frozen --python 3.12 python scripts/benchmark_ab.py \\
         --base "$(git merge-base origin/master HEAD)"
     uv run --frozen python scripts/benchmark_ab.py --base HEAD
     uv run --frozen python scripts/benchmark_ab.py --base-src ../other/src
 
 The first compares this working tree's ``src``, the head, with its
-merge-base with ``origin/master``, on Python 3.12, the interpreter of
-the CI ``benchmark`` job; on a clean tree the head is ``HEAD``.
+merge-base with ``origin/master``, and runs it on Python 3.12; on a
+clean tree the head is ``HEAD``.
 
 The base is a git revision of this repository (``--base``), whose
 ``src`` directory is exported with ``git archive`` into a temporary
@@ -69,6 +69,20 @@ WORKER = Path(__file__).resolve().parent / "_benchmark_ab_worker.py"
 
 #: Fails when the median ratio is more than this many percent above 1.0.
 THRESHOLD = 5.0
+
+#: The fields each worker mode writes, and the type of each.
+FIELDS = {
+    "probe": {
+        "file": str,
+        "version": str,
+        "frames": int,
+        "raises": list,
+        "outside": list,
+        "site": bool,
+        "bytecode_written": bool,
+    },
+    "time": {"frames": int, "rejected": int, "outside": list},
+}
 
 
 class ComparisonError(Exception):
@@ -219,6 +233,25 @@ def run_worker(
     return result
 
 
+def check_fields(name: str, result: dict[str, Any], mode: str) -> None:
+    """Check that a worker result holds every field its mode writes.
+
+    :param name: ``base`` or ``head``.
+    :param result: The worker's result.
+    :param mode: ``probe`` or ``time``.
+    :raises ComparisonError: if a field of :data:`FIELDS` for ``mode`` is
+        missing, or its value is not exactly of the type listed there.
+    """
+    for field, kind in FIELDS[mode].items():
+        if field not in result:
+            raise ComparisonError(f"{name}'s {mode} result has no {field!r}")
+        if type(result[field]) is not kind:
+            raise ComparisonError(
+                f"{name}'s {mode} result has {field!r} = "
+                f"{result[field]!r}, not of type {kind.__name__}"
+            )
+
+
 def summarize(ratios: Sequence[float]) -> dict[str, float]:
     """Return the median, extremes, quartiles and spread of ``ratios``.
 
@@ -260,7 +293,8 @@ def compare(
     :returns: The probes, the frames each tree raises on, the skipped
         frames, each pair's times and ratio, and :func:`summarize` of
         the ratios.
-    :raises ComparisonError: if a worker fails, imports any
+    :raises ComparisonError: if a worker fails, leaves a result without
+        a field of :data:`FIELDS` or with one of another type, imports any
         ``netprotocols`` module from outside its tree, runs with
         ``site`` or bytecode writing on, the trees see different frame
         counts, no frame is left, or a timed run decodes a different
@@ -272,6 +306,7 @@ def compare(
         "head": run_worker(head, fixtures, "probe"),
     }
     for name, found in probes.items():
+        check_fields(name, found, "probe")
         print(f"{name}: netprotocols {found['version']} from {found['file']}")
         if found["outside"]:
             raise ComparisonError(
@@ -348,9 +383,10 @@ def check_timed(name: str, timed: dict[str, Any], expected: int) -> None:
     :param expected: The number of frames left after the skips.
     :raises ComparisonError: if the run imported a module from outside
         its tree, decoded other than ``expected`` frames, rejected any,
-        or reports no time, or one that is not a positive finite number
-        of seconds; a ``bool`` is not a number of seconds.
+        or reports no time, or one that is not a positive finite
+        ``float``, or if :func:`check_fields` raises.
     """
+    check_fields(name, timed, "time")
     if timed["outside"]:
         raise ComparisonError(
             f"{name} loaded modules from outside its tree: "
@@ -362,10 +398,8 @@ def check_timed(name: str, timed: dict[str, Any], expected: int) -> None:
             f"{timed['rejected']}; the probes predict {expected} and 0"
         )
     seconds = timed.get("seconds")
-    if (
-        isinstance(seconds, bool)
-        or not isinstance(seconds, (int, float))
-        or not (math.isfinite(seconds) and seconds > 0)
+    if type(seconds) is not float or not (
+        math.isfinite(seconds) and seconds > 0
     ):
         raise ComparisonError(
             f"{name} measured {seconds!r}; the time must be a positive "

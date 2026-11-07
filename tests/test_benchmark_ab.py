@@ -67,6 +67,17 @@ def decode_frame(frame):
     return len(frame)
 """
 
+#: A probe result that passes every check.
+PROBE = {
+    "file": "x",
+    "version": "0",
+    "frames": 5,
+    "raises": [],
+    "outside": [],
+    "site": False,
+    "bytecode_written": False,
+}
+
 
 @pytest.fixture
 def fixtures(tmp_path: Path) -> Path:
@@ -595,7 +606,9 @@ class TestVerdict:
         assert ab.main(argv) == 2
         assert "median ratio is" in capsys.readouterr().err
 
-    @pytest.mark.parametrize("seconds", [math.inf, math.nan, 0.0])
+    @pytest.mark.parametrize(
+        "seconds", [math.inf, math.nan, 0.0, -1.0, -math.inf]
+    )
     def test_a_time_that_is_not_positive_and_finite_is_an_error(
         self,
         ab: ModuleType,
@@ -603,27 +616,21 @@ class TestVerdict:
         monkeypatch: pytest.MonkeyPatch,
         seconds: float,
     ) -> None:
-        probe = {
-            "file": "x",
-            "version": "0",
-            "frames": 5,
-            "raises": [],
-            "outside": [],
-            "site": False,
-            "bytecode_written": False,
-        }
         timed = {"seconds": seconds, "frames": 5, "rejected": 0, "outside": []}
 
         def worker(
             src: Path, fixtures: Path, mode: str, *options: str
         ) -> dict[str, object]:
-            return dict(probe if mode == "probe" else timed)
+            return dict(PROBE if mode == "probe" else timed)
 
         monkeypatch.setattr(ab, "run_worker", worker)
         with pytest.raises(ab.ComparisonError, match="positive finite"):
             ab.compare(Path("b"), Path("h"), fixtures, 2, 1, 1)
 
-    @pytest.mark.parametrize("seconds", ["1.0", None, True, [1.0]])
+    @pytest.mark.parametrize(
+        "seconds",
+        ["1.0", None, True, [1.0], pytest.param(10**400, id="10**400")],
+    )
     def test_a_time_that_is_not_a_number_exits_2(
         self,
         ab: ModuleType,
@@ -632,26 +639,56 @@ class TestVerdict:
         capsys: pytest.CaptureFixture[str],
         seconds: object,
     ) -> None:
-        probe = {
-            "file": "x",
-            "version": "0",
-            "frames": 5,
-            "raises": [],
-            "outside": [],
-            "site": False,
-            "bytecode_written": False,
-        }
         timed = {"seconds": seconds, "frames": 5, "rejected": 0, "outside": []}
 
         def worker(
             src: Path, fixtures: Path, mode: str, *options: str
         ) -> dict[str, object]:
-            return dict(probe if mode == "probe" else timed)
+            return dict(PROBE if mode == "probe" else timed)
 
         monkeypatch.setattr(ab, "run_worker", worker)
         argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
         assert ab.main([*argv, "--pairs", "2"]) == 2
         assert "positive finite" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("mode", "field"),
+        [
+            *(("probe", field) for field in PROBE),
+            *(("time", field) for field in ("frames", "rejected", "outside")),
+        ],
+    )
+    @pytest.mark.parametrize("kind", ["missing", "mistyped"])
+    def test_a_worker_result_with_a_missing_or_mistyped_field_exits_2(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        mode: str,
+        field: str,
+        kind: str,
+    ) -> None:
+        results = {
+            "probe": dict(PROBE),
+            "time": {"seconds": 1.0, "frames": 5, "rejected": 0, "outside": []},
+        }
+        if kind == "missing":
+            del results[mode][field]
+        else:
+            results[mode][field] = None
+
+        def worker(
+            src: Path, fixtures: Path, mode: str, *options: str
+        ) -> dict[str, object]:
+            return dict(results[mode])
+
+        monkeypatch.setattr(ab, "run_worker", worker)
+        argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        assert ab.main([*argv, "--pairs", "2"]) == 2
+        error = capsys.readouterr().err
+        assert f"{mode} result has" in error
+        assert repr(field) in error
 
     def test_a_timed_run_without_a_time_is_an_error(
         self, ab: ModuleType

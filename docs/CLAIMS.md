@@ -1286,7 +1286,7 @@ figure the gate reads. `.github/workflows/benchmark-noise.yml` runs the
 same comparison with the base equal to the head, to measure the
 runner's noise.
 
-Reproduce: after `git fetch origin`, on a clean working tree (the head is the working tree's `src`), `uv run --frozen --python 3.12 python scripts/benchmark_ab.py --base "$(git merge-base origin/master HEAD)"`, the base CI uses for a pull request, on the CI job's Python 3.12.
+Reproduce: after `git fetch origin`, on a clean working tree (the head is the working tree's `src`), `uv run --isolated --frozen --python 3.12 python scripts/benchmark_ab.py --base "$(git merge-base origin/master HEAD)"`, the base CI uses for a pull request, on the CI job's Python 3.12.
 
 **"No other Python packet library in this comparison set gates
 performance in CI" — audited 2026-09-04 (#124), and the claim is now
