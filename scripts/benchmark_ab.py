@@ -61,7 +61,7 @@ REPOSITORY = Path(__file__).resolve().parent.parent
 WORKER = Path(__file__).resolve().parent / "_benchmark_ab_worker.py"
 
 #: Fails when the median ratio is more than this many percent above 1.0.
-THRESHOLD = 10.0
+THRESHOLD = 5.0
 
 
 class ComparisonError(Exception):

@@ -433,13 +433,29 @@ class TestVerdict:
         assert summary["spread"] == pytest.approx(0.4)
 
     @pytest.mark.parametrize(
-        ("median", "status"), [(1.099, 0), (1.1, 0), (1.101, 1), (0.5, 0)]
+        ("median", "status"), [(1.049, 0), (1.05, 0), (1.051, 1), (0.5, 0)]
     )
     def test_fails_only_above_the_threshold(
         self, ab: ModuleType, median: float, status: int
     ) -> None:
         summary = ab.summarize([median])
-        assert ab.verdict(summary, 10.0) == status
+        assert ab.verdict(summary, 5.0) == status
+
+    @pytest.mark.parametrize(("median", "status"), [(1.05, 0), (1.051, 1)])
+    def test_the_default_threshold_is_5_percent(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        median: float,
+        status: int,
+    ) -> None:
+        def fixed(*args: object) -> dict[str, object]:
+            return {"summary": ab.summarize([median])}
+
+        monkeypatch.setattr(ab, "compare", fixed)
+        argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        assert ab.main(argv) == status
 
     def test_a_tree_against_itself_passes_and_writes_json(
         self, ab: ModuleType, tmp_path: Path, fixtures: Path

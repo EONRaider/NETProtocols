@@ -266,7 +266,9 @@ going on. CI additionally runs the test matrix
 on Python 3.12 to 3.14, the allocation tests, the dependency scan, the
 wheel build and its reproducibility check, the Pyodide check and the
 benchmark gate, which times the head against its base on the runner
-(`scripts/benchmark_ab.py`).
+(`scripts/benchmark_ab.py`) and fails when the median ratio is more
+than 5% above 1.0, a threshold set from ten noise runs on
+`ubuntu-latest` whose medians spanned −0.7% to +0.2% (CLAIMS 1.7).
 
 ## 6. Open the PR and merge it
 
