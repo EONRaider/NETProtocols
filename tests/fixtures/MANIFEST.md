@@ -1177,10 +1177,20 @@ The values are also hard-coded, independently, in
   6f7207a6 (the TLV's diagram, lines 100-121, its reading, lines
   320-344, and the rule that reads it only in a message of exactly 50
   captured bytes whose bytes 20 and 21 are Type 4 and Length 28, lines
-  444-459), each labelled as hand-built. They are cross-checked
-  against that source only: tshark was not installed where they were
-  written, so unlike the HSRPv2 and Advertise vectors above, none has
-  been decoded by tshark. **No real capture of the TLV exists here**:
+  444-459), each labelled as hand-built. tshark 4.2.2 decodes each of
+  the nine hand-built 50-byte messages (the five `VECTORS`,
+  `raw_hsrp_md5_hello`, `tests/test_check_fixtures.py`'s `HSRP_MD5`,
+  `tests/test_hsrp.py`'s `HELLO` with `MD5_TLV` and
+  `tests/test_fuzz.py`'s first seed message with `_HSRP_MD5_TLV`),
+  wrapped in Ethernet/IPv4/UDP from and to port 1985 to 224.0.0.2 in a
+  temporary pcap that is not committed, as an HSRP message with good
+  IPv4 and UDP checksums and an "MD5 Authentication TLV: Type=4
+  Len=28" whose Algorithm, Padding, Flags, sender's IP Address, Key ID
+  and digest equal what `HSRP.decode()` reads from the same bytes. It
+  reports the same 50 bytes with Type 4 and Length 27, or Type 0, as
+  "Unknown TLV sequence in HSRPv1 dissection", and shows a 49- and a
+  51-byte message with no TLV, as `HSRP.decode()` leaves each of those
+  at its 20 bytes. **No real capture of the TLV exists here**:
   every byte of it in this repository is hand-built, and what the
   tests show is packet-hsrp.c's reading, not a router's. Nothing here
   shows what a Cisco router puts in the Authentication Data, the
