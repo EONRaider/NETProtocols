@@ -526,8 +526,10 @@ class TestDispatch:
 
     @pytest.mark.parametrize("first", range(256))
     def test_the_first_byte_chooses(self, first):
+        """UDP hands over the first two bytes; the second never counts."""
         expected = NTPControl if first & 7 == 6 else NTP
-        assert NTP._for_payload(first) is expected
+        for second in (0, 1, 6, 0xFF):
+            assert NTP._for_payload(first << 8 | second) is expected
 
     def test_a_built_udp_header_has_seen_no_payload(self):
         udp = UDP(src_port=40000, dst_port=123, length=20, checksum=0)
@@ -543,7 +545,8 @@ class TestDispatch:
 
     def test_the_first_byte_is_not_compared(self):
         decoded = decode_frame(udp_frame(READ_REQUEST))[UDP]
-        assert decoded._lead == 0xD6
+        assert decoded._lead == int.from_bytes(READ_REQUEST[:2])
+        assert decoded._lead >> 8 == 0xD6
         built = replace(decoded)
         assert built._lead is None
         assert built == decoded

@@ -1,5 +1,10 @@
 """HSRP — Cisco's Hot Standby Router Protocol: HSRPv1 (RFC 2281) and HSRPv2.
 
+The three formats on UDP port 1985 each have a class: :class:`HSRP` for
+the HSRPv1 Hello, Coup and Resign, :class:`HSRPAdvertise` for Cisco's
+Op Code 3 interface-state Advertise and :class:`HSRPv2` for HSRPv2 and
+HSRP for IPv6.
+
 HSRP lets a group of routers on a LAN present one virtual router to the
 hosts on it: one virtual IP address and one virtual MAC address, held by
 whichever router is Active, with a Standby router ready to take over
@@ -78,7 +83,7 @@ often. The other fields are not judged: any Hellotime, Holdtime,
 Priority, Group, Reserved byte, Authentication Data and Virtual IP
 Address decodes.
 
-Two kinds of message on the same port are not HSRPv1, and
+Two kinds of message on the same port are not this layout, and
 :meth:`HSRP.decode` rejects them rather than misread them as it:
 
 - HSRPv2, which runs on port 1985 too, to 224.0.0.102 rather than
@@ -87,23 +92,26 @@ Two kinds of message on the same port are not HSRPv1, and
   :meth:`HSRP.decode` raises ``InvalidFieldError`` for every HSRPv2
   message, with ``field`` ``"version"`` and ``actual`` 1, and a message
   that names :class:`HSRPv2`. (HSRPv2's own version, 2, is the TLV's
-  third byte.) A walk does not reach that error: it hands the first byte
-  of the datagram to ``HSRP._for_payload``, which answers
-  :class:`HSRPv2` for a first byte of 1 and :class:`HSRP` for any other,
-  so UDP port 1985 decodes both versions (see "HSRPv2" below). The
-  choice holds wherever :class:`HSRP` is registered, a port named in
-  ``decode_as`` included.
+  third byte.) A walk does not reach that error: it hands the first two
+  bytes of the datagram to ``HSRP._for_payload``, which answers
+  :class:`HSRPv2` for a first byte of 1, so UDP port 1985 decodes both
+  versions (see "HSRPv2" below). The choice holds wherever
+  :class:`HSRP` is registered, a port named in ``decode_as`` included.
 - Op Code 3, the Advertise message of Cisco's HSRP interface-state
   advertisements, is version 0 too, but a 16-byte message whose Op Code
-  is followed by a TLV rather than by this header's fields (Wireshark's
-  packet-hsrp.c decodes it), so it raises ``InvalidFieldError`` with
-  ``field`` ``"opcode"`` and ``actual`` 3, whatever its length. It is
-  not decoded.
+  is followed by a TLV rather than by this header's fields, so
+  :meth:`HSRP.decode` raises ``InvalidFieldError`` for it with
+  ``field`` ``"opcode"`` and ``actual`` 3, whatever its length, and a
+  message that names :class:`HSRPAdvertise`. A walk does not reach that
+  error either: ``HSRP._for_payload`` answers :class:`HSRPAdvertise`
+  when the datagram's first two bytes are ``00 03`` (see "Advertise"
+  below), wherever :class:`HSRP` is registered.
 
-A strict :func:`~netprotocols.decode_frame` therefore raises on an
-Advertise, as it does on ntpd's mode 7 messages on port 123. Walk such
-traffic with ``decode_frame(frame, lax=True)``, which keeps Ethernet, IP
-and UDP and reports the rejection as ``stopped_by``.
+``HSRP._for_payload`` answers :class:`HSRP` for every other first two
+bytes, so UDP port 1985 decodes all three formats, and only a message
+that is none of them fails a strict :func:`~netprotocols.decode_frame`.
+Walk such traffic with ``decode_frame(frame, lax=True)``, which keeps
+Ethernet, IP and UDP and reports the rejection as ``stopped_by``.
 
 Construction checks only that each field fits its byte, that the
 Authentication Data is 8 bytes and that the Virtual IP Address is
@@ -111,6 +119,52 @@ dotted-decimal, so a message with a Version, Op Code or State decode
 rejects builds, and ``HSRP.decode(bytes(message))`` raises for it,
 which ARCHITECTURE.md's round-trip guarantee allows: it covers canonical
 headers, which that one is not.
+
+Advertise
+---------
+
+The interface-state Advertise has no RFC either. Its layout here is the
+one Wireshark's dissector, epan/dissectors/packet-hsrp.c (commit
+6f7207a6), reads for a version 0 message to 224.0.0.2 with Op Code 3::
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |   Version     |  Op Code = 3  |           TLV Type            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |            TLV Length         |      State    |   Reserved    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |     Active Group Count        |     Passive Group Count       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                           Reserved                            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+An interface sends one when HSRP on it enters or leaves the passive
+state, when a group on it learns a new Active router, and periodically
+while it is passive. The TLV Type is 1 (HSRP interface state) or 2 (IP
+redundancy), the State Dormant (1), Passive (2) or Active (3), and the
+two counts, of the interface's active and passive groups, range over
+0-256 by packet-hsrp.c's description of them. The TLV Length, which
+packet-hsrp.c displays but does not hold to any value, and the two
+Reserved fields are carried verbatim.
+
+:meth:`HSRPAdvertise.decode` judges four fields, each as soon as its
+bytes are in the buffer and before the length: a Version of 0, an Op
+Code of 3, a TLV Type of 1 or 2 once both its bytes are present, and a
+State of 1-3. Random bytes pass 1 x 1 x 2 x 3 of the 2^40 values of
+those five bytes, about 1 in 183 billion. Only a buffer whose leading
+bytes all pass can raise ``TruncatedHeaderError``, when it is shorter
+than 16 bytes. The TLV Length, the counts and the Reserved fields are
+not judged. Like :class:`HSRP`'s, the layer is its 16 bytes, and
+whatever follows stays outside it, so
+``bytes(HSRPAdvertise.decode(x)) == x[:16]``.
+:meth:`HSRPAdvertise.decode` rejects an HSRPv1 Hello, Coup or Resign at
+its Op Code and an HSRPv2 message at its first byte, each with a
+message naming the class that decodes it.
+
+Construction checks only that each field fits its width, so an
+Advertise with a Version, Op Code, TLV Type or State decode rejects
+builds, and decoding its bytes raises.
 
 HSRPv2
 ------
@@ -215,6 +269,7 @@ from netprotocols.utils.mac import validate_mac_addr
 
 __all__ = [
     "HSRP",
+    "HSRPAdvertise",
     "HSRPv2",
     "HSRPv2GroupState",
     "HSRPv2MD5Authentication",
@@ -226,8 +281,8 @@ __all__ = [
 #: version 0").
 _VERSION = 0
 
-#: Op Codes (RFC 2281 §5.1). Op Code 3, Cisco's Advertise, is named in
-#: :data:`_ADVERTISE` only, for the error that rejects it.
+#: Op Codes (RFC 2281 §5.1). Op Code 3, Cisco's Advertise, is
+#: :data:`_ADVERTISE`, decoded by :class:`HSRPAdvertise`.
 _OPCODE_NAMES: dict[int, str] = {0: "Hello", 1: "Coup", 2: "Resign"}
 
 #: The Type of HSRPv2's Group State TLV, which opens every HSRPv2
@@ -237,6 +292,10 @@ _GROUP_STATE_TYPE = 1
 #: The interface-state Advertise message's Op Code, which shares the
 #: port and the version but not the layout (Wireshark's packet-hsrp.c).
 _ADVERTISE = 3
+
+#: The first two bytes of every Advertise, Version 0 and Op Code 3, as
+#: a big-endian 16-bit integer.
+_ADVERTISE_LEAD = _VERSION << 8 | _ADVERTISE
 
 #: States (RFC 2281 §5.1), by the value a message carries.
 _STATE_NAMES: dict[int, str] = {
@@ -289,7 +348,7 @@ def _reject(owner: type, field: str, offset: int, value: int) -> NoReturn:
         expected = "0-2"
         message = f"HSRP opcode must be 0-2, got {value}"
         if value == _ADVERTISE:
-            message += " (Cisco's interface-state Advertise; not decoded)"
+            message += " (Cisco's Advertise: decode it with HSRPAdvertise)"
     else:
         expected = ", ".join(str(state) for state in _STATE_NAMES)
         message = f"HSRP state must be one of {expected}, got {value}"
@@ -425,17 +484,22 @@ class HSRP(Protocol):
 
     @classmethod
     def _for_payload(cls, lead: int) -> type[Protocol]:
-        """Return :class:`HSRPv2` for a first byte of 1, else ``cls``.
+        """Return the class for a payload opening with ``lead``.
 
-        UDP port 1985 carries both versions, and an HSRPv2 message opens
+        UDP port 1985 carries three formats: an HSRPv2 message opens
         with its Group State TLV's Type, 1, where an HSRPv1 message has
-        its Version, 0, so a walk reads ``lead`` before it chooses a
-        header (see the module docstring). Any other first byte is left
-        to :meth:`decode`, which rejects all but 0.
+        its Version, 0, and an Advertise opens with Version 0 and Op
+        Code 3, so a walk reads ``lead`` before it chooses a header (see
+        the module docstring). :class:`HSRPv2` answers a first byte of
+        1, :class:`HSRPAdvertise` the two bytes ``00 03``, and ``cls``
+        any other ``lead``, which is left to :meth:`decode`.
 
-        :param lead: The first byte of the UDP payload.
+        :param lead: The first two bytes of the UDP payload, as a
+            big-endian 16-bit integer.
         """
-        return HSRPv2 if lead == _GROUP_STATE_TYPE else cls
+        if lead == _ADVERTISE_LEAD:
+            return HSRPAdvertise
+        return HSRPv2 if lead >> 8 == _GROUP_STATE_TYPE else cls
 
     def __bytes__(self) -> bytes:
         """Serialize the message to its 20 on-wire bytes."""
@@ -458,7 +522,7 @@ class HSRP(Protocol):
 
         Falls back to ``"unknown (n)"`` for a value RFC 2281 does not
         list (degrades, never raises); only construction can give one,
-        Op Code 3, an Advertise, among them.
+        Op Code 3, an Advertise's, among them.
         """
         return _OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
 
@@ -515,6 +579,204 @@ class HSRP(Protocol):
         MAC address instead, which §6.1 strongly discourages.
         """
         return f"{_VIRTUAL_MAC_PREFIX}:{self.group:02x}"
+
+
+#: Every Op Code packet-hsrp.c names (``hsrp_opcode_vals``).
+_ADV_OPCODE_NAMES: dict[int, str] = {**_OPCODE_NAMES, _ADVERTISE: "Advertise"}
+
+#: The Advertise's TLV Types (packet-hsrp.c's ``HSRP_ADV_TYPE_*``).
+_ADV_TYPE_NAMES: dict[int, str] = {
+    1: "HSRP interface state",
+    2: "IP redundancy",
+}
+
+#: The Advertise's States (packet-hsrp.c's ``HSRP_ADV_STATE_*``).
+_ADV_STATE_NAMES: dict[int, str] = {1: "Dormant", 2: "Passive", 3: "Active"}
+
+#: The Advertise's integer fields and their widths in bits, in wire
+#: order.
+_ADV_WIDTHS = (
+    ("version", 8),
+    ("opcode", 8),
+    ("tlv_type", 16),
+    ("tlv_length", 16),
+    ("state", 8),
+    ("reserved1", 8),
+    ("active_groups", 16),
+    ("passive_groups", 16),
+    ("reserved2", 32),
+)
+
+
+def _reject_advertise(
+    owner: type, field: str, offset: int, value: int
+) -> NoReturn:
+    """Raise the decode-time :class:`InvalidFieldError` for ``field``.
+
+    ``offset`` is the field's first byte in the message, and ``value``
+    what it holds. Where the value is how a kind of message this class
+    does not decode begins (HSRPv2, an HSRPv1 Hello, Coup or Resign),
+    the error says so.
+
+    :param owner: The class named as ``protocol`` in the error.
+    :param field: The field's name.
+    :param offset: The field's first byte in the message.
+    :param value: The value the field holds.
+    :raises InvalidFieldError: always.
+    """
+    expected: str
+    if field == "version":
+        expected = str(_VERSION)
+        message = f"HSRP Advertise version must be {_VERSION}, got {value}"
+        if value == _GROUP_STATE_TYPE:
+            message += " (HSRPv2's Group State TLV type: decode it with HSRPv2)"
+    elif field == "opcode":
+        expected = str(_ADVERTISE)
+        message = f"HSRP Advertise opcode must be {_ADVERTISE}, got {value}"
+        if value in _OPCODE_NAMES:
+            message += f" ({_OPCODE_NAMES[value]}: decode it with HSRP)"
+    elif field == "tlv_type":
+        expected = "1 or 2"
+        message = f"HSRP Advertise TLV type must be 1 or 2, got {value}"
+    else:
+        expected = "1-3"
+        message = f"HSRP Advertise state must be 1-3, got {value}"
+    raise InvalidFieldError(
+        message,
+        protocol=owner,
+        field=field,
+        offset=offset,
+        expected=expected,
+        actual=value,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class HSRPAdvertise(Protocol):
+    """An HSRP interface-state Advertise: version 0, Op Code 3.
+
+    Its layout is packet-hsrp.c's (see "Advertise" in the module
+    docstring). Construction accepts any value that fits each field;
+    :meth:`decode` is stricter and rejects a Version other than 0, an
+    Op Code other than 3, a TLV Type other than 1 or 2 and a State
+    other than 1-3.
+
+    :param version: Version, ``0``.
+    :param opcode: Op Code, ``3`` (see :attr:`opcode_name`).
+    :param tlv_type: The TLV Type: ``1`` HSRP interface state, ``2`` IP
+        redundancy (see :attr:`tlv_type_name`).
+    :param tlv_length: The TLV Length, 16 bits, carried verbatim.
+    :param state: The interface's state: ``1`` Dormant, ``2`` Passive,
+        ``3`` Active (see :attr:`state_name`).
+    :param reserved1: The Reserved byte after the State, carried
+        verbatim.
+    :param active_groups: The number of active groups on the
+        interface, 16 bits.
+    :param passive_groups: The number of passive groups on the
+        interface, 16 bits.
+    :param reserved2: The 4 Reserved bytes that end the message, as a
+        32-bit integer, carried verbatim.
+    :raises InvalidFieldError: if an integer field does not fit its
+        width.
+
+    >>> advertise = HSRPAdvertise.decode(
+    ...     bytes.fromhex("0003 0001 000e 02 00 0001 0000 00000000")
+    ... )
+    >>> advertise.opcode_name, advertise.tlv_type_name, advertise.state_name
+    ('Advertise', 'HSRP interface state', 'Passive')
+    >>> advertise.active_groups, advertise.passive_groups
+    (1, 0)
+    """
+
+    version: int
+    opcode: int
+    tlv_type: int
+    tlv_length: int
+    state: int
+    reserved1: int
+    active_groups: int
+    passive_groups: int
+    reserved2: int
+
+    _struct: ClassVar[Struct] = Struct("!BBHHBBHHI")
+
+    def __post_init__(self) -> None:
+        """Check each field's width."""
+        owner = type(self)
+        for name, bits in _ADV_WIDTHS:
+            _check_width(owner, name, getattr(self, name), bits)
+
+    @classmethod
+    def decode(cls, data: bytes | memoryview) -> Self:
+        """Decode the 16-byte Advertise at the start of ``data``.
+
+        The Version, Op Code, TLV Type and State are judged before the
+        length, in that order, each once its bytes are present (see
+        "Advertise" in the module docstring). Anything after the 16
+        bytes is left undecoded.
+
+        :param data: The buffer, starting at the Version byte.
+        :raises InvalidFieldError: if the Version is not 0 (``field``
+            ``"version"``, ``offset`` 0), else the Op Code is not 3
+            (``"opcode"``, 1), else the TLV Type is not 1 or 2
+            (``"tlv_type"``, 2), else the State is not 1-3 (``"state"``,
+            6), at any length.
+        :raises TruncatedHeaderError: if ``data`` is shorter than 16
+            bytes and every judged field it holds passes.
+        """
+        if len(data) > 0 and data[0] != _VERSION:
+            _reject_advertise(cls, "version", 0, data[0])
+        if len(data) > 1 and data[1] != _ADVERTISE:
+            _reject_advertise(cls, "opcode", 1, data[1])
+        if len(data) > 3:
+            tlv_type = data[2] << 8 | data[3]
+            if tlv_type not in _ADV_TYPE_NAMES:
+                _reject_advertise(cls, "tlv_type", 2, tlv_type)
+        if len(data) > 6 and data[6] not in _ADV_STATE_NAMES:
+            _reject_advertise(cls, "state", 6, data[6])
+        return cls(*cls._unpack_fixed(data))
+
+    def __bytes__(self) -> bytes:
+        """Serialize the Advertise to its 16 on-wire bytes."""
+        return self._struct.pack(
+            self.version,
+            self.opcode,
+            self.tlv_type,
+            self.tlv_length,
+            self.state,
+            self.reserved1,
+            self.active_groups,
+            self.passive_groups,
+            self.reserved2,
+        )
+
+    @property
+    def opcode_name(self) -> str:
+        """Name the Op Code, ``"Advertise"`` for 3.
+
+        Op Codes 0-2 are named as :class:`HSRP` names them, and any
+        other value, which only construction can give with Op Codes
+        0-2, falls back to ``"unknown (n)"`` (degrades, never raises).
+        """
+        return _ADV_OPCODE_NAMES.get(self.opcode, f"unknown ({self.opcode})")
+
+    @property
+    def tlv_type_name(self) -> str:
+        """Name the TLV Type, e.g. ``"HSRP interface state"``.
+
+        Falls back to ``"unknown (n)"`` for a value other than 1 or 2,
+        which only construction can give (degrades, never raises).
+        """
+        return _ADV_TYPE_NAMES.get(self.tlv_type, f"unknown ({self.tlv_type})")
+
+    @property
+    def state_name(self) -> str:
+        """Name the interface's state, e.g. ``"Passive"``.
+
+        Falls back to ``"unknown (n)"`` for a value other than 1-3,
+        which only construction can give (degrades, never raises).
+        """
+        return _ADV_STATE_NAMES.get(self.state, f"unknown ({self.state})")
 
 
 #: HSRPv2's version, the Group State TLV's first value byte.

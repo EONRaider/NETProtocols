@@ -80,6 +80,7 @@ from netprotocols import (
     BGPPrefix,
     DNSOverTCP,
     Ethernet,
+    HSRPAdvertise,
     HSRPv2,
     ICMPv4,
     ICMPv6,
@@ -120,6 +121,7 @@ from strategies import (
     bgp_path_attributes,
     bgp_prefixes,
     cdp_pdus,
+    hsrp_advertisements,
     hsrp_messages,
     hsrpv2_messages,
     http_context_responses,
@@ -181,6 +183,7 @@ ALL_PROTOCOLS = (
     NTP,
     NTPControl,
     HSRP,
+    HSRPAdvertise,
     HSRPv2,
     VRRP,
     VRRPv6,
@@ -1894,6 +1897,125 @@ class TestHSRPAccessorSafety:
             getattr(hsrp, name)
 
 
+#: Hand-built HSRP interface-state Advertises, packed here in the layout
+#: of Wireshark's packet-hsrp.c, not built by the library: both TLV
+#: Types in each of the three States, with a few group counts.
+_HSRP_ADVERTISES = [
+    bytes([0, 3]) + struct.pack("!HHBBHHI", kind, 14, state, 0, active, 0, 0)
+    for kind in (1, 2)
+    for state in (1, 2, 3)
+    for active in (0, 1, 256)
+]
+
+#: The values HSRPAdvertise.decode() weighs in its Version, Op Code, the
+#: TLV Type's low byte and the State, the ones either side of what it
+#: accepts among them, and a few others.
+_hsrp_advertise_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 16, 255])
+
+
+@st.composite
+def _hsrp_advertise_seeded(draw: st.DrawFn) -> bytes:
+    """A hand-built Advertise, now and then a judged byte redrawn near
+    the values decode() accepts and a later byte changed, cut anywhere
+    and followed by nothing, an FCS-like 4 bytes or free bytes."""
+    raw = bytearray(draw(st.sampled_from(_HSRP_ADVERTISES)))
+    for position in (0, 1, 2, 3, 6):
+        if draw(st.integers(0, 3)) == 0:
+            raw[position] = draw(_hsrp_advertise_lead)
+    if draw(st.booleans()):
+        raw[draw(st.integers(4, 15))] = draw(st.integers(0, 255))
+    cut = draw(st.integers(0, len(raw)))
+    tail = draw(
+        st.one_of(
+            st.just(b""), st.just(b"\xde\xad\xbe\xef"), st.binary(max_size=40)
+        )
+    )
+    return bytes(raw[:cut]) + tail
+
+
+#: HSRPAdvertise's display accessors, every one of which must answer on
+#: any decoded or constructed instance.
+_HSRP_ADVERTISE_ACCESSORS = (
+    "opcode_name",
+    "tlv_type_name",
+    "state_name",
+    "header_len",
+)
+
+
+def _hsrp_advertise_rejection(data: bytes) -> str | None:
+    """What HSRPAdvertise.decode() must reject ``data`` for, judged in
+    its order, each once its bytes are present: ``"version"`` other than
+    0, ``"opcode"`` other than 3, ``"tlv_type"`` other than 1 or 2,
+    ``"state"`` outside 1-3; then ``"truncated"``, shorter than 16
+    bytes; or ``None``."""
+    if len(data) > 0 and data[0] != 0:
+        return "version"
+    if len(data) > 1 and data[1] != 3:
+        return "opcode"
+    if len(data) > 3 and int.from_bytes(data[2:4]) not in (1, 2):
+        return "tlv_type"
+    if len(data) > 6 and data[6] not in (1, 2, 3):
+        return "state"
+    return "truncated" if len(data) < 16 else None
+
+
+class TestHSRPAdvertiseAccessorSafety:
+    @given(data=st.one_of(_hsrp_advertise_seeded(), fuzz_input))
+    def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
+        """decode() raises only for the first reason that applies, takes
+        exactly 16 bytes and leaves the rest; the accessors never
+        raise."""
+        try:
+            advertise = HSRPAdvertise.decode(data)
+        except TruncatedHeaderError:
+            assert _hsrp_advertise_rejection(data) == "truncated"
+            event("HSRPAdvertise rejected: truncated")
+            return
+        except InvalidFieldError as error:
+            assert _hsrp_advertise_rejection(data) == error.field
+            event(f"HSRPAdvertise rejected: {error.field}")
+            return
+        assert _hsrp_advertise_rejection(data) is None
+        assert bytes(advertise) == data[:16]
+        assert HSRPAdvertise.decode(bytes(advertise)) == advertise
+        for name in _HSRP_ADVERTISE_ACCESSORS:
+            getattr(advertise, name)
+        assert advertise.opcode_name == "Advertise"
+        event(f"HSRPAdvertise {advertise.state_name}")
+
+    @given(header=hsrp_advertisements(), trailer=st.binary(max_size=60))
+    def test_trailing_bytes_stay_out_of_the_message(
+        self, header: HSRPAdvertise, trailer: bytes
+    ) -> None:
+        """The message is always 16 bytes, so whatever follows is left
+        undecoded, and HSRP hands its first two bytes to HSRPAdvertise."""
+        raw = bytes(header) + trailer
+        decoded = HSRPAdvertise.decode(raw)
+        assert decoded == header
+        assert decoded.header_len == 16
+        assert HSRP._for_payload(int.from_bytes(raw[:2])) is HSRPAdvertise
+        with pytest.raises(InvalidFieldError, match="HSRPAdvertise"):
+            HSRP.decode(raw)
+
+    @given(
+        opcode=st.integers(4, 0xFF),
+        tlv_type=st.integers(3, 0xFFFF),
+        state=st.sampled_from([0, *range(4, 256)]),
+    )
+    def test_constructed_unknown_values_display(
+        self, opcode: int, tlv_type: int, state: int
+    ) -> None:
+        """Construction accepts values decode() rejects, and the display
+        helpers name them as unknown rather than raising."""
+        advertise = HSRPAdvertise(0, opcode, tlv_type, 0, state, 0, 0, 0, 0)
+        assert advertise.opcode_name == f"unknown ({opcode})"
+        assert advertise.tlv_type_name == f"unknown ({tlv_type})"
+        assert advertise.state_name == f"unknown ({state})"
+        for name in _HSRP_ADVERTISE_ACCESSORS:
+            getattr(advertise, name)
+
+
 #: Hand-built HSRPv2 messages, packed here in the layout of Wireshark's
 #: packet-hsrp.c, not built by the library: a Group State TLV for IPv4
 #: and for IPv6 in every State, alone or followed by a Text
@@ -1996,7 +2118,7 @@ class TestHSRPv2AccessorSafety:
         """A message's first byte is 1, which HSRP answers HSRPv2 for,
         and HSRP decoded on it raises naming HSRPv2."""
         raw = bytes(message)
-        assert HSRP._for_payload(raw[0]) is HSRPv2
+        assert HSRP._for_payload(int.from_bytes(raw[:2])) is HSRPv2
         with pytest.raises(InvalidFieldError, match="HSRPv2"):
             HSRP.decode(raw)
 

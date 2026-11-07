@@ -334,6 +334,16 @@ def raw_hsrp_hello() -> bytes:
 
 
 @pytest.fixture
+def raw_hsrp_advertise() -> bytes:
+    """A hand-built HSRP interface-state Advertise in the layout of
+    Wireshark's packet-hsrp.c: Version 0, Op Code 3, TLV Type 1 (HSRP
+    interface state), TLV Length 14, State 2 (Passive), a Reserved byte,
+    1 active and 0 passive groups and 4 Reserved bytes, 16 bytes in
+    all. No capture holds an Advertise."""
+    return bytes.fromhex("0003 0001 000e 02 00 0001 0000 00000000")
+
+
+@pytest.fixture
 def raw_hsrpv2_hello() -> bytes:
     """A hand-built HSRPv2 Hello in the layout of Wireshark's
     packet-hsrp.c: a Group State TLV (Version 2, Active, IPv4, group 1,

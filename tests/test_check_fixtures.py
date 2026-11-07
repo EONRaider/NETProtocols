@@ -1185,7 +1185,9 @@ def _() -> tuple[bytes, bytes]:
 
 @case("hsrp-op-code")
 def _() -> tuple[bytes, bytes]:
-    return hsrp(1, 3)
+    # 3 would open an Advertise, which _check_hsrp_advertise reads
+    # instead.
+    return hsrp(1, 4)
 
 
 @case("hsrp-state")
@@ -1206,6 +1208,66 @@ def _() -> tuple[bytes, bytes]:
 @case("hsrp-auth-data")
 def _() -> tuple[bytes, bytes]:
     return hsrp(8, 1)
+
+
+#: A hand-built HSRP interface-state Advertise in the layout of
+#: Wireshark's packet-hsrp.c: Version 0, Op Code 3, TLV Type 1 (HSRP
+#: interface state), TLV Length 14, State 2 (Passive), a Reserved byte,
+#: 1 active and 0 passive groups and 4 Reserved bytes.
+HSRP_ADVERTISE = bytes([0, 3]) + struct.pack("!HHBBHHI", 1, 14, 2, 0, 1, 0, 0)
+
+
+def hsrp_advertise(offset: int, value: bytes) -> tuple[bytes, bytes]:
+    """The Advertise in ``HSRP_HELLO``'s Ethernet and IPv4 headers, and
+    a copy with ``value`` at ``offset`` of the Advertise."""
+    return hsrpv2_v4(HSRP_ADVERTISE), hsrpv2_v4(
+        put(HSRP_ADVERTISE, offset, value)
+    )
+
+
+@case("hsrp-advertise-length")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRP_ADVERTISE), hsrpv2_v4(HSRP_ADVERTISE + bytes(4))
+
+
+@case("hsrp-advertise-length")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRP_ADVERTISE), hsrpv2_v4(HSRP_ADVERTISE[:15])
+
+
+@case("hsrp-advertise-port")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRP_ADVERTISE), hsrpv2_v4(HSRP_ADVERTISE, (1985, 40000))
+
+
+@case("hsrp-advertise-type")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(2, struct.pack("!H", 3))
+
+
+@case("hsrp-advertise-state")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(6, b"\x04")
+
+
+@case("hsrp-advertise-groups")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(8, struct.pack("!H", 257))
+
+
+@case("hsrp-advertise-groups")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(10, struct.pack("!H", 257))
+
+
+@case("hsrp-advertise-reserved")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(7, b"\x01")
+
+
+@case("hsrp-advertise-reserved")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_advertise(15, b"\x01")
 
 
 def hsrpv2_group_state(
@@ -2253,6 +2315,18 @@ class TestRadiusDispatch:
         assert checker.check_frame(moved, stats) == ["hsrp-port"]
         assert stats["radius"] == 0
         assert stats["hsrp"] == 1
+
+    def test_an_advertise_on_port_1985_is_read_as_an_advertise(self) -> None:
+        """The bytes 00 03, Version 0 and Op Code 3, open an Advertise,
+        which passes and counts as hsrp and hsrp-advertise; Op Code 3
+        on a 20-byte message is an Advertise of the wrong length."""
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(hsrpv2_v4(HSRP_ADVERTISE), stats) == []
+        assert (stats["hsrp"], stats["hsrp-advertise"]) == (1, 1)
+        assert stats["hsrp-hello"] == 0
+        _, tampered = hsrp(1, 3)
+        assert checker.check_frame(tampered, stats) == ["hsrp-advertise-length"]
+        assert (stats["hsrp"], stats["hsrp-advertise"]) == (2, 2)
 
     @pytest.mark.parametrize("port", [1812, 1813, 3799])
     @pytest.mark.parametrize("source", [True, False])

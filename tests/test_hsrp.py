@@ -192,6 +192,9 @@ HSRPV2_HELLO = (
 #: all.
 ADVERTISE = bytes.fromhex("00030001000e02000001000000000000")
 
+#: ADVERTISE with Op Code 4, which no format on port 1985 has.
+OP_CODE_4 = ADVERTISE[:1] + b"\x04" + ADVERTISE[2:]
+
 #: An MD5 Authentication TLV as packet-hsrp.c lays it out after a
 #: 20-byte HSRPv1 message: type 4, length 28, algorithm 1 (MD5), a
 #: padding byte, 2 bytes of flags, the sender's address, a 4-byte Key
@@ -788,7 +791,7 @@ class TestDecodeGuard:
             HSRP.decode(ADVERTISE)
         error = caught.value
         assert (error.field, error.offset, error.actual) == ("opcode", 1, 3)
-        assert "Advertise" in str(error)
+        assert "decode it with HSRPAdvertise" in str(error)
 
     def test_other_rejections_name_neither(self):
         """The hints are for the two known kinds alone."""
@@ -803,7 +806,7 @@ class TestDecodeGuard:
         "payload,field",
         [
             pytest.param(b"\x02" + HSRPV2_HELLO[1:], "version", id="version"),
-            pytest.param(ADVERTISE, "opcode", id="advertise"),
+            pytest.param(OP_CODE_4, "opcode", id="op-code-4"),
         ],
     )
     def test_a_strict_walk_raises_at_the_hsrp_header(self, payload, field):
@@ -820,7 +823,7 @@ class TestDecodeGuard:
         "payload",
         [
             pytest.param(b"\x02" + HSRPV2_HELLO[1:], id="version"),
-            pytest.param(ADVERTISE, id="advertise"),
+            pytest.param(OP_CODE_4, id="op-code-4"),
         ],
     )
     def test_a_lax_walk_stops_at_udp(self, payload):
@@ -1128,7 +1131,7 @@ class TestChecker:
         "position,value,failure",
         [
             pytest.param(0, 2, "hsrp-version", id="version-2"),
-            pytest.param(1, 3, "hsrp-op-code", id="advertise-op-code"),
+            pytest.param(1, 4, "hsrp-op-code", id="op-code-4"),
             pytest.param(1, 0xFF, "hsrp-op-code", id="op-code-255"),
             pytest.param(2, 3, "hsrp-state", id="state-3"),
             pytest.param(2, 32, "hsrp-state", id="state-32"),
@@ -1213,7 +1216,7 @@ class TestChecker:
         both = retouched(frame, message[:19], src_port=1)
         assert self.check(both) == ["hsrp-length"]
         for first, second, failure in (
-            ((0, 2), (1, 3), "hsrp-version"),  # and Op Code 3
+            ((0, 2), (1, 4), "hsrp-version"),  # and Op Code 4
             ((7, 1), (4, 3), "hsrp-reserved"),  # and Holdtime 3
         ):
             alone = retouched(frame, changed(message, *second))
@@ -1232,7 +1235,7 @@ class TestChecker:
         """Every message counts as ``hsrp``; its Op Code's counter
         follows once the Op Code is known, so a later failure keeps it."""
         stats = self.checker.Counter()
-        for position, value in ((1, 3), (0, 2)):
+        for position, value in ((1, 4), (0, 2)):
             raw = changed(self.message_of(0), position, value)
             self.check(retouched(self.FRAMES[0], raw), stats)
         assert stats["hsrp"] == 2

@@ -54,6 +54,7 @@ from netprotocols import (
     BGPPathAttribute,
     BGPPrefix,
     DNSOverTCP,
+    HSRPAdvertise,
     HSRPv2,
     HSRPv2GroupState,
     HSRPv2MD5Authentication,
@@ -1230,6 +1231,25 @@ def hsrp_messages(draw: st.DrawFn) -> HSRP:
 
 
 @st.composite
+def hsrp_advertisements(draw: st.DrawFn) -> HSRPAdvertise:
+    # Canonical: Version 0, Op Code 3, a TLV Type of 1 or 2 and a State
+    # of 1-3, the four fields decode() judges (the constructor accepts
+    # others; test_hsrp_advertise.py covers those). The TLV Length, the
+    # counts and the Reserved fields are any value of their widths.
+    return HSRPAdvertise(
+        version=0,
+        opcode=3,
+        tlv_type=draw(st.sampled_from([1, 2])),
+        tlv_length=draw(st.integers(0, 0xFFFF)),
+        state=draw(st.integers(1, 3)),
+        reserved1=draw(st.integers(0, 0xFF)),
+        active_groups=draw(st.integers(0, 0xFFFF)),
+        passive_groups=draw(st.integers(0, 0xFFFF)),
+        reserved2=draw(st.integers(0, 0xFFFFFFFF)),
+    )
+
+
+@st.composite
 def hsrpv2_group_states(draw: st.DrawFn) -> HSRPv2GroupState:
     # Canonical for decode(): Version 2, an Op Code of 0-2, a State of
     # 0-6 and an IP Version of 4 or 6 (the constructor accepts other
@@ -1385,6 +1405,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "NTP": ntp_messages(),
     "NTPControl": ntp_control_messages(),
     "HSRP": hsrp_messages(),
+    "HSRPAdvertise": hsrp_advertisements(),
     "HSRPv2": hsrpv2_messages(),
     "TLS": tls_records(),
     "BGP": bgp_messages(),

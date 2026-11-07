@@ -17,6 +17,7 @@ from netprotocols.layer7.dns import (
 )
 from netprotocols.layer7.hsrp import (
     HSRP,
+    HSRPAdvertise,
     HSRPv2,
     HSRPv2GroupState,
     HSRPv2MD5Authentication,
@@ -76,6 +77,7 @@ __all__ = [
     "DNSOverTCP",
     "DNSQuestion",
     "DNSResourceRecord",
+    "HSRPAdvertise",
     "HSRPv2",
     "HSRPv2GroupState",
     "HSRPv2MD5Authentication",

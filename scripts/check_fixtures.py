@@ -834,11 +834,13 @@ def _check_udp_payload(
     keyed authenticators (see :func:`_check_radius`), a STUN message's
     FINGERPRINT and MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP
     message's MAC (see :func:`_check_ntp`) or an HSRP message's fields
-    (see :func:`_check_hsrp` and, for an HSRPv2 message, which opens
-    with the byte 1 on port 1985 and is any message on port 2029,
-    :func:`_check_hsrpv2`). A datagram is RADIUS when its server's port
-    (see :func:`_radius_server_port`) is a RADIUS port and neither port
-    is a STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
+    (see :func:`_check_hsrp`; for an HSRPv2 message, which opens with
+    the byte 1 on port 1985 and is any message on port 2029,
+    :func:`_check_hsrpv2`; and for an Advertise, which opens with the
+    bytes 00 03 on port 1985, :func:`_check_hsrp_advertise`). A
+    datagram is RADIUS when its server's port (see
+    :func:`_radius_server_port`) is a RADIUS port and neither port is a
+    STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
@@ -856,8 +858,11 @@ def _check_udp_payload(
         return _check_hsrpv2(src, datagram, stats)
     if _HSRP_PORT in (src_port, dst_port):
         end = struct.unpack_from("!H", datagram, 4)[0]
-        if datagram[8:end][:1] == b"\x01":
+        lead = datagram[8:end][:2]
+        if lead[:1] == b"\x01":
             return _check_hsrpv2(src, datagram, stats)
+        if lead == b"\x00\x03":
+            return _check_hsrp_advertise(datagram, stats)
         return _check_hsrp(datagram, stats)
     return []
 
@@ -1663,7 +1668,8 @@ def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     Holdtime rule too is on what the sender transmitted, not on what a
     receiver requires: nothing in RFC 2281 tells a receiver to drop a
     message that breaks it, or any of the conventions. HSRPv2 is
-    checked by :func:`_check_hsrpv2` instead."""
+    checked by :func:`_check_hsrpv2` instead, and an Advertise by
+    :func:`_check_hsrp_advertise`."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrp"] += 1
     if len(hsrp) != 20:
@@ -1686,6 +1692,62 @@ def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     password = hsrp[8:16].rstrip(b"\x00")
     if not all(0x20 <= b < 0x7F for b in password):
         return ["hsrp-auth-data"]
+    return []
+
+
+#: The Advertise's TLV Types (Wireshark's packet-hsrp.c,
+#: ``HSRP_ADV_TYPE_*``): HSRP interface state and IP redundancy.
+_HSRP_ADVERTISE_TYPES = (1, 2)
+
+#: The Advertise's States (packet-hsrp.c, ``HSRP_ADV_STATE_*``):
+#: Dormant, Passive and Active.
+_HSRP_ADVERTISE_STATES = (1, 2, 3)
+
+#: The most active or passive groups an Advertise counts (packet-hsrp.c:
+#: "The range of values are 0-256").
+_HSRP_ADVERTISE_MAX_GROUPS = 256
+
+
+def _check_hsrp_advertise(datagram: bytes, stats: Counter[str]) -> list[str]:
+    """Validate an HSRP interface-state Advertise (Op Code 3), as
+    Wireshark's packet-hsrp.c reads it.
+
+    The Advertise has no RFC and no checksum of its own, so, as for the
+    other HSRP messages, this checks its fields. It must be the whole
+    UDP payload, exactly 16 bytes, sent from and to port 1985, Version 0
+    and Op Code 3 (which is how it is told apart, so those two always
+    hold), with a TLV Type and a State packet-hsrp.c defines and an
+    active and a passive group count of at most 256 each, the range
+    packet-hsrp.c gives them. The TLV Length, which packet-hsrp.c holds
+    to no value, is not judged. That both Reserved fields are zero is
+    this corpus's convention, as for HSRPv1's Reserved byte, not
+    packet-hsrp.c's rule. Every Advertise counts as ``hsrp`` and as
+    ``hsrp-advertise``, as an HSRPv1 message counts as ``hsrp`` and its
+    Op Code's counter."""
+    hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["hsrp"] += 1
+    stats["hsrp-advertise"] += 1
+    if len(hsrp) != 16:
+        return ["hsrp-advertise-length"]
+    if struct.unpack_from("!HH", datagram) != (_HSRP_PORT, _HSRP_PORT):
+        return ["hsrp-advertise-port"]
+    (
+        tlv_type,
+        _tlv_length,
+        state,
+        reserved1,
+        active,
+        passive,
+        reserved2,
+    ) = struct.unpack_from("!HHBBHHI", hsrp, 2)
+    if tlv_type not in _HSRP_ADVERTISE_TYPES:
+        return ["hsrp-advertise-type"]
+    if state not in _HSRP_ADVERTISE_STATES:
+        return ["hsrp-advertise-state"]
+    if max(active, passive) > _HSRP_ADVERTISE_MAX_GROUPS:
+        return ["hsrp-advertise-groups"]
+    if reserved1 or reserved2:  # a corpus convention, not packet-hsrp.c's
+        return ["hsrp-advertise-reserved"]
     return []
 
 

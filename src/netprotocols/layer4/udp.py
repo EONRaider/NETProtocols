@@ -13,6 +13,9 @@ from netprotocols.utils.exceptions import InvalidFieldError
 
 __all__ = ["UDP"]
 
+#: The 8-byte header and the first two bytes of the payload after it.
+_LEAD = Struct("!HHHHH")
+
 
 @dataclass(frozen=True, slots=True)
 class UDP(Protocol):
@@ -29,13 +32,14 @@ class UDP(Protocol):
     dst_port: int
     length: int
     checksum: int
-    #: The first byte of the payload, which :meth:`next_protocol` hands
-    #: to the class its port names; ``None`` when :meth:`decode` saw no
-    #: payload, or for a header built rather than decoded. Decode
-    #: context, not a wire field, so it is neither compared nor hashed.
-    #: :func:`copy.copy` and :func:`copy.deepcopy` keep it;
-    #: :func:`dataclasses.replace` builds a new header, which has it
-    #: unset.
+    #: The first two bytes of the payload as a big-endian 16-bit
+    #: integer, its low byte 0 when the payload or the buffer ends after
+    #: the first, which :meth:`next_protocol` hands to the class its
+    #: port names; ``None`` when :meth:`decode` saw no payload, or for a
+    #: header built rather than decoded. Decode context, not a wire
+    #: field, so it is neither compared nor hashed. :func:`copy.copy`
+    #: and :func:`copy.deepcopy` keep it; :func:`dataclasses.replace`
+    #: builds a new header, which has it unset.
     _lead: int | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -49,14 +53,28 @@ class UDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte UDP header at the start of ``data``.
 
-        The first byte of the payload, when the buffer holds one and
-        the Length does not say the payload is empty, is kept as decode
-        context for :meth:`next_protocol`.
+        The first two bytes of the payload, as far as the buffer holds
+        them and the Length does not say the payload ends sooner, are
+        kept as decode context for :meth:`next_protocol`, a byte that is
+        not there read as 0; none are kept for a Length of 8.
 
         :param data: The buffer, starting at the source port.
         :raises TruncatedHeaderError: if ``data`` is shorter than the
             8-byte header.
         """
+        if len(data) > 9:
+            src_port, dst_port, length, checksum, lead = _LEAD.unpack_from(data)
+            udp = cls(
+                src_port=src_port,
+                dst_port=dst_port,
+                length=length,
+                checksum=checksum,
+            )
+            if length != 8:
+                if length == 9:
+                    lead &= 0xFF00
+                object.__setattr__(udp, "_lead", lead)
+            return udp
         src_port, dst_port, length, checksum = cls._unpack_fixed(data)
         udp = cls(
             src_port=src_port,
@@ -65,7 +83,7 @@ class UDP(Protocol):
             checksum=checksum,
         )
         if len(data) > 8 and length != 8:
-            object.__setattr__(udp, "_lead", data[8])
+            object.__setattr__(udp, "_lead", data[8] << 8)
         return udp
 
     def __bytes__(self) -> bytes:
@@ -102,11 +120,12 @@ class UDP(Protocol):
         :mod:`netprotocols.layer4._ports`) from ``registry``'s tables, or
         the default ones when it is ``None``; ``None`` when neither port
         is recognized. The class the port names then sees the payload's
-        first byte, when :meth:`decode` kept one, and answers the class
-        that decodes it: :class:`~netprotocols.NTP` answers
+        first two bytes, when :meth:`decode` kept them, and answers the
+        class that decodes it: :class:`~netprotocols.NTP` answers
         :class:`~netprotocols.NTPControl` for a mode 6 message, and
         :class:`~netprotocols.HSRP` answers :class:`~netprotocols.HSRPv2`
-        for an HSRPv2 one.
+        for an HSRPv2 one and :class:`~netprotocols.HSRPAdvertise` for an
+        Advertise.
         """
         protocol = udp_app_class(self.src_port, self.dst_port, registry)
         if protocol is None or self._lead is None:

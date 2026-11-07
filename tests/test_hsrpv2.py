@@ -28,6 +28,7 @@ from netprotocols import (
     HSRP,
     UDP,
     Ethernet,
+    HSRPAdvertise,
     HSRPv2,
     HSRPv2GroupState,
     HSRPv2MD5Authentication,
@@ -846,10 +847,16 @@ class TestDisplay:
 
 class TestDispatch:
     def test_hsrp_chooses_by_the_first_byte(self):
-        """1, the Group State TLV's Type, names HSRPv2; every other first
-        byte is left to HSRP."""
-        for lead in range(256):
-            expected = HSRPv2 if lead == 1 else HSRP
+        """1, the Group State TLV's Type, names HSRPv2 whatever the
+        second byte; every other first byte is left to HSRP, but for the
+        Advertise's 00 03."""
+        for lead in range(1 << 16):
+            if lead >> 8 == 1:
+                expected = HSRPv2
+            elif lead == 0x0003:
+                expected = HSRPAdvertise
+            else:
+                expected = HSRP
             assert HSRP._for_payload(lead) is expected
         assert HSRPv2._for_payload(0) is HSRPv2
 

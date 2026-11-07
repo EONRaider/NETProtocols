@@ -148,9 +148,9 @@ Control messages
 Modes 6 and 7 carry control messages: RFC 9327's mode 6, which
 ``ntpq`` speaks, and ntpd's private mode 7, which ``ntpdc`` speaks.
 Their headers are not the time message's. UDP port 123 names
-:class:`NTP`, and a walk hands it the first byte of the datagram
-before choosing a header (``NTP._for_payload``): a mode 6 byte selects
-:class:`NTPControl`, and any other byte :class:`NTP`, which rejects
+:class:`NTP`, and a walk hands it the first two bytes of the datagram
+before choosing a header (``NTP._for_payload``): a mode 6 first byte
+selects :class:`NTPControl`, and any other :class:`NTP`, which rejects
 mode 7 with ``InvalidFieldError``, ``field`` ``"mode"``, whatever its
 length. A strict ``decode_frame`` therefore raises on ``ntpdc`` traffic
 to or from port 123; ``decode_frame(frame, lax=True)`` keeps Ethernet,
@@ -787,12 +787,13 @@ class NTP(Protocol):
         """Return :class:`NTPControl` for a mode 6 first byte, else ``cls``.
 
         UDP port 123 carries both formats, so a walk reads the mode in
-        ``lead`` before it chooses a header (see "Control messages" in
-        the module docstring).
+        the first byte of ``lead`` before it chooses a header (see
+        "Control messages" in the module docstring).
 
-        :param lead: The first byte of the UDP payload.
+        :param lead: The first two bytes of the UDP payload, as a
+            big-endian 16-bit integer.
         """
-        return NTPControl if lead & 0x07 == _MODE_CONTROL else cls
+        return NTPControl if lead >> 8 & 0x07 == _MODE_CONTROL else cls
 
     @property
     def leap_name(self) -> str:
