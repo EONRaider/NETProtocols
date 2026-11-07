@@ -211,8 +211,8 @@ class Packet:
         :class:`~netprotocols._base.Protocol` instance, which holds for
         :func:`~netprotocols.decode_frame`, the only caller, since it
         passes only what its ``decode()`` calls returned. It builds the
-        instance with ``object.__new__``, as :mod:`netprotocols._base`
-        does for Ethernet/ARP/IPv4 field construction.
+        instance with ``object.__new__``, as the headers named in
+        "Decode-path construction" in :mod:`netprotocols._base` do.
 
         :param layers: The decoded headers, outermost first.
         :param stopped_by: The error that ended the walk, or ``None``.
