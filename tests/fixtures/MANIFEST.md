@@ -1177,19 +1177,17 @@ The values are also hard-coded, independently, in
   6f7207a6 (the TLV's diagram, lines 100-121, its reading, lines
   320-344, and the rule that reads it only in a message of exactly 50
   captured bytes whose bytes 20 and 21 are Type 4 and Length 28, lines
-  444-459), each labelled as hand-built; tshark 4.2.2 decodes the five
-  of `tests/test_hsrp_md5.py`'s `VECTORS`, wrapped in Ethernet/IPv4/UDP
-  from and to port 1985 to 224.0.0.2 with TTL 1, as HSRP messages with
-  good IPv4 and UDP checksums and an "MD5 Authentication TLV: Type=4
-  Len=28" carrying the Algorithm, Padding, Flags, sender's IP Address,
-  Key ID and digest the tests expect, and reports the same message with
-  Type 0, or Type 4 and Length 27, as "Unknown TLV sequence in HSRPv1
-  dissection" and a 51-byte one with no TLV, as `HSRP.decode()` leaves
-  each of those three at its 20 bytes. That is the dissector's reading,
-  not a router's: nothing here shows what a Cisco router puts in the
-  Authentication Data, the Padding or the Flags beside the TLV, which
-  the vectors set to zero. The digest is not verified, here or by
-  `check_fixtures`: no sender available here computes it as IOS does,
+  444-459), each labelled as hand-built. They are cross-checked
+  against that source only: tshark was not installed where they were
+  written, so unlike the HSRPv2 and Advertise vectors above, none has
+  been decoded by tshark. **No real capture of the TLV exists here**:
+  every byte of it in this repository is hand-built, and what the
+  tests show is packet-hsrp.c's reading, not a router's. Nothing here
+  shows what a Cisco router puts in the Authentication Data, the
+  Padding or the Flags beside the TLV, which all but one of the
+  vectors set to zero, or that a router sends the TLV only in a 50-byte
+  message. The digest is not verified, here or by `check_fixtures`: no
+  sender available here computes it as IOS does,
   and no primary source says which bytes it covers. `check_fixtures`
   checks a 50-byte HSRPv1 message's TLV structurally, its Type 4, Length
   28, Algorithm 1 and zero Padding (`_check_hsrp_md5`), and has none in

@@ -197,10 +197,10 @@ ADVERTISE = bytes.fromhex("00030001000e02000001000000000000")
 #: ADVERTISE with Op Code 4, which no format on port 1985 has.
 OP_CODE_4 = ADVERTISE[:1] + b"\x04" + ADVERTISE[2:]
 
-#: An MD5 Authentication TLV as packet-hsrp.c lays it out after a
-#: 20-byte HSRPv1 message: type 4, length 28, algorithm 1 (MD5), a
-#: padding byte, 2 bytes of flags, the sender's address, a 4-byte Key
-#: ID and a 16-byte digest. 30 bytes in all.
+#: A hand-built MD5 Authentication TLV as packet-hsrp.c lays it out
+#: after a 20-byte HSRPv1 message: type 4, length 28, algorithm 1
+#: (MD5), a padding byte, 2 bytes of flags, the sender's address, a
+#: 4-byte Key ID and a 16-byte digest. 30 bytes in all.
 MD5_TLV = bytes.fromhex("041c01000000c000020b00000001") + bytes(range(16))
 
 
