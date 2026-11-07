@@ -112,6 +112,7 @@ from netprotocols._base import (
     bytes_to_ipv4,
     hex_str,
     ipv4_to_bytes,
+    slot_setters,
 )
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -1202,19 +1203,31 @@ class OSPF(Protocol):
         # Authentication field is the struct's 8 bytes, and the trailer
         # is sliced to the length the AuType gives after the buffer is
         # confirmed to hold it.
+        (
+            set_version,
+            set_type,
+            set_packet_length,
+            set_router_id,
+            set_area_id,
+            set_checksum,
+            set_instance_id,
+            set_au_type,
+            set_authentication,
+            set_body,
+            set_auth_trailer,
+        ) = _OSPF_SETTERS
         header = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(header, "version", version)
-        set_field(header, "type", type_)
-        set_field(header, "packet_length", packet_length)
-        set_field(header, "router_id", bytes_to_ipv4(router_id))
-        set_field(header, "area_id", bytes_to_ipv4(area_id))
-        set_field(header, "checksum", checksum)
-        set_field(header, "instance_id", instance_id)
-        set_field(header, "au_type", au_type)
-        set_field(header, "authentication", authentication)
-        set_field(header, "body", body)
-        set_field(header, "auth_trailer", bytes(data[packet_length:end]))
+        set_version(header, version)
+        set_type(header, type_)
+        set_packet_length(header, packet_length)
+        set_router_id(header, bytes_to_ipv4(router_id))
+        set_area_id(header, bytes_to_ipv4(area_id))
+        set_checksum(header, checksum)
+        set_instance_id(header, instance_id)
+        set_au_type(header, au_type)
+        set_authentication(header, authentication)
+        set_body(header, body)
+        set_auth_trailer(header, bytes(data[packet_length:end]))
         return header
 
     def __bytes__(self) -> bytes:
@@ -1407,6 +1420,23 @@ class OSPF(Protocol):
             OSPFLSAHeader._parse(body, offset)
             for offset in range(start, len(body), _LSA_HEADER.size)
         )
+
+
+#: The slot setters :meth:`OSPF.decode` builds its instance with.
+_OSPF_SETTERS = slot_setters(
+    OSPF,
+    "version",
+    "type",
+    "packet_length",
+    "router_id",
+    "area_id",
+    "checksum",
+    "instance_id",
+    "au_type",
+    "authentication",
+    "body",
+    "auth_trailer",
+)
 
 
 def _walk_lsas(

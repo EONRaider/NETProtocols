@@ -27,7 +27,7 @@ import contextlib
 import importlib.util
 import struct
 import sys
-from dataclasses import replace
+from dataclasses import fields, replace
 from ipaddress import IPv6Address
 from pathlib import Path
 
@@ -550,6 +550,40 @@ class TestDirectlyBuiltDecodesPassValidation:
                     assert_constructor_accepts(layer)
                     checked += 1
         assert checked > len(CORPUS_FRAMES)
+
+    @pytest.mark.parametrize(
+        "cls",
+        [cls for cls in DIRECTLY_BUILT if cls is not VRRPv6],
+        ids=lambda c: c.__name__,
+    )
+    def test_a_subclass_decodes_the_same_fields(self, cls) -> None:
+        """decode() builds an instance of the class it is called on, a
+        subclass without slots of its own included."""
+        decoded = 0
+        for frame in CORPUS_FRAMES:
+            for layer in decode_frame(frame, lax=True).layers:
+                if type(layer) is cls:
+                    assert_a_subclass_decodes_alike(cls, bytes(layer))
+                    decoded += 1
+        assert decoded
+
+    @given(header=vrrp_headers(VRRPv6))
+    def test_a_vrrpv6_subclass_decodes_the_same_fields(self, header) -> None:
+        assert_a_subclass_decodes_alike(VRRPv6, bytes(header))
+
+
+def assert_a_subclass_decodes_alike(cls: type[Protocol], raw: bytes) -> None:
+    """Decode ``raw`` with ``cls`` and with a subclass that adds no
+    slots, and check both hold the same fields."""
+    subclass = type(f"Other{cls.__name__}", (cls,), {})
+    other = subclass.decode(raw)
+    assert type(other) is subclass
+    assert vars_of(other) == vars_of(cls.decode(raw))
+
+
+def vars_of(header: Protocol) -> dict[str, object]:
+    """Every dataclass field of ``header``, compared or not."""
+    return {f.name: getattr(header, f.name) for f in fields(header)}
 
 
 class TestNDPAccessorSafety:

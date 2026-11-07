@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, bytes_to_mac, mac_to_bytes
+from netprotocols._base import (
+    Protocol,
+    bytes_to_mac,
+    mac_to_bytes,
+    slot_setters,
+)
 from netprotocols._enums import EtherType
 from netprotocols.layer2.llc import LLC
 from netprotocols.registry import DEFAULT, TABLE_ETHERTYPE, Registry
@@ -144,11 +149,15 @@ class Ethernet(Protocol):
         # bytes_to_mac() produces addresses that pass the constructor's
         # validators, so the instance is built directly, without
         # __post_init__ (see "Decode-path construction" in _base.py).
+        (
+            set_dst,
+            set_src,
+            set_ethertype,
+        ) = _ETHERNET_SETTERS
         header = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(header, "dst", bytes_to_mac(dst))
-        set_field(header, "src", bytes_to_mac(src))
-        set_field(header, "ethertype", ethertype)
+        set_dst(header, bytes_to_mac(dst))
+        set_src(header, bytes_to_mac(src))
+        set_ethertype(header, ethertype)
         return header
 
     def __bytes__(self) -> bytes:
@@ -210,3 +219,12 @@ class Ethernet(Protocol):
         display form).
         """
         return _ethertype_enum(self.ethertype)
+
+
+#: The slot setters :meth:`Ethernet.decode` builds its instance with.
+_ETHERNET_SETTERS = slot_setters(
+    Ethernet,
+    "dst",
+    "src",
+    "ethertype",
+)

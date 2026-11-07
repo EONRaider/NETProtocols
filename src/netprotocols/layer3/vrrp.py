@@ -71,6 +71,7 @@ from netprotocols._base import (
     hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
+    slot_setters,
 )
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -258,18 +259,27 @@ class VRRP(Protocol):
         # one address is read per count, and the authentication data is
         # sliced to the version's length after the buffer is confirmed
         # to hold it.
+        (
+            set_version,
+            set_type,
+            set_vrid,
+            set_priority,
+            set_count_ip_addrs,
+            set_adver_word,
+            set_checksum,
+            set_addresses,
+            set_auth_data,
+        ) = _VRRP_SETTERS
         advert = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(advert, "version", version)
-        set_field(advert, "type", ver_type & 0x0F)
-        set_field(advert, "vrid", vrid)
-        set_field(advert, "priority", priority)
-        set_field(advert, "count_ip_addrs", count)
-        set_field(advert, "adver_word", adver_word)
-        set_field(advert, "checksum", checksum)
-        set_field(
+        set_version(advert, version)
+        set_type(advert, ver_type & 0x0F)
+        set_vrid(advert, vrid)
+        set_priority(advert, priority)
+        set_count_ip_addrs(advert, count)
+        set_adver_word(advert, adver_word)
+        set_checksum(advert, checksum)
+        set_addresses(
             advert,
-            "addresses",
             tuple(
                 [
                     to_str(bytes(data[offset : offset + width]))
@@ -277,7 +287,7 @@ class VRRP(Protocol):
                 ]
             ),
         )
-        set_field(advert, "auth_data", bytes(data[addresses_end:end]))
+        set_auth_data(advert, bytes(data[addresses_end:end]))
         return advert
 
     def __bytes__(self) -> bytes:
@@ -379,6 +389,21 @@ class VRRP(Protocol):
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x5af6"``."""
         return hex_str(self.checksum, 6)
+
+
+#: The slot setters :meth:`VRRP.decode` builds its instance with.
+_VRRP_SETTERS = slot_setters(
+    VRRP,
+    "version",
+    "type",
+    "vrid",
+    "priority",
+    "count_ip_addrs",
+    "adver_word",
+    "checksum",
+    "addresses",
+    "auth_data",
+)
 
 
 @dataclass(frozen=True, slots=True)

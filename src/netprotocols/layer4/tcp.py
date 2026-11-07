@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, hex_str
+from netprotocols._base import Protocol, hex_str, slot_setters
 from netprotocols._tlv import walk_kind_length_value
 from netprotocols.layer4._ports import tcp_app_class
 from netprotocols.registry import Registry
@@ -236,21 +236,31 @@ class TCP(Protocol):
         # below 5 above, and the options are sliced to exactly
         # data_offset * 4 bytes after the buffer is confirmed to hold
         # them.
+        (
+            set_src_port,
+            set_dst_port,
+            set_seq,
+            set_ack,
+            set_data_offset,
+            set_reserved,
+            set_flags,
+            set_window,
+            set_checksum,
+            set_urgent_pointer,
+            set_options,
+        ) = _TCP_SETTERS
         header = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(header, "src_port", src_port)
-        set_field(header, "dst_port", dst_port)
-        set_field(header, "seq", seq)
-        set_field(header, "ack", ack)
-        set_field(header, "data_offset", data_offset)
-        set_field(header, "reserved", (offset_flags >> 9) & 0b111)
-        set_field(header, "flags", offset_flags & 0x1FF)
-        set_field(header, "window", window)
-        set_field(header, "checksum", checksum)
-        set_field(header, "urgent_pointer", urgent_pointer)
-        set_field(
-            header, "options", bytes(data[cls._struct.size : data_offset * 4])
-        )
+        set_src_port(header, src_port)
+        set_dst_port(header, dst_port)
+        set_seq(header, seq)
+        set_ack(header, ack)
+        set_data_offset(header, data_offset)
+        set_reserved(header, (offset_flags >> 9) & 0b111)
+        set_flags(header, offset_flags & 0x1FF)
+        set_window(header, window)
+        set_checksum(header, checksum)
+        set_urgent_pointer(header, urgent_pointer)
+        set_options(header, bytes(data[cls._struct.size : data_offset * 4]))
         return header
 
     def __bytes__(self) -> bytes:
@@ -334,3 +344,20 @@ class TCP(Protocol):
                 protocol=type(self),
             )
         )
+
+
+#: The slot setters :meth:`TCP.decode` builds its instance with.
+_TCP_SETTERS = slot_setters(
+    TCP,
+    "src_port",
+    "dst_port",
+    "seq",
+    "ack",
+    "data_offset",
+    "reserved",
+    "flags",
+    "window",
+    "checksum",
+    "urgent_pointer",
+    "options",
+)

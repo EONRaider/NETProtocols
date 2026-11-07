@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, hex_str
+from netprotocols._base import Protocol, hex_str, slot_setters
 from netprotocols.layer4._ports import udp_app_class
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import InvalidFieldError
@@ -78,13 +78,19 @@ class UDP(Protocol):
         # UDP has no __post_init__, and every field is unpacked from its
         # own wire width, so the instance is built directly, without
         # __init__ (see "Decode-path construction" in _base.py).
+        (
+            set_src_port,
+            set_dst_port,
+            set_length,
+            set_checksum,
+            set_lead,
+        ) = _UDP_SETTERS
         udp = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(udp, "src_port", src_port)
-        set_field(udp, "dst_port", dst_port)
-        set_field(udp, "length", length)
-        set_field(udp, "checksum", checksum)
-        set_field(udp, "_lead", lead)
+        set_src_port(udp, src_port)
+        set_dst_port(udp, dst_port)
+        set_length(udp, length)
+        set_checksum(udp, checksum)
+        set_lead(udp, lead)
         return udp
 
     def __bytes__(self) -> bytes:
@@ -137,3 +143,14 @@ class UDP(Protocol):
     def checksum_hex_str(self) -> str:
         """The checksum as a hexadecimal string, e.g. ``"0x1c2a"``."""
         return hex_str(self.checksum, 6)
+
+
+#: The slot setters :meth:`UDP.decode` builds its instance with.
+_UDP_SETTERS = slot_setters(
+    UDP,
+    "src_port",
+    "dst_port",
+    "length",
+    "checksum",
+    "_lead",
+)

@@ -100,6 +100,7 @@ from netprotocols._base import (
     hex_str,
     ipv4_to_bytes,
     ipv6_to_bytes,
+    slot_setters,
 )
 from netprotocols._tlv import walk_kind_length_value
 from netprotocols.layer3.ip import IPv4, IPv6
@@ -963,13 +964,19 @@ class PIM(Protocol):
         # built directly, without it (see "Decode-path construction" in
         # _base.py): the version is checked above, the type is a nibble,
         # and the other fields are unpacked from their own widths.
+        (
+            set_version,
+            set_type,
+            set_reserved,
+            set_checksum,
+            set_body,
+        ) = _PIM_SETTERS
         message = object.__new__(cls)
-        set_field = object.__setattr__
-        set_field(message, "version", version)
-        set_field(message, "type", type_)
-        set_field(message, "reserved", reserved)
-        set_field(message, "checksum", checksum)
-        set_field(message, "body", body[: _message_end(type_, body)])
+        set_version(message, version)
+        set_type(message, type_)
+        set_reserved(message, reserved)
+        set_checksum(message, checksum)
+        set_body(message, body[: _message_end(type_, body)])
         return message
 
     def __bytes__(self) -> bytes:
@@ -1029,6 +1036,17 @@ class PIM(Protocol):
             return None
         message, _ = parser(self.body)
         return message
+
+
+#: The slot setters :meth:`PIM.decode` builds its instance with.
+_PIM_SETTERS = slot_setters(
+    PIM,
+    "version",
+    "type",
+    "reserved",
+    "checksum",
+    "body",
+)
 
 
 def _message_end(type_: int, body: bytes) -> int:
