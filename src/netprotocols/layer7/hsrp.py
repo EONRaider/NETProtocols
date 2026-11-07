@@ -744,6 +744,10 @@ class HSRPv2GroupState:
         address.
 
     ``bytes(tlv)`` is the 42-byte TLV, its Type and Length included.
+    :func:`dataclasses.replace` copies the current
+    ``virtual_ip_padding``, so a replace that changes ``ip_version``
+    also needs ``virtual_ip_padding=None``, or the padding of the new
+    version, passed with it.
     """
 
     version: int
@@ -864,11 +868,12 @@ class HSRPv2GroupState:
         ``"00:05:73:a0:00:01"`` for group 1: the ranges Cisco gives
         HSRPv2 over IPv4, 0000.0C9F.F000-0000.0C9F.FFFF (Cisco's
         "Configuring HSRP" chapter for the Nexus 3000 Series, read
-        2026-11-06,
-        https://www.cisco.com/en/US/docs/switches/datacenter/nexus3000/sw/unicast/l3_hsrp.html),
-        and HSRP for IPv6, 0005.73A0.0000-0005.73A0.0FFF (Cisco IOS's
-        "HSRP for IPv6", read 2026-11-06,
-        https://www.cisco.com/en/US/docs/ios-xml/ios/ipapp_fhrp/configuration/15-s/ip6-fhrp-hsrp.html).
+        2026-11-07,
+        https://www.cisco.com/c/en/us/td/docs/switches/datacenter/nexus3000/sw/unicast/nexus3000_unicast_config_gd_503_u1_1/l3_hsrp.html),
+        and HSRP for IPv6, 0005.73A0.0000-0005.73A0.0FFF (Cisco IOS
+        XE's "Configuring First Hop Redundancy Protocols in IPv6", of
+        the IPv6 configuration guide for Release 3SG, read 2026-11-07,
+        https://www.cisco.com/en/US/docs/ios-xml/ios/ipv6/configuration/xe-3sg/ip6-fhrp.pdf).
         Never raises.
         """
         prefix = _V2_VIRTUAL_MAC_PREFIXES[self.ip_version]

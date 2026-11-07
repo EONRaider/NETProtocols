@@ -1136,11 +1136,12 @@ The values are also hard-coded, independently, in
   hand-built; tshark 4.2.2 decodes the five of `tests/test_hsrpv2.py`'s
   `VECTORS` as HSRPv2 with the fields the tests expect. It dissects the
   same layout: packet-hsrp.c at tag v4.2.2 differs from 6f7207a6's only
-  in C type names, one `col_` call and the display length of two TLV
-  items, which 6f7207a6 changed. That is the
-  dissector's reading, not a router's: nothing here shows what a Cisco
-  router puts in the 12 bytes after an IPv4 virtual address, which
-  States it sends, or whether it sends other TLVs. `check_fixtures`
+  in C type names, the `= -1` and `EI_INIT` initialisers 6f7207a6's
+  drops, whitespace, one `col_` call and the display length of two TLV
+  items, which 6f7207a6 changed. That is the dissector's reading, not
+  a router's: nothing here shows what a Cisco router puts in the 12
+  bytes after an IPv4 virtual address, which States it sends, or
+  whether it sends other TLVs. `check_fixtures`
   reads an HSRPv2 message on 1985 (first byte 1) or 2029 with
   `_check_hsrpv2`, and has none in the corpus to read.
 - `tls.pcap` was produced by `scripts/capture_fixtures_tls.sh`. nginx

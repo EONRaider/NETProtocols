@@ -1715,14 +1715,13 @@ def _check_hsrpv2(
     length is judged as packet-hsrp.c lays it out, an Active Groups
     and a Passive Groups count of 2 bytes each, although
     ``netprotocols.HSRPv2`` keeps that TLV raw at any length. Each
-    Group State TLV must
-    hold Version 2, an Op Code of Hello, Coup or Resign, a State
-    packet-hsrp.c defines, the IP Version of the IP header carrying it
-    and a Group of at most 4095, and in a Hello a Hold Time above the
-    Hello Time. As this corpus's conventions, an IPv4 virtual address
-    must be followed by 12 zero bytes in its 16-byte field and a Text
-    Authentication TLV's data must be a clear-text password, printable
-    ASCII padded with NUL bytes."""
+    Group State TLV must hold Version 2, an Op Code of Hello, Coup or
+    Resign, a State packet-hsrp.c defines, the IP Version of the IP
+    header carrying it and a Group of at most 4095, and in a Hello a
+    Hold Time above the Hello Time. As this corpus's conventions, an
+    IPv4 virtual address must be followed by 12 zero bytes in its
+    16-byte field and a Text Authentication TLV's data must be a
+    clear-text password, printable ASCII padded with NUL bytes."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrpv2"] += 1
     family, port = (4, _HSRP_PORT) if len(src) == 4 else (6, _HSRP_V6_PORT)

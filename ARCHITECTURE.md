@@ -1065,10 +1065,9 @@ Length, a Text Authentication TLV (Type 3) of other than 8 bytes or an
 MD5 Authentication TLV (Type 4) of other than 28 rejecting it.
 Measured as above, by `scripts/measure_port_guard.py --one-generator
 --port 1985 --count HSRP --count HSRPv2` and `--port 2029`, the walks
-to port 1985 are
-unchanged by `HSRPv2`: on this tree as on the tree before it, 89,998 of
-the 90,000 ended with `stopped_by` set and the same two decoded an HSRP
-layer, and none decoded HSRPv2, since every payload whose first byte is
+to port 1985 are unchanged by `HSRPv2`: on this tree as on the tree
+before it, 89,998 of the 90,000 ended with `stopped_by` set and the
+same two decoded an HSRP layer, and none decoded HSRPv2, since every payload whose first byte is
 1 that the tree before rejected at `version` is now rejected by
 `HSRPv2.decode()` instead. Every one of the 90,000 walks to port 2029
 ended with `stopped_by` set and none decoded an HSRPv2 layer, where on
