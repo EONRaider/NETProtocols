@@ -146,21 +146,24 @@ redundancy), the State Dormant (1), Passive (2) or Active (3), and the
 two counts, of the interface's active and passive groups, range over
 0-256 by packet-hsrp.c's description of them. The TLV Length, which
 packet-hsrp.c displays but does not hold to any value, and the two
-Reserved fields are carried verbatim.
+Reserved fields are carried verbatim. A TLV Type 2 (IP redundancy)
+message is read with Type 1's layout, as packet-hsrp.c reads both
+without branching on the type.
 
 :meth:`HSRPAdvertise.decode` judges four fields, each as soon as its
 bytes are in the buffer and before the length: a Version of 0, an Op
-Code of 3, a TLV Type of 1 or 2 once both its bytes are present, and a
-State of 1-3. Random bytes pass 1 x 1 x 2 x 3 of the 2^40 values of
-those five bytes, about 1 in 183 billion. Only a buffer whose leading
-bytes all pass can raise ``TruncatedHeaderError``, when it is shorter
-than 16 bytes. The TLV Length, the counts and the Reserved fields are
-not judged. Like :class:`HSRP`'s, the layer is its 16 bytes, and
-whatever follows stays outside it, so
+Code of 3, a TLV Type of 1 or 2, and a State of 1-3. The TLV Type's high
+byte, 0 for both Types, is judged as soon as it is present, and the
+whole TLV Type once both its bytes are. Random bytes pass 1 x 1 x 2 x 3
+of the 2^40 values of those five bytes, about 1 in 183 billion. Only a
+buffer whose leading bytes all pass can raise ``TruncatedHeaderError``,
+when it is shorter than 16 bytes. The TLV Length, the counts and the
+Reserved fields are not judged. Like :class:`HSRP`'s, the layer is its
+16 bytes, and whatever follows stays outside it, so
 ``bytes(HSRPAdvertise.decode(x)) == x[:16]``.
 :meth:`HSRPAdvertise.decode` rejects an HSRPv1 Hello, Coup or Resign at
-its Op Code and an HSRPv2 message at its first byte, each with a
-message naming the class that decodes it.
+its Op Code and an HSRPv2 message at its first byte, each with a message
+naming the class that decodes it.
 
 Construction checks only that each field fits its width, so an
 Advertise with a Version, Op Code, TLV Type or State decode rejects
@@ -711,16 +714,18 @@ class HSRPAdvertise(Protocol):
         """Decode the 16-byte Advertise at the start of ``data``.
 
         The Version, Op Code, TLV Type and State are judged before the
-        length, in that order, each once its bytes are present (see
-        "Advertise" in the module docstring). Anything after the 16
-        bytes is left undecoded.
+        length, in that order, each once its bytes are present; the TLV
+        Type's high byte is judged alone when ``data`` ends after it
+        (see "Advertise" in the module docstring). Anything after the
+        16 bytes is left undecoded.
 
         :param data: The buffer, starting at the Version byte.
         :raises InvalidFieldError: if the Version is not 0 (``field``
             ``"version"``, ``offset`` 0), else the Op Code is not 3
-            (``"opcode"``, 1), else the TLV Type is not 1 or 2
-            (``"tlv_type"``, 2), else the State is not 1-3 (``"state"``,
-            6), at any length.
+            (``"opcode"``, 1), else the TLV Type is not 1 or 2, or
+            ``data`` ends after a nonzero high byte of it, whose missing
+            low byte is read as 0 (``"tlv_type"``, 2), else the State is
+            not 1-3 (``"state"``, 6), at any length.
         :raises TruncatedHeaderError: if ``data`` is shorter than 16
             bytes and every judged field it holds passes.
         """
@@ -732,6 +737,8 @@ class HSRPAdvertise(Protocol):
             tlv_type = data[2] << 8 | data[3]
             if tlv_type not in _ADV_TYPE_NAMES:
                 _reject_advertise(cls, "tlv_type", 2, tlv_type)
+        elif len(data) > 2 and data[2]:
+            _reject_advertise(cls, "tlv_type", 2, data[2] << 8)
         if len(data) > 6 and data[6] not in _ADV_STATE_NAMES:
             _reject_advertise(cls, "state", 6, data[6])
         return cls(*cls._unpack_fixed(data))

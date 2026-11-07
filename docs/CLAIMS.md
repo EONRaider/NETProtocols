@@ -1608,9 +1608,14 @@ every server_name must be a host name.
 Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that nine TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
-`RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s, `STP`'s,
-`CDP`'s, `TFTP`'s, `NTP`'s, `HSRP`'s and `HSRPAdvertise`'s accessors
-never raise at all, and that `bytes(decode(x)) == x` is
+`VRRPv6`'s, `RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s,
+`STP`'s, `CDP`'s, `TFTP`'s, `NTP`'s, `NTPControl`'s, `HSRP`'s,
+`HSRPAdvertise`'s and `HSRPv2`'s accessors never raise at all, that
+`SCTP`'s and `PIM`'s raise only `ProtocolError`, that `RADIUS`'s,
+`STUN`'s and `TLS`'s raise only `InvalidFieldError` (and `TLS`'s
+ClientHello parsers `TruncatedHeaderError`) from the walk or parser of
+their body and otherwise never raise, and that `bytes(decode(x)) == x`
+is
 Hypothesis-generated for **all 45** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
 `tests/test_fuzz.py::TestGeneralizedRoundTrips` parametrizes the

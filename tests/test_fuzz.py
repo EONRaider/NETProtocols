@@ -1946,14 +1946,17 @@ _HSRP_ADVERTISE_ACCESSORS = (
 def _hsrp_advertise_rejection(data: bytes) -> str | None:
     """What HSRPAdvertise.decode() must reject ``data`` for, judged in
     its order, each once its bytes are present: ``"version"`` other than
-    0, ``"opcode"`` other than 3, ``"tlv_type"`` other than 1 or 2,
-    ``"state"`` outside 1-3; then ``"truncated"``, shorter than 16
-    bytes; or ``None``."""
+    0, ``"opcode"`` other than 3, ``"tlv_type"`` other than 1 or 2
+    (its high byte alone when the low one is missing), ``"state"``
+    outside 1-3; then ``"truncated"``, shorter than 16 bytes; or
+    ``None``."""
     if len(data) > 0 and data[0] != 0:
         return "version"
     if len(data) > 1 and data[1] != 3:
         return "opcode"
     if len(data) > 3 and int.from_bytes(data[2:4]) not in (1, 2):
+        return "tlv_type"
+    if len(data) == 3 and data[2] != 0:
         return "tlv_type"
     if len(data) > 6 and data[6] not in (1, 2, 3):
         return "state"

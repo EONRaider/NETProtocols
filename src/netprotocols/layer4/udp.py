@@ -53,10 +53,14 @@ class UDP(Protocol):
     def decode(cls, data: bytes | memoryview) -> Self:
         """Decode the 8-byte UDP header at the start of ``data``.
 
-        The first two bytes of the payload, as far as the buffer holds
-        them and the Length does not say the payload ends sooner, are
-        kept as decode context for :meth:`next_protocol`, a byte that is
-        not there read as 0; none are kept for a Length of 8.
+        The first two bytes of the payload are kept as decode context
+        for :meth:`next_protocol`. None are kept when ``data`` ends at
+        the 8-byte header or the Length is 8. The second byte is read as
+        0 when the Length is 9 or ``data`` ends after the first payload
+        byte. A Length of 0, which bounds nothing, or of 1 to 7, shorter
+        than the header, takes both bytes from ``data``; for a Length of
+        1 to 7, :func:`~netprotocols.decode_frame` refuses the datagram
+        before it dispatches the payload (see :meth:`_payload_extent`).
 
         :param data: The buffer, starting at the source port.
         :raises TruncatedHeaderError: if ``data`` is shorter than the

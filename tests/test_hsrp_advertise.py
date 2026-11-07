@@ -299,6 +299,20 @@ class TestDecodeGuard:
             HSRPAdvertise.decode(bytes([0, 3, 0, 0]))
         assert caught.value.field == "tlv_type"
 
+    @pytest.mark.parametrize("high", [1, 0x7F, 0xFF])
+    def test_a_nonzero_high_byte_is_judged_alone(self, high):
+        """Types 1 and 2 both have a high byte of 0, so any other is
+        rejected before the low byte arrives, which is read as 0."""
+        with pytest.raises(InvalidFieldError) as caught:
+            HSRPAdvertise.decode(bytes([0, 3, high]))
+        error = caught.value
+        assert error.protocol is HSRPAdvertise
+        assert (error.field, error.offset) == ("tlv_type", 2)
+        assert (error.expected, error.actual) == ("1 or 2", high << 8)
+        assert str(error) == (
+            f"HSRP Advertise TLV type must be 1 or 2, got {high << 8}"
+        )
+
     def test_the_rejections_name_the_class_that_decodes_them(self):
         """A Version of 1 opens HSRPv2, and Op Codes 0-2 are HSRPv1's
         Hello, Coup and Resign; other values name nothing."""
