@@ -78,6 +78,20 @@ class ARP(Protocol):
         htype, ptype, hlen, plen, oper, sha, spa, tha, tpa = cls._unpack_fixed(
             data
         )
+        if cls is not ARP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                htype=htype,
+                ptype=ptype,
+                hlen=hlen,
+                plen=plen,
+                oper=oper,
+                sha=bytes_to_mac(sha),
+                spa=bytes_to_ipv4(spa),
+                tha=bytes_to_mac(tha),
+                tpa=bytes_to_ipv4(tpa),
+            )
         # bytes_to_mac()/bytes_to_ipv4() produce addresses that pass the
         # constructor's validators, so the instance is built directly,
         # without __post_init__ (see "Decode-path construction" in

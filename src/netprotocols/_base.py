@@ -43,21 +43,21 @@ The three headers that carry addresses (``Ethernet``, ``ARP``,
 ``object.__new__`` plus one slot setter per field (see
 :func:`slot_setters`), skipping ``__init__`` and ``__post_init__``.
 ``TCP``, ``UDP``, ``OSPF``, ``PIM``, ``VRRP`` (and ``VRRPv6``), ``RIP``
-and ``BGP`` do the same, but only when ``decode()`` is called on one
-of those classes itself: their ``decode()`` runs every check of their
+and ``BGP`` do the same: their ``decode()`` runs every check of their
 wire framing itself, at the offset it reports, so their
 ``__post_init__`` would only repeat it (``UDP`` has none, and skips
-only ``__init__``). Called on any other subclass of them, which may
+only ``__init__``). ``HTTP`` takes the same path: its ``__post_init__``
+re-parses ``head + raw_body`` to check that the two are one complete,
+exactly framed message, which ``decode()`` has established by parsing
+the buffer they were cut from.
+
+Each of these builds its instance directly only when ``decode()`` is
+called on that class itself. Called on any other subclass, which may
 add fields or checks of its own, ``decode()`` builds the instance
 through that subclass's constructor, ``__init__`` and
 ``__post_init__`` included. Every public constructor still validates,
 and every ``__post_init__`` check skipped this way holds for what
 ``decode()`` produces (documented at each site).
-
-``HTTP`` takes the same path: its ``__post_init__`` re-parses
-``head + raw_body`` to check that the two are one complete, exactly
-framed message, which ``decode()`` has established by parsing the
-buffer they were cut from.
 
 Text-framed protocols
 ---------------------

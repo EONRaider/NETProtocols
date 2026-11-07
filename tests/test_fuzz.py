@@ -627,7 +627,26 @@ def vars_of(header: Protocol) -> dict[str, object]:
 #: The classes whose decode() builds the instance directly only when
 #: called on the class itself, and through the constructor when called
 #: on any other subclass (see "Decode-path construction" in _base.py).
-FAST_PATH_ONLY_FOR_ITSELF = (TCP, UDP, OSPF, PIM, VRRP, VRRPv6, RIP, BGP)
+FAST_PATH_ONLY_FOR_ITSELF = (
+    Ethernet,
+    ARP,
+    IPv4,
+    TCP,
+    UDP,
+    OSPF,
+    PIM,
+    VRRP,
+    VRRPv6,
+    RIP,
+    BGP,
+    HTTP,
+)
+
+#: A request with a body, framed by its Content-Length.
+_HTTP_REQUEST = (
+    b"POST /submit HTTP/1.1\r\nHost: example.com\r\n"
+    b"Content-Length: 5\r\n\r\nhello"
+)
 
 
 def raw_header(cls: type[Protocol]) -> bytes:
@@ -635,6 +654,8 @@ def raw_header(cls: type[Protocol]) -> bytes:
     built one where the corpus has none."""
     if cls is VRRPv6:
         return bytes(VRRPv6(3, 1, 1, 100, 1, 100, 0, ("2001:db8::1",)))
+    if cls is HTTP:
+        return _HTTP_REQUEST
     for frame in CORPUS_FRAMES:
         for layer in decode_frame(frame, lax=True).layers:
             if type(layer) is cls:
@@ -687,29 +708,51 @@ class TestDecodeIntoASubclass:
             strict.decode(raw_header(cls))
 
     @pytest.mark.parametrize(
-        "cls,raw,context",
+        "cls,raw,kwargs,context",
         [
             (
                 UDP,
                 bytes.fromhex("0208020800200000") + bytes.fromhex("0202"),
+                {},
                 "_lead",
             ),
-            (BGP, (b"\xff" * 16 + bytes.fromhex("001304")) * 2, "_followed"),
+            (
+                BGP,
+                (b"\xff" * 16 + bytes.fromhex("001304")) * 2,
+                {},
+                "_followed",
+            ),
+            (
+                HTTP,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+                {"request_method": "HEAD"},
+                "request_method",
+            ),
+            (
+                HTTP,
+                b"HTTP/1.1 200 OK\r\n\r\nuntil close",
+                {"closed": True},
+                "raw_body",
+            ),
         ],
-        ids=["UDP", "BGP"],
+        ids=["UDP", "BGP", "HTTP-HEAD", "HTTP-closed"],
     )
     def test_a_subclass_keeps_the_decode_context(
-        self, cls, raw, context
+        self, cls, raw, kwargs, context
     ) -> None:
-        """The context decode() records outside the compared fields, UDP's
-        first payload bytes and whether another BGP message follows,
-        reaches a subclass's instance too."""
+        """The context decode() records outside the wire fields, UDP's
+        first payload bytes, whether another BGP message follows, the
+        request an HTTP response answers and whether its connection
+        closed, reaches a subclass's instance too."""
         other = dataclass(frozen=True, slots=True)(
             type(f"Other{cls.__name__}", (cls,), {})
         )
-        expected = getattr(cls.decode(raw), context)
+        library = cls.decode(raw, **kwargs)
+        expected = getattr(library, context)
         assert expected
-        assert getattr(other.decode(raw), context) == expected
+        header = other.decode(raw, **kwargs)
+        assert getattr(header, context) == expected
+        assert vars_of(header) == vars_of(library)
 
     @pytest.mark.parametrize(
         "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__

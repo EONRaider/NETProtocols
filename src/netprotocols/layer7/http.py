@@ -1378,6 +1378,14 @@ class HTTP(Protocol):
         """
         buffer = bytes(data)
         message = _parse_message(buffer, request_method, closed, cls)
+        if cls is not HTTP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                head=buffer[: message.head_len],
+                raw_body=buffer[message.head_len : message.end],
+                request_method=request_method,
+            )
         # The parse above establishes everything __post_init__ checks,
         # so the instance is built directly (see _base.py).
         instance = object.__new__(cls)
