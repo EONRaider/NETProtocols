@@ -687,6 +687,31 @@ class TestDecodeIntoASubclass:
             strict.decode(raw_header(cls))
 
     @pytest.mark.parametrize(
+        "cls,raw,context",
+        [
+            (
+                UDP,
+                bytes.fromhex("0208020800200000") + bytes.fromhex("0202"),
+                "_lead",
+            ),
+            (BGP, (b"\xff" * 16 + bytes.fromhex("001304")) * 2, "_followed"),
+        ],
+        ids=["UDP", "BGP"],
+    )
+    def test_a_subclass_keeps_the_decode_context(
+        self, cls, raw, context
+    ) -> None:
+        """The context decode() records outside the compared fields, UDP's
+        first payload bytes and whether another BGP message follows,
+        reaches a subclass's instance too."""
+        other = dataclass(frozen=True, slots=True)(
+            type(f"Other{cls.__name__}", (cls,), {})
+        )
+        expected = getattr(cls.decode(raw), context)
+        assert expected
+        assert getattr(other.decode(raw), context) == expected
+
+    @pytest.mark.parametrize(
         "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
     )
     def test_the_library_class_skips_its_constructor(self, cls) -> None:
