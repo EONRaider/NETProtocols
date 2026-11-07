@@ -160,9 +160,59 @@ class TestIsolation:
         with pytest.raises(ab.ComparisonError, match=r"netprotocols\.planted"):
             ab.compare(base, head, fixtures, 1, 1, 1)
 
+    def test_a_module_imported_during_decode_is_scanned_too(
+        self, ab: ModuleType, tmp_path: Path, fixtures: Path
+    ) -> None:
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "lazy.py").write_text("X = 1\n")
+        body = f"""
+        import sys
+
+
+        def decode_frame(frame):
+            if "netprotocols.lazy" not in sys.modules:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(
+                    "netprotocols.lazy", {str(elsewhere / "lazy.py")!r}
+                )
+                lazy = importlib.util.module_from_spec(spec)
+                sys.modules["netprotocols.lazy"] = lazy
+                spec.loader.exec_module(lazy)
+            return frame
+        """
+        src = write_library(tmp_path / "tree", body)
+        assert ab.run_worker(src, fixtures, "probe")["outside"] == [
+            "netprotocols.lazy"
+        ]
+        timed = ab.run_worker(
+            src, fixtures, "time", "--repetitions", "1", "--trials", "1"
+        )
+        assert timed["outside"] == ["netprotocols.lazy"]
+        with pytest.raises(ab.ComparisonError, match=r"netprotocols\.lazy"):
+            ab.check_timed("base", timed, 5)
+
+    def test_what_the_library_prints_is_not_read_as_the_result(
+        self, ab: ModuleType, tmp_path: Path, fixtures: Path
+    ) -> None:
+        noisy = REJECTING.format(reject="()").replace(
+            "    return len(frame)", '    print("{{")\n    return len(frame)'
+        )
+        base = write_library(tmp_path / "base", 'print("not json")\n' + noisy)
+        head = write_library(tmp_path / "head", REJECTING.format(reject="()"))
+        result = ab.compare(base, head, fixtures, 2, 1, 1)
+        assert len(result["pairs"]) == 2
+
+    def test_a_worker_that_writes_no_result_is_an_error(
+        self, ab: ModuleType, tmp_path: Path, fixtures: Path
+    ) -> None:
+        base = write_library(tmp_path / "base", "import os\nos._exit(0)\n")
+        with pytest.raises(ab.ComparisonError, match="left no result"):
+            ab.run_worker(base, fixtures, "probe")
+
 
 class TestFrames:
-    def test_frames_the_base_raises_on_are_skipped_for_both_trees(
+    def test_frames_either_tree_raises_on_are_skipped_for_both(
         self,
         ab: ModuleType,
         tmp_path: Path,
@@ -177,9 +227,13 @@ class TestFrames:
         )
         result = ab.compare(base, head, fixtures, 2, 1, 1)
         assert result["frames"] == 5
-        assert result["skipped"] == [1, 3]
-        assert result["head_only_raises"] == [2]
-        assert "2 skipped for both trees" in capsys.readouterr().out
+        assert result["base_raises"] == [1, 3]
+        assert result["head_raises"] == [1, 2, 3]
+        assert result["skipped"] == [1, 2, 3]
+        assert (
+            "3 skipped for both trees: 2 the base raises on, 3 the head "
+            "raises on"
+        ) in capsys.readouterr().out
         timed = ab.run_worker(
             head,
             fixtures,
@@ -189,10 +243,54 @@ class TestFrames:
             "--trials",
             "1",
             "--skip",
-            "1,3",
+            "1,2,3",
         )
-        assert timed["frames"] == 3
-        assert timed["rejected"] == 1
+        assert timed["frames"] == 2
+        assert timed["rejected"] == 0
+        ab.check_timed("head", timed, 2)
+
+    def test_a_timed_run_that_disagrees_with_the_probes_is_an_error(
+        self, ab: ModuleType
+    ) -> None:
+        good = {"outside": [], "frames": 2, "rejected": 0, "seconds": 1.0}
+        ab.check_timed("head", good, 2)
+        for bad in ({**good, "frames": 3}, {**good, "rejected": 1}):
+            with pytest.raises(ab.ComparisonError, match="probes predict"):
+                ab.check_timed("head", bad, 2)
+
+    def test_a_head_that_raises_on_every_frame_is_an_error(
+        self,
+        ab: ModuleType,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        copied = tmp_path / "copy"
+        shutil.copytree(
+            ROOT / "src",
+            copied,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        init = copied / "netprotocols" / "__init__.py"
+        init.write_text(
+            init.read_text()
+            + "\n\ndef decode_frame(*a, **k):\n    raise ValueError\n"
+        )
+        status = ab.main(
+            [
+                "--base-src",
+                str(ROOT / "src"),
+                "--head-src",
+                str(copied),
+                "--pairs",
+                "2",
+                "--repetitions",
+                "1",
+                "--trials",
+                "1",
+            ]
+        )
+        assert status == 2
+        assert "decodes in both trees" in capsys.readouterr().err
 
     def test_a_base_that_decodes_nothing_is_an_error(
         self, ab: ModuleType, tmp_path: Path, fixtures: Path
@@ -201,7 +299,7 @@ class TestFrames:
             tmp_path / "base", REJECTING.format(reject="range(256)")
         )
         head = write_library(tmp_path / "head", REJECTING.format(reject="()"))
-        with pytest.raises(ab.ComparisonError, match="decodes none"):
+        with pytest.raises(ab.ComparisonError, match="decodes in both"):
             ab.compare(base, head, fixtures, 1, 1, 1)
 
     def test_a_base_without_decode_frame_is_an_error(
@@ -262,6 +360,58 @@ class TestBaseRevision:
         with pytest.raises(ab.ComparisonError, match="cannot export src"):
             ab.export_tree(repository, "HEAD", tmp_path)
 
+    def test_an_unsafe_link_in_the_base_exits_2(
+        self,
+        ab: ModuleType,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        repository = make_repository(
+            tmp_path / "repo", REJECTING.format(reject="()")
+        )
+        (repository / "src" / "netprotocols" / "evil").symlink_to("/etc/passwd")
+        git(repository, "add", ".")
+        git(repository, "commit", "-q", "-m", "link")
+        with pytest.raises(ab.ComparisonError, match="cannot extract"):
+            ab.export_tree(repository, "HEAD", tmp_path)
+        status = ab.main(["--repository", str(repository), "--base", "HEAD"])
+        assert status == 2
+        assert "cannot extract" in capsys.readouterr().err
+
+
+class TestCopy:
+    def test_links_inside_the_tree_are_kept_as_links(
+        self, ab: ModuleType, tmp_path: Path
+    ) -> None:
+        src = write_library(tmp_path / "tree", REJECTING.format(reject="()"))
+        (src / "netprotocols" / "alias.py").symlink_to("extra.py")
+        copied = ab.copy_tree(src, tmp_path)
+        assert (copied / "netprotocols" / "alias.py").is_symlink()
+        assert str((copied / "netprotocols" / "alias.py").readlink()) == (
+            "extra.py"
+        )
+
+    @pytest.mark.parametrize("target", ["/etc/passwd", "../../outside.py"])
+    def test_links_the_archive_filter_refuses_are_refused(
+        self, ab: ModuleType, tmp_path: Path, target: str
+    ) -> None:
+        src = write_library(tmp_path / "tree", REJECTING.format(reject="()"))
+        (src / "netprotocols" / "evil.py").symlink_to(target)
+        out = tmp_path / "out"
+        out.mkdir()
+        with pytest.raises(ab.ComparisonError, match="links to"):
+            ab.copy_tree(src, out)
+
+    def test_a_failed_copy_is_a_comparison_error(
+        self, ab: ModuleType, tmp_path: Path
+    ) -> None:
+        src = write_library(tmp_path / "tree", REJECTING.format(reject="()"))
+        out = tmp_path / "out"
+        out.mkdir()
+        ab.copy_tree(src, out)
+        with pytest.raises(ab.ComparisonError, match="cannot copy"):
+            ab.copy_tree(src, out)
+
 
 class TestVerdict:
     def test_summary_of_one_ratio(self, ab: ModuleType) -> None:
@@ -305,7 +455,7 @@ class TestVerdict:
                 "--fixtures",
                 str(fixtures),
                 "--pairs",
-                "3",
+                "4",
                 "--repetitions",
                 "200",
                 "--trials",
@@ -318,7 +468,7 @@ class TestVerdict:
         )
         assert status == 0
         written = json.loads(output.read_text())
-        assert len(written["pairs"]) == 3
+        assert len(written["pairs"]) == 4
         assert {pair["first"] for pair in written["pairs"]} == {
             "base",
             "head",
@@ -372,9 +522,47 @@ class TestVerdict:
         assert status == 2
         assert "fetch-depth" in capsys.readouterr().err
 
-    def test_main_rejects_zero_pairs(self, ab: ModuleType) -> None:
+    @pytest.mark.parametrize("pairs", ["0", "1", "3", "15"])
+    def test_main_rejects_an_odd_or_zero_pair_count(
+        self, ab: ModuleType, pairs: str
+    ) -> None:
         with pytest.raises(SystemExit):
-            ab.main(["--base", "HEAD", "--pairs", "0"])
+            ab.main(["--base", "HEAD", "--pairs", pairs])
+
+    def test_the_default_pair_count_is_16(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen: list[int] = []
+
+        def record(*args: object) -> None:
+            seen.append(int(str(args[3])))
+            raise ab.ComparisonError("recorded")
+
+        monkeypatch.setattr(ab, "compare", record)
+        status = ab.main(["--base-src", "src", "--fixtures", str(fixtures)])
+        assert status == 2
+        assert seen == [16]
+
+    @pytest.mark.parametrize("kind", ["missing", "empty"])
+    def test_main_reports_missing_or_empty_fixtures(
+        self,
+        ab: ModuleType,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        kind: str,
+    ) -> None:
+        fixtures = tmp_path / "fixtures"
+        if kind == "empty":
+            fixtures.mkdir()
+        status = ab.main(["--base-src", "src", "--fixtures", str(fixtures)])
+        assert status == 2
+        err = capsys.readouterr().err
+        assert (
+            "no fixtures directory" if kind == "missing" else "no *.pcap"
+        ) in err
 
     def test_copy_tree_refuses_a_directory_without_the_package(
         self, ab: ModuleType, tmp_path: Path
@@ -387,15 +575,15 @@ class TestVerdict:
 class TestBaseScript:
     @pytest.fixture
     def history(self, tmp_path: Path) -> Path:
-        """master: m1 - m2; a branch from m1: b1; a clone as origin."""
+        """master: m1 - m2 - m3; a branch from m1: b1; a clone of it."""
         upstream = tmp_path / "upstream"
         upstream.mkdir()
         git(tmp_path, "init", "-q", "-b", "master", str(upstream))
-        for name in ("m1", "m2"):
+        for name in ("m1", "m2", "m3"):
             (upstream / name).write_text(name)
             git(upstream, "add", name)
             git(upstream, "commit", "-q", "-m", name)
-        git(upstream, "checkout", "-q", "-b", "feature", "HEAD^1")
+        git(upstream, "checkout", "-q", "-b", "feature", "HEAD~2")
         (upstream / "b1").write_text("b1")
         git(upstream, "add", "b1")
         git(upstream, "commit", "-q", "-m", "b1")
@@ -427,9 +615,19 @@ class TestBaseScript:
     def test_a_push_compares_against_the_commit_before_it(
         self, history: Path
     ) -> None:
-        before = git(history, "rev-parse", "HEAD^1")
+        before = git(history, "rev-parse", "HEAD~2")
         result = self.run(history, EVENT="push", BEFORE=before)
+        assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == before
+        assert before != git(history, "rev-parse", "HEAD^1")
+
+    def test_a_before_equal_to_head_falls_back_to_the_parent(
+        self, history: Path
+    ) -> None:
+        head = git(history, "rev-parse", "HEAD")
+        result = self.run(history, EVENT="push", BEFORE=head)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == git(history, "rev-parse", "HEAD^1")
 
     @pytest.mark.parametrize("before", ["", "0" * 40])
     def test_a_push_with_no_before_falls_back_to_the_parent(

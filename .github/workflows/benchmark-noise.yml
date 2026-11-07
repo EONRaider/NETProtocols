@@ -3,15 +3,15 @@ name: Benchmark noise
 # Runs scripts/benchmark_ab.py with the base equal to the head, once in
 # each of ten jobs on separate ubuntu-latest runners, so each job's
 # ratios measure only that runner's noise. Dispatched by hand on any
-# branch; `pairs` sets the number of pairs per run. No concurrency
-# group, so several dispatches on one ref all run.
+# branch; `pairs`, an even number, sets the number of pairs per run.
+# No concurrency group, so several dispatches on one ref all run.
 on:
   workflow_dispatch:
     inputs:
       pairs:
-        description: "Pairs of measurements per run"
+        description: "Pairs of measurements per run (even)"
         required: false
-        default: "15"
+        default: "16"
 
 permissions:
   contents: read
@@ -33,10 +33,15 @@ jobs:
         env:
           PAIRS: ${{ inputs.pairs }}
         run: |
+          # The step exits with the comparison's own status, saved in
+          # $status before its output is copied to the step summary.
+          status=0
           uv run --frozen python scripts/benchmark_ab.py --base HEAD \
-            --pairs "$PAIRS" | tee benchmark.out
+            --pairs "$PAIRS" >benchmark.out 2>&1 || status=$?
           {
             echo '```'
             cat benchmark.out
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
+          cat benchmark.out
+          exit "$status"

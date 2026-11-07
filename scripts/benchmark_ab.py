@@ -22,14 +22,16 @@ first copied, or exported, into one temporary directory without any
 
 Both trees decode the frames of ``--fixtures``, by default this
 checkout's ``tests/fixtures``. A probe pass decodes every frame once in
-each tree first; the frames the base raises on are dropped for both
-trees, and the frames only the head raises on are kept and counted.
+each tree first; every frame either tree raises on is dropped for both
+trees, and the two counts are printed apart. Each timed run is then
+checked to have decoded exactly the frames left, rejecting none.
 
-``--pairs`` pairs of measurements follow, alternating which tree goes
-first. Each pair gives a ratio, head time over base time, so above 1.0
-means the head is slower. The script prints every pair, then the
-median, minimum, maximum and quartiles of the ratios, and exits 1 when
-the median is more than ``--threshold`` percent above 1.0.
+``--pairs`` pairs of measurements follow, an even number, alternating
+which tree goes first. Each pair gives a ratio, head time over base
+time, so above 1.0 means the head is slower. The script prints every
+pair, then the median, minimum, maximum and quartiles of the ratios,
+and exits 1 when the median is more than ``--threshold`` percent above
+1.0.
 
 ``--base HEAD`` on a clean checkout, or ``--base-src`` naming the head's
 own ``src``, compares a tree with itself, so the ratios measure only
@@ -44,6 +46,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import shutil
 import statistics
 import subprocess
@@ -73,7 +76,9 @@ def export_tree(repository: Path, revision: str, destination: Path) -> Path:
     :param destination: An existing directory to extract into.
     :returns: The extracted ``src`` directory.
     :raises ComparisonError: if the revision is not in the repository,
-        as in a clone too shallow to hold it, or holds no ``src``.
+        as in a clone too shallow to hold it, holds no ``src``, or holds
+        a member that ``tarfile``'s ``data`` filter refuses, such as a
+        symbolic link to an absolute path or out of the tree.
     """
     resolved = subprocess.run(
         [
@@ -112,58 +117,98 @@ def export_tree(repository: Path, revision: str, destination: Path) -> Path:
             f"cannot export src from {commit}: "
             f"{archive.stderr.decode(errors='replace').strip()}"
         )
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        tar.extractall(destination, filter="data")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+            tar.extractall(destination, filter="data")
+    except (tarfile.TarError, OSError) as error:
+        raise ComparisonError(
+            f"cannot extract src from {commit}: {error}"
+        ) from error
     return destination / "src"
 
 
 def copy_tree(src: Path, destination: Path) -> Path:
     """Copy a ``src`` directory to ``destination/src``, without bytecode.
 
+    Symbolic links are copied as links, and refused where
+    :func:`export_tree`'s ``data`` filter refuses them: a link to an
+    absolute path, or one that resolves outside ``src``.
+
     :param src: The ``src`` directory to copy.
     :param destination: An existing directory to copy into.
     :returns: The copied ``src`` directory.
-    :raises ComparisonError: if ``src`` holds no ``netprotocols`` package.
+    :raises ComparisonError: if ``src`` holds no ``netprotocols`` package
+        or such a link, or the copy fails.
     """
     if not (src / "netprotocols" / "__init__.py").is_file():
         raise ComparisonError(f"{src} holds no netprotocols package")
+    root = src.resolve()
+    for directory, names, files in os.walk(src):
+        for name in [*names, *files]:
+            path = Path(directory, name)
+            if not path.is_symlink():
+                continue
+            target = os.readlink(path)
+            if os.path.isabs(target) or not (
+                (path.parent / target).resolve().is_relative_to(root)
+            ):
+                raise ComparisonError(
+                    f"{path} links to {target}, outside {src}"
+                )
     copied = destination / "src"
-    shutil.copytree(
-        src, copied, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
-    )
+    try:
+        shutil.copytree(
+            src,
+            copied,
+            symlinks=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+    except OSError as error:
+        raise ComparisonError(f"cannot copy {src}: {error}") from error
     return copied
 
 
 def run_worker(
     src: Path, fixtures: Path, mode: str, *options: str
 ) -> dict[str, Any]:
-    """Run the worker on one tree and return the JSON it prints.
+    r"""Run the worker on one tree and return the JSON it writes.
 
     :param src: The tree's ``src`` directory.
     :param fixtures: The directory of captures to decode.
     :param mode: ``probe`` or ``time``.
-    :param options: Further worker arguments.
+    :param \*options: Further worker arguments.
     :returns: The worker's result.
-    :raises ComparisonError: if the worker exits with a non-zero status.
+    :raises ComparisonError: if the worker exits with a non-zero status,
+        or leaves no JSON object in its output file.
     """
-    command = [
-        sys.executable,
-        "-I",
-        "-S",
-        "-B",
-        str(WORKER),
-        str(src),
-        str(fixtures),
-        mode,
-        *options,
-    ]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise ComparisonError(
-            f"the worker failed on {src} (status {completed.returncode}):"
-            f"\n{completed.stderr.strip()}"
-        )
-    result: dict[str, Any] = json.loads(completed.stdout)
+    with tempfile.TemporaryDirectory(prefix="benchmark-ab-worker-") as out:
+        output = Path(out, "result.json")
+        command = [
+            sys.executable,
+            "-I",
+            "-S",
+            "-B",
+            str(WORKER),
+            str(src),
+            str(fixtures),
+            str(output),
+            mode,
+            *options,
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise ComparisonError(
+                f"the worker failed on {src} (status "
+                f"{completed.returncode}):\n{completed.stderr.strip()}"
+            )
+        try:
+            result = json.loads(output.read_text())
+        except (OSError, ValueError) as error:
+            raise ComparisonError(
+                f"the worker left no result for {src}: {error}"
+            ) from error
+    if not isinstance(result, dict):
+        raise ComparisonError(f"the worker's result for {src} is not a map")
     return result
 
 
@@ -205,11 +250,14 @@ def compare(
     :param pairs: How many pairs of measurements to take.
     :param repetitions: Decode passes per timed run.
     :param trials: Timed runs per measurement; the shortest is kept.
-    :returns: The probes, the skipped frames, each pair's times and
-        ratio, and :func:`summarize` of the ratios.
+    :returns: The probes, the frames each tree raises on, the skipped
+        frames, each pair's times and ratio, and :func:`summarize` of
+        the ratios.
     :raises ComparisonError: if a worker fails, imports any
         ``netprotocols`` module from outside its tree, runs with
-        ``site`` or bytecode writing on, or no frame is left.
+        ``site`` or bytecode writing on, the trees see different frame
+        counts, no frame is left, or a timed run decodes a different
+        number of frames, or rejects any, than the probes predict.
     """
     probes = {
         "base": run_worker(base, fixtures, "probe"),
@@ -227,14 +275,19 @@ def compare(
                 f"{name}'s worker ran with site-packages or bytecode on"
             )
     total = probes["head"]["frames"]
-    skipped = sorted(probes["base"]["raises"])
-    head_only = sorted(set(probes["head"]["raises"]) - set(skipped))
+    if probes["base"]["frames"] != total:
+        raise ComparisonError("the trees read different frame counts")
+    if total == 0:
+        raise ComparisonError(f"{fixtures} holds no frames")
+    base_raises = sorted(probes["base"]["raises"])
+    head_raises = sorted(probes["head"]["raises"])
+    skipped = sorted({*base_raises, *head_raises})
     if len(skipped) >= total:
-        raise ComparisonError(f"the base decodes none of {total} frames")
+        raise ComparisonError(f"no frame of {total} decodes in both trees")
     print(
-        f"frames: {total} in {fixtures}, {len(skipped)} skipped for both "
-        f"trees because the base raises on them, {len(head_only)} kept "
-        "that only the head raises on"
+        f"frames: {total} in {fixtures}; {len(skipped)} skipped for both "
+        f"trees: {len(base_raises)} the base raises on, "
+        f"{len(head_raises)} the head raises on"
     )
     print(
         f"{pairs} pairs, {repetitions} repetitions per run, best of "
@@ -252,12 +305,13 @@ def compare(
     measured = []
     for number in range(pairs):
         order = ("base", "head") if number % 2 == 0 else ("head", "base")
-        seconds = {
-            name: run_worker(
+        seconds = {}
+        for name in order:
+            timed = run_worker(
                 base if name == "base" else head, fixtures, "time", *options
-            )["seconds"]
-            for name in order
-        }
+            )
+            check_timed(name, timed, total - len(skipped))
+            seconds[name] = timed["seconds"]
         ratio = seconds["head"] / seconds["base"]
         measured.append({"first": order[0], **seconds, "ratio": ratio})
         print(
@@ -268,13 +322,36 @@ def compare(
     return {
         "probes": probes,
         "frames": total,
+        "base_raises": base_raises,
+        "head_raises": head_raises,
         "skipped": skipped,
-        "head_only_raises": head_only,
         "repetitions": repetitions,
         "trials": trials,
         "pairs": measured,
         "summary": summarize([pair["ratio"] for pair in measured]),
     }
+
+
+def check_timed(name: str, timed: dict[str, Any], expected: int) -> None:
+    """Check a timed run against what the probes predict.
+
+    :param name: ``base`` or ``head``.
+    :param timed: The worker's ``time`` result.
+    :param expected: The number of frames left after the skips.
+    :raises ComparisonError: if the run imported a module from outside
+        its tree, decoded other than ``expected`` frames, or rejected
+        any.
+    """
+    if timed["outside"]:
+        raise ComparisonError(
+            f"{name} loaded modules from outside its tree: "
+            f"{', '.join(timed['outside'])}"
+        )
+    if timed["frames"] != expected or timed["rejected"] != 0:
+        raise ComparisonError(
+            f"{name} timed {timed['frames']} frames and rejected "
+            f"{timed['rejected']}; the probes predict {expected} and 0"
+        )
 
 
 def verdict(summary: dict[str, float], threshold: float) -> int:
@@ -302,6 +379,12 @@ def verdict(summary: dict[str, float], threshold: float) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the comparison the command line describes.
+
+    :param argv: The command line, without the program name.
+    :returns: 0 within the threshold, 1 over it, 2 when the comparison
+        cannot run.
+    """
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
@@ -313,20 +396,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--fixtures", type=Path, default=REPOSITORY / "tests" / "fixtures"
     )
     parser.add_argument("--repository", type=Path, default=REPOSITORY)
-    parser.add_argument("--pairs", type=int, default=15)
+    parser.add_argument("--pairs", type=int, default=16)
     parser.add_argument("--repetitions", type=int, default=20)
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--threshold", type=float, default=THRESHOLD)
     parser.add_argument("--json", type=Path, help="write the results here")
     args = parser.parse_args(argv)
-    if args.pairs < 1:
-        parser.error("--pairs must be at least 1")
+    if args.pairs < 2 or args.pairs % 2:
+        parser.error("--pairs must be even and at least 2")
 
     with tempfile.TemporaryDirectory(prefix="benchmark-ab-") as scratch:
         base_dir, head_dir = Path(scratch, "base"), Path(scratch, "head")
         base_dir.mkdir()
         head_dir.mkdir()
         try:
+            if not args.fixtures.is_dir():
+                raise ComparisonError(f"no fixtures directory {args.fixtures}")
+            if not any(args.fixtures.glob("*.pcap")):
+                raise ComparisonError(f"{args.fixtures} holds no *.pcap")
             if args.base is not None:
                 base_src = export_tree(args.repository, args.base, base_dir)
                 print(f"base: {args.base}, exported to {base_src}")
