@@ -1036,17 +1036,61 @@ class TestParameters:
     @pytest.mark.parametrize("length", [0, 1, 2, 3])
     def test_a_length_below_four(self, length):
         raw = struct.pack("!HH", 5, length) + bytes(8)
-        assert self.parameters_of(raw) is None
+        with pytest.raises(
+            InvalidFieldError,
+            match=f"^SCTP parameter length must be at least 4, got {length}$",
+        ) as caught:
+            self.parameters_of(raw)
+        error = caught.value
+        assert error.protocol is SCTPChunk
+        assert error.field == "value"
+        assert error.offset == 16
+        assert (error.expected, error.actual) == (">=4", length)
+        assert error.__cause__ is None and error.__suppress_context__
 
     def test_a_length_past_the_value(self):
         raw = struct.pack("!HH", 5, 12) + bytes(4)
-        assert self.parameters_of(raw) is None
-        assert self.parameters_of(raw + bytes(4)) is not None
+        with pytest.raises(
+            InvalidFieldError,
+            match=r"^SCTP parameter declares 12 bytes, 8 remain$",
+        ) as caught:
+            self.parameters_of(raw)
+        error = caught.value
+        assert error.protocol is SCTPChunk
+        assert error.field == "value"
+        assert error.offset == 16
+        assert (error.expected, error.actual) == (12, 8)
+        assert self.parameters_of(raw + bytes(4)) == (
+            SCTPParameter(5, bytes(8)),
+        )
 
     @pytest.mark.parametrize("left", [1, 2, 3])
     def test_bytes_too_few_for_a_parameter_header(self, left):
         raw = bytes(SCTPParameter(9, bytes(4))) + b"\x00" * left
-        assert self.parameters_of(raw) is None
+        with pytest.raises(
+            InvalidFieldError,
+            match=f"^SCTP parameter header needs 4 bytes, {left} remain$",
+        ) as caught:
+            self.parameters_of(raw)
+        error = caught.value
+        assert error.protocol is SCTPChunk
+        assert error.field == "value"
+        assert error.offset == 16 + 8
+        assert (error.expected, error.actual) == (4, left)
+
+    @pytest.mark.parametrize("type_", [1, 2])
+    def test_an_init_ack_raises_as_an_init_does(self, type_):
+        """The offset counts from the start of the value, past the
+        parameters that walk."""
+        raw = bytes(SCTPParameter(9, bytes(4))) + struct.pack("!HH", 5, 2)
+        with pytest.raises(InvalidFieldError) as caught:
+            self.parameters_of(raw, type_)
+        assert caught.value.offset == 16 + 8
+
+    @pytest.mark.parametrize("type_", sorted(set(range(256)) - {1, 2}))
+    def test_other_chunk_types_read_none_whatever_the_value(self, type_):
+        raw = struct.pack("!HH", 5, 2)
+        assert SCTPChunk(type_, 0, init_value(raw)).parameters is None
 
     def test_many_minimal_parameters_walk(self):
         raw = bytes(SCTPParameter(0xC000)) * 4096
@@ -1072,10 +1116,16 @@ class TestStateCookie:
         assert chunk_.parameters == (self.COOKIE,)
         assert chunk_.state_cookie is None
 
-    def test_parameters_that_do_not_walk(self):
-        raw = bytes(self.COOKIE) + b"\x00\x05\x00\x02"
-        chunk_ = SCTPChunk(2, 0, init_value(raw))
-        assert chunk_.parameters is None
+    @pytest.mark.parametrize(
+        "tail",
+        [b"\x00\x05\x00\x02", b"\x00\x05\x00\x0c", b"\x00\x05\x00"],
+    )
+    def test_parameters_that_do_not_walk(self, tail):
+        """A State Cookie before the parameter that does not walk is not
+        read either."""
+        chunk_ = SCTPChunk(2, 0, init_value(bytes(self.COOKIE) + tail))
+        with pytest.raises(InvalidFieldError):
+            _ = chunk_.parameters
         assert chunk_.state_cookie is None
 
     def test_an_init_ack_cut_short_of_its_fixed_fields(self):
