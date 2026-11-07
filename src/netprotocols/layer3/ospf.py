@@ -112,6 +112,7 @@ from netprotocols._base import (
     bytes_to_ipv4,
     hex_str,
     ipv4_to_bytes,
+    slot_setters,
 )
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -1195,19 +1196,56 @@ class OSPF(Protocol):
             )
         body = bytes(data[size:packet_length])
         cls._check_body(type_, body, base=size)
-        return cls(
-            version=version,
-            type=type_,
-            packet_length=packet_length,
-            router_id=bytes_to_ipv4(router_id),
-            area_id=bytes_to_ipv4(area_id),
-            checksum=checksum,
-            instance_id=instance_id,
-            au_type=au_type,
-            authentication=authentication,
-            body=body,
-            auth_trailer=bytes(data[packet_length:end]),
-        )
+        auth_trailer = bytes(data[packet_length:end])
+        if cls is not OSPF:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                version=version,
+                type=type_,
+                packet_length=packet_length,
+                router_id=bytes_to_ipv4(router_id),
+                area_id=bytes_to_ipv4(area_id),
+                checksum=checksum,
+                instance_id=instance_id,
+                au_type=au_type,
+                authentication=authentication,
+                body=body,
+                auth_trailer=auth_trailer,
+            )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the version and the body's framing are checked
+        # above, the body is packet_length - 24 bytes, the
+        # Authentication field is the struct's 8 bytes, and the trailer
+        # is sliced to the length the AuType gives after the buffer is
+        # confirmed to hold it.
+        (
+            set_version,
+            set_type,
+            set_packet_length,
+            set_router_id,
+            set_area_id,
+            set_checksum,
+            set_instance_id,
+            set_au_type,
+            set_authentication,
+            set_body,
+            set_auth_trailer,
+        ) = _OSPF_SETTERS
+        header = object.__new__(cls)
+        set_version(header, version)
+        set_type(header, type_)
+        set_packet_length(header, packet_length)
+        set_router_id(header, bytes_to_ipv4(router_id))
+        set_area_id(header, bytes_to_ipv4(area_id))
+        set_checksum(header, checksum)
+        set_instance_id(header, instance_id)
+        set_au_type(header, au_type)
+        set_authentication(header, authentication)
+        set_body(header, body)
+        set_auth_trailer(header, auth_trailer)
+        return header
 
     def __bytes__(self) -> bytes:
         """Serialize this packet to its exact on-wire form."""
@@ -1399,6 +1437,23 @@ class OSPF(Protocol):
             OSPFLSAHeader._parse(body, offset)
             for offset in range(start, len(body), _LSA_HEADER.size)
         )
+
+
+#: The slot setters :meth:`OSPF.decode` builds its instance with.
+_OSPF_SETTERS = slot_setters(
+    OSPF,
+    "version",
+    "type",
+    "packet_length",
+    "router_id",
+    "area_id",
+    "checksum",
+    "instance_id",
+    "au_type",
+    "authentication",
+    "body",
+    "auth_trailer",
+)
 
 
 def _walk_lsas(

@@ -180,7 +180,7 @@ from ipaddress import IPv4Network
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, bytes_to_ipv4
+from netprotocols._base import Protocol, bytes_to_ipv4, slot_setters
 from netprotocols.registry import Registry
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
@@ -845,15 +845,34 @@ class BGP(Protocol):
                 expected=length,
                 actual=len(data),
             )
-        message = cls(
-            marker=_MARKER,
-            length=length,
-            type=type_,
-            body=bytes(data[_HEADER_LEN:length]),
-        )
-        rest = bytes(data[length : length + 16])
-        if rest and rest == _MARKER[: len(rest)]:
-            object.__setattr__(message, "_followed", True)
+        body = bytes(data[_HEADER_LEN:length])
+        rest = data[length : length + 16]
+        followed = bool(rest) and _MARKER.startswith(rest)
+        if cls is not BGP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            message = cls(marker=_MARKER, length=length, type=type_, body=body)
+            if followed:
+                object.__setattr__(message, "_followed", True)
+            return message
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the Marker is 16 bytes, the Type a byte, and the
+        # body is length - 19 bytes after the buffer is confirmed to
+        # hold the message.
+        (
+            set_marker,
+            set_length,
+            set_type,
+            set_body,
+            set_followed,
+        ) = _BGP_SETTERS
+        message = object.__new__(cls)
+        set_marker(message, _MARKER)
+        set_length(message, length)
+        set_type(message, type_)
+        set_body(message, body)
+        set_followed(message, followed)
         return message
 
     def __bytes__(self) -> bytes:
@@ -1133,6 +1152,17 @@ class BGP(Protocol):
             return data[1 : 1 + data[0]].decode("utf-8")
         except UnicodeDecodeError:
             return None
+
+
+#: The slot setters :meth:`BGP.decode` builds its instance with.
+_BGP_SETTERS = slot_setters(
+    BGP,
+    "marker",
+    "length",
+    "type",
+    "body",
+    "_followed",
+)
 
 
 def _check_header(marker: bytes, length: int, type_: int) -> None:

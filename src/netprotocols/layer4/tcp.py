@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from struct import Struct
 from typing import ClassVar, Self
 
-from netprotocols._base import Protocol, hex_str
+from netprotocols._base import Protocol, hex_str, slot_setters
 from netprotocols._tlv import walk_kind_length_value
 from netprotocols.layer4._ports import tcp_app_class
 from netprotocols.registry import Registry
@@ -230,19 +230,55 @@ class TCP(Protocol):
                 expected=data_offset * 4,
                 actual=len(data),
             )
-        return cls(
-            src_port=src_port,
-            dst_port=dst_port,
-            seq=seq,
-            ack=ack,
-            data_offset=data_offset,
-            reserved=(offset_flags >> 9) & 0b111,
-            flags=offset_flags & 0x1FF,
-            window=window,
-            checksum=checksum,
-            urgent_pointer=urgent_pointer,
-            options=bytes(data[cls._struct.size : data_offset * 4]),
-        )
+        options = bytes(data[cls._struct.size : data_offset * 4])
+        if cls is not TCP:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                src_port=src_port,
+                dst_port=dst_port,
+                seq=seq,
+                ack=ack,
+                data_offset=data_offset,
+                reserved=(offset_flags >> 9) & 0b111,
+                flags=offset_flags & 0x1FF,
+                window=window,
+                checksum=checksum,
+                urgent_pointer=urgent_pointer,
+                options=options,
+            )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the data offset is 4 bits (so <= 15) and is rejected
+        # below 5 above, and the options are sliced to exactly
+        # data_offset * 4 bytes after the buffer is confirmed to hold
+        # them.
+        (
+            set_src_port,
+            set_dst_port,
+            set_seq,
+            set_ack,
+            set_data_offset,
+            set_reserved,
+            set_flags,
+            set_window,
+            set_checksum,
+            set_urgent_pointer,
+            set_options,
+        ) = _TCP_SETTERS
+        header = object.__new__(cls)
+        set_src_port(header, src_port)
+        set_dst_port(header, dst_port)
+        set_seq(header, seq)
+        set_ack(header, ack)
+        set_data_offset(header, data_offset)
+        set_reserved(header, (offset_flags >> 9) & 0b111)
+        set_flags(header, offset_flags & 0x1FF)
+        set_window(header, window)
+        set_checksum(header, checksum)
+        set_urgent_pointer(header, urgent_pointer)
+        set_options(header, options)
+        return header
 
     def __bytes__(self) -> bytes:
         return (
@@ -325,3 +361,20 @@ class TCP(Protocol):
                 protocol=type(self),
             )
         )
+
+
+#: The slot setters :meth:`TCP.decode` builds its instance with.
+_TCP_SETTERS = slot_setters(
+    TCP,
+    "src_port",
+    "dst_port",
+    "seq",
+    "ack",
+    "data_offset",
+    "reserved",
+    "flags",
+    "window",
+    "checksum",
+    "urgent_pointer",
+    "options",
+)

@@ -21,6 +21,8 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from hypothesis import example, given
+from hypothesis import strategies as st
 
 from conftest import FIXTURES, pcap_frames
 from netprotocols import (
@@ -44,12 +46,15 @@ from netprotocols import (
     PIMLANPruneDelay,
     PIMRegister,
     PIMRegisterStop,
+    ProtocolError,
     TruncatedHeaderError,
     compute,
     decode_frame,
     verify,
 )
+from netprotocols.layer3 import pim
 from netprotocols.registry import DEFAULT, TABLE_IP_PROTO, TABLE_IP_PROTO_V6
+from strategies import _PIM_MESSAGES
 
 FRAMES = pcap_frames(FIXTURES / "pim.pcap")
 
@@ -1304,3 +1309,71 @@ class TestIndependentChecker:
         failures, stats = self.check(frame)
         assert failures == []
         assert stats["pim-null-register-truncated"] == 1
+
+
+def parser_end(type_: int, body: bytes) -> int:
+    """Where the message's parser ends it: what it reads, or all of
+    ``body`` when there is no parser or it raises."""
+    parser = pim._PARSERS.get(type_)
+    if parser is None:
+        return len(body)
+    try:
+        _, end = parser(body)
+    except ProtocolError:
+        return len(body)
+    return end
+
+
+@st.composite
+def pim_bodies(draw: st.DrawFn) -> bytes:
+    """A message body near a parser's edges: a built message with bytes
+    changed, cut or appended, or bytes over a small alphabet that holds
+    the native families and encodings."""
+    choice = draw(st.integers(0, 2))
+    if choice == 0:
+        return draw(st.binary(max_size=64))
+    if choice == 1:
+        alphabet = st.sampled_from([0, 1, 2, 4, 32, 255])
+        return bytes(draw(st.lists(alphabet, max_size=64)))
+    type_ = draw(st.sampled_from(sorted(_PIM_MESSAGES)))
+    body = bytearray(bytes(draw(_PIM_MESSAGES[type_])))  # type: ignore[call-overload]
+    for _ in range(draw(st.integers(0, 3))):
+        if body:
+            position = draw(st.integers(0, len(body) - 1))
+            body[position] = draw(st.integers(0, 255))
+    body = (
+        body[: draw(st.integers(0, len(body)))] if draw(st.booleans()) else body
+    )
+    tail = draw(st.binary(max_size=8) | st.integers(0, 8).map(bytes))
+    return bytes(body) + tail
+
+
+class TestMessageEnd:
+    """decode() bounds a message where its parser would end it."""
+
+    @given(type_=st.integers(0, 0x0F), body=pim_bodies())
+    @example(type_=0, body=b"")
+    @example(type_=0, body=b"\x00\x01\x00\x02\x00\x69\x00")
+    @example(type_=0, body=b"\x00\x01\x00\x02\x00\x69\x00\x00\x00\x00")
+    @example(type_=0, body=b"\x00\x01\x00\x09\x00\x69\x00\x00")
+    @example(type_=0, body=b"\x00\x00\x00\x00\x00\x01\x00\x00")
+    @example(type_=3, body=bytes(4))
+    @example(type_=3, body=b"\x01\x00\x0a\x00\x00\x01\x00\x01\x00\x00")
+    @example(type_=2, body=b"\x02\x00\x00\x80" + bytes(16) + b"\x01\x01")
+    @example(
+        type_=5, body=b"\x01\x00\x00\x20" + bytes(4) + b"\x01\x00" + bytes(11)
+    )
+    @example(
+        type_=2, body=b"\x01\x00\x00\x20" + bytes(4) + b"\x01\x00" + bytes(6)
+    )
+    @example(
+        type_=2, body=b"\x01\x00\x00\x20" + bytes(4) + b"\x01\x01" + bytes(6)
+    )
+    def test_it_agrees_with_the_parser(self, type_: int, body: bytes) -> None:
+        assert pim._message_end(type_, body) == parser_end(type_, body)
+
+    def test_the_capture(self) -> None:
+        for frame in FRAMES:
+            body = frame[PIM_START + 4 :]
+            type_ = frame[PIM_START] & 0x0F
+            assert pim._message_end(type_, body) == parser_end(type_, body)
