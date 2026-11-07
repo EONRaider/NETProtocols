@@ -1179,14 +1179,16 @@ def hsrpv2_group_states(draw: st.DrawFn) -> HSRPv2GroupState:
     # Canonical for decode(): Version 2, an Op Code of 0-2, a State of
     # 0-6 and an IP Version of 4 or 6 (the constructor accepts other
     # Versions, Op Codes and States; test_hsrpv2.py covers those), and
-    # 12 padding bytes after an IPv4 address, any value.
+    # 12 padding bytes after an IPv4 address, any value, or None, which
+    # construction replaces with 12 zero bytes for IPv4 and none for IPv6.
     ip_version = draw(st.sampled_from([4, 6]))
+    padding: bytes | None
     if ip_version == 4:
         virtual_ip = draw(ipv4_strings())
-        padding = draw(st.binary(min_size=12, max_size=12))
+        padding = draw(st.none() | st.binary(min_size=12, max_size=12))
     else:
         virtual_ip = draw(ipv6_strings())
-        padding = b""
+        padding = draw(st.sampled_from([None, b""]))
     return HSRPv2GroupState(
         version=2,
         opcode=draw(st.integers(0, 2)),

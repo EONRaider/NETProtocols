@@ -1008,10 +1008,12 @@ HSRP on UDP 1985 (RFC 2281) rejects far more, though less than BGP and
 STUN below: its first three bytes must be a Version of 0, one of the
 three Op Codes (Hello, Coup, Resign) and one of the six States, which
 18 of the 2^24 values of those bytes are, about one in 932,000, and
-the payload must then hold the whole 20-byte message. Measured the
-same way (`random.Random` seeds 0-2, each 10,000 random 300-byte
-payloads and 10,000 of uniformly random length 0-600, the latter
-walked both unpadded and padded: 90,000 walks to port 1985 in all),
+the payload must then hold the whole 20-byte message. Measured by
+`scripts/measure_port_guard.py --port 1985 --count HSRP
+--one-generator` (`random.Random` seeds 0-2, each 10,000 random
+300-byte payloads and, from the same generator, not one seeded again,
+10,000 of uniformly random length 0-600, the latter walked both
+unpadded and padded: 90,000 walks to port 1985 in all),
 about 0.1 of those walks are expected to decode an HSRP layer
 (90,000 x 18 / 2^24 = 0.097, a little less in fact, since a few of the
 random-length payloads are too short to reach 20 bytes), and 2 did:
@@ -1055,10 +1057,8 @@ rest of the datagram walked as TLVs, a Group State TLV of another
 Length, a Text Authentication TLV (Type 3) of other than 8 bytes or an
 MD5 Authentication TLV (Type 4) of other than 28 rejecting it.
 Measured as above, by `scripts/measure_port_guard.py --one-generator
---port 1985 --count HSRP --count HSRPv2` and `--port 2029` (the
-`--one-generator` draw being the one the HSRPv1 figures were taken
-with: the 0-600 byte payloads come from the generator that drew the
-300-byte ones, not from a reseeded one), the walks to port 1985 are
+--port 1985 --count HSRP --count HSRPv2` and `--port 2029`, the walks
+to port 1985 are
 unchanged by `HSRPv2`: on this tree as on the tree before it, 89,998 of
 the 90,000 ended with `stopped_by` set and the same two decoded an HSRP
 layer, and none decoded HSRPv2, since every payload whose first byte is

@@ -1098,7 +1098,9 @@ class TestChecker:
             pytest.param(lambda raw: raw[:0], id="empty"),
             pytest.param(lambda raw: raw + b"\x00", id="21-bytes"),
             pytest.param(lambda raw: raw + MD5_TLV, id="md5-tlv"),
-            pytest.param(lambda raw: b"\x02" + HSRPV2_HELLO[1:], id="tlvs"),
+            pytest.param(
+                lambda raw: b"\x02" + HSRPV2_HELLO[1:], id="52-bytes-version-2"
+            ),
         ],
     )
     def test_a_message_not_20_bytes_fails_its_length(self, index, cut):

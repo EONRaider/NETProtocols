@@ -141,7 +141,13 @@ first TLV is the Group State TLV, Type 1 and Length 40::
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
    |           Hold Time           |  Virtual IP Address (16 bytes)|
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   /                      Virtual IP Address                       /
+   |                      Virtual IP Address                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Virtual IP Address                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                      Virtual IP Address                       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |      Virtual IP Address       |
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 The Version is 2. The Op Codes are HSRPv1's: Hello (0), Coup (1) and
@@ -183,7 +189,8 @@ buffer, which a walk ends at the end of the UDP datagram, so
 Construction checks that each field fits, that the Group is at most
 4095, the IP Version 4 or 6 and the address of that version, and that
 the message opens with a Group State TLV; it accepts a Version, Op Code
-or State decode rejects.
+or State decode rejects. A Group State TLV built without
+``virtual_ip_padding`` gets 12 zero bytes for IPv4 and none for IPv6.
 """
 
 from __future__ import annotations
@@ -725,10 +732,12 @@ class HSRPv2GroupState:
         for ``ip_version`` 4, RFC 5952 text for 6.
     :param virtual_ip_padding: The 12 bytes of the Virtual IP Address
         field after an IPv4 address, kept raw; ``b""`` for IPv6, whose
-        address fills the field.
+        address fills the field. ``None``, the default, stands for
+        ``bytes(12)`` for IPv4 and ``b""`` for IPv6, and the field holds
+        that value once constructed.
     :raises InvalidFieldError: if an integer field does not fit its
         width, ``group`` exceeds 4095, ``ip_version`` is neither 4 nor
-        6, ``virtual_ip`` is not an address of that version, or
+        6, ``virtual_ip`` is not an address of that version, or a given
         ``virtual_ip_padding`` is not 12 bytes for IPv4 and empty for
         IPv6.
     :raises InvalidMACAddressError: if ``identifier`` is not a MAC
@@ -747,13 +756,17 @@ class HSRPv2GroupState:
     hellotime: int
     holdtime: int
     virtual_ip: str
-    virtual_ip_padding: bytes
+    virtual_ip_padding: bytes | None = None
 
     #: The TLV's Type.
     type: ClassVar[int] = _GROUP_STATE_TYPE
 
     def __post_init__(self) -> None:
-        """Check each field's width and the address's form."""
+        """Check each field's width and the address's form.
+
+        A ``virtual_ip_padding`` of ``None`` is replaced by the padding
+        of its IP Version: ``bytes(12)`` for IPv4, ``b""`` for IPv6.
+        """
         owner = type(self)
         for name in ("version", "opcode", "state", "ip_version"):
             _check_width(owner, name, getattr(self, name), 8)
@@ -786,14 +799,18 @@ class HSRPv2GroupState:
         else:
             _check_ipv6(owner, self.virtual_ip)
             padding = 0
-        _check_len(
-            owner, "virtual_ip_padding", self.virtual_ip_padding, padding
-        )
+        fill = self.virtual_ip_padding
+        if fill is None:
+            fill = bytes(padding)
+            object.__setattr__(self, "virtual_ip_padding", fill)
+        _check_len(owner, "virtual_ip_padding", fill, padding)
 
     def __bytes__(self) -> bytes:
         """Serialize the TLV: Type, Length, then its 40 bytes of value."""
         if self.ip_version == 4:
-            address = ipv4_to_bytes(self.virtual_ip) + self.virtual_ip_padding
+            address = ipv4_to_bytes(self.virtual_ip) + cast(
+                bytes, self.virtual_ip_padding
+            )
         else:
             address = ipv6_to_bytes(self.virtual_ip)
         return _GROUP_STATE.pack(
@@ -844,9 +861,15 @@ class HSRPv2GroupState:
         ``00:00:0c:9f:f`` and the group number in three hex digits for
         an IPv4 group, ``"00:00:0c:9f:f0:01"`` for group 1, and
         ``00:05:73:a0:0`` and the group number for an IPv6 group,
-        ``"00:05:73:a0:00:01"`` for group 1: the ranges Cisco's HSRP
-        configuration guides give HSRPv2 and HSRP for IPv6. Never
-        raises.
+        ``"00:05:73:a0:00:01"`` for group 1: the ranges Cisco gives
+        HSRPv2 over IPv4, 0000.0C9F.F000-0000.0C9F.FFFF (Cisco's
+        "Configuring HSRP" chapter for the Nexus 3000 Series, read
+        2026-11-06,
+        https://www.cisco.com/en/US/docs/switches/datacenter/nexus3000/sw/unicast/l3_hsrp.html),
+        and HSRP for IPv6, 0005.73A0.0000-0005.73A0.0FFF (Cisco IOS's
+        "HSRP for IPv6", read 2026-11-06,
+        https://www.cisco.com/en/US/docs/ios-xml/ios/ipapp_fhrp/configuration/15-s/ip6-fhrp-hsrp.html).
+        Never raises.
         """
         prefix = _V2_VIRTUAL_MAC_PREFIXES[self.ip_version]
         digits = f"{self.group:03x}"

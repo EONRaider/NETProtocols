@@ -1061,7 +1061,10 @@ The values are also hard-coded, independently, in
   with `struct` and `socket` in the layout of Wireshark's
   `epan/dissectors/packet-hsrp.c` (commit 6f7207a6), each labelled as
   hand-built; tshark 4.2.2 decodes the five of `tests/test_hsrpv2.py`'s
-  `VECTORS` as HSRPv2 with the fields the tests expect. That is the
+  `VECTORS` as HSRPv2 with the fields the tests expect. It dissects the
+  same layout: packet-hsrp.c at tag v4.2.2 differs from 6f7207a6's only
+  in C type names, one `col_` call and the display length of two TLV
+  items, which 6f7207a6 changed. That is the
   dissector's reading, not a router's: nothing here shows what a Cisco
   router puts in the 12 bytes after an IPv4 virtual address, which
   States it sends, or whether it sends other TLVs. `check_fixtures`

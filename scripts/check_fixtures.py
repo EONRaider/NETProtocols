@@ -1711,7 +1711,11 @@ def _check_hsrpv2(
     counts the value alone and the value, the first a Group State TLV
     (Type 1), and every Group State, Interface State, Text
     Authentication and MD5 Authentication TLV of the length
-    packet-hsrp.c reads (40, 4, 8 and 28). Each Group State TLV must
+    packet-hsrp.c reads (40, 4, 8 and 28). The Interface State TLV's
+    length is judged as packet-hsrp.c lays it out, an Active Groups
+    and a Passive Groups count of 2 bytes each, although
+    ``netprotocols.HSRPv2`` keeps that TLV raw at any length. Each
+    Group State TLV must
     hold Version 2, an Op Code of Hello, Coup or Resign, a State
     packet-hsrp.c defines, the IP Version of the IP header carrying it
     and a Group of at most 4095, and in a Hello a Hold Time above the

@@ -12,9 +12,10 @@ struct and socket rather than by the library, in the layout of
 Wireshark's epan/dissectors/packet-hsrp.c (commit 6f7207a6): the Group
 State TLV as its lines 53-78 draw it and lines 479-543 read it, the Text
 Authentication TLV as lines 89-98 and 565-587, the MD5 Authentication
-TLV as lines 100-119 and 319-344, and the walk of lines 474-601. tshark
-4.2.2 decodes the five VECTORS, wrapped in the frames ipv4_frame() and
-ipv6_frame() build, as HSRPv2 with these fields (see CHANGELOG.md).
+TLV as lines 100-119 and 319-344, and the walk of lines 474-601. The
+tests check that each of the five VECTORS decodes to the fields
+packet-hsrp.c reads from it, alone and wrapped in the frames
+ipv4_frame() and ipv6_frame() build.
 """
 
 import socket
@@ -98,8 +99,8 @@ MD5_AUTH = (
 #: passive), which HSRPv2 keeps raw.
 INTERFACE_STATE = bytes([2, 4]) + struct.pack("!HH", 1, 0)
 
-#: The HAND-BUILT vectors tshark 4.2.2 decodes as HSRPv2, by name: the
-#: IP version of the frame each travels in, and the message.
+#: The HAND-BUILT vectors in packet-hsrp.c's layout, by name: the IP
+#: version of the frame each travels in, and the message.
 VECTORS = {
     "v4_hello_text": (4, group_state() + TEXT_AUTH),
     "v4_coup_md5": (
@@ -251,8 +252,7 @@ EXPECTED = {
 
 
 class TestVectors:
-    """Each vector's fields, as packet-hsrp.c reads them and tshark 4.2.2
-    showed them."""
+    """Each vector's fields, as packet-hsrp.c reads them."""
 
     @pytest.mark.parametrize("name", list(VECTORS))
     def test_each_vector_decodes_to_its_fields(self, name):
@@ -287,9 +287,8 @@ class TestVectors:
 
     @pytest.mark.parametrize("name", list(VECTORS))
     def test_each_vector_walks_to_hsrpv2(self, name):
-        """Ethernet/IPv4/UDP 1985 and Ethernet/IPv6/UDP 2029, the
-        frames tshark read, both end in an HSRPv2 layer that takes the
-        rest of the frame."""
+        """Ethernet/IPv4/UDP 1985 and Ethernet/IPv6/UDP 2029 both end
+        in an HSRPv2 layer that takes the rest of the frame."""
         family, raw = VECTORS[name]
         frame = (ipv4_frame if family == 4 else ipv6_frame)(raw)
         packet = decode_frame(frame)
@@ -646,6 +645,69 @@ class TestConstruction:
         with pytest.raises(InvalidFieldError) as caught:
             state_of(ip_version=6, virtual_ip=V6_VIP)
         assert caught.value.field == "virtual_ip_padding"
+
+    @staticmethod
+    def built(**fields: object) -> HSRPv2GroupState:
+        """An Active IPv4 Hello for group 1, built with ``fields``."""
+        defaults: dict[str, object] = {
+            "version": 2,
+            "opcode": 0,
+            "state": 6,
+            "ip_version": 4,
+            "group": 1,
+            "identifier": IDENTIFIER,
+            "priority": 100,
+            "hellotime": 3000,
+            "holdtime": 10000,
+            "virtual_ip": "192.0.2.1",
+        }
+        return HSRPv2GroupState(**{**defaults, **fields})
+
+    def test_an_ipv4_group_state_without_padding_gets_12_zero_bytes(self):
+        state = self.built()
+        assert state.virtual_ip_padding == bytes(12)
+        assert state == self.built(virtual_ip_padding=None)
+        assert state == self.built(virtual_ip_padding=bytes(12))
+        assert hash(state) == hash(self.built(virtual_ip_padding=bytes(12)))
+        assert state == HSRPv2.decode(HELLO).group_state
+        assert bytes(state) == HELLO
+
+    def test_an_ipv6_group_state_without_padding_gets_none(self):
+        state = self.built(ip_version=6, virtual_ip=V6_VIP)
+        assert state.virtual_ip_padding == b""
+        assert state == self.built(
+            ip_version=6, virtual_ip=V6_VIP, virtual_ip_padding=b""
+        )
+        assert bytes(state) == VECTORS["v6_hello"][1]
+
+    def test_given_padding_is_kept(self):
+        state = self.built(virtual_ip_padding=bytes(range(1, 13)))
+        assert state.virtual_ip_padding == bytes(range(1, 13))
+        assert bytes(state)[30:] == bytes(range(1, 13))
+        assert state != self.built()
+
+    @pytest.mark.parametrize(
+        "ip_version,virtual_ip,padding",
+        [
+            (4, "192.0.2.1", b""),
+            (4, "192.0.2.1", bytes(11)),
+            (4, "192.0.2.1", bytes(13)),
+            (6, V6_VIP, bytes(12)),
+            (6, V6_VIP, b"\x00"),
+        ],
+    )
+    def test_given_padding_of_another_length(
+        self, ip_version, virtual_ip, padding
+    ):
+        with pytest.raises(InvalidFieldError) as caught:
+            self.built(
+                ip_version=ip_version,
+                virtual_ip=virtual_ip,
+                virtual_ip_padding=padding,
+            )
+        assert caught.value.field == "virtual_ip_padding"
+        assert caught.value.expected == (12 if ip_version == 4 else 0)
+        assert caught.value.actual == len(padding)
 
     def test_construction_accepts_what_decode_rejects(self):
         """Any Version, Op Code or State that fits its byte builds, and
