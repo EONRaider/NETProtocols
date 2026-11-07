@@ -71,6 +71,7 @@ class TestTruncation:
             (STUN, "raw_stun_message"),
             (NTP, "raw_ntp_message"),
             (HSRP, "raw_hsrp_hello"),
+            (HSRP, "raw_hsrp_md5_hello"),
             (HSRPAdvertise, "raw_hsrp_advertise"),
             (HSRPv2, "raw_hsrpv2_hello"),
             (TLS, "raw_tls_client_hello"),
@@ -442,21 +443,54 @@ class TestDamagedPayload:
         [
             pytest.param(b"\xde\xad\xbe\xef", id="fcs"),
             pytest.param(bytes(26), id="padding"),
-            pytest.param(b"\x04\x1c\x01\x00" + bytes(26), id="md5-tlv"),
+            pytest.param(bytes(30), id="50-bytes-type-0"),
+            pytest.param(b"\x04\x1b" + bytes(28), id="50-bytes-length-27"),
+            pytest.param(b"\x04\x1c" + bytes(27), id="49-bytes"),
+            pytest.param(b"\x04\x1c" + bytes(29), id="51-bytes"),
         ],
     )
     def test_hsrp_leaves_what_follows_its_message(
         self, raw_hsrp_hello, trailer, lax
     ):
-        """HSRP has no length field and needs none: its message is
-        always 20 bytes, so an FCS, zero bytes or the MD5 Authentication
-        TLV some Cisco releases append are left undecoded."""
+        """HSRP has no length field: its message is 20 bytes unless the
+        buffer is exactly 50 and bytes 20-21 are 04 1c, so an FCS, zero
+        bytes, a 30-byte TLV of another Type or Length, and a 04 1c TLV
+        in a buffer of 49 or 51 bytes are left undecoded."""
         raw = raw_hsrp_hello + trailer
         packet = decode_frame(raw, start=HSRP, lax=lax)
         assert [type(layer) for layer in packet] == [HSRP]
         assert packet.stopped_by is None
         assert packet.consumed == 20
+        assert packet[HSRP].md5_authentication is None
         assert bytes(packet) == raw_hsrp_hello
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_an_hsrp_md5_authentication_tlv_round_trips(
+        self, raw_hsrp_md5_hello, lax
+    ):
+        """A 50-byte HSRPv1 message whose bytes 20-21 are Type 4 and
+        Length 28 is one layer of 50 bytes, its MD5 Authentication TLV
+        decoded, and bytes() gives back all 50."""
+        packet = decode_frame(raw_hsrp_md5_hello, start=HSRP, lax=lax)
+        assert [type(layer) for layer in packet] == [HSRP]
+        assert packet.stopped_by is None
+        assert packet.consumed == 50
+        assert packet[HSRP].header_len == 50
+        assert packet[HSRP].md5_authentication is not None
+        assert bytes(packet) == raw_hsrp_md5_hello
+        assert HSRP.decode(bytes(packet[HSRP])) == packet[HSRP]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_an_hsrp_md5_message_leaves_an_fcs_after_it(
+        self, raw_hsrp_md5_hello, lax
+    ):
+        """Decoded from a buffer of 54 bytes, the message is not exactly
+        50 long, so the TLV stays outside the layer with what follows."""
+        raw = raw_hsrp_md5_hello + b"\xde\xad\xbe\xef"
+        packet = decode_frame(raw, start=HSRP, lax=lax)
+        assert packet.consumed == 20
+        assert packet[HSRP].md5_authentication is None
+        assert bytes(packet) == raw_hsrp_md5_hello[:20]
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(

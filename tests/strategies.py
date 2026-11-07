@@ -1215,7 +1215,9 @@ def hsrp_messages(draw: st.DrawFn) -> HSRP:
     # but the three decode() judges: Version 0, an Op Code of 0-2 and
     # one of RFC 2281's six States (the constructor accepts others;
     # test_hsrp.py covers those). The Authentication Data is any 8
-    # bytes, not only a password.
+    # bytes, not only a password. The MD5 Authentication TLV is absent
+    # or any one: decode() reads it back from the 50 bytes whatever its
+    # fields hold.
     return HSRP(
         version=0,
         opcode=draw(st.integers(0, 2)),
@@ -1227,6 +1229,7 @@ def hsrp_messages(draw: st.DrawFn) -> HSRP:
         reserved=draw(st.integers(0, 0xFF)),
         auth_data=draw(st.binary(min_size=8, max_size=8)),
         virtual_ip=draw(ipv4_strings()),
+        md5_authentication=draw(st.none() | hsrpv2_md5_authentications()),
     )
 
 

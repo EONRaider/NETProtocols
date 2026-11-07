@@ -32,7 +32,7 @@ from ipaddress import IPv6Address
 from pathlib import Path
 
 import pytest
-from hypothesis import event, example, given
+from hypothesis import assume, event, example, given
 from hypothesis import strategies as st
 
 from conftest import (
@@ -1894,6 +1894,18 @@ _HSRP_MESSAGES = [
     for auth in (b"cisco\x00\x00\x00", b"spark\x00\x00\x00", bytes(8))
 ]
 
+#: A hand-built MD5 Authentication TLV in the layout of Wireshark's
+#: packet-hsrp.c: Type 4, Length 28, Algorithm 1, Padding 0, Flags 0,
+#: the sender's address 192.0.2.11, Key ID 1 and a 16-byte digest.
+_HSRP_MD5_TLV = bytes.fromhex("041c 01 00 0000 c000020b 00000001") + bytes(
+    range(16)
+)
+
+#: The values the Type and Length bytes of an MD5 Authentication TLV
+#: are redrawn from: the ones decode() reads it at, the ones beside
+#: them, and a few others.
+_hsrp_md5_lead = st.sampled_from([0, 3, 4, 5, 27, 28, 29, 255])
+
 #: The values HSRP.decode() weighs in its first three bytes, the ones
 #: either side of what it accepts among them, and a few others.
 _hsrp_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 8, 15, 16, 17, 255])
@@ -1901,17 +1913,24 @@ _hsrp_lead = st.sampled_from([0, 1, 2, 3, 4, 5, 8, 15, 16, 17, 255])
 
 @st.composite
 def _hsrp_seeded(draw: st.DrawFn) -> bytes:
-    """A constructed HSRP message, now and then a Version, Op Code or
-    State redrawn near the values decode() accepts and a later byte
-    changed, cut anywhere and followed by nothing, an FCS-like 4 bytes
-    or free bytes: the guard's boundaries, which free bytes rarely
-    reach, and every length."""
+    """A constructed HSRP message, half the time with an MD5
+    Authentication TLV after it whose Type and Length are now and then
+    redrawn near the ones decode() reads it at, now and then a Version,
+    Op Code or State redrawn near the values decode() accepts and a
+    later byte changed, cut anywhere and followed by nothing, an
+    FCS-like 4 bytes or free bytes: the guard's boundaries, the 50-byte
+    rule's, which free bytes rarely reach, and every length."""
     raw = bytearray(draw(st.sampled_from(_HSRP_MESSAGES)))
+    if draw(st.booleans()):
+        raw += _HSRP_MD5_TLV
+        for position in (20, 21):
+            if draw(st.integers(0, 3)) == 0:
+                raw[position] = draw(_hsrp_md5_lead)
     for position in range(3):
         if draw(st.integers(0, 3)) == 0:
             raw[position] = draw(_hsrp_lead)
     if draw(st.booleans()):
-        raw[draw(st.integers(3, 19))] = draw(st.integers(0, 255))
+        raw[draw(st.integers(3, len(raw) - 1))] = draw(st.integers(0, 255))
     cut = draw(st.integers(0, len(raw)))
     tail = draw(
         st.one_of(
@@ -1931,6 +1950,7 @@ _HSRP_ACCESSORS = (
     "is_default_auth",
     "virtual_mac",
     "header_len",
+    "md5_authentication",
 )
 
 
@@ -1964,32 +1984,57 @@ class TestHSRPAccessorSafety:
     def test_decode_and_every_accessor_are_total(self, data: bytes) -> None:
         """decode() raises only for the first reason that applies (a
         Version other than 0, then an Op Code outside 0-2, then an
-        unknown State, at any length, then too short), takes exactly 20
-        bytes and leaves the rest; the accessors never raise."""
+        unknown State, at any length, then too short), takes all 50
+        bytes of a 50-byte buffer whose bytes 20-21 are 04 1c and
+        exactly 20 of any other, and leaves the rest; the accessors
+        never raise."""
         hsrp = _hsrp_decode(data)
         if not isinstance(hsrp, HSRP):
             assert hsrp == _hsrp_rejection(data)
             event(f"HSRP rejected: {hsrp}")
             return
         assert _hsrp_rejection(data) is None
-        assert bytes(hsrp) == data[:20]
+        md5 = len(data) == 50 and data[20:22] == b"\x04\x1c"
+        assert hsrp.header_len == (50 if md5 else 20)
+        assert (hsrp.md5_authentication is not None) is md5
+        assert bytes(hsrp) == data[: hsrp.header_len]
         assert HSRP.decode(bytes(hsrp)) == hsrp
-        assert hsrp.header_len == 20
         for name in _HSRP_ACCESSORS:
             getattr(hsrp, name)
+        if hsrp.md5_authentication is not None:
+            assert bytes(hsrp.md5_authentication) == data[20:]
+            assert hsrp.md5_authentication.algorithm_name
         assert hsrp.virtual_mac.endswith(f":{hsrp.group:02x}")
         assert hsrp.password == hsrp.auth_data.rstrip(b"\x00")
         event(f"HSRP {hsrp.opcode_name} in {hsrp.state_name}")
+        event(f"HSRP MD5 Authentication TLV: {md5}")
 
     @given(header=hsrp_messages(), trailer=st.binary(max_size=60))
     def test_trailing_bytes_stay_out_of_the_message(
         self, header: HSRP, trailer: bytes
     ) -> None:
-        """The message is always 20 bytes, so whatever follows (an FCS,
-        an MD5 Authentication TLV, anything) is left undecoded."""
-        decoded = HSRP.decode(bytes(header) + trailer)
-        assert decoded == header
+        """Short of a 30-byte trailer opening with 04 1c, which is the
+        MD5 Authentication TLV, the 20 bytes are the message, whatever
+        follows them (an FCS, a TLV in a buffer of another length,
+        anything); a message with the TLV followed by any byte keeps
+        only its 20."""
+        bare = replace(header, md5_authentication=None)
+        assume(len(trailer) != 30 or trailer[:2] != b"\x04\x1c")
+        decoded = HSRP.decode(bytes(bare) + trailer)
+        assert decoded == bare
         assert decoded.header_len == 20
+        if header.md5_authentication is not None and trailer:
+            assert HSRP.decode(bytes(header) + trailer) == bare
+
+    @given(header=hsrp_messages())
+    def test_a_message_with_the_md5_tlv_round_trips(self, header: HSRP) -> None:
+        """A message built with any MD5 Authentication TLV is 50 bytes,
+        and decode() reads all 50 back, the TLV with them."""
+        raw = bytes(header)
+        assert len(raw) == header.header_len
+        assert len(raw) == (20 if header.md5_authentication is None else 50)
+        assert HSRP.decode(raw) == header
+        assert HSRP.decode(memoryview(raw)) == header
 
     @given(
         opcode=st.integers(3, 0xFF),

@@ -334,6 +334,21 @@ def raw_hsrp_hello() -> bytes:
 
 
 @pytest.fixture
+def raw_hsrp_md5_hello() -> bytes:
+    """A hand-built 50-byte HSRPv1 Hello carrying the MD5 Authentication
+    TLV, in the layout of Wireshark's packet-hsrp.c: ``raw_hsrp_hello``'s
+    fields but Authentication Data of 8 NUL bytes, then Type 4, Length
+    28, Algorithm 1 (MD5), Padding 0, Flags 0, the sender's address
+    192.0.2.11, Key ID 1 and the 16-byte digest 00 01 ... 0f. No capture
+    holds the TLV."""
+    return (
+        bytes.fromhex("000004030a640100 0000000000000000 c0000201")
+        + bytes.fromhex("041c 01 00 0000 c000020b 00000001")
+        + bytes(range(16))
+    )
+
+
+@pytest.fixture
 def raw_hsrp_advertise() -> bytes:
     """A hand-built HSRP interface-state Advertise in the layout of
     Wireshark's packet-hsrp.c: Version 0, Op Code 3, TLV Type 1 (HSRP
