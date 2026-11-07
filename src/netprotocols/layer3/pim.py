@@ -1109,16 +1109,22 @@ def _hello_end(body: bytes) -> int | None:
         option_type, length = _OPTION_HEADER.unpack_from(body, cursor)
         end = cursor + _OPTION_HEADER.size + length
         if end > len(body):
-            return cursor if cursor >= zero_tail else None
+            # A Length that runs past the body is nonzero, so the cursor
+            # is before the zero tail, where _parse_hello raises.
+            return None
         if option_type == 0 and cursor >= zero_tail:
             return cursor
         cursor = end
     return cursor
 
 
-def _register_end(body: bytes) -> int:
-    """Return where :func:`_parse_register` ends a Register: all of it."""
-    return len(body)
+def _register_end(body: bytes) -> int | None:
+    """Return where :func:`_parse_register` ends a Register, or ``None``.
+
+    That is all of it, and ``None`` for a body shorter than the 4-byte
+    Register header, where it raises.
+    """
+    return len(body) if len(body) >= _UINT32.size else None
 
 
 def _register_stop_end(body: bytes) -> int | None:
