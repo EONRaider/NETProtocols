@@ -15,9 +15,10 @@ export PREV=A.B.C   # the latest released version, e.g. 2.9.0
 export REPO=EONRaider/NETProtocols
 ```
 
-Later command blocks set `MS`, `CHECKED`, `BODY`, `PR`, `HEAD_SHA`,
+Later command blocks set `MS`, `CANDIDATE`, `BODY`, `PR`, `HEAD_SHA`,
 `SHA`, `T0`, `FUZZ_RUN`, `MUT_RUN` and `RUN` where they are first
-needed, and the blocks after them reuse those values.
+needed, and the blocks after them reuse those values. `CHECKED` is set
+by hand, to `CANDIDATE`, once step 3's item 3 result is accepted.
 
 The blocks assume bash. zsh does not word-split an unquoted `$runs`, so
 step 11's guard would treat every run ID as one.
@@ -167,13 +168,15 @@ until the slowdown is fixed or accepted.
    merge-base, so slowdowns under its threshold can add up across a
    release. `scripts/benchmark_ab.py` compares the working tree's `src`,
    so the tree must be clean, with `v$PREV`'s, under item 2's load gate
-   and core. `CHECKED` keeps the commit measured, for step 8. The first
+   and core. `CANDIDATE` is the commit measured; once the result is
+   accepted (exit 0, or an exit 1 the maintainer accepts), run
+   `CHECKED=$CANDIDATE`, which steps 4 and 8 compare against. The first
    run is a noise run, the head against itself; the second is the check:
 
    ```bash
    git status --porcelain                                 # nothing
-   git describe --tags --abbrev=0                         # v$PREV
-   CHECKED=$(git rev-parse HEAD) && echo "CHECKED=$CHECKED"
+   git merge-base --is-ancestor "v$PREV" HEAD && echo ok  # ok
+   CANDIDATE=$(git rev-parse HEAD) && echo "CANDIDATE=$CANDIDATE"
    for base in HEAD "v$PREV"; do
      until awk '{ exit !($1 < 1.0) }' /proc/loadavg; do sleep 15; done
      taskset -c 2 uv run --frozen --group bench python scripts/benchmark_ab.py \
@@ -198,8 +201,11 @@ until the slowdown is fixed or accepted.
      measure no figure and make no release commit. A frame the base
      decodes less deeply stays in the timing, so a release that adds or
      deepens decoders can exit 1 for doing more work. This prints how
-     many frames both trees decode and each tree's layers on them, the
-     base's first; equal layers rule that cause out:
+     many frames both trees decode, how many of them have a different
+     layer count in the two trees, and each tree's total layers, the
+     base's first. That cause is ruled out only when the count with a
+     different depth is 0; when it is not, look at those frames before
+     treating the exit 1 as a slowdown:
 
      ```bash
      depth() { uv run --frozen python -I -S -B -c 'import sys
@@ -214,7 +220,8 @@ until the slowdown is fixed or accepted.
              print(-1)' "$1"; }
      d=$(mktemp -d) && git archive "v$PREV" src | tar -x -C "$d" &&
        paste <(depth "$d/src") <(depth src) | awk '$1 >= 0 && $2 >= 0 {
-         n++; b += $1; h += $2 } END { print n, "frames, layers:", b, h }'
+         n++; diff += $1 != $2; b += $1; h += $2 } END {
+         print n + 0, "frames,", diff + 0, "with a different depth; layers:", b + 0, h + 0 }'
      [ -z "$d" ] || rm -rf -- "$d"
      ```
 
@@ -307,11 +314,18 @@ One commit holds the release change, in these six files.
    follow-up). Step 8 builds it again from the commit to be tagged when
    that is a later `master` commit.
 
-Review fixes go on the branch as further commits; after each one, run
-`git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" HEAD -- src`,
-and if it exits 1, `src` changed in more than the version line since
-step 3's item 3 measured it, so run item 3 again on the branch head and
-update its CLAIMS row and the CHANGELOG entry from that rerun.
+Review fixes go on the branch as further commits; after each one, run:
+
+```bash
+git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" HEAD -- \
+  src tests/fixtures scripts/benchmark_ab.py \
+  scripts/_benchmark_ab_worker.py scripts/_pcap.py
+```
+
+If it exits 1, the benchmark's inputs changed in more than the version
+line since `CHECKED`, so run item 3 again on the branch head, set
+`CHECKED` again once its result is accepted, and update its CLAIMS row
+and the CHANGELOG entry from that rerun.
 
 ## 5. Run the QA ladder
 
@@ -523,22 +537,26 @@ The `awk` program is `release.yml`'s own. The workflow runs it only after
 the PyPI upload, so a missing section caught there leaves a published
 version without a GitHub release.
 
-Step 3's item 3 measured `CHECKED` (its CLAIMS row names the commit,
-if the shell has lost it), and review fixes, gate fixes or a later
-`master` commit can change `src` after it. Compare the two, ignoring the
-version line, which step 4 changes:
+`CHECKED` is the commit of step 3's item 3 last accepted result (its
+CLAIMS row names the commit, if the shell has lost it), and review
+fixes, gate fixes or a later `master` commit can change the benchmark's
+inputs after it: `src`, the `tests/fixtures` corpus and the scripts that
+read and time it. Compare the two, ignoring the version line, which
+step 4 changes:
 
 ```bash
-git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" "$SHA" -- src
+git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" "$SHA" -- \
+  src tests/fixtures scripts/benchmark_ab.py \
+  scripts/_benchmark_ab_worker.py scripts/_pcap.py
 echo "exit: $?"
 ```
 
-Exit 0 means `src` is unchanged and the check stands. Exit 1 means it
-changed, and lists the files: run item 3 again on `$SHA`
-(`git switch --detach "$SHA"`, then item 3's block, which sets `CHECKED`
-to `$SHA`), and do not tag on a check that exits 1: fix it on
-`master` as in step 7's gate fixes, or have the maintainer accept it,
-as item 3 says.
+Exit 0 means the inputs are unchanged and the check stands. Exit 1
+means they changed, and lists the files: run item 3 again on `$SHA`
+(`git switch --detach "$SHA"`, then item 3's block), set
+`CHECKED=$CANDIDATE` once its result is accepted, and do not tag on a
+check that exits 1 unaccepted: fix it on `master` as in step 7's gate
+fixes, or have the maintainer accept it, as item 3 says.
 When the result differs from the CLAIMS row and the CHANGELOG entry,
 correct them as in step 7's gate fixes and come back to this step with
 `SHA` set to the new commit. Exit 128 means `CHECKED` or `SHA` is empty
