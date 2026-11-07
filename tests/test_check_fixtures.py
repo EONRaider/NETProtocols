@@ -1179,7 +1179,8 @@ def _() -> tuple[bytes, bytes]:
 
 @case("hsrp-version")
 def _() -> tuple[bytes, bytes]:
-    return hsrp(0, 1)
+    # 1 would open an HSRPv2 message, which _check_hsrpv2 reads instead.
+    return hsrp(0, 2)
 
 
 @case("hsrp-op-code")
@@ -1205,6 +1206,148 @@ def _() -> tuple[bytes, bytes]:
 @case("hsrp-auth-data")
 def _() -> tuple[bytes, bytes]:
     return hsrp(8, 1)
+
+
+def hsrpv2_group_state(
+    *, ip_version: int = 4, address: bytes = bytes([192, 0, 2, 1]) + bytes(12)
+) -> bytes:
+    """A hand-built HSRPv2 Group State TLV in the layout of Wireshark's
+    packet-hsrp.c: Type 1, Length 40, Version 2, a Hello (Op Code 0) in
+    Active (6), group 1, an Identifier, priority 100, Hello Time 3000
+    and Hold Time 10000 ms and the 16-byte Virtual IP Address field."""
+    return (
+        bytes([1, 40, 2, 0, 6, ip_version])
+        + struct.pack("!H", 1)
+        + bytes.fromhex("02000a09c30b")
+        + struct.pack("!III", 100, 3000, 10000)
+        + address
+    )
+
+
+#: A hand-built Text Authentication TLV: Type 3, Length 8, "cisco".
+HSRPV2_TEXT = bytes([3, 8]) + b"cisco\x00\x00\x00"
+
+
+def hsrpv2_v4(payload: bytes, ports: tuple[int, int] = (1985, 1985)) -> bytes:
+    """``payload`` as the UDP payload of ``HSRP_HELLO``'s Ethernet and
+    IPv4 headers, between ``ports``, every length and checksum
+    recomputed."""
+    at = l4(HSRP_HELLO)
+    udp = struct.pack("!HHHH", *ports, 8 + len(payload), 1) + payload
+    frame = put(
+        HSRP_HELLO[:at] + udp, 16, struct.pack("!H", at - 14 + len(udp))
+    )
+    return reseal(frame)
+
+
+def hsrpv2_v6(payload: bytes, ports: tuple[int, int] = (2029, 2029)) -> bytes:
+    """``payload`` in Ethernet, IPv6 (fe80::a:9c3:b to ff02::66) and UDP
+    between ``ports``, its checksum computed."""
+    src = bytes.fromhex("fe80000000000000000000000a09c30b")
+    dst = bytes.fromhex("ff020000000000000000000000000066")
+    udp = struct.pack("!HHHH", *ports, 8 + len(payload), 0) + payload
+    pseudo = src + dst + struct.pack("!IxxxB", len(udp), 17)
+    checksum = internet_checksum(pseudo + udp) or 0xFFFF
+    udp = put(udp, 6, struct.pack("!H", checksum))
+    ipv6 = struct.pack("!IHBB", 0x60000000, len(udp), 17, 255) + src + dst
+    return bytes.fromhex("333300000066 02000a09c30b 86dd") + ipv6 + udp
+
+
+#: Hand-built HSRPv2 messages: an IPv4 Hello with a Text Authentication
+#: TLV, and an HSRP for IPv6 Hello.
+HSRPV2_V4 = hsrpv2_group_state() + HSRPV2_TEXT
+HSRPV2_V6 = hsrpv2_group_state(
+    ip_version=6, address=bytes.fromhex("fe80000000000000000573fffea00001")
+)
+
+
+def hsrpv2(offset: int, value: bytes) -> tuple[bytes, bytes]:
+    """The IPv4 HSRPv2 frame and a copy with ``value`` at ``offset`` of
+    its message."""
+    return hsrpv2_v4(HSRPV2_V4), hsrpv2_v4(put(HSRPV2_V4, offset, value))
+
+
+@case("hsrpv2-port")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRPV2_V4), hsrpv2_v4(HSRPV2_V4, (40000, 1985))
+
+
+@case("hsrpv2-port")
+def _() -> tuple[bytes, bytes]:
+    # HSRP for IPv6 uses 2029; 1985 over IPv6 is not it.
+    return hsrpv2_v6(HSRPV2_V6), hsrpv2_v6(HSRPV2_V6, (1985, 1985))
+
+
+@case("hsrpv2-tlv")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRPV2_V4), hsrpv2_v4(HSRPV2_V4 + b"\x02")
+
+
+@case("hsrpv2-tlv")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRPV2_V4), hsrpv2_v4(HSRPV2_V4 + b"\x02\x05\x00")
+
+
+@case("hsrpv2-group-state")
+def _() -> tuple[bytes, bytes]:
+    # Only port 2029 reads a message whose first byte is not 1 as HSRPv2.
+    return hsrpv2_v6(HSRPV2_V6), hsrpv2_v6(HSRPV2_TEXT + HSRPV2_V6)
+
+
+@case("hsrpv2-group-state")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v6(HSRPV2_V6), hsrpv2_v6(b"")
+
+
+@case("hsrpv2-tlv-length")
+def _() -> tuple[bytes, bytes]:
+    # The 8-byte Text Authentication TLV retyped as MD5's, which is 28.
+    return hsrpv2(42, b"\x04")
+
+
+@case("hsrpv2-version")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(2, b"\x03")
+
+
+@case("hsrpv2-op-code")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(3, b"\x03")
+
+
+@case("hsrpv2-state")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(4, b"\x07")
+
+
+@case("hsrpv2-ip-version")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(5, b"\x06")
+
+
+@case("hsrpv2-ip-version")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v6(HSRPV2_V6), hsrpv2_v6(put(HSRPV2_V6, 5, b"\x04"))
+
+
+@case("hsrpv2-group")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(6, struct.pack("!H", 4096))
+
+
+@case("hsrpv2-holdtime")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(22, struct.pack("!I", 3000))
+
+
+@case("hsrpv2-padding")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(41, b"\x01")
+
+
+@case("hsrpv2-auth-data")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2(44, b"\x01")
 
 
 # IPsec.
@@ -2110,6 +2253,18 @@ class TestRadiusDispatch:
         assert checker.check_frame(moved, stats) == ["hsrp-port"]
         assert stats["radius"] == 0
         assert stats["hsrp"] == 1
+
+    @pytest.mark.parametrize("port", [1812, 1813, 3799])
+    @pytest.mark.parametrize("source", [True, False])
+    def test_hsrp_for_ipv6_with_a_radius_port_is_read_as_hsrpv2(
+        self, port: int, source: bool
+    ) -> None:
+        ports = (port, 2029) if source else (2029, port)
+        moved = hsrpv2_v6(HSRPV2_V6, ports)
+        stats: Counter[str] = Counter()
+        assert checker.check_frame(moved, stats) == ["hsrpv2-port"]
+        assert stats["radius"] == 0
+        assert stats["hsrpv2"] == 1
 
     @pytest.mark.parametrize("port", [1812, 1813, 3799])
     @pytest.mark.parametrize("code", [0, 1, 4, 12, 40, 43, 255])

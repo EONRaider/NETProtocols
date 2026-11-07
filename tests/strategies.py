@@ -54,6 +54,11 @@ from netprotocols import (
     BGPPathAttribute,
     BGPPrefix,
     DNSOverTCP,
+    HSRPv2,
+    HSRPv2GroupState,
+    HSRPv2MD5Authentication,
+    HSRPv2TextAuthentication,
+    HSRPv2TLV,
     ICMPv4,
     ICMPv6,
     IPv4,
@@ -1225,6 +1230,66 @@ def hsrp_messages(draw: st.DrawFn) -> HSRP:
 
 
 @st.composite
+def hsrpv2_group_states(draw: st.DrawFn) -> HSRPv2GroupState:
+    # Canonical for decode(): Version 2, an Op Code of 0-2, a State of
+    # 0-6 and an IP Version of 4 or 6 (the constructor accepts other
+    # Versions, Op Codes and States; test_hsrpv2.py covers those), and
+    # 12 padding bytes after an IPv4 address, any value, or None, which
+    # construction replaces with 12 zero bytes for IPv4 and none for IPv6.
+    ip_version = draw(st.sampled_from([4, 6]))
+    padding: bytes | None
+    if ip_version == 4:
+        virtual_ip = draw(ipv4_strings())
+        padding = draw(st.none() | st.binary(min_size=12, max_size=12))
+    else:
+        virtual_ip = draw(ipv6_strings())
+        padding = draw(st.sampled_from([None, b""]))
+    return HSRPv2GroupState(
+        version=2,
+        opcode=draw(st.integers(0, 2)),
+        state=draw(st.integers(0, 6)),
+        ip_version=ip_version,
+        group=draw(st.integers(0, 4095)),
+        identifier=draw(mac_strings()),
+        priority=draw(st.integers(0, 2**32 - 1)),
+        hellotime=draw(st.integers(0, 2**32 - 1)),
+        holdtime=draw(st.integers(0, 2**32 - 1)),
+        virtual_ip=virtual_ip,
+        virtual_ip_padding=padding,
+    )
+
+
+@st.composite
+def hsrpv2_md5_authentications(draw: st.DrawFn) -> HSRPv2MD5Authentication:
+    return HSRPv2MD5Authentication(
+        algorithm=draw(st.integers(0, 0xFF)),
+        padding=draw(st.integers(0, 0xFF)),
+        flags=draw(st.integers(0, 0xFFFF)),
+        ip_address=draw(ipv4_strings()),
+        key_id=draw(st.integers(0, 2**32 - 1)),
+        digest=draw(st.binary(min_size=16, max_size=16)),
+    )
+
+
+@st.composite
+def hsrpv2_messages(draw: st.DrawFn) -> HSRPv2:
+    # A Group State TLV, then any mix of the four TLV classes; a raw TLV
+    # is any Type but the three typed ones, with any value.
+    later = st.one_of(
+        hsrpv2_group_states(),
+        st.binary(min_size=8, max_size=8).map(HSRPv2TextAuthentication),
+        hsrpv2_md5_authentications(),
+        st.builds(
+            HSRPv2TLV,
+            type=st.integers(0, 0xFF).filter(lambda t: t not in (1, 3, 4)),
+            value=st.binary(max_size=_MAX_BLOB),
+        ),
+    )
+    first = draw(hsrpv2_group_states())
+    return HSRPv2(tlvs=(first, *draw(st.lists(later, max_size=4))))
+
+
+@st.composite
 def tls_extensions(draw: st.DrawFn) -> TLSExtension:
     # Any type, any data: only server_name's data is ever parsed, and
     # its parse is on demand, so a malformed one still round-trips.
@@ -1320,6 +1385,7 @@ ROUND_TRIP_STRATEGIES: Mapping[str, st.SearchStrategy[Protocol]] = {
     "NTP": ntp_messages(),
     "NTPControl": ntp_control_messages(),
     "HSRP": hsrp_messages(),
+    "HSRPv2": hsrpv2_messages(),
     "TLS": tls_records(),
     "BGP": bgp_messages(),
 }

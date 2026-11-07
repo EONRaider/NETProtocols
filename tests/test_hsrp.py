@@ -2,10 +2,10 @@
 
 Covered: the 20-byte message, every Op Code and State, its round trips,
 truncation at every length, what follows it in the buffer, the
-decode-time guard against a wrong port guess (HSRPv2 and Cisco's Op
-Code 3 Advertise among what it rejects), the display helpers,
-construction, dispatch from UDP port 1985, and scripts/check_fixtures.py's
-HSRP checks.
+decode-time guard against a wrong port guess (HSRPv2, decoded
+directly, and Cisco's Op Code 3 Advertise among what it rejects), the
+display helpers, construction, dispatch from UDP port 1985, and
+scripts/check_fixtures.py's HSRP checks.
 
 The unit tests build their messages and frames here, byte by byte, so
 none of them depends on a capture. The Yersinia capture in
@@ -802,7 +802,7 @@ class TestDecodeGuard:
     @pytest.mark.parametrize(
         "payload,field",
         [
-            pytest.param(HSRPV2_HELLO, "version", id="hsrpv2"),
+            pytest.param(b"\x02" + HSRPV2_HELLO[1:], "version", id="version"),
             pytest.param(ADVERTISE, "opcode", id="advertise"),
         ],
     )
@@ -819,7 +819,7 @@ class TestDecodeGuard:
     @pytest.mark.parametrize(
         "payload",
         [
-            pytest.param(HSRPV2_HELLO, id="hsrpv2"),
+            pytest.param(b"\x02" + HSRPV2_HELLO[1:], id="version"),
             pytest.param(ADVERTISE, id="advertise"),
         ],
     )
@@ -1098,7 +1098,9 @@ class TestChecker:
             pytest.param(lambda raw: raw[:0], id="empty"),
             pytest.param(lambda raw: raw + b"\x00", id="21-bytes"),
             pytest.param(lambda raw: raw + MD5_TLV, id="md5-tlv"),
-            pytest.param(lambda raw: HSRPV2_HELLO, id="hsrpv2"),
+            pytest.param(
+                lambda raw: b"\x02" + HSRPV2_HELLO[1:], id="52-bytes-version-2"
+            ),
         ],
     )
     def test_a_message_not_20_bytes_fails_its_length(self, index, cut):
@@ -1125,7 +1127,6 @@ class TestChecker:
     @pytest.mark.parametrize(
         "position,value,failure",
         [
-            pytest.param(0, 1, "hsrp-version", id="version-1"),
             pytest.param(0, 2, "hsrp-version", id="version-2"),
             pytest.param(1, 3, "hsrp-op-code", id="advertise-op-code"),
             pytest.param(1, 0xFF, "hsrp-op-code", id="op-code-255"),
@@ -1212,7 +1213,7 @@ class TestChecker:
         both = retouched(frame, message[:19], src_port=1)
         assert self.check(both) == ["hsrp-length"]
         for first, second, failure in (
-            ((0, 1), (1, 3), "hsrp-version"),  # and Op Code 3
+            ((0, 2), (1, 3), "hsrp-version"),  # and Op Code 3
             ((7, 1), (4, 3), "hsrp-reserved"),  # and Holdtime 3
         ):
             alone = retouched(frame, changed(message, *second))
@@ -1231,7 +1232,7 @@ class TestChecker:
         """Every message counts as ``hsrp``; its Op Code's counter
         follows once the Op Code is known, so a later failure keeps it."""
         stats = self.checker.Counter()
-        for position, value in ((1, 3), (0, 1)):
+        for position, value in ((1, 3), (0, 2)):
             raw = changed(self.message_of(0), position, value)
             self.check(retouched(self.FRAMES[0], raw), stats)
         assert stats["hsrp"] == 2

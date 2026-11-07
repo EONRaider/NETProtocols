@@ -333,6 +333,22 @@ def raw_hsrp_hello() -> bytes:
     return bytes.fromhex("000004030a640100636973636f000000c0000201")
 
 
+@pytest.fixture
+def raw_hsrpv2_hello() -> bytes:
+    """A hand-built HSRPv2 Hello in the layout of Wireshark's
+    packet-hsrp.c: a Group State TLV (Version 2, Active, IPv4, group 1,
+    Identifier 02:00:0a:09:c3:0b, priority 100, Hello Time 3000 and Hold
+    Time 10000 ms, virtual IP 192.0.2.1 and 12 zero bytes) and a Text
+    Authentication TLV, ``cisco``. No capture holds HSRPv2."""
+    return (
+        bytes.fromhex("01280200060400010200 0a09c30b 00000064")
+        + bytes.fromhex("00000bb8 00002710 c0000201")
+        + bytes(12)
+        + bytes.fromhex("0308")
+        + b"cisco\x00\x00\x00"
+    )
+
+
 def tls_client_hello_record() -> bytes:
     """A constructed TLS record holding a ClientHello (RFC 9846 §4.2.2):
     record version 0x0301, ClientHello version 0x0303, a Random of

@@ -803,14 +803,19 @@ _STUN_PORT = 3478
 #: NTP's port (RFC 5905).
 _NTP_PORT = 123
 
-#: HSRP's port (RFC 2281 §5.1).
+#: HSRP's port (RFC 2281 §5.1), HSRPv2's over IPv4 too.
 _HSRP_PORT = 1985
+
+#: HSRP for IPv6's port, which carries the HSRPv2 format.
+_HSRP_V6_PORT = 2029
 
 #: The ports :func:`_check_udp_payload` dispatches on after RADIUS's: a
 #: datagram from or to one of them is not read as RADIUS, whatever its
 #: other port, so a reply of one of these protocols sent to a client
 #: whose ephemeral port is 1812, 1813 or 3799 is read as that protocol.
-_NON_RADIUS_PORTS = frozenset((_STUN_PORT, _NTP_PORT, _HSRP_PORT))
+_NON_RADIUS_PORTS = frozenset(
+    (_STUN_PORT, _NTP_PORT, _HSRP_PORT, _HSRP_V6_PORT)
+)
 
 
 def _check_udp_payload(
@@ -829,9 +834,11 @@ def _check_udp_payload(
     keyed authenticators (see :func:`_check_radius`), a STUN message's
     FINGERPRINT and MESSAGE-INTEGRITY (see :func:`_check_stun`), an NTP
     message's MAC (see :func:`_check_ntp`) or an HSRP message's fields
-    (see :func:`_check_hsrp`). A datagram is RADIUS when its server's
-    port (see :func:`_radius_server_port`) is a RADIUS port and neither
-    port is a STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
+    (see :func:`_check_hsrp` and, for an HSRPv2 message, which opens
+    with the byte 1 on port 1985 and is any message on port 2029,
+    :func:`_check_hsrpv2`). A datagram is RADIUS when its server's port
+    (see :func:`_radius_server_port`) is a RADIUS port and neither port
+    is a STUN, NTP or HSRP one (see :data:`_NON_RADIUS_PORTS`)."""
     src_port, dst_port = struct.unpack_from("!HH", datagram)
     if dst_port == _VXLAN_PORT:
         return _check_vxlan(datagram, stats, depth, strict=strict)
@@ -845,7 +852,12 @@ def _check_udp_payload(
         return _check_stun(datagram[8:end], stats, stream=False)
     if _NTP_PORT in (src_port, dst_port):
         return _check_ntp(datagram, stats)
+    if _HSRP_V6_PORT in (src_port, dst_port):
+        return _check_hsrpv2(src, datagram, stats)
     if _HSRP_PORT in (src_port, dst_port):
+        end = struct.unpack_from("!H", datagram, 4)[0]
+        if datagram[8:end][:1] == b"\x01":
+            return _check_hsrpv2(src, datagram, stats)
         return _check_hsrp(datagram, stats)
     return []
 
@@ -1650,9 +1662,8 @@ def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     a clear-text password, printable ASCII padded with NUL bytes. The
     Holdtime rule too is on what the sender transmitted, not on what a
     receiver requires: nothing in RFC 2281 tells a receiver to drop a
-    message that breaks it, or any of the conventions. HSRPv2, a
-    sequence of TLVs whose Group State TLV alone is 42 bytes, fails
-    too."""
+    message that breaks it, or any of the conventions. HSRPv2 is
+    checked by :func:`_check_hsrpv2` instead."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrp"] += 1
     if len(hsrp) != 20:
@@ -1676,6 +1687,99 @@ def _check_hsrp(datagram: bytes, stats: Counter[str]) -> list[str]:
     if not all(0x20 <= b < 0x7F for b in password):
         return ["hsrp-auth-data"]
     return []
+
+
+#: HSRPv2's States (Wireshark's packet-hsrp.c, ``HSRP2_STATE_*``):
+#: Disabled, Init, Learn, Listen, Speak, Standby and Active.
+_HSRPV2_STATES = range(7)
+
+#: The value length of each HSRPv2 TLV Type packet-hsrp.c reads at a
+#: fixed length: Group State, Interface State, Text Authentication and
+#: MD5 Authentication.
+_HSRPV2_TLV_LENGTHS = {1: 40, 2: 4, 3: 8, 4: 28}
+
+
+def _check_hsrpv2(
+    src: bytes, datagram: bytes, stats: Counter[str]
+) -> list[str]:
+    """Validate an HSRPv2 message, as Wireshark's packet-hsrp.c reads it.
+
+    HSRPv2 has no RFC and no checksum of its own, so, as for HSRPv1,
+    this checks the message's fields. Over IPv4 it must be sent from
+    and to port 1985 and over IPv6, as HSRP for IPv6, from and to port
+    2029. Its UDP payload must be whole TLVs, each a Type, a Length that
+    counts the value alone and the value, the first a Group State TLV
+    (Type 1), and every Group State, Interface State, Text
+    Authentication and MD5 Authentication TLV of the length
+    packet-hsrp.c reads (40, 4, 8 and 28). The Interface State TLV's
+    length is judged as packet-hsrp.c lays it out, an Active Groups
+    and a Passive Groups count of 2 bytes each, although
+    ``netprotocols.HSRPv2`` keeps that TLV raw at any length. Each
+    Group State TLV must hold Version 2, an Op Code of Hello, Coup or
+    Resign, a State packet-hsrp.c defines, the IP Version of the IP
+    header carrying it and a Group of at most 4095, and in a Hello a
+    Hold Time above the Hello Time. As this corpus's conventions, an
+    IPv4 virtual address must be followed by 12 zero bytes in its
+    16-byte field and a Text Authentication TLV's data must be a
+    clear-text password, printable ASCII padded with NUL bytes."""
+    hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
+    stats["hsrpv2"] += 1
+    family, port = (4, _HSRP_PORT) if len(src) == 4 else (6, _HSRP_V6_PORT)
+    if struct.unpack_from("!HH", datagram) != (port, port):
+        return ["hsrpv2-port"]
+    tlvs: list[tuple[int, bytes]] = []
+    cursor = 0
+    while cursor < len(hsrp):
+        end = cursor + 2 + (hsrp[cursor + 1] if cursor + 1 < len(hsrp) else 0)
+        if cursor + 2 > len(hsrp) or end > len(hsrp):
+            return ["hsrpv2-tlv"]
+        tlvs.append((hsrp[cursor], hsrp[cursor + 2 : end]))
+        cursor = end
+    if not tlvs or tlvs[0][0] != 1:
+        return ["hsrpv2-group-state"]
+    for kind, value in tlvs:
+        if len(value) != _HSRPV2_TLV_LENGTHS.get(kind, len(value)):
+            return ["hsrpv2-tlv-length"]
+    for kind, value in tlvs:
+        if kind == 1:
+            failure = _check_hsrpv2_group_state(value, family, stats)
+            if failure is not None:
+                return [failure]
+        # NUL is not printable, so this also fails a NUL before the
+        # padding.
+        if kind == 3 and not all(
+            0x20 <= b < 0x7F for b in value.rstrip(b"\x00")
+        ):
+            return ["hsrpv2-auth-data"]
+    return []
+
+
+def _check_hsrpv2_group_state(
+    value: bytes, family: int, stats: Counter[str]
+) -> str | None:
+    """The failure, if any, of a Group State TLV's 40-byte ``value`` sent
+    over IP version ``family`` (see :func:`_check_hsrpv2`)."""
+    version, op_code, state, ip_version, group = struct.unpack_from(
+        "!BBBBH", value
+    )
+    hellotime, holdtime = struct.unpack_from("!II", value, 16)
+    if version != 2:
+        return "hsrpv2-version"
+    if op_code not in _HSRP_OP_CODES:
+        return "hsrpv2-op-code"
+    stats[f"hsrpv2-{_HSRP_OP_CODES[op_code]}"] += 1
+    if state not in _HSRPV2_STATES:
+        return "hsrpv2-state"
+    if ip_version != family:
+        return "hsrpv2-ip-version"
+    if group > 4095:
+        return "hsrpv2-group"
+    if op_code == 0 and holdtime <= hellotime:
+        return "hsrpv2-holdtime"
+    # a corpus convention, not packet-hsrp.c's
+    if ip_version == 4 and any(value[28:40]):
+        return "hsrpv2-padding"
+    return None
 
 
 #: IP protocol numbers whose payload is a whole IP packet: 4 carries

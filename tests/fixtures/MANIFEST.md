@@ -1053,8 +1053,8 @@ Access-Challenge, Accounting-Response and the Disconnect and CoA ACKs
 and NAKs (RFC 5176 §2.3, on UDP 3799). A UDP datagram is read as RADIUS
 when the server's port is 1812, 1813 or 3799, the source port of a reply
 and the destination port of anything else, and neither port is STUN's
-3478, NTP's 123 or HSRP's 1985, the ports the checker reads as those
-protocols, so a STUN or NTP reply sent to a client's ephemeral 1812,
+3478, NTP's 123 or HSRP's 1985 or 2029, the ports the checker reads as
+those protocols, so a STUN or NTP reply sent to a client's ephemeral 1812,
 1813 or 3799 is read as STUN or NTP. A reply that no earlier request of
 its pcap matches is counted `radius-reply-unpaired` and not checked, as
 an unreadable payload is counted and not failed, and fails as
@@ -1123,6 +1123,27 @@ The values are also hard-coded, independently, in
   no frame carries Ethernet padding or an FCS: a 20-byte HSRP message
   behind UDP's 8 bytes and IPv4's 20 already fills Ethernet's 46-byte
   minimum payload, and tcpdump on a veth device captures no FCS.
+  **The corpus holds no HSRPv2 and no HSRP for IPv6 frame.** Nothing
+  that runs in a Linux netns sends either: Yersinia 0.8.2 builds
+  HSRPv1 only, no open-source HSRP daemon exists, and the packet
+  crafters that could write one are the scapy and dpkt this project
+  benchmarks against and does not use. `HSRPv2` is therefore tested
+  only against hand-built vectors in `tests/test_hsrpv2.py` (and
+  `tests/test_check_fixtures.py`, `tests/test_fuzz.py` and
+  `tests/conftest.py`'s `raw_hsrpv2_hello`), packed field by field
+  with `struct` and `socket` in the layout of Wireshark's
+  `epan/dissectors/packet-hsrp.c` (commit 6f7207a6), each labelled as
+  hand-built; tshark 4.2.2 decodes the five of `tests/test_hsrpv2.py`'s
+  `VECTORS` as HSRPv2 with the fields the tests expect. It dissects the
+  same layout: packet-hsrp.c at tag v4.2.2 differs from 6f7207a6's only
+  in C type names, the `= -1` and `EI_INIT` initialisers 6f7207a6's
+  drops, whitespace, one `col_` call and the display length of two TLV
+  items, which 6f7207a6 changed. That is the dissector's reading, not
+  a router's: nothing here shows what a Cisco router puts in the 12
+  bytes after an IPv4 virtual address, which States it sends, or
+  whether it sends other TLVs. `check_fixtures`
+  reads an HSRPv2 message on 1985 (first byte 1) or 2029 with
+  `_check_hsrpv2`, and has none in the corpus to read.
 - `tls.pcap` was produced by `scripts/capture_fixtures_tls.sh`. nginx
   1.24 (nginx-light, OpenSSL 3.0.13) serves HTTPS on 10.9.196.2:443 in
   one netns, with session tickets off and a self-signed ECDSA P-256

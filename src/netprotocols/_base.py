@@ -90,6 +90,9 @@ is decoded on its own) instead of raising. See
 48-byte header: its extension fields and MAC run to the end of the
 datagram, so it keeps the rest of the buffer, and its accessors report
 what is neither as a remainder. See :mod:`netprotocols.layer7.ntp`.
+``HSRPv2`` is the same case from its first byte: its TLVs run to the end
+of the datagram, so it keeps the whole buffer, and unlike NTP raises
+for bytes no TLV fits. See :mod:`netprotocols.layer7.hsrp`.
 
 ``TFTP`` is port-dispatched too, but bounds most of its messages by
 their structure: an ACK's 4 bytes, an ERROR's terminated message, a
@@ -173,7 +176,9 @@ Identifier other than STP's 0x0000, such as GARP's, ends the walk.
 ``UDP`` keeps the first byte of its payload and hands it to the class
 its port names, through that class's ``_for_payload()``, which may
 answer another class: ``NTP`` answers ``NTPControl`` for a mode 6
-first byte, so UDP port 123 reads the mode before choosing a header.
+first byte, so UDP port 123 reads the mode before choosing a header,
+and ``HSRP`` answers ``HSRPv2`` for a first byte of 1, so UDP port 1985
+reads the version before choosing one.
 Each ``decode()`` records what only the bytes could tell it on the
 instance, in a ``compare=False`` field outside its comparison and
 hash, so two equal headers compare equal wherever they were found,
@@ -417,8 +422,8 @@ class Protocol(ABC):
         first byte of the datagram's payload, so that a port carrying
         two message formats can pick between them before either is
         decoded (see "Decode context in next_protocol" above). This
-        answers ``cls`` itself; :class:`~netprotocols.NTP` overrides
-        it.
+        answers ``cls`` itself; :class:`~netprotocols.NTP` and
+        :class:`~netprotocols.HSRP` override it.
 
         :param lead: The first byte of the payload.
         """

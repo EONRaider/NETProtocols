@@ -104,7 +104,9 @@ class UDP(Protocol):
         is recognized. The class the port names then sees the payload's
         first byte, when :meth:`decode` kept one, and answers the class
         that decodes it: :class:`~netprotocols.NTP` answers
-        :class:`~netprotocols.NTPControl` for a mode 6 message.
+        :class:`~netprotocols.NTPControl` for a mode 6 message, and
+        :class:`~netprotocols.HSRP` answers :class:`~netprotocols.HSRPv2`
+        for an HSRPv2 one.
         """
         protocol = udp_app_class(self.src_port, self.dst_port, registry)
         if protocol is None or self._lead is None:
