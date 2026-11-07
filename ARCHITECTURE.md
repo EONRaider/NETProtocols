@@ -504,10 +504,10 @@ split:
 - `NTP.extension_fields` walks type-length-value fields and never
   raises: its walk ends where what is left has a MAC's length, at a
   Length RFC 7822 §3 does not allow, or at the end of the body.
-- `PIM.address_list` reads encoded addresses to the end of the Address
-  List option's value and raises `TruncatedHeaderError` for an address
-  that runs past it (and `InvalidFieldError` for a family or encoding
-  it cannot size).
+- `PIMHello.address_list` reads encoded addresses to the end of the
+  Address List option's value and raises `TruncatedHeaderError` for an
+  address that runs past it (and `InvalidFieldError` for a family or
+  encoding it cannot size).
 - `RADIUS`'s packet-level lookups (`user_name`, `nas_ip_address`,
   `nas_port`, `framed_ip_address`) read through `parsed_attributes`
   and raise as it does.

@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **ARCHITECTURE.md's decode contract states which accessors raise and which degrade (#350).** A type-length-value walk that returns a tuple raises `InvalidFieldError` when its bytes do not walk; lookups and display helpers degrade to `None`. The section names the accessors outside that split, among them `NTP.extension_fields`, `PIM.address_list`, `RADIUS`'s packet-level lookups and the count-given lists.
+- **ARCHITECTURE.md's decode contract states which accessors raise and which degrade (#350).** A type-length-value walk that returns a tuple raises `InvalidFieldError` when its bytes do not walk; lookups and display helpers degrade to `None`. The section names the accessors outside that split, among them `NTP.extension_fields`, `PIMHello.address_list`, `RADIUS`'s packet-level lookups and the count-given lists.
 
 - **A 50-byte HSRPv1 message carrying the MD5 Authentication TLV is one 50-byte `HSRP` layer, not 20 (#282).** For such a message `header_len` is 50 where it was 20, `bytes()` gives all 50 bytes where it gave the first 20, a walk's `consumed` covers the TLV where it stopped 30 bytes short of the datagram's end, and equality and the hash compare the TLV through `md5_authentication`, so two such messages differing only in the TLV, or one with it and its first 20 bytes alone, are no longer equal. `dataclasses.fields()`, `astuple()`, `asdict()`, `repr()` and `__match_args__` of every `HSRP` gain `md5_authentication` as their last item, so a positional pattern of ten fields still matches. Every other HSRPv1 message is decoded exactly as before, 20 bytes long, and the set of payloads `HSRP.decode()` accepts or rejects is unchanged.
 
