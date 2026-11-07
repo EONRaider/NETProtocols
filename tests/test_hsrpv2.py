@@ -1,16 +1,18 @@
 """Test HSRPv2 and HSRP for IPv6 decoding and dispatch.
 
-Covered: the Group State, Text Authentication and MD5 Authentication
-TLVs and raw TLVs of other Types, the round trip, truncation at every
-length, every judged field of the Group State TLV, every malformed TLV,
-construction, the display helpers, and dispatch: UDP port 1985 choosing
-HSRP or HSRPv2 by the first byte, and port 2029 naming HSRPv2.
+Covered: the Group State, Interface State, Text Authentication and MD5
+Authentication TLVs and raw TLVs of other Types, the round trip,
+truncation at every length, every judged field of the Group State TLV,
+every malformed TLV, construction, the display helpers, and dispatch:
+UDP port 1985 choosing HSRP or HSRPv2 by the first byte, and port 2029
+naming HSRPv2.
 
 No sender that runs in a Linux netns produces HSRPv2, so there is no
 capture: every vector here is HAND-BUILT, packed field by field with
 struct and socket rather than by the library, in the layout of
 Wireshark's epan/dissectors/packet-hsrp.c (commit 6f7207a6): the Group
-State TLV as its lines 53-78 draw it and lines 479-543 read it, the Text
+State TLV as its lines 53-78 draw it and lines 479-543 read it, the
+Interface State TLV as lines 80-87 and 544-564, the Text
 Authentication TLV as lines 89-98 and 565-587, the MD5 Authentication
 TLV as lines 100-119 and 319-344, and the walk of lines 474-601. The
 tests check that each of the five VECTORS decodes to the fields
@@ -31,6 +33,7 @@ from netprotocols import (
     HSRPAdvertise,
     HSRPv2,
     HSRPv2GroupState,
+    HSRPv2InterfaceState,
     HSRPv2MD5Authentication,
     HSRPv2TextAuthentication,
     HSRPv2TLV,
@@ -97,7 +100,7 @@ MD5_AUTH = (
 )
 
 #: A HAND-BUILT Interface State TLV (Type 2, Length 4: 1 active group, 0
-#: passive), which HSRPv2 keeps raw.
+#: passive).
 INTERFACE_STATE = bytes([2, 4]) + struct.pack("!HH", 1, 0)
 
 #: The HAND-BUILT vectors in packet-hsrp.c's layout, by name: the IP
@@ -117,7 +120,10 @@ VECTORS = {
         )
         + MD5_AUTH,
     ),
-    "v4_resign_unknown": (4, group_state(opcode=2, group=0) + INTERFACE_STATE),
+    "v4_resign_interface_state": (
+        4,
+        group_state(opcode=2, group=0) + INTERFACE_STATE,
+    ),
     "v6_hello_text": (
         6,
         group_state(ip_version=6, state=5, group=10, address=V6_ADDRESS)
@@ -216,7 +222,7 @@ EXPECTED = {
         "198.51.100.7",
         [HSRPv2GroupState, HSRPv2MD5Authentication],
     ),
-    "v4_resign_unknown": (
+    "v4_resign_interface_state": (
         "Resign",
         "Active",
         "IPv4",
@@ -225,7 +231,7 @@ EXPECTED = {
         3000,
         10000,
         "192.0.2.1",
-        [HSRPv2GroupState, HSRPv2TLV],
+        [HSRPv2GroupState, HSRPv2InterfaceState],
     ),
     "v6_hello_text": (
         "Hello",
@@ -322,15 +328,22 @@ class TestVectors:
         assert bytes(md5) == MD5_AUTH
         assert message.text_authentication is None
 
-    def test_an_unknown_tlv_is_kept_raw(self):
-        """The Interface State TLV, which packet-hsrp.c reads but this
-        library does not, is an HSRPv2TLV."""
-        message = HSRPv2.decode(VECTORS["v4_resign_unknown"][1])
-        tlv = message.tlvs[1]
-        assert tlv == HSRPv2TLV(type=2, value=bytes.fromhex("00010000"))
-        assert tlv.type_name == "Interface State"
+    def test_the_interface_state_tlv(self):
+        """Both counts of lines 544-564, 2 bytes each."""
+        message = HSRPv2.decode(VECTORS["v4_resign_interface_state"][1])
+        tlv = message.interface_state
+        assert tlv == HSRPv2InterfaceState(active_groups=1, passive_groups=0)
+        assert message.tlvs[1] is tlv
         assert bytes(tlv) == INTERFACE_STATE
         assert message.md5_authentication is None
+        assert message.text_authentication is None
+
+    def test_an_unknown_tlv_is_kept_raw(self):
+        """A Type packet-hsrp.c does not read is an HSRPv2TLV."""
+        message = HSRPv2.decode(HELLO + bytes([5, 3]) + b"abc")
+        assert message.tlvs[1] == HSRPv2TLV(type=5, value=b"abc")
+        assert message.tlvs[1].type_name == "unknown (5)"
+        assert message.interface_state is None
 
     def test_an_ipv4_address_keeps_its_12_padding_bytes(self):
         """The address takes the field's first 4 bytes; the other 12 are
@@ -551,6 +564,9 @@ class TestMalformedTLVs:
         [
             (1, 39, "40"),
             (1, 41, "40"),
+            (2, 0, "4"),
+            (2, 3, "4"),
+            (2, 5, "4"),
             (3, 0, "8"),
             (3, 7, "8"),
             (3, 9, "8"),
@@ -754,9 +770,9 @@ class TestConstruction:
         with pytest.raises(InvalidIPv4AddressError):
             replace(md5, ip_address="::1")
 
-    @pytest.mark.parametrize("kind", [1, 3, 4])
+    @pytest.mark.parametrize("kind", [1, 2, 3, 4])
     def test_a_raw_tlv_of_a_typed_type(self, kind):
-        """Types 1, 3 and 4 have their own classes."""
+        """Types 1-4 have their own classes."""
         with pytest.raises(InvalidFieldError) as caught:
             HSRPv2TLV(kind, bytes(8))
         assert (caught.value.field, caught.value.actual) == ("type", kind)
@@ -766,9 +782,9 @@ class TestConstruction:
             HSRPv2TLV(256)
         assert caught.value.field == "type"
         with pytest.raises(InvalidFieldError) as caught:
-            HSRPv2TLV(2, bytes(256))
+            HSRPv2TLV(5, bytes(256))
         assert caught.value.field == "value"
-        assert len(bytes(HSRPv2TLV(2, bytes(255)))) == 257
+        assert len(bytes(HSRPv2TLV(5, bytes(255)))) == 257
 
     def test_a_message_must_open_with_a_group_state_tlv(self):
         state = HSRPv2.decode(HELLO).group_state

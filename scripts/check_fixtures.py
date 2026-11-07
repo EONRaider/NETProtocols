@@ -1799,23 +1799,22 @@ def _check_hsrpv2(
     """Validate an HSRPv2 message, as Wireshark's packet-hsrp.c reads it.
 
     HSRPv2 has no RFC and no checksum of its own, so, as for HSRPv1,
-    this checks the message's fields. Over IPv4 it must be sent from
-    and to port 1985 and over IPv6, as HSRP for IPv6, from and to port
-    2029. Its UDP payload must be whole TLVs, each a Type, a Length that
+    this checks the message's fields. Over IPv4 it must be sent from and
+    to port 1985 and over IPv6, as HSRP for IPv6, from and to port 2029.
+    Its UDP payload must be whole TLVs, each a Type, a Length that
     counts the value alone and the value, the first a Group State TLV
     (Type 1), and every Group State, Interface State, Text
     Authentication and MD5 Authentication TLV of the length
     packet-hsrp.c reads (40, 4, 8 and 28). The Interface State TLV's
-    length is judged as packet-hsrp.c lays it out, an Active Groups
-    and a Passive Groups count of 2 bytes each, although
-    ``netprotocols.HSRPv2`` keeps that TLV raw at any length. Each
-    Group State TLV must hold Version 2, an Op Code of Hello, Coup or
-    Resign, a State packet-hsrp.c defines, the IP Version of the IP
-    header carrying it and a Group of at most 4095, and in a Hello a
-    Hold Time above the Hello Time. As this corpus's conventions, an
-    IPv4 virtual address must be followed by 12 zero bytes in its
-    16-byte field and a Text Authentication TLV's data must be a
-    clear-text password, printable ASCII padded with NUL bytes."""
+    length is judged as packet-hsrp.c lays it out, an Active Groups and
+    a Passive Groups count of 2 bytes each, and its counts are not
+    judged. Each Group State TLV must hold Version 2, an Op Code of
+    Hello, Coup or Resign, a State packet-hsrp.c defines, the IP Version
+    of the IP header carrying it and a Group of at most 4095, and in a
+    Hello a Hold Time above the Hello Time. As this corpus's
+    conventions, an IPv4 virtual address must be followed by 12 zero
+    bytes in its 16-byte field and a Text Authentication TLV's data must
+    be a clear-text password, printable ASCII padded with NUL bytes."""
     hsrp = datagram[8 : struct.unpack_from("!H", datagram, 4)[0]]
     stats["hsrpv2"] += 1
     family, port = (4, _HSRP_PORT) if len(src) == 4 else (6, _HSRP_V6_PORT)

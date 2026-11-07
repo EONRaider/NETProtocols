@@ -57,6 +57,7 @@ from netprotocols import (
     HSRPAdvertise,
     HSRPv2,
     HSRPv2GroupState,
+    HSRPv2InterfaceState,
     HSRPv2MD5Authentication,
     HSRPv2TextAuthentication,
     HSRPv2TLV,
@@ -1296,15 +1297,20 @@ def hsrpv2_md5_authentications(draw: st.DrawFn) -> HSRPv2MD5Authentication:
 
 @st.composite
 def hsrpv2_messages(draw: st.DrawFn) -> HSRPv2:
-    # A Group State TLV, then any mix of the four TLV classes; a raw TLV
-    # is any Type but the three typed ones, with any value.
+    # A Group State TLV, then any mix of the five TLV classes; a raw TLV
+    # is any Type but the four typed ones, with any value.
     later = st.one_of(
         hsrpv2_group_states(),
+        st.builds(
+            HSRPv2InterfaceState,
+            active_groups=st.integers(0, 0xFFFF),
+            passive_groups=st.integers(0, 0xFFFF),
+        ),
         st.binary(min_size=8, max_size=8).map(HSRPv2TextAuthentication),
         hsrpv2_md5_authentications(),
         st.builds(
             HSRPv2TLV,
-            type=st.integers(0, 0xFF).filter(lambda t: t not in (1, 3, 4)),
+            type=st.integers(0, 0xFF).filter(lambda t: t not in (1, 2, 3, 4)),
             value=st.binary(max_size=_MAX_BLOB),
         ),
     )
