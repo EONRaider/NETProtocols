@@ -627,7 +627,26 @@ def vars_of(header: Protocol) -> dict[str, object]:
 #: The classes whose decode() builds the instance directly only when
 #: called on the class itself, and through the constructor when called
 #: on any other subclass (see "Decode-path construction" in _base.py).
-FAST_PATH_ONLY_FOR_ITSELF = (TCP, UDP, OSPF, PIM, VRRP, VRRPv6, RIP, BGP)
+FAST_PATH_ONLY_FOR_ITSELF = (
+    Ethernet,
+    ARP,
+    IPv4,
+    TCP,
+    UDP,
+    OSPF,
+    PIM,
+    VRRP,
+    VRRPv6,
+    RIP,
+    BGP,
+    HTTP,
+)
+
+#: A request with a body, framed by its Content-Length.
+_HTTP_REQUEST = (
+    b"POST /submit HTTP/1.1\r\nHost: example.com\r\n"
+    b"Content-Length: 5\r\n\r\nhello"
+)
 
 
 def raw_header(cls: type[Protocol]) -> bytes:
@@ -635,6 +654,8 @@ def raw_header(cls: type[Protocol]) -> bytes:
     built one where the corpus has none."""
     if cls is VRRPv6:
         return bytes(VRRPv6(3, 1, 1, 100, 1, 100, 0, ("2001:db8::1",)))
+    if cls is HTTP:
+        return _HTTP_REQUEST
     for frame in CORPUS_FRAMES:
         for layer in decode_frame(frame, lax=True).layers:
             if type(layer) is cls:
@@ -644,6 +665,103 @@ def raw_header(cls: type[Protocol]) -> bytes:
 
 class RejectedBySubclass(InvalidFieldError):
     """What a test subclass's __post_init__ raises."""
+
+
+def patched(raw: bytes, offset: int, value: bytes) -> bytes:
+    """``raw`` with ``value`` written over it at ``offset``."""
+    return raw[:offset] + value + raw[offset + len(value) :]
+
+
+def malformed_inputs(cls: type[Protocol]) -> list[tuple[bytes, dict]]:
+    """Inputs ``cls.decode()`` rejects with a check it runs before it
+    chooses how to build the instance, each with its keyword arguments.
+
+    :param cls: A class of :data:`FAST_PATH_ONLY_FOR_ITSELF`.
+    """
+    raw = raw_header(cls)
+    if cls is Ethernet:
+        return [(raw[:13], {})]
+    if cls is ARP:
+        return [(raw[:27], {})]
+    if cls is IPv4:
+        return [
+            (raw[:19], {}),
+            (patched(raw, 0, b"\x44"), {}),
+            (patched(raw[:20], 0, b"\x46"), {}),
+        ]
+    if cls is TCP:
+        return [
+            (raw[:19], {}),
+            (patched(raw, 12, b"\x40"), {}),
+            (patched(raw, 12, b"\xf0"), {}),
+        ]
+    if cls is UDP:
+        return [(raw[:7], {})]
+    if cls is OSPF:
+        return [
+            (raw[:23], {}),
+            (patched(raw, 0, b"\x03"), {}),
+            (patched(raw, 2, (23).to_bytes(2, "big")), {}),
+            (patched(raw, 2, (len(raw) + 1).to_bytes(2, "big")), {}),
+            (patched(raw, 2, (25).to_bytes(2, "big")), {}),
+        ]
+    if cls is PIM:
+        return [(raw[:3], {}), (patched(raw, 0, b"\x10"), {})]
+    if cls in (VRRP, VRRPv6):
+        return [
+            (raw[:7], {}),
+            (patched(raw, 0, bytes([raw[0] ^ 0x70])), {}),
+            (patched(raw, 3, b"\xff"), {}),
+        ]
+    if cls is RIP:
+        return [
+            (raw[:3], {}),
+            (patched(raw, 0, b"\x00"), {}),
+            (patched(raw, 1, b"\x03"), {}),
+        ]
+    if cls is BGP:
+        return [
+            (raw[:18], {}),
+            (patched(raw, 0, b"\xfe"), {}),
+            (patched(raw, 16, (18).to_bytes(2, "big")), {}),
+            (patched(raw, 16, (len(raw) + 1).to_bytes(2, "big")), {}),
+            (patched(raw, 18, b"\x09"), {}),
+        ]
+    assert cls is HTTP
+    return [
+        (raw[:20], {}),
+        (raw, {"request_method": "GET"}),
+        (b"HTTP/1.1 200 OK\r\n\r\nuntil close", {"closed": False}),
+        (
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nhi",
+            {"closed": True},
+        ),
+    ]
+
+
+def assert_a_subclass_rejects_alike(
+    cls: type[Protocol], raw: bytes, kwargs: dict
+) -> None:
+    """Decode ``raw`` with ``cls`` and with a subclass of it, and check
+    both reject it with the same error.
+
+    :param cls: The library class.
+    :param raw: The input, which ``cls.decode()`` rejects.
+    :param kwargs: The keyword arguments both decodes are given.
+    """
+    other = dataclass(frozen=True, slots=True)(
+        type(f"Other{cls.__name__}", (cls,), {})
+    )
+    with pytest.raises(ProtocolError) as library:
+        cls.decode(raw, **kwargs)
+    with pytest.raises(ProtocolError) as subclass:
+        other.decode(raw, **kwargs)
+    assert type(subclass.value) is type(library.value)
+    for name in ("offset", "field", "expected", "actual"):
+        assert getattr(subclass.value, name) == getattr(library.value, name)
+    assert str(subclass.value).replace(other.__name__, cls.__name__) == str(
+        library.value
+    )
 
 
 class TestDecodeIntoASubclass:
@@ -687,29 +805,87 @@ class TestDecodeIntoASubclass:
             strict.decode(raw_header(cls))
 
     @pytest.mark.parametrize(
-        "cls,raw,context",
+        "cls,raw,kwargs,context",
         [
             (
                 UDP,
                 bytes.fromhex("0208020800200000") + bytes.fromhex("0202"),
+                {},
                 "_lead",
             ),
-            (BGP, (b"\xff" * 16 + bytes.fromhex("001304")) * 2, "_followed"),
+            (
+                BGP,
+                (b"\xff" * 16 + bytes.fromhex("001304")) * 2,
+                {},
+                "_followed",
+            ),
+            (
+                HTTP,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+                {"request_method": "HEAD"},
+                "request_method",
+            ),
+            (
+                HTTP,
+                b"HTTP/1.1 200 OK\r\n\r\nuntil close",
+                {"closed": True},
+                "raw_body",
+            ),
         ],
-        ids=["UDP", "BGP"],
+        ids=["UDP", "BGP", "HTTP-HEAD", "HTTP-closed"],
     )
     def test_a_subclass_keeps_the_decode_context(
-        self, cls, raw, context
+        self, cls, raw, kwargs, context
     ) -> None:
-        """The context decode() records outside the compared fields, UDP's
-        first payload bytes and whether another BGP message follows,
-        reaches a subclass's instance too."""
+        """The context decode() records outside the wire fields, UDP's
+        first payload bytes, whether another BGP message follows, the
+        request an HTTP response answers and whether its connection
+        closed, reaches a subclass's instance too."""
         other = dataclass(frozen=True, slots=True)(
             type(f"Other{cls.__name__}", (cls,), {})
         )
-        expected = getattr(cls.decode(raw), context)
+        library = cls.decode(raw, **kwargs)
+        expected = getattr(library, context)
         assert expected
-        assert getattr(other.decode(raw), context) == expected
+        header = other.decode(raw, **kwargs)
+        assert getattr(header, context) == expected
+        assert vars_of(header) == vars_of(library)
+
+    @pytest.mark.parametrize(
+        "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__
+    )
+    def test_a_subclass_rejects_malformed_input_alike(self, cls) -> None:
+        """A check decode() runs before it chooses how to build the
+        instance raises for a subclass what it raises for the library
+        class: the same type, offset, field, expected, actual and
+        message."""
+        for raw, kwargs in malformed_inputs(cls):
+            assert_a_subclass_rejects_alike(cls, raw, kwargs)
+
+    @given(
+        cls=st.sampled_from(FAST_PATH_ONLY_FOR_ITSELF),
+        position=st.integers(0, 2**16),
+        value=st.integers(0, 255),
+        cut=st.integers(0, 2**16),
+    )
+    def test_a_subclass_decodes_a_mutated_header_alike(
+        self, cls, position, value, cut
+    ) -> None:
+        """A header with one byte replaced and its tail cut off decodes
+        for a subclass as for the library class, or is rejected by both
+        with the same error."""
+        raw = raw_header(cls)
+        raw = patched(raw, position % len(raw), bytes([value]))
+        raw = raw[: len(raw) - cut % len(raw)]
+        try:
+            library = cls.decode(raw)
+        except ProtocolError:
+            assert_a_subclass_rejects_alike(cls, raw, {})
+        else:
+            other = dataclass(frozen=True, slots=True)(
+                type(f"Other{cls.__name__}", (cls,), {})
+            )
+            assert vars_of(other.decode(raw)) == vars_of(library)
 
     @pytest.mark.parametrize(
         "cls", FAST_PATH_ONLY_FOR_ITSELF, ids=lambda c: c.__name__

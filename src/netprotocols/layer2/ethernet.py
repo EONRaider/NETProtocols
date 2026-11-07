@@ -146,6 +146,14 @@ class Ethernet(Protocol):
             14-byte header.
         """
         dst, src, ethertype = cls._unpack_fixed(data)
+        if cls is not Ethernet:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                dst=bytes_to_mac(dst),
+                src=bytes_to_mac(src),
+                ethertype=ethertype,
+            )
         # bytes_to_mac() produces addresses that pass the constructor's
         # validators, so the instance is built directly, without
         # __post_init__ (see "Decode-path construction" in _base.py).

@@ -362,6 +362,25 @@ class IPv4(Protocol):
                 expected=ihl * 4,
                 actual=len(data),
             )
+        if cls is not IPv4:
+            # A subclass may add fields or checks of its own, so it is
+            # built through its constructor.
+            return cls(
+                version=ver_ihl >> 4,
+                ihl=ihl,
+                dscp=dscp_ecn >> 2,
+                ecn=dscp_ecn & 0b11,
+                total_length=total_length,
+                identification=identification,
+                flags=flags_frag >> 13,
+                fragment_offset=flags_frag & 0x1FFF,
+                ttl=ttl,
+                protocol=protocol,
+                checksum=checksum,
+                src=bytes_to_ipv4(src),
+                dst=bytes_to_ipv4(dst),
+                options=bytes(data[cls._struct.size : ihl * 4]),
+            )
         # Every check the constructor runs holds here, so the instance
         # is built directly, without __post_init__ (see "Decode-path
         # construction" in _base.py): bytes_to_ipv4() produces valid
