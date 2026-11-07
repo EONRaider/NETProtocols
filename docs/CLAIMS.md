@@ -1526,7 +1526,7 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 
 15 stdlib modules imported (`__future__` and the type-checking-only
 `_typeshed` aside); `socket` used for exactly two
-`inet_pton`/`inet_ntop` calls (`_base.py:196-201`) and no socket ever
+`inet_pton`/`inet_ntop` calls (`_base.py:244-249`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
 
@@ -1677,9 +1677,12 @@ percentage read as stable across both drifts by coincidence: the miss
 count never moved while the codebase grew around it. Exactly the kind
 of thing Rule 4 exists to catch.*
 
-6,202 statements, 1 missed (99.98%; re-measured 2026-11-01, after
-TLS's `peek_server_name` (#285), and the miss is still
-`Packet.__eq__`'s `NotImplemented` branch). Enforced, not merely
+7,485 statements, none missed (100.00%; re-derived 2026-11-07 for
+#366 at `e017fc3` with CI's `uv run --frozen pytest
+--cov=netprotocols --cov-report=term`, the same on CPython 3.12 and
+3.13.18; on 2026-11-01, after TLS's `peek_server_name` (#285), 6,202
+statements with 1 missed, `Packet.__eq__`'s `NotImplemented` branch).
+Enforced, not merely
 reported: `[tool.coverage.report]` sets `fail_under = 98`, and the
 `test` CI job runs with `--cov-report=term` on every push and pull
 request, so a regression below the gate fails the build (#79).
@@ -1730,9 +1733,12 @@ same public `register()` a third party calls
 (`src/netprotocols/_defaults.py`), so there is no privileged path and
 nothing to fall out of sync.
 
-Reproduce: `uv run pytest tests/test_registry.py` — 66 tests covering
-registration, conflict handling, table inheritance and isolation from
-the process-wide default.
+Reproduce: `uv run pytest tests/test_registry.py` — 107 tests covering
+registration, conflict handling, table inheritance, key ranges, the
+`WITHHELD` sentinel and isolation from the process-wide default (66 at
+the 2026-11-01 status audit; re-counted 2026-11-07 for #366 at
+`e017fc3` with `uv run --frozen pytest tests/test_registry.py
+--collect-only`).
 
 Three properties worth stating alongside it, because they are what
 make the extension point safe rather than merely present:
