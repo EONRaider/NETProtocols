@@ -180,7 +180,7 @@ dummy builder writes no output; the check is the build itself.
   it. Reference it there:
   ``:attr:`~netprotocols.layer3.ah.AH.icv` `` from `AHv6`, or with an
   explicit title,
-  ``:attr:`HSRP.header_len <netprotocols._base.Protocol.header_len>` ``.
+  ``:attr:`HSRPAdvertise.header_len <netprotocols._base.Protocol.header_len>` ``.
 - Special methods (`__eq__`, `__getitem__`, ...) are not documented, so
   write them as literals: ``` ``__eq__`` ```.
 - A role must not wrap across a line break: write

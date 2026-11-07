@@ -1210,6 +1210,60 @@ def _() -> tuple[bytes, bytes]:
     return hsrp(8, 1)
 
 
+#: ``HSRP_HELLO``'s message followed by a hand-built MD5 Authentication
+#: TLV in the layout of Wireshark's packet-hsrp.c: Type 4, Length 28,
+#: Algorithm 1 (MD5), Padding 0, Flags 0, the sender's address
+#: 10.9.195.11, Key ID 1 and a 16-byte digest. 50 bytes in all.
+HSRP_MD5 = (
+    HSRP_HELLO[udp_data(HSRP_HELLO) :]
+    + bytes.fromhex("041c 01 00 0000 0a09c30b 00000001")
+    + bytes(range(16))
+)
+
+
+def hsrp_md5(offset: int, value: bytes) -> tuple[bytes, bytes]:
+    """``HSRP_MD5`` in ``HSRP_HELLO``'s Ethernet and IPv4 headers, and a
+    copy with ``value`` at ``offset`` of the message."""
+    return hsrpv2_v4(HSRP_MD5), hsrpv2_v4(put(HSRP_MD5, offset, value))
+
+
+@case("hsrp-length")
+def _() -> tuple[bytes, bytes]:
+    # 49 and 51 bytes are neither the bare message nor one with the TLV.
+    return hsrpv2_v4(HSRP_MD5), hsrpv2_v4(HSRP_MD5[:49])
+
+
+@case("hsrp-length")
+def _() -> tuple[bytes, bytes]:
+    return hsrpv2_v4(HSRP_MD5), hsrpv2_v4(HSRP_MD5 + b"\x00")
+
+
+@case("hsrp-md5-type")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_md5(20, b"\x03")
+
+
+@case("hsrp-md5-length")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_md5(21, b"\x1b")
+
+
+@case("hsrp-md5-algorithm")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_md5(22, b"\x02")
+
+
+@case("hsrp-md5-padding")
+def _() -> tuple[bytes, bytes]:
+    return hsrp_md5(23, b"\x01")
+
+
+@case("hsrp-reserved")
+def _() -> tuple[bytes, bytes]:
+    # The 20 bytes are judged first, as in a message without the TLV.
+    return hsrp_md5(7, b"\x01")
+
+
 #: A hand-built HSRP interface-state Advertise in the layout of
 #: Wireshark's packet-hsrp.c: Version 0, Op Code 3, TLV Type 1 (HSRP
 #: interface state), TLV Length 14, State 2 (Passive), a Reserved byte,

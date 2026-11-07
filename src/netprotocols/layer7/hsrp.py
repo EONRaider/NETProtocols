@@ -45,23 +45,73 @@ router sends, and is computed by :attr:`HSRP.virtual_mac`.
 
 Every field is kept as its wire value: the eight one-byte fields as
 integers, the Authentication Data as its raw 8 bytes and the Virtual IP
-Address as a dotted-decimal string, so
-``bytes(HSRP.decode(x)) == x[:20]`` holds by construction. The message
-has no length field, and needs none: it is always 20 bytes, so the
-decode contract's rule 3 holds as for any fixed header. The layer is
-those 20 bytes and nothing more:
-:attr:`HSRP.header_len <netprotocols._base.Protocol.header_len>` is 20,
-and whatever follows stays outside the layer, after it and past a walk's
-``packet.consumed``, undecoded and not kept, as VRRP and STP leave what
-follows theirs. Inside the UDP datagram that is the 30-byte MD5
-Authentication TLV that some Cisco releases append after the 20 bytes
-(Wireshark's packet-hsrp.c reads it when a message is exactly 50 bytes
-long), which is not decoded; a caller who wants it reads it from the
-frame, ``frame[packet.consumed : len(frame) - len(packet.trailer)]``.
-An Ethernet FCS a capture kept is the packet's
-:attr:`~netprotocols.Packet.trailer`. Ethernet's padding never
-reaches HSRP: the 20 bytes, behind UDP's 8 and IPv4's 20, already fill
-Ethernet's 46-byte minimum payload.
+Address as a dotted-decimal string. The message has no length field.
+The layer is its 20 bytes, or 50 for a message that carries the MD5
+Authentication TLV (see "MD5 Authentication" below), and nothing more:
+:attr:`HSRP.header_len` is 20 or 50, and whatever follows stays outside
+the layer, after it and past a walk's ``packet.consumed``, undecoded
+and not kept, as VRRP and STP leave what follows theirs, so the decode
+contract's rule 3 holds as for any fixed header and
+``bytes(HSRP.decode(x))`` is ``x`` for a message with the TLV and
+``x[:20]`` for any other. An Ethernet FCS a capture kept is the
+packet's :attr:`~netprotocols.Packet.trailer`. Ethernet's padding
+never reaches HSRP: the 20 bytes, behind UDP's 8 and IPv4's 20, already
+fill Ethernet's 46-byte minimum payload.
+
+MD5 Authentication
+------------------
+
+With MD5 authentication configured, a router appends an MD5
+Authentication TLV to the 20 bytes, making a 50-byte message. Its
+layout is the one Wireshark's dissector, epan/dissectors/packet-hsrp.c
+(commit 6f7207a6), reads at byte 20 of an HSRPv1 message, and the one
+it reads for HSRPv2's MD5 Authentication TLV::
+
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |    Type=4     |    Length     |   Algorithm   |   Padding     |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |             Flags             |      IP Address(4octets)      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |       IP Address cont.        |         Key ID(4octets)       |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |         Key ID cont.          | Authentication Data(16octets) |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                   Authentication Data cont.                   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                   Authentication Data cont.                   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                   Authentication Data cont.                   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |   Authentication Data cont.   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+The Length, 28, counts the value alone. The Algorithm is 1 for MD5.
+packet-hsrp.c describes the Padding byte as zero and the Flags as
+undefined, and both are carried verbatim. The IP Address is the sender
+interface's, the Key ID names its key chain, and the Authentication
+Data is the 16-byte MD5 digest, kept raw and not verified. The TLV is an
+:class:`HSRPv2MD5Authentication`, the class HSRPv2's TLV of the same
+layout decodes into, held as :attr:`HSRP.md5_authentication`. The
+message's own 8-byte Authentication Data is kept raw beside it, as for
+any message.
+
+:meth:`HSRP.decode` takes the TLV only where packet-hsrp.c reads one:
+when the buffer is exactly 50 bytes long and its bytes 20 and 21 are a
+Type of 4 and a Length of 28. Every other buffer decodes to its 20
+bytes, with :attr:`HSRP.md5_authentication` ``None`` and what follows
+outside the layer: a 50-byte buffer whose bytes 20 and 21 are any
+other Type or Length, a Type of 4 with another Length among them,
+which packet-hsrp.c reports as an unknown TLV sequence without failing
+the message, and a buffer of any other length, whatever its bytes 20
+and 21 hold. Nothing in the TLV is judged, so it adds no rejection: a
+50-byte buffer decodes wherever its first 20 bytes do, and raises only
+what those 20 would. In a walk the buffer ends where the UDP Length
+ends the datagram (see "Payload extent" in :mod:`netprotocols._base`),
+so the 50 bytes are the whole UDP payload and an FCS after it stays in
+the packet's trailer; decoded on its own, :meth:`HSRP.decode` judges
+the buffer it is given, so a message with the TLV followed by any byte
+decodes to its 20 bytes.
 
 Decoding a guess
 ----------------
@@ -81,7 +131,8 @@ in 932,000), and always when it is shorter than 20 bytes. That is rare,
 not never: a random payload of 20 bytes or more decodes as HSRP that
 often. The other fields are not judged: any Hellotime, Holdtime,
 Priority, Group, Reserved byte, Authentication Data and Virtual IP
-Address decodes.
+Address decodes, as does any value in an MD5 Authentication TLV's
+fields.
 
 Two kinds of message on the same port are not this layout, and
 :meth:`HSRP.decode` rejects them rather than misread them as it:
@@ -114,11 +165,14 @@ Walk such traffic with ``decode_frame(frame, lax=True)``, which keeps
 Ethernet, IP and UDP and reports the rejection as ``stopped_by``.
 
 Construction checks only that each field fits its byte, that the
-Authentication Data is 8 bytes and that the Virtual IP Address is
-dotted-decimal, so a message with a Version, Op Code or State decode
-rejects builds, and ``HSRP.decode(bytes(message))`` raises for it,
-which ARCHITECTURE.md's round-trip guarantee allows: it covers canonical
-headers, which that one is not.
+Authentication Data is 8 bytes, that the Virtual IP Address is
+dotted-decimal and that the MD5 Authentication TLV, if given, is an
+:class:`HSRPv2MD5Authentication`, so a message with a Version, Op Code
+or State decode rejects builds, and ``HSRP.decode(bytes(message))``
+raises for it, which ARCHITECTURE.md's round-trip guarantee allows: it
+covers canonical headers, which that one is not. A message built with
+an MD5 Authentication TLV serializes to 50 bytes, which decode reads
+back with the TLV.
 
 Advertise
 ---------
@@ -394,10 +448,27 @@ class HSRP(Protocol):
     :param auth_data: The 8 bytes of Authentication Data, kept raw: a
         clear-text password, NUL-padded (see :attr:`password`).
     :param virtual_ip: The group's virtual IP address, dotted-decimal.
+    :param md5_authentication: The MD5 Authentication TLV after the 20
+        bytes, or ``None``, the default, for a message without one (see
+        "MD5 Authentication" in the module docstring).
     :raises InvalidFieldError: if an integer field does not fit its
-        byte, or ``auth_data`` is not 8 bytes long.
+        byte, ``auth_data`` is not 8 bytes long, or
+        ``md5_authentication`` is neither ``None`` nor an
+        :class:`HSRPv2MD5Authentication`.
     :raises InvalidIPv4AddressError: if ``virtual_ip`` is not a
         dotted-decimal IPv4 address.
+
+    >>> hsrp = HSRP.decode(
+    ...     bytes.fromhex("0000100a0f6e0100") + bytes(8)
+    ...     + bytes.fromhex("c00002fe")
+    ...     + bytes.fromhex("041c 01 00 0000 c000020b 00000001")
+    ...     + bytes(range(16))
+    ... )
+    >>> hsrp.state_name, hsrp.header_len
+    ('Active', 50)
+    >>> md5 = hsrp.md5_authentication
+    >>> md5.algorithm_name, md5.ip_address, md5.key_id
+    ('MD5', '192.0.2.11', 1)
     """
 
     version: int
@@ -410,11 +481,12 @@ class HSRP(Protocol):
     reserved: int
     auth_data: bytes
     virtual_ip: str
+    md5_authentication: HSRPv2MD5Authentication | None = None
 
     _struct: ClassVar[Struct] = Struct("!8B8s4s")
 
     def __post_init__(self) -> None:
-        """Check each field's width and the address's form."""
+        """Check each field's width, the address's form and the TLV."""
         owner = type(self)
         for name in _BYTE_FIELDS:
             value = getattr(self, name)
@@ -436,15 +508,26 @@ class HSRP(Protocol):
                 actual=len(self.auth_data),
             )
         validate_ipv4_addr(self.virtual_ip, protocol=owner, field="virtual_ip")
+        md5 = self.md5_authentication
+        if md5 is not None and not isinstance(md5, HSRPv2MD5Authentication):
+            raise InvalidFieldError(
+                f"HSRP md5_authentication must be an HSRPv2MD5Authentication "
+                f"or None, got {md5!r}",
+                protocol=owner,
+                field="md5_authentication",
+            )
 
     @classmethod
     def decode(cls, data: bytes | memoryview) -> Self:
-        """Decode the 20-byte message at the start of ``data``.
+        """Decode the message at the start of ``data``.
 
         The Version, Op Code and State are judged before the length, in
         that order, each once its byte is present (see "Decoding a
-        guess" in the module docstring). Anything after the 20 bytes is
-        left undecoded.
+        guess" in the module docstring). The message is the first 20
+        bytes, and the MD5 Authentication TLV after them when ``data``
+        is exactly 50 bytes long and its bytes 20 and 21 are a Type of
+        4 and a Length of 28 (see "MD5 Authentication" in the module
+        docstring). Anything after the message is left undecoded.
 
         :param data: The buffer, starting at the Version byte.
         :raises InvalidFieldError: if the Version is not 0 (``field``
@@ -472,6 +555,13 @@ class HSRP(Protocol):
             auth_data,
             virtual_ip,
         ) = cls._unpack_fixed(data)
+        md5 = None
+        if (
+            len(data) == _MD5_MESSAGE_LEN
+            and data[_MD5_TLV_AT] == _MD5_AUTH_TYPE
+            and data[_MD5_TLV_AT + 1] == _MD5_AUTH.size
+        ):
+            md5 = _md5_authentication(data, _MD5_TLV_AT + 2)
         return cls(
             version=version,
             opcode=opcode,
@@ -483,6 +573,7 @@ class HSRP(Protocol):
             reserved=reserved,
             auth_data=auth_data,
             virtual_ip=bytes_to_ipv4(virtual_ip),
+            md5_authentication=md5,
         )
 
     @classmethod
@@ -505,8 +596,8 @@ class HSRP(Protocol):
         return HSRPv2 if lead >> 8 == _GROUP_STATE_TYPE else cls
 
     def __bytes__(self) -> bytes:
-        """Serialize the message to its 20 on-wire bytes."""
-        return self._struct.pack(
+        """Serialize the message: its 20 bytes, then the MD5 TLV if any."""
+        header = self._struct.pack(
             self.version,
             self.opcode,
             self.state,
@@ -518,6 +609,16 @@ class HSRP(Protocol):
             self.auth_data,
             ipv4_to_bytes(self.virtual_ip),
         )
+        if self.md5_authentication is None:
+            return header
+        return header + bytes(self.md5_authentication)
+
+    @property
+    def header_len(self) -> int:
+        """The message: 20 bytes, or 50 with the MD5 Authentication TLV."""
+        if self.md5_authentication is None:
+            return self._struct.size
+        return _MD5_MESSAGE_LEN
 
     @property
     def opcode_name(self) -> str:
@@ -855,6 +956,14 @@ _GROUP_STATE = Struct("!6BH6sIII16s")
 #: The MD5 Authentication TLV's value: Algorithm, padding, Flags, IP
 #: Address, Key ID and digest.
 _MD5_AUTH = Struct("!BBH4sI16s")
+
+#: The offset of the MD5 Authentication TLV in an HSRPv1 message: the
+#: end of its 20 bytes.
+_MD5_TLV_AT = 20
+
+#: The length of an HSRPv1 message that carries the MD5 Authentication
+#: TLV: the 20 bytes, then the TLV's Type, Length and 28-byte value.
+_MD5_MESSAGE_LEN = _MD5_TLV_AT + 2 + _MD5_AUTH.size
 
 #: The Group State TLV's one-byte fields that decode judges: each one's
 #: offset in the TLV, name, accepted values and those values in words.
@@ -1208,7 +1317,12 @@ class HSRPv2TextAuthentication:
 
 @dataclass(frozen=True, slots=True)
 class HSRPv2MD5Authentication:
-    """An HSRPv2 MD5 Authentication TLV: Type 4, Length 28.
+    """An MD5 Authentication TLV: Type 4, Length 28.
+
+    HSRPv2 carries it among its TLVs (see :attr:`HSRPv2.md5_authentication`)
+    and an HSRPv1 message after its 20 bytes (see
+    :attr:`HSRP.md5_authentication`), in one layout (see "MD5
+    Authentication" in the module docstring).
 
     :param algorithm: The hash algorithm, ``1`` for MD5 (see
         :attr:`algorithm_name`).
@@ -1266,6 +1380,29 @@ class HSRPv2MD5Authentication:
         return _MD5_ALGORITHM_NAMES.get(
             self.algorithm, f"unknown ({self.algorithm})"
         )
+
+
+def _md5_authentication(
+    data: bytes | memoryview, at: int
+) -> HSRPv2MD5Authentication:
+    """Build the MD5 Authentication TLV whose value starts at ``at``.
+
+    Every value of its 28 bytes builds one, so this never raises.
+
+    :param data: A buffer holding the 28-byte value from ``at`` on.
+    :param at: The offset of the value, past the Type and Length.
+    """
+    algorithm, padding, flags, address, key_id, digest = _MD5_AUTH.unpack_from(
+        data, at
+    )
+    return HSRPv2MD5Authentication(
+        algorithm=algorithm,
+        padding=padding,
+        flags=flags,
+        ip_address=bytes_to_ipv4(address),
+        key_id=key_id,
+        digest=digest,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1369,17 +1506,7 @@ def _record(
     if kind == _TEXT_AUTH_TYPE:
         return HSRPv2TextAuthentication(auth_data=value)
     if kind == _MD5_AUTH_TYPE:
-        algorithm, padding, flags, address, key_id, digest = _MD5_AUTH.unpack(
-            value
-        )
-        return HSRPv2MD5Authentication(
-            algorithm=algorithm,
-            padding=padding,
-            flags=flags,
-            ip_address=bytes_to_ipv4(address),
-            key_id=key_id,
-            digest=digest,
-        )
+        return _md5_authentication(value, 0)
     _judge_group_state(owner, data, at)
     return _group_state(data[at : at + _GROUP_STATE.size])
 
