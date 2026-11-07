@@ -15,9 +15,10 @@ export PREV=A.B.C   # the latest released version, e.g. 2.9.0
 export REPO=EONRaider/NETProtocols
 ```
 
-Later command blocks set `MS`, `BODY`, `PR`, `HEAD_SHA`, `SHA`, `T0`,
-`FUZZ_RUN`, `MUT_RUN` and `RUN` where they are first needed, and the
-blocks after them reuse those values.
+Later command blocks set `MS`, `CANDIDATE`, `BODY`, `PR`, `HEAD_SHA`,
+`SHA`, `T0`, `FUZZ_RUN`, `MUT_RUN` and `RUN` where they are first
+needed, and the blocks after them reuse those values. `CHECKED` is set
+by hand, to `CANDIDATE`, once step 3's item 3 result is accepted.
 
 The blocks assume bash. zsh does not word-split an unquoted `$runs`, so
 step 11's guard would treat every run ID as one.
@@ -118,7 +119,9 @@ in; Rule 3 requires each comparative number to name the competitor's
 version and the Python version. Measure on the release branch before
 making the release commit (step 4), which carries the figures. The
 wheel size is the exception: step 4 measures it from the release commit
-itself.
+itself. Run item 3, the check of decode time against the last release,
+before any figure of items 1 and 2: a release that fails it stops there
+until the slowdown is fixed or accepted.
 
 1. **Which numbers, with which commands.** Every figure the README's
    [Why NETProtocols](README.md#why-netprotocols) section quotes. The
@@ -160,14 +163,96 @@ itself.
      --compare --repetitions 30 --trials 9
    ```
 
-3. **A figure that is not re-measured is marked as not repeated for
+3. **Check decode time against the last release, before any figure.**
+   CI's benchmark gate compares each pull request only with its
+   merge-base, so slowdowns under its threshold can add up across a
+   release. `scripts/benchmark_ab.py` compares the working tree's `src`,
+   so the tree must be clean, with `v$PREV`'s, under item 2's load gate
+   and core. `CANDIDATE` is the commit measured; once the result is
+   accepted (exit 0, or an exit 1 the maintainer accepts), run
+   `CHECKED=$CANDIDATE`, which steps 4 and 8 compare against. The first
+   run is a noise run, the head against itself; the second is the check:
+
+   ```bash
+   git status --porcelain                                 # nothing
+   git merge-base --is-ancestor "v$PREV" HEAD && echo ok  # ok
+   CANDIDATE=$(git rev-parse HEAD) && echo "CANDIDATE=$CANDIDATE"
+   for base in HEAD "v$PREV"; do
+     until awk '{ exit !($1 < 1.0) }' /proc/loadavg; do sleep 15; done
+     taskset -c 2 uv run --frozen --group bench python scripts/benchmark_ab.py \
+       --base "$base"; echo "benchmark_ab --base $base exit: $?"
+   done
+   ```
+
+   The `until` loop is the load rule, as in item 2; the load is not read
+   after a run, which itself keeps CPU 2 busy. To discard or repeat a
+   run is to rerun its `benchmark_ab.py --base` command behind the same
+   loop. The script's defaults apply: 16 pairs, and a failure when the
+   median ratio of head time over base time is more than 5% above 1.0.
+   That threshold is CI's, set from `ubuntu-latest`'s noise (CLAIMS
+   1.7), so if the noise run's median is outside 0.975-1.025, half the
+   threshold either side of 1.0, the check's result, whatever its exit
+   status, goes to the maintainer to judge. A noise run that exits 2 is
+   fixed as the check's exit 2 is. The check's exit status decides what
+   follows:
+   - **Exit 0:** the median is within the threshold. Go on to the
+     figures.
+   - **Exit 1:** the median is more than 5% above 1.0. Stop the release:
+     measure no figure and make no release commit. A frame the base
+     decodes less deeply stays in the timing, so a release that adds or
+     deepens decoders can exit 1 for doing more work. This prints how
+     many frames both trees decode, how many of them have a different
+     layer count in the two trees, and each tree's total layers, the
+     base's first. That cause is ruled out only when the count with a
+     different depth is 0; when it is not, look at those frames before
+     treating the exit 1 as a slowdown:
+
+     ```bash
+     depth() { uv run --frozen python -I -S -B -c 'import sys
+     sys.path[:0] = [sys.argv[1], "scripts"]
+     from pathlib import Path
+     from _pcap import corpus_frames
+     from netprotocols import decode_frame
+     for frame in corpus_frames(Path("tests/fixtures")):
+         try:
+             print(len(decode_frame(frame).layers))
+         except Exception:
+             print(-1)' "$1"; }
+     d=$(mktemp -d) && git archive "v$PREV" src | tar -x -C "$d" &&
+       paste <(depth "$d/src") <(depth src) | awk '$1 >= 0 && $2 >= 0 {
+         n++; diff += $1 != $2; b += $1; h += $2 } END {
+         print n + 0, "frames,", diff + 0, "with a different depth; layers:", b + 0, h + 0 }'
+     [ -z "$d" ] || rm -rf -- "$d"
+     ```
+
+     `git log --first-parent --oneline "v$PREV"..HEAD` lists the merges
+     since the release; a run with `--base` set to one of them gives a
+     median near 1.0 when the slowdown is at or before it. Then either
+     fix it on `master` by its own PR, through CONTRIBUTING's
+     [Pull requests](CONTRIBUTING.md#pull-requests), delete the release
+     branch (`git switch master && git branch -D "release-$V"`) and
+     start again from step 1, or have the maintainer accept it, with its
+     reason (more decoding, or a correctness fix that costs decode time)
+     recorded with the result.
+   - **Exit 2:** the comparison could not run. The message says why: a
+     `v$PREV` the clone lacks (`git fetch origin --tags`), a tree that
+     fails to load, or no fixtures. Fix the cause and run it again.
+
+   Record both runs as a row of the command table in the
+   `### Re-measured for X.Y.Z` section that step 4 adds to
+   `docs/CLAIMS.md`, with the Claim column `drift vs v$PREV`, since the
+   check backs no claim: the command, the commit checked, the pairs, the
+   frames each tree raises on, the noise run's median, the check's
+   median, quartiles and exit status, and the reason for an accepted
+   exit 1. Step 4's CHANGELOG entry says the same.
+4. **A figure that is not re-measured is marked as not repeated for
    this release, with the version it was last measured in** (Rule 4). It
    is never carried over silently. README and CLAIMS each name the
    figures not repeated and the version each was last measured in, and
    the CHANGELOG entry says the same.
-4. **The maintainer approves the numbers before they are committed.**
-   Show each previous figure, the new one and the individual runs, and
-   wait for approval.
+5. **The maintainer approves the numbers before they are committed.**
+   Show item 3's result, each previous figure, the new one and the
+   individual runs, and wait for approval.
 
 ## 4. Make the `chore(release): X.Y.Z` commit
 
@@ -189,16 +274,18 @@ One commit holds the release change, in these six files.
    `## [Unreleased]`, so that everything unreleased moves under the new
    heading and `## [Unreleased]` is left empty. Add a `### Development`
    entry to the new section recording the re-measurement: corpus,
-   machine, method, competitor versions, each new figure against the
-   previous one, and what was not repeated. `release.yml` publishes this
-   section as the GitHub release notes.
+   machine, method, competitor versions, step 3's decode-time check
+   against `v$PREV`, each new figure against the previous one, and what
+   was not repeated. `release.yml` publishes this section as the GitHub
+   release notes.
 4. In `README.md`, update the figures and the "re-measured for" date in
    [Why NETProtocols](README.md#why-netprotocols), and the list of
    versions on PyPI in [Roadmap](README.md#roadmap).
 5. In `docs/CLAIMS.md`, add a `### Re-measured for X.Y.Z (YYYY-MM-DD)`
    section after the previous one under Measurement baseline (method,
-   command table, what was not re-measured), and update the heading and
-   the `**Status: VERIFIED for X.Y.Z**` line of each re-measured claim.
+   command table with step 3's decode-time check as a row, what was not
+   re-measured), and update the heading and the
+   `**Status: VERIFIED for X.Y.Z**` line of each re-measured claim.
 6. Commit:
 
    ```bash
@@ -227,7 +314,18 @@ One commit holds the release change, in these six files.
    follow-up). Step 8 builds it again from the commit to be tagged when
    that is a later `master` commit.
 
-Review fixes go on the branch as further commits.
+Review fixes go on the branch as further commits; after each one, run:
+
+```bash
+git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" HEAD -- \
+  src tests/fixtures scripts/benchmark_ab.py \
+  scripts/_benchmark_ab_worker.py scripts/_pcap.py
+```
+
+If it exits 1, the benchmark's inputs changed in more than the version
+line since `CHECKED`, so run item 3 again on the branch head, set
+`CHECKED` again once its result is accepted, and update its CLAIMS row
+and the CHANGELOG entry from that rerun.
 
 ## 5. Run the QA ladder
 
@@ -438,6 +536,32 @@ git show "$SHA:CHANGELOG.md" | awk -v ver="$V" '
 The `awk` program is `release.yml`'s own. The workflow runs it only after
 the PyPI upload, so a missing section caught there leaves a published
 version without a GitHub release.
+
+`CHECKED` is the commit of step 3's item 3 last accepted result (its
+CLAIMS row names the commit, if the shell has lost it), and review
+fixes, gate fixes or a later `master` commit can change the benchmark's
+inputs after it: `src`, the `tests/fixtures` corpus and the scripts that
+read and time it. Compare the two, ignoring the version line, which
+step 4 changes:
+
+```bash
+git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" "$SHA" -- \
+  src tests/fixtures scripts/benchmark_ab.py \
+  scripts/_benchmark_ab_worker.py scripts/_pcap.py
+echo "exit: $?"
+```
+
+Exit 0 means the inputs are unchanged and the check stands. Exit 1
+means they changed, and lists the files: run item 3 again on `$SHA`
+(`git switch --detach "$SHA"`, then item 3's block), set
+`CHECKED=$CANDIDATE` once its result is accepted, and do not tag on a
+check that exits 1 unaccepted: fix it on `master` as in step 7's gate
+fixes, or have the maintainer accept it, as item 3 says.
+When the result differs from the CLAIMS row and the CHANGELOG entry,
+correct them as in step 7's gate fixes and come back to this step with
+`SHA` set to the new commit. Exit 128 means `CHECKED` or `SHA` is empty
+or not a commit in this clone: set both and compare again. A retag
+(step 11) comes through this step, so the same holds for it.
 
 Step 4 measured the wheel on the release branch. When `$SHA` is a later
 `master` commit, gate fixes may have changed what the wheel holds, so
