@@ -1195,19 +1195,27 @@ class OSPF(Protocol):
             )
         body = bytes(data[size:packet_length])
         cls._check_body(type_, body, base=size)
-        return cls(
-            version=version,
-            type=type_,
-            packet_length=packet_length,
-            router_id=bytes_to_ipv4(router_id),
-            area_id=bytes_to_ipv4(area_id),
-            checksum=checksum,
-            instance_id=instance_id,
-            au_type=au_type,
-            authentication=authentication,
-            body=body,
-            auth_trailer=bytes(data[packet_length:end]),
-        )
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the version and the body's framing are checked
+        # above, the body is packet_length - 24 bytes, the
+        # Authentication field is the struct's 8 bytes, and the trailer
+        # is sliced to the length the AuType gives after the buffer is
+        # confirmed to hold it.
+        header = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(header, "version", version)
+        set_field(header, "type", type_)
+        set_field(header, "packet_length", packet_length)
+        set_field(header, "router_id", bytes_to_ipv4(router_id))
+        set_field(header, "area_id", bytes_to_ipv4(area_id))
+        set_field(header, "checksum", checksum)
+        set_field(header, "instance_id", instance_id)
+        set_field(header, "au_type", au_type)
+        set_field(header, "authentication", authentication)
+        set_field(header, "body", body)
+        set_field(header, "auth_trailer", bytes(data[packet_length:end]))
+        return header
 
     def __bytes__(self) -> bytes:
         """Serialize this packet to its exact on-wire form."""

@@ -252,20 +252,33 @@ class VRRP(Protocol):
                 actual=len(data),
             )
         to_str = bytes_to_ipv6 if cls._ipv6 else bytes_to_ipv4
-        return cls(
-            version=version,
-            type=ver_type & 0x0F,
-            vrid=vrid,
-            priority=priority,
-            count_ip_addrs=count,
-            adver_word=adver_word,
-            checksum=checksum,
-            addresses=tuple(
-                to_str(bytes(data[offset : offset + width]))
-                for offset in range(cls._struct.size, addresses_end, width)
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the version is checked above, the type is a nibble,
+        # one address is read per count, and the authentication data is
+        # sliced to the version's length after the buffer is confirmed
+        # to hold it.
+        advert = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(advert, "version", version)
+        set_field(advert, "type", ver_type & 0x0F)
+        set_field(advert, "vrid", vrid)
+        set_field(advert, "priority", priority)
+        set_field(advert, "count_ip_addrs", count)
+        set_field(advert, "adver_word", adver_word)
+        set_field(advert, "checksum", checksum)
+        set_field(
+            advert,
+            "addresses",
+            tuple(
+                [
+                    to_str(bytes(data[offset : offset + width]))
+                    for offset in range(cls._struct.size, addresses_end, width)
+                ]
             ),
-            auth_data=bytes(data[addresses_end:end]),
         )
+        set_field(advert, "auth_data", bytes(data[addresses_end:end]))
+        return advert
 
     def __bytes__(self) -> bytes:
         """Serialize the advert, re-encoding its address strings."""

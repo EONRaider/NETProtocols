@@ -500,6 +500,46 @@ class TestPacketProperties:
                 assert bytes(Packet(*layers)) == bytes(data[:consumed])
 
 
+#: The classes whose decode() builds its instance without __init__ or
+#: __post_init__ (see "Decode-path construction" in _base.py).
+DIRECTLY_BUILT = (Ethernet, ARP, IPv4, OSPF, BGP, VRRP, VRRPv6)
+
+
+def assert_constructor_accepts(header: Protocol) -> None:
+    """Rebuild a decoded header through its constructor, which validates
+    every field, and check the rebuilt header equals it."""
+    rebuilt = replace(header)
+    assert rebuilt == header
+    assert bytes(rebuilt) == bytes(header)
+
+
+class TestDirectlyBuiltDecodesPassValidation:
+    """A decode() that skips __post_init__ must produce only instances
+    __post_init__ accepts: a constructor given the same field values
+    raises nothing."""
+
+    @given(data=fuzz_input)
+    def test_every_layer_of_a_walk(self, data: bytes) -> None:
+        for layer in decode_frame(data, lax=True).layers:
+            if isinstance(layer, DIRECTLY_BUILT):
+                assert_constructor_accepts(layer)
+
+    @given(data=fuzz_input)
+    def test_every_class_on_the_raw_bytes(self, data: bytes) -> None:
+        for protocol in DIRECTLY_BUILT:
+            with contextlib.suppress(ProtocolError):
+                assert_constructor_accepts(protocol.decode(data))
+
+    def test_the_corpus(self) -> None:
+        checked = 0
+        for frame in CORPUS_FRAMES:
+            for layer in decode_frame(frame, lax=True).layers:
+                if isinstance(layer, DIRECTLY_BUILT):
+                    assert_constructor_accepts(layer)
+                    checked += 1
+        assert checked > len(CORPUS_FRAMES)
+
+
 class TestNDPAccessorSafety:
     @given(data=fuzz_input)
     def test_ndp_accessors_never_hang_or_escape(self, data: bytes) -> None:

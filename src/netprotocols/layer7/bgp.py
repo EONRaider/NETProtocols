@@ -845,15 +845,19 @@ class BGP(Protocol):
                 expected=length,
                 actual=len(data),
             )
-        message = cls(
-            marker=_MARKER,
-            length=length,
-            type=type_,
-            body=bytes(data[_HEADER_LEN:length]),
-        )
-        rest = bytes(data[length : length + 16])
-        if rest and rest == _MARKER[: len(rest)]:
-            object.__setattr__(message, "_followed", True)
+        # Every check __post_init__ runs holds here, so the instance is
+        # built directly, without it (see "Decode-path construction" in
+        # _base.py): the Marker is 16 bytes, the Type a byte, and the
+        # body is length - 19 bytes after the buffer is confirmed to
+        # hold the message.
+        message = object.__new__(cls)
+        set_field = object.__setattr__
+        set_field(message, "marker", _MARKER)
+        set_field(message, "length", length)
+        set_field(message, "type", type_)
+        set_field(message, "body", bytes(data[_HEADER_LEN:length]))
+        rest = data[length : length + 16]
+        set_field(message, "_followed", bool(rest) and _MARKER.startswith(rest))
         return message
 
     def __bytes__(self) -> bytes:
