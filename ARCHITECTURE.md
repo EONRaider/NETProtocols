@@ -1066,8 +1066,9 @@ values of the first six and 4,096 of the 65,536 Groups, about 2.6 in
 2^48. That is stronger than STUN's guard below, though nowhere near
 BGP's, and only then is the 42-byte TLV held against the buffer and the
 rest of the datagram walked as TLVs, a Group State TLV of another
-Length, a Text Authentication TLV (Type 3) of other than 8 bytes or an
-MD5 Authentication TLV (Type 4) of other than 28 rejecting it.
+Length, an Interface State TLV (Type 2) of other than 4 bytes, a Text
+Authentication TLV (Type 3) of other than 8 or an MD5 Authentication
+TLV (Type 4) of other than 28 rejecting it.
 Measured as above, by `scripts/measure_port_guard.py --one-generator
 --port 1985 --count HSRP --count HSRPv2` and `--port 2029`, the walks
 to port 1985 are unchanged by `HSRPv2`: on the tree that added it as on
@@ -1079,11 +1080,17 @@ every payload whose first byte is 1 that the tree before rejected at
 ended with `stopped_by` set and none decoded an HSRPv2 layer, where on
 the tree before, with nothing registered there, every walk ended at UDP
 with none set. With the eight judged bytes forced to values they
-accept (`random.Random(0)`), `HSRPv2.decode()` accepted 636 of 100,000
-random 300-byte payloads: the walk of the 258 bytes after the Group
-State TLV is what turns away the rest, almost all of them for a TLV
-whose Length runs past the datagram. Past those bytes the Identifier,
-the Priority, the timers and the address are not judged.
+accept (`random.Random(0)`), `HSRPv2.decode()` accepted 628 of 100,000
+random 300-byte payloads (636 before the Interface State TLV's Length
+was judged): the walk of the 258 bytes after the Group State TLV is
+what turns away the rest, almost all of them for a TLV whose Length
+runs past the datagram. Judging that Length changes none of the walks
+to port 1985 or 2029 above: `scripts/measure_port_guard.py --port 1985
+--count HSRP --count HSRPv2 --count HSRPAdvertise` and `--port 2029
+--count HSRPv2`, each with and without `--one-generator`, print the
+same figures on the tree that judges it as on the tree before. Past
+those bytes the Identifier, the Priority, the timers, the address and
+the Interface State TLV's counts are not judged.
 
 Cisco's Op Code 3 interface-state Advertise, version 0 like HSRPv1 but
 16 bytes laid out as a TLV, opens with `00 03`, and the walk hands it

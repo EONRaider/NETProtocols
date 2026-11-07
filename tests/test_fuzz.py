@@ -2112,6 +2112,7 @@ def _hsrpv2_seeded(draw: st.DrawFn) -> bytes:
 #: decoded message.
 _HSRPV2_ACCESSORS = (
     "group_state",
+    "interface_state",
     "text_authentication",
     "md5_authentication",
     "header_len",
@@ -2130,6 +2131,7 @@ _HSRPV2_TLV_ACCESSORS = {
         "auth_data_str",
         "is_default_auth",
     ),
+    "HSRPv2InterfaceState": (),
     "HSRPv2MD5Authentication": ("algorithm_name",),
     "HSRPv2TLV": ("type_name",),
 }

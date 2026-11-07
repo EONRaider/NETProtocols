@@ -1145,6 +1145,30 @@ The values are also hard-coded, independently, in
   whether it sends other TLVs. `check_fixtures`
   reads an HSRPv2 message on 1985 (first byte 1) or 2029 with
   `_check_hsrpv2`, and has none in the corpus to read.
+  **The corpus holds no HSRPv2 Interface State TLV either**, for the
+  same reasons. `HSRPv2.interface_state` is therefore tested only
+  against hand-built vectors in `tests/test_hsrpv2_interface_state.py`
+  (and `tests/test_hsrpv2.py`, `tests/test_check_fixtures.py`,
+  `tests/test_fuzz.py`, `tests/test_contract.py` and
+  `tests/conftest.py`'s `raw_hsrpv2_interface_state`), packed field by
+  field with `struct` and `socket` in the layout of packet-hsrp.c at
+  commit 6f7207a6 (the TLV's diagram, lines 80-87, its reading, lines
+  544-564, and its two 16-bit counts, lines 777-785), each labelled as
+  hand-built. tshark 4.2.2 decodes the ten `VECTORS` of
+  `tests/test_hsrpv2_interface_state.py`, `tests/test_hsrpv2.py`'s
+  Resign vector, `raw_hsrpv2_interface_state` and the passing message
+  of `tests/test_check_fixtures.py`'s Interface State case, wrapped in
+  Ethernet/IPv4/UDP 1985 to 224.0.0.102 or Ethernet/IPv6/UDP 2029 to
+  ff02::66 in a temporary pcap that is not committed, with good
+  checksums and the Active Groups and Passive Groups the library reads
+  from the same bytes, but for one: after a TLV of Type 0, packet-hsrp.c
+  stops and shows the rest as data, where the library walks on and
+  decodes the Interface State TLV after it. Every Length but 4 that
+  tshark was given it shows as data, where the library raises. That is
+  the dissector's reading, not a router's: nothing here shows when a
+  Cisco router sends the TLV, what its counts hold, or where among the
+  TLVs it puts it. `check_fixtures` judges its Length, 4, and not its
+  counts.
   **The corpus holds no HSRP Advertise (Op Code 3) either**, for the
   same reasons: Yersinia 0.8.2 sends Hello, Coup and Resign only, and
   no open-source sender of the interface-state Advertise exists.

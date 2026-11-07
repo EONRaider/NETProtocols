@@ -1421,6 +1421,18 @@ def _() -> tuple[bytes, bytes]:
     return hsrpv2(42, b"\x04")
 
 
+#: A hand-built HSRPv2 Interface State TLV in the layout of Wireshark's
+#: packet-hsrp.c: Type 2, Length 4, 1 active group and 0 passive.
+HSRPV2_INTERFACE_STATE = bytes([2, 4]) + struct.pack("!HH", 1, 0)
+
+
+@case("hsrpv2-tlv-length")
+def _() -> tuple[bytes, bytes]:
+    # An Interface State TLV of 5 bytes, where packet-hsrp.c reads 4.
+    good = HSRPV2_V4 + HSRPV2_INTERFACE_STATE
+    return hsrpv2_v4(good), hsrpv2_v4(HSRPV2_V4 + bytes([2, 5]) + bytes(5))
+
+
 @case("hsrpv2-version")
 def _() -> tuple[bytes, bytes]:
     return hsrpv2(2, b"\x03")
