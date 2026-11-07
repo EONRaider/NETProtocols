@@ -904,6 +904,20 @@ else's.
 ### 1.2 "dpkt decodes 1.5× faster" (was "Within 15% of dpkt on decode", true through 2.4.0)
 **Status: VERIFIED for 2.9.0 — the 15% claim no longer holds, on the 265-, 293-, 379-, 394- or 411-frame corpus**
 
+*Measured on the decode-path work of
+[#250](https://github.com/EONRaider/NETProtocols/issues/250) (2026-11-07,
+not a release re-measurement; another machine, CPython 3.13.18,
+`dpkt 1.9.8`, the 509-frame corpus): `benchmark.py --compare
+--repetitions 30 --trials 9` reads **dpkt 1.20-1.27× faster** on the
+branch against 1.44-1.47× on master `d68b7fb`, three alternating runs
+each. The routing captures moved most: dpkt leads by 1.14× on OSPF
+(1.58× on master), 1.16× on BGP (1.60×), 1.01× on PIM (2.26×), 1.08×
+on RIP (1.38×) and 0.98× on VRRP (1.30×). The same-job A/B runner puts
+the branch's corpus decode time at 0.850 of master's and the routing
+captures' at 0.677 (16 pairs, medians). The heading and status stand
+until the next release re-measures them on the release machine
+(Rule 4).*
+
 *Re-measured for 2.9.0 (2026-11-06, the 411-frame corpus; see above):
 **dpkt 1.53× faster** on the median-ratio run (146,273 against
 223,273; 1.51-1.55× across three runs).*
