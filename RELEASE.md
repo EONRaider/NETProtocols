@@ -164,16 +164,11 @@ until the slowdown is fixed or accepted.
 
 3. **Check decode time against the last release, before any figure.**
    CI's benchmark gate compares each pull request only with its
-   merge-base, so slowdowns that each stay under its threshold can add
-   up across a release. `scripts/benchmark_ab.py` compares the release
-   branch with `v$PREV` on this machine, under item 2's load gate and
-   core. The head is the working tree's `src`, so the tree must be clean.
-   Step 1's fifth check showed that `v$PREV` is the latest tag;
-   `git describe --tags --abbrev=0` names the same tag on the release
-   branch. `CHECKED` keeps the commit measured, for step 8. The first
-   run is a noise run, the head against itself; the second is the
-   check. Each is gated like item 2's runs, and the load is read again
-   right after it:
+   merge-base, so slowdowns under its threshold can add up across a
+   release. `scripts/benchmark_ab.py` compares the working tree's `src`,
+   so the tree must be clean, with `v$PREV`'s, under item 2's load gate
+   and core. `CHECKED` keeps the commit measured, for step 8. The first
+   run is a noise run, the head against itself; the second is the check:
 
    ```bash
    git status --porcelain                                 # nothing
@@ -183,82 +178,66 @@ until the slowdown is fixed or accepted.
      until awk '{ exit !($1 < 1.0) }' /proc/loadavg; do sleep 15; done
      taskset -c 2 uv run --frozen --group bench python scripts/benchmark_ab.py \
        --base "$base"; echo "benchmark_ab --base $base exit: $?"
-     awk '{ print "load after: " $1; exit !($1 < 1.0) }' /proc/loadavg ||
-       echo "DISCARD: the load broke the threshold during this run"
    done
    ```
 
-   A run during which the load broke the threshold, shown by a
-   one-minute average at or above 1.0 right after it, is discarded and
-   repeated, as item 2 says. The script's defaults apply: 16 pairs, and
-   a failure when the median ratio of head time over base time is more
-   than 5% above 1.0. That threshold is CI's, set from `ubuntu-latest`'s
-   noise (CLAIMS 1.7), not this machine's, so the noise run tests it
-   here: if the noise run's median is outside 0.975-1.025, half the
-   threshold either side of 1.0, the threshold cannot tell this
-   machine's noise from drift, and the check's result, whatever its
-   exit status, goes to the maintainer to judge.
-
-   The check does not always compare equal work, as a pull request's
-   gate does. Both trees decode the release branch's `tests/fixtures`,
-   and only frames that either tree raises on are dropped for both; the
-   script prints how many each tree raises on. A frame the base decodes
-   less deeply, for lack of a decoder or of a layer it reads, stays in,
-   and the head's deeper decode counts as time. So a release that adds
-   or deepens decoders can exit 1 for doing more work. Before treating
-   an exit 1 as a slowdown, compare how deep each tree decodes; this
-   prints the layers each tree's `decode_frame` returns on the same
-   frames, the base's first:
-
-   ```bash
-   d=$(mktemp -d) && git archive "v$PREV" src | tar -x -C "$d" &&
-     for src in "$d/src" src; do
-       uv run --frozen python -I -B -c 'import sys
-   sys.path[:0] = [sys.argv[1], "scripts"]
-   from pathlib import Path
-   from _pcap import corpus_frames
-   from netprotocols import decode_frame
-   n = 0
-   for frame in corpus_frames(Path("tests/fixtures")):
-       try:
-           n += len(decode_frame(frame).layers)
-       except Exception:
-           pass
-   print(sys.argv[1], "layers:", n)' "$src"
-     done
-   [ -z "$d" ] || rm -rf -- "$d"
-   ```
-
-   The check's exit status decides what follows; a noise run that
-   exits 2 is fixed as an exit 2 is.
+   The `until` loop is the load rule, as in item 2; the load is not read
+   after a run, which itself keeps CPU 2 busy. To discard or repeat a
+   run is to rerun its `benchmark_ab.py --base` command behind the same
+   loop. The script's defaults apply: 16 pairs, and a failure when the
+   median ratio of head time over base time is more than 5% above 1.0.
+   That threshold is CI's, set from `ubuntu-latest`'s noise (CLAIMS
+   1.7), so if the noise run's median is outside 0.975-1.025, half the
+   threshold either side of 1.0, the check's result, whatever its exit
+   status, goes to the maintainer to judge. A noise run that exits 2 is
+   fixed as the check's exit 2 is. The check's exit status decides what
+   follows:
    - **Exit 0:** the median is within the threshold. Go on to the
      figures.
    - **Exit 1:** the median is more than 5% above 1.0. Stop the release:
-     measure no figure and make no release commit. Find the change:
+     measure no figure and make no release commit. A frame the base
+     decodes less deeply stays in the timing, so a release that adds or
+     deepens decoders can exit 1 for doing more work. This prints how
+     many frames both trees decode and each tree's layers on them, the
+     base's first; equal layers rule that cause out:
+
+     ```bash
+     depth() { uv run --frozen python -I -S -B -c 'import sys
+     sys.path[:0] = [sys.argv[1], "scripts"]
+     from pathlib import Path
+     from _pcap import corpus_frames
+     from netprotocols import decode_frame
+     for frame in corpus_frames(Path("tests/fixtures")):
+         try:
+             print(len(decode_frame(frame).layers))
+         except Exception:
+             print(-1)' "$1"; }
+     d=$(mktemp -d) && git archive "v$PREV" src | tar -x -C "$d" &&
+       paste <(depth "$d/src") <(depth src) | awk '$1 >= 0 && $2 >= 0 {
+         n++; b += $1; h += $2 } END { print n, "frames, layers:", b, h }'
+     [ -z "$d" ] || rm -rf -- "$d"
+     ```
+
      `git log --first-parent --oneline "v$PREV"..HEAD` lists the merges
-     since the release, each PR's `benchmark` job printed its own median,
-     and a run with `--base` set to one of those merge commits compares
-     the release branch with it, so a median near 1.0 there puts the
-     slowdown at or before that commit. Then either fix it on `master`
-     by its own PR, through CONTRIBUTING's
+     since the release; a run with `--base` set to one of them gives a
+     median near 1.0 when the slowdown is at or before it. Then either
+     fix it on `master` by its own PR, through CONTRIBUTING's
      [Pull requests](CONTRIBUTING.md#pull-requests), delete the release
      branch (`git switch master && git branch -D "release-$V"`) and
      start again from step 1, or have the maintainer accept it, with its
-     reason (more decoding, or a correctness fix that costs decode time,
-     for instance) recorded with the result, and the release goes on.
+     reason (more decoding, or a correctness fix that costs decode time)
+     recorded with the result.
    - **Exit 2:** the comparison could not run. The message says why: a
      `v$PREV` the clone lacks (`git fetch origin --tags`), a tree that
-     fails to load, or no fixtures. Fix the cause and run it again. The
-     release does not go on without an exit 0 or an accepted exit 1.
+     fails to load, or no fixtures. Fix the cause and run it again.
 
-   Record both runs in the `### Re-measured for X.Y.Z` section that
-   step 4 adds to `docs/CLAIMS.md`, as a row of its command table whose
-   Claim column reads `drift vs v$PREV` (`drift vs v2.9.0` for 2.10.0),
-   since the check backs no claim: the command, the base tag, the
-   commit checked, the pairs, the frames each tree raises on, the noise
-   run's median, the check's median and quartiles and its exit status,
-   with the reason for an accepted exit 1. The CHANGELOG entry of step 4
-   says the same.
+   Record both runs as a row of the command table in the
+   `### Re-measured for X.Y.Z` section that step 4 adds to
+   `docs/CLAIMS.md`, with the Claim column `drift vs v$PREV`, since the
+   check backs no claim: the command, the commit checked, the pairs, the
+   frames each tree raises on, the noise run's median, the check's
+   median, quartiles and exit status, and the reason for an accepted
+   exit 1. Step 4's CHANGELOG entry says the same.
 4. **A figure that is not re-measured is marked as not repeated for
    this release, with the version it was last measured in** (Rule 4). It
    is never carried over silently. README and CLAIMS each name the
@@ -328,9 +307,11 @@ One commit holds the release change, in these six files.
    follow-up). Step 8 builds it again from the commit to be tagged when
    that is a later `master` commit.
 
-Review fixes go on the branch as further commits. When one changes
-`src`, run step 3's item 3 again on the branch head if step 8's check,
-with `HEAD` for `$SHA`, prints any changed line.
+Review fixes go on the branch as further commits; after each one, run
+`git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" HEAD -- src`,
+and if it exits 1, `src` changed in more than the version line since
+step 3's item 3 measured it, so run item 3 again on the branch head and
+update its CLAIMS row and the CHANGELOG entry from that rerun.
 
 ## 5. Run the QA ladder
 
@@ -544,26 +525,25 @@ version without a GitHub release.
 
 Step 3's item 3 measured `CHECKED` (its CLAIMS row names the commit,
 if the shell has lost it), and review fixes, gate fixes or a later
-`master` commit can change `src` after it. This prints every
-line of `src` that differs between the two other than the version
-line, which step 4 changes, or `src unchanged`:
+`master` commit can change `src` after it. Compare the two, ignoring the
+version line, which step 4 changes:
 
 ```bash
-[ -n "$CHECKED" ] && [ -n "$SHA" ] &&
-  { git diff -U0 "$CHECKED" "$SHA" -- src | grep -E '^[-+]' |
-      grep -v -E '^(\+\+\+|---) |^[-+]__version__ = ' ||
-      echo "src unchanged"; } ||
-  echo "CHECKED or SHA is empty: set both before comparing"
+git diff --exit-code --stat -I '^__version__ = ' "$CHECKED" "$SHA" -- src
+echo "exit: $?"
 ```
 
-If it prints any changed line, run item 3 again on `$SHA` first
+Exit 0 means `src` is unchanged and the check stands. Exit 1 means it
+changed, and lists the files: run item 3 again on `$SHA`
 (`git switch --detach "$SHA"`, then item 3's block, which sets `CHECKED`
-to `$SHA`), and do not tag on an exit 1 there: fix it on `master` as
-step 7's gate fixes are made, or have the maintainer accept it, as item
-3 says. Correct the CLAIMS row and the CHANGELOG entry by a PR as below
-when the result differs from theirs, and come back to this step with
-`SHA` set to the new commit. A retag (step 11) comes through this step,
-so the same holds for it.
+to `$SHA`), and do not tag on a check that exits 1: fix it on
+`master` as in step 7's gate fixes, or have the maintainer accept it,
+as item 3 says.
+When the result differs from the CLAIMS row and the CHANGELOG entry,
+correct them as in step 7's gate fixes and come back to this step with
+`SHA` set to the new commit. Exit 128 means `CHECKED` or `SHA` is empty
+or not a commit in this clone: set both and compare again. A retag
+(step 11) comes through this step, so the same holds for it.
 
 Step 4 measured the wheel on the release branch. When `$SHA` is a later
 `master` commit, gate fixes may have changed what the wheel holds, so
