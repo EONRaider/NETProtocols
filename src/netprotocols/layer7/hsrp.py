@@ -278,9 +278,9 @@ TLV (Type 2, Length 4), the Text Authentication TLV (Type 3, Length 8),
 the MD5 Authentication TLV (Type 4, Length 28), an Algorithm byte (1,
 MD5), a padding byte, 2 bytes of Flags, the sender's IPv4 address, a
 4-byte Key ID and the 16-byte digest, which is kept raw and not
-verified. The Interface State TLV holds two 16-bit counts, of the
-sender's active groups and of its passive groups, laid out as
-packet-hsrp.c draws it::
+verified. The Interface State TLV holds packet-hsrp.c's Active Groups
+and Passive Groups, two 16-bit counts, laid out as packet-hsrp.c draws
+it::
 
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -923,9 +923,16 @@ _IP_VERSION_NAMES: dict[int, str] = {4: "IPv4", 6: "IPv6"}
 #: The largest HSRPv2 group number.
 _MAX_V2_GROUP = 4095
 
-#: The Types of the TLVs this module decodes into their own classes.
+#: The Type of HSRPv2's Interface State TLV, decoded into
+#: :class:`HSRPv2InterfaceState`.
 _INTERFACE_STATE_TYPE = 2
+
+#: The Type of HSRPv2's Text Authentication TLV, decoded into
+#: :class:`HSRPv2TextAuthentication`.
 _TEXT_AUTH_TYPE = 3
+
+#: The Type of the MD5 Authentication TLV, decoded into
+#: :class:`HSRPv2MD5Authentication`.
 _MD5_AUTH_TYPE = 4
 
 #: The value Length each typed TLV must have, by Type.
@@ -1286,10 +1293,10 @@ class HSRPv2InterfaceState:
     Its layout is packet-hsrp.c's (see "HSRPv2" in the module
     docstring). Neither count is judged by :meth:`HSRPv2.decode`.
 
-    :param active_groups: The number of the sender's groups in which it
-        is the Active router, 16 bits.
-    :param passive_groups: The number of the sender's groups in which it
-        is not the Active router, 16 bits.
+    :param active_groups: packet-hsrp.c's Active Groups, a 16-bit
+        count.
+    :param passive_groups: packet-hsrp.c's Passive Groups, a 16-bit
+        count.
     :raises InvalidFieldError: if a count does not fit 16 bits.
 
     ``bytes(tlv)`` is the 6-byte TLV, its Type and Length included.

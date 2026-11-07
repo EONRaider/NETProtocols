@@ -1808,11 +1808,11 @@ def _check_hsrpv2(
     packet-hsrp.c reads (40, 4, 8 and 28). The Interface State TLV's
     length is judged as packet-hsrp.c lays it out, an Active Groups
     and a Passive Groups count of 2 bytes each, and its counts are not
-    judged. Each
-    Group State TLV must hold Version 2, an Op Code of Hello, Coup or
-    Resign, a State packet-hsrp.c defines, the IP Version of the IP
-    header carrying it and a Group of at most 4095, and in a Hello a
-    Hold Time above the Hello Time. As this corpus's conventions, an
+    judged. Each Group State TLV must hold Version 2, an Op Code of
+    Hello, Coup or Resign, a State packet-hsrp.c defines, the IP
+    Version of the IP header carrying it and a Group of at most 4095,
+    and in a Hello a Hold Time above the Hello Time. As this corpus's
+    conventions, an
     IPv4 virtual address must be followed by 12 zero bytes in its
     16-byte field and a Text Authentication TLV's data must be a
     clear-text password, printable ASCII padded with NUL bytes."""

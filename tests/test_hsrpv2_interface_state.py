@@ -16,7 +16,9 @@ by lines 544-564 and declared 16-bit by lines 777-785; any other Length
 falls to the Undefined TLV branch of lines 594-599. The tests check
 that each of the VECTORS decodes to the counts packet-hsrp.c reads from
 it, alone and wrapped in the frames ipv4_frame() and ipv6_frame()
-build.
+build, but for after_raw_tlv: packet-hsrp.c stops at its Type 0 TLV and
+reads no Interface State TLV, which the library walks on to and
+decodes.
 """
 
 import importlib.util
