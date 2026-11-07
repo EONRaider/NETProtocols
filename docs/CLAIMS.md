@@ -1267,13 +1267,20 @@ audit for #101 caught the mismatch).
 ### 1.7 "Decode throughput is regression-gated in CI"
 **Status: VERIFIED** — the gate itself stands; the comparative form rests on the #124 audit below, re-run 2026-11-04 for 2.8.0
 
-Every pull request runs the corpus benchmark and fails at 15% below
-`benchmarks/baseline.json` (`.github/workflows/ci.yml`). Throughput is
-normalized against a fixed calibration workload so a baseline survives
-a change of machine, and a failing check re-measures once before
-failing so a noisy runner does not block unrelated work.
+Every pull request and every push to `master` runs an A/B comparison
+in one job (`benchmark` in `.github/workflows/ci.yml`):
+`scripts/benchmark_ab.py` times the pull request's head and its
+merge-base with `master` (on a push, the pushed commit and the one
+before it), each in fresh, isolated processes, in alternating pairs on
+the same runner and on the same frames (the head's `tests/fixtures`).
+The job fails when the median of head time over base time is more than
+the script's `THRESHOLD` percent above 1.0. No committed baseline is
+involved, so neither a change of runner nor a new capture moves the
+figure the gate reads. `.github/workflows/benchmark-noise.yml` runs the
+same comparison with the base equal to the head, to measure the
+runner's noise.
 
-Reproduce: `uv run --group bench python scripts/benchmark.py --check`.
+Reproduce: `uv run --frozen python scripts/benchmark_ab.py --base origin/master`.
 
 **"No other Python packet library in this comparison set gates
 performance in CI" — audited 2026-09-04 (#124), and the claim is now

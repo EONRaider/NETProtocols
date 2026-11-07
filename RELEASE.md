@@ -257,12 +257,16 @@ uv run --frozen sphinx-build -W -n -b dummy docs "$(mktemp -d)"; echo "sphinx ex
 uvx bandit==1.9.4 -r src scripts -q   # without uvx on PATH: uv tool run bandit==1.9.4 -r src scripts -q
 ```
 
-The bandit baseline is 11 Low, 0 Medium, 0 High, taken with bandit
-1.9.4 for 2.9.0; it holds for that version, hence the pin. Investigate
-any new finding before going on. CI additionally runs the test matrix
+The bandit baseline is 17 Low, 0 Medium, 0 High, with bandit 1.9.4;
+it holds for that version, hence the pin. 2.9.0 read 11; the other six
+are `scripts/benchmark_ab.py`'s `subprocess` import and its calls to
+`git` and to its worker (B404, B603 three times, B607 twice), accepted
+as `scripts/check_markers.py`'s are. Investigate any new finding before
+going on. CI additionally runs the test matrix
 on Python 3.12 to 3.14, the allocation tests, the dependency scan, the
 wheel build and its reproducibility check, the Pyodide check and the
-benchmark gate.
+benchmark gate, which times the head against its base on the runner
+(`scripts/benchmark_ab.py`).
 
 ## 6. Open the PR and merge it
 
