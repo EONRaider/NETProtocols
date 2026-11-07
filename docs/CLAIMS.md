@@ -1281,13 +1281,26 @@ audit for #101 caught the mismatch).
 ### 1.7 "Decode throughput is regression-gated in CI"
 **Status: VERIFIED** — the gate itself stands; the comparative form rests on the #124 audit below, re-run 2026-11-04 for 2.8.0
 
-Every pull request runs the corpus benchmark and fails at 15% below
-`benchmarks/baseline.json` (`.github/workflows/ci.yml`). Throughput is
-normalized against a fixed calibration workload so a baseline survives
-a change of machine, and a failing check re-measures once before
-failing so a noisy runner does not block unrelated work.
+Every pull request and every push to `master` runs an A/B comparison
+in one job (`benchmark` in `.github/workflows/ci.yml`):
+`scripts/benchmark_ab.py` times the pull request's head and its
+merge-base with `master` (on a push, the pushed commit and the one
+before it), each in fresh, isolated processes, in alternating pairs on
+the same runner and on the same frames (the head's `tests/fixtures`).
+The job fails when the median of head time over base time is more than
+5% above 1.0 (the script's `THRESHOLD`). The threshold was set from ten
+noise samples on `ubuntu-latest`: PR #365's own `benchmark` job, where
+neither tree changes `src/`, run ten times with 16 pairs each (workflow
+run 42383097241) read medians of 0.9962, 0.9985, 0.9927, 1.0016,
+1.0021, 0.9979, 0.9992, 0.9965, 0.9998 and 0.9969 (0.9927-1.0021, −0.7%
+to +0.2%), with single-pair ratios from 0.945 to 1.062, so 5% is about
+seven times the largest deviation of a median. No committed baseline is
+involved, so neither a change of runner nor a new capture moves the
+figure the gate reads. `.github/workflows/benchmark-noise.yml` runs the
+same comparison with the base equal to the head, to measure the
+runner's noise.
 
-Reproduce: `uv run --group bench python scripts/benchmark.py --check`.
+Reproduce: after `git fetch origin`, on a clean working tree (the head is the working tree's `src`), `uv run --isolated --frozen --python 3.12 python scripts/benchmark_ab.py --base "$(git merge-base origin/master HEAD)"`, the base CI uses for a pull request, on the CI job's Python 3.12.
 
 **"No other Python packet library in this comparison set gates
 performance in CI" — audited 2026-09-04 (#124), and the claim is now

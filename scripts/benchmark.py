@@ -3,7 +3,6 @@
 
     uv run --group bench python scripts/benchmark.py
     uv run --group bench python scripts/benchmark.py --compare
-    uv run --group bench python scripts/benchmark.py --check
 
 The workload is every frame in ``tests/fixtures/`` walked from
 ``Ethernet`` to the end of its chain — the corpus exercises DNS, DHCP,
@@ -15,25 +14,9 @@ Comparison mode (``--compare``) times `dpkt` and `scapy` on the same
 frames, and prints exactly what each library was asked to do. Both are
 dev-only extras: the package itself has zero runtime dependencies.
 
-Cross-machine comparison
-------------------------
-Absolute frames/sec is a property of the machine as much as the code, so
-a committed baseline cannot be compared to a run on someone else's
-hardware — or on whichever shared runner CI lands. Every run therefore
-also times a fixed calibration workload built from the same primitives
-as the decode path (``struct`` unpacking, slicing, dict lookups) and
-reports throughput normalized by it. The normalized figure is what
-``--check`` compares; the absolute one is what you quote, with the
-machine named.
-
-``--check`` re-measures with whatever settings the baseline recorded,
-rather than trusting the caller to match them.
-
-Normalization cancels how fast the *machine* is; it does not cancel the
-interpreter, since a CPython release can speed the decode path and the
-calibration workload up by different amounts. A baseline holds for the
-Python version that recorded it: ``--check`` says so when they differ,
-and the CI job pins one version.
+Absolute frames/sec is a property of the machine as much as the code;
+quote it with the machine named. ``scripts/benchmark_ab.py`` compares
+two trees of this library on one machine, which is what CI gates on.
 """
 
 from __future__ import annotations
@@ -41,21 +24,14 @@ from __future__ import annotations
 import argparse
 import json
 import platform
-import struct
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-#: Calibration passes per trial. Fixed, and large enough that a pass
-#: takes tens of milliseconds, well above scheduler noise, which would
-#: otherwise land in the normalized figure the regression gate reads.
-CALIBRATION_PASSES = 1000
-
 REPOSITORY = Path(__file__).resolve().parent.parent
 FIXTURES = REPOSITORY / "tests" / "fixtures"
-BASELINE = REPOSITORY / "benchmarks" / "baseline.json"
 
 sys.path.insert(0, str(REPOSITORY / "src"))
 sys.path.insert(0, str(REPOSITORY / "scripts"))
@@ -103,24 +79,6 @@ def decode_scapy(frames: list[bytes]) -> int:
     return decoded
 
 
-def calibration_workload() -> int:
-    """A fixed unit of work built from the decode path's primitives.
-
-    Used only as a speed reference for the machine, so a baseline
-    recorded elsewhere stays comparable. It is not a decode, and does
-    not change when the decoder does.
-    """
-    header = struct.Struct("!BBHHHBBH4s4s")
-    buffer = bytes(range(64))
-    table = {number: number * 2 for number in range(16)}
-    total = 0
-    for _ in range(200):
-        fields = header.unpack_from(buffer)
-        total += fields[0] + len(buffer[20:40])
-        total += table.get(fields[1] & 0x0F, 0)
-    return total
-
-
 def best_of(work: Callable[[], Any], trials: int) -> float:
     """Shortest wall-clock time of ``trials`` runs, after one warm-up run."""
     work()  # warm caches and imports
@@ -141,19 +99,8 @@ def measure(
             decode_netprotocols(frames)
 
     seconds = best_of(decode_pass, trials)
-    frames_per_sec = (repetitions * len(frames)) / seconds
-
-    def calibration_pass() -> None:
-        for _ in range(CALIBRATION_PASSES):
-            calibration_workload()
-
-    calibration_seconds = best_of(calibration_pass, trials)
-    calibration_per_sec = CALIBRATION_PASSES / calibration_seconds
-
     return {
-        "frames_per_sec": round(frames_per_sec, 1),
-        "calibration_per_sec": round(calibration_per_sec, 1),
-        "normalized": round(frames_per_sec / calibration_per_sec, 4),
+        "frames_per_sec": round((repetitions * len(frames)) / seconds, 1),
         "frames": len(frames),
         "repetitions": repetitions,
         "trials": trials,
@@ -273,41 +220,6 @@ def depth_report(frames: list[bytes]) -> list[str]:
     return lines
 
 
-def check(
-    current: dict[str, Any], baseline_path: Path, threshold: float
-) -> int:
-    """Compare a run against a committed baseline; 0 if within bounds."""
-    if not baseline_path.exists():
-        print(f"No baseline at {baseline_path}; run --update-baseline first.")
-        return 1
-    baseline = json.loads(baseline_path.read_text())
-    before = baseline["normalized"]
-    now = current["normalized"]
-    change = (now - before) / before * 100
-    print(
-        f"\nnormalized throughput: {now:.4f} against baseline "
-        f"{before:.4f} ({change:+.1f}%)"
-    )
-    print(f"baseline recorded: {baseline['recorded']['on']}")
-    running = platform.python_version()
-    recorded_on = baseline["recorded"].get("python", running)
-    if recorded_on.rsplit(".", 1)[0] != running.rsplit(".", 1)[0]:
-        print(
-            f"NOTE: this run is CPython {running}, the baseline is "
-            f"{recorded_on}. Normalization cancels machine speed, not the "
-            "interpreter, so the comparison below is indicative only."
-        )
-    if change < -threshold:
-        print(
-            f"REGRESSION: more than {threshold:.0f}% below the baseline.\n"
-            "If this is expected, re-record with --update-baseline and say "
-            "why in the pull request."
-        )
-        return 1
-    print(f"Within the {threshold:.0f}% threshold.")
-    return 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repetitions", type=int, default=40)
@@ -320,12 +232,6 @@ def main() -> int:
         action="store_true",
         help="report where each library stops decoding",
     )
-    parser.add_argument(
-        "--check", action="store_true", help="fail on a regression"
-    )
-    parser.add_argument("--update-baseline", action="store_true")
-    # The default equals the --threshold that ci.yml passes.
-    parser.add_argument("--threshold", type=float, default=15.0)
     parser.add_argument("--json", type=Path, help="write the results here")
     args = parser.parse_args()
 
@@ -334,21 +240,7 @@ def main() -> int:
         print(f"No fixtures found under {FIXTURES}", file=sys.stderr)
         return 1
 
-    repetitions, trials = args.repetitions, args.trials
-    if args.check and BASELINE.exists():
-        # Both figures are a best-of, which tightens as trials rise, at
-        # different rates, so a run measures with the baseline's
-        # repetitions and trials, whatever the command line says.
-        recorded = json.loads(BASELINE.read_text())
-        repetitions = recorded.get("repetitions", repetitions)
-        trials = recorded.get("trials", trials)
-        if (repetitions, trials) != (args.repetitions, args.trials):
-            print(
-                f"Measuring with the baseline's settings "
-                f"({repetitions} repetitions, best of {trials})."
-            )
-
-    result = measure(frames, repetitions, trials)
+    result = measure(frames, args.repetitions, args.trials)
     result["recorded"] = {
         "on": f"CPython {platform.python_version()} / {platform.machine()}"
         f" / {platform.system()}",
@@ -362,7 +254,6 @@ def main() -> int:
         f"{result['repetitions']} repetitions, best of {result['trials']}"
     )
     print(f"  {result['frames_per_sec']:>12,.0f} frames/sec")
-    print(f"  {result['normalized']:>12.4f} normalized (machine-independent)")
     print(f"  on {result['recorded']['on']}")
 
     if args.compare:
@@ -371,22 +262,6 @@ def main() -> int:
         print("\n".join(depth_report(frames)))
     if args.json:
         args.json.write_text(json.dumps(result, indent=2) + "\n")
-    if args.update_baseline:
-        BASELINE.parent.mkdir(parents=True, exist_ok=True)
-        BASELINE.write_text(json.dumps(result, indent=2) + "\n")
-        print(f"\nBaseline written to {BASELINE.relative_to(REPOSITORY)}")
-    if args.check:
-        status = check(result, BASELINE, args.threshold)
-        if status != 0:
-            print(
-                "\nRe-measuring once before failing: a shared runner can "
-                "lose a slice of CPU to a neighbour mid-run. A real "
-                "regression fails this second attempt too."
-            )
-            second = measure(frames, repetitions, trials)
-            second["recorded"] = result["recorded"]
-            status = check(second, BASELINE, args.threshold)
-        return status
     return 0
 
 

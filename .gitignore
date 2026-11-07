@@ -149,7 +149,7 @@ amass.log
 .logs/
 tests/fixtures/staging/
 
-# Written by the benchmark CI step (scripts/benchmark.py output)
+# Written by the benchmark CI step (scripts/benchmark_ab.py output)
 benchmark.out
 
 # npm dependency (the pyodide package itself) for scripts/pyodide/ —

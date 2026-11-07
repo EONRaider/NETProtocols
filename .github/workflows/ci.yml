@@ -163,29 +163,48 @@ jobs:
           node scripts/pyodide/run_in_pyodide.mjs
           "$GITHUB_WORKSPACE" scripts/pyodide/check_in_pyodide.py
 
-  # Blocking: fails when normalized decode throughput is more than 15%
-  # below the committed baseline. A failing measurement is repeated
-  # once, and the job fails only if the second fails too.
-  #
-  # Runs on the baseline's interpreter: normalization cancels how fast
-  # the machine is, not which CPython runs it (see the module docstring
-  # in scripts/benchmark.py). `--update-baseline` re-records the
-  # baseline.
+  # Blocking: runs scripts/benchmark_ab.py, which times this tree and a
+  # base tree decoding this tree's tests/fixtures, in alternating pairs
+  # of fresh processes on this runner, and fails when the median ratio
+  # of head time to base time is more than the script's threshold above
+  # 1.0. The head is the pull request's head commit, or the pushed
+  # commit; scripts/benchmark_base.sh picks the base: the merge-base
+  # with the base branch for a pull request, otherwise the commit before
+  # the push, or HEAD^1. fetch-depth: 0 puts both in the clone.
+  # benchmark-noise.yml runs the same comparison with the base equal to
+  # the head. The last step reports dpkt's and scapy's throughput on the
+  # same corpus and gates nothing.
   benchmark:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-      - name: Corpus decode throughput
+      - name: Choose the base commit
+        id: base
         shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          # The step exits with the benchmark's own status, saved in
+          commit=$(scripts/benchmark_base.sh)
+          echo "commit=$commit" >>"$GITHUB_OUTPUT"
+      - name: Decode time against the base
+        shell: bash
+        env:
+          BASE: ${{ steps.base.outputs.commit }}
+        run: |
+          # The step exits with the comparison's own status, saved in
           # $status before its output is copied to the step summary.
           status=0
-          uv run --frozen --group bench python scripts/benchmark.py \
-            --check --threshold 15 --compare >benchmark.out 2>&1 || status=$?
+          uv run --frozen python scripts/benchmark_ab.py --base "$BASE" \
+            >benchmark.out 2>&1 || status=$?
           {
             echo '```'
             cat benchmark.out
@@ -193,3 +212,5 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
           cat benchmark.out
           exit "$status"
+      - name: Throughput against dpkt and scapy
+        run: uv run --frozen --group bench python scripts/benchmark.py --compare

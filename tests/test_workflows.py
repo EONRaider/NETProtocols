@@ -472,6 +472,39 @@ class TestCIWorkflow:
             "dependency-scan job no longer runs pip-audit"
         )
 
+    def test_benchmark_gates_on_the_same_job_comparison(
+        self, ci_jobs: dict[str, str]
+    ) -> None:
+        """The benchmark job compares the head with a base it checks out."""
+        block = ci_jobs.get("benchmark")
+        assert block is not None, "ci.yml has no benchmark job"
+        for needle in (
+            "fetch-depth: 0",
+            "github.event.pull_request.head.sha",
+            "scripts/benchmark_base.sh",
+            'scripts/benchmark_ab.py --base "$BASE"',
+            'exit "$status"',
+        ):
+            assert needle in block, f"the benchmark job lost {needle!r}"
+        assert "--check" not in block
+        assert "baseline.json" not in block
+
+    @pytest.mark.parametrize(
+        ("filename", "job"),
+        [("ci.yml", "benchmark"), ("benchmark-noise.yml", "noise")],
+    )
+    def test_benchmark_checkouts_do_not_persist_credentials(
+        self, filename: str, job: str
+    ) -> None:
+        """The benchmark checkouts leave no token in the clone's config."""
+        block = job_blocks(WORKFLOWS / filename)[job]
+        checkout = block.partition("actions/checkout@")[2].partition(
+            "      - "
+        )[0]
+        assert "persist-credentials: false" in checkout, (
+            f"{filename}'s {job!r} checkout persists credentials"
+        )
+
     def test_ci_has_no_schedule(self) -> None:
         """ci.yml runs on push, pull_request and workflow_call only.
 
@@ -1782,6 +1815,10 @@ NEW_WORKFLOW_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "pr-title-lint.yml": (
         "lint-pr-title",
         ("action-semantic-pull-request",),
+    ),
+    "benchmark-noise.yml": (
+        "noise",
+        ("scripts/benchmark_ab.py --base HEAD",),
     ),
 }
 
