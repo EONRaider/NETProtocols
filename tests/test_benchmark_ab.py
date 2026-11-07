@@ -690,6 +690,45 @@ class TestVerdict:
         assert f"{mode} result has" in error
         assert repr(field) in error
 
+    @pytest.mark.parametrize(
+        ("mode", "field", "value"),
+        [
+            ("probe", "frames", True),
+            ("time", "rejected", True),
+            ("probe", "raises", [[1]]),
+            ("probe", "raises", [1, "a"]),
+            ("probe", "raises", [True]),
+            ("probe", "outside", [1]),
+            ("time", "outside", [1]),
+        ],
+    )
+    def test_a_worker_result_with_a_mistyped_value_or_item_exits_2(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        mode: str,
+        field: str,
+        value: object,
+    ) -> None:
+        results = {
+            "probe": dict(PROBE),
+            "time": {"seconds": 1.0, "frames": 5, "rejected": 0, "outside": []},
+        }
+        results[mode][field] = value
+
+        def worker(
+            src: Path, fixtures: Path, mode: str, *options: str
+        ) -> dict[str, object]:
+            return dict(results[mode])
+
+        monkeypatch.setattr(ab, "run_worker", worker)
+        argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        assert ab.main([*argv, "--pairs", "2"]) == 2
+        error = capsys.readouterr().err
+        assert f"{mode} result has {field!r} = {value!r}" in error
+
     def test_a_timed_run_without_a_time_is_an_error(
         self, ab: ModuleType
     ) -> None:

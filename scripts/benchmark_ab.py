@@ -70,7 +70,8 @@ WORKER = Path(__file__).resolve().parent / "_benchmark_ab_worker.py"
 #: Fails when the median ratio is more than this many percent above 1.0.
 THRESHOLD = 5.0
 
-#: The fields each worker mode writes, and the type of each.
+#: The fields each worker mode writes besides ``seconds``, and the type
+#: of each.
 FIELDS = {
     "probe": {
         "file": str,
@@ -83,6 +84,9 @@ FIELDS = {
     },
     "time": {"frames": int, "rejected": int, "outside": list},
 }
+
+#: The type of every item of each list field of :data:`FIELDS`.
+ITEMS = {"raises": int, "outside": str}
 
 
 class ComparisonError(Exception):
@@ -240,7 +244,9 @@ def check_fields(name: str, result: dict[str, Any], mode: str) -> None:
     :param result: The worker's result.
     :param mode: ``probe`` or ``time``.
     :raises ComparisonError: if a field of :data:`FIELDS` for ``mode`` is
-        missing, or its value is not exactly of the type listed there.
+        missing, or its value is not exactly of the type listed there, or
+        an item of a list field is not exactly of the type :data:`ITEMS`
+        lists for it.
     """
     for field, kind in FIELDS[mode].items():
         if field not in result:
@@ -249,6 +255,13 @@ def check_fields(name: str, result: dict[str, Any], mode: str) -> None:
             raise ComparisonError(
                 f"{name}'s {mode} result has {field!r} = "
                 f"{result[field]!r}, not of type {kind.__name__}"
+            )
+        item = ITEMS.get(field)
+        if item and any(type(value) is not item for value in result[field]):
+            raise ComparisonError(
+                f"{name}'s {mode} result has {field!r} = "
+                f"{result[field]!r}, with an item not of type "
+                f"{item.__name__}"
             )
 
 
@@ -294,12 +307,13 @@ def compare(
         frames, each pair's times and ratio, and :func:`summarize` of
         the ratios.
     :raises ComparisonError: if a worker fails, leaves a result without
-        a field of :data:`FIELDS` or with one of another type, imports any
+        a field of :data:`FIELDS` or with one of another type or with a
+        list item of another type than :data:`ITEMS` lists, imports any
         ``netprotocols`` module from outside its tree, runs with
         ``site`` or bytecode writing on, the trees see different frame
         counts, no frame is left, or a timed run decodes a different
         number of frames, or rejects any, than the probes predict, or a
-        time is missing or not a positive finite number.
+        time is missing or not a positive finite ``float``.
     """
     probes = {
         "base": run_worker(base, fixtures, "probe"),
