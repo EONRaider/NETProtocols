@@ -74,6 +74,7 @@ class TestTruncation:
             (HSRP, "raw_hsrp_md5_hello"),
             (HSRPAdvertise, "raw_hsrp_advertise"),
             (HSRPv2, "raw_hsrpv2_hello"),
+            (HSRPv2, "raw_hsrpv2_interface_state"),
             (TLS, "raw_tls_client_hello"),
             (VRRP, "raw_vrrpv2_advert"),
             (VRRP, "raw_vrrpv3_advert"),
@@ -491,6 +492,35 @@ class TestDamagedPayload:
         assert packet.consumed == 20
         assert packet[HSRP].md5_authentication is None
         assert bytes(packet) == raw_hsrp_md5_hello[:20]
+
+    @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
+    def test_an_hsrpv2_interface_state_tlv_round_trips(
+        self, raw_hsrpv2_interface_state, lax
+    ):
+        """HSRPv2 keeps the whole buffer, so a message ending in an
+        Interface State TLV is one layer, the TLV decoded, and bytes()
+        gives back every byte."""
+        raw = raw_hsrpv2_interface_state
+        packet = decode_frame(raw, start=HSRPv2, lax=lax)
+        assert [type(layer) for layer in packet] == [HSRPv2]
+        assert packet.stopped_by is None
+        assert packet.consumed == len(raw) == 48
+        assert packet[HSRPv2].interface_state is not None
+        assert bytes(packet) == raw
+        assert HSRPv2.decode(bytes(packet[HSRPv2])) == packet[HSRPv2]
+
+    def test_an_hsrpv2_interface_state_tlv_of_another_length_stops_a_walk(
+        self, raw_hsrpv2_interface_state
+    ):
+        """A Length of 5 raises in a strict walk; a lax one decodes no
+        layer and reports it."""
+        raw = raw_hsrpv2_interface_state[:43] + b"\x05\x00\x01\x00\x00\x00"
+        with pytest.raises(InvalidFieldError) as caught:
+            decode_frame(raw, start=HSRPv2)
+        assert (caught.value.field, caught.value.offset) == ("length", 43)
+        packet = decode_frame(raw, start=HSRPv2, lax=True)
+        assert list(packet) == []
+        assert isinstance(packet.stopped_by, InvalidFieldError)
 
     @pytest.mark.parametrize("lax", [False, True], ids=["strict", "lax"])
     @pytest.mark.parametrize(
