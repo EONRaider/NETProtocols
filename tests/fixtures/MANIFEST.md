@@ -1098,7 +1098,8 @@ The values are also hard-coded, independently, in
   Reserved and TTL bytes, parsing the pcap with the standard library,
   and then runs `check_fixtures` over it. HSRP has no checksum of its
   own, so `check_fixtures` checks each message's fields instead (see
-  `_check_hsrp`): exactly 20 bytes, from and to port 1985, Version 0,
+  `_check_hsrp`): 20 bytes, or 50 with an MD5 Authentication TLV
+  after them (see below), from and to port 1985, Version 0,
   a known Op Code and State and, in a Hello, a Holdtime above the
   Hellotime, which RFC 2281 requires, and, as this corpus's
   conventions rather than the RFC's, a zero Reserved byte and
@@ -1116,7 +1117,7 @@ The values are also hard-coded, independently, in
   timers moving to 5 s / 15 s on becoming Active, a Coup from Listen
   preempting the Active router and its Resign), and what neither
   holds: the Initial and Learn states, HSRPv2, an Op Code 3 Advertise,
-  the MD5 Authentication TLV and other trailers. Nothing in the frames
+  the MD5 Authentication TLV and trailers. Nothing in the frames
   is sensitive: the addresses are in 10.9.195.0/24, the MAC addresses
   locally administered, and the passwords `cisco` (§5.1's default) and
   `spark` protect nothing. Everything here is IPv4 and untagged, and
@@ -1163,6 +1164,48 @@ The values are also hard-coded, independently, in
   the Reserved fields, is unknown here. `check_fixtures` reads a
   datagram on 1985 that opens with `00 03` with
   `_check_hsrp_advertise`, and has none in the corpus to read.
+  **The corpus holds no HSRPv1 message with the MD5 Authentication
+  TLV either**, for the same reasons: Yersinia 0.8.2 cannot send the
+  TLV, no open-source HSRP daemon exists, and the crafters that could
+  write one are scapy- and dpkt-based. `HSRP.md5_authentication` is
+  therefore tested only against hand-built vectors in
+  `tests/test_hsrp_md5.py` (and `tests/test_hsrp.py`,
+  `tests/test_check_fixtures.py`, `tests/test_fuzz.py`,
+  `tests/test_contract.py` and `tests/conftest.py`'s
+  `raw_hsrp_md5_hello`), 50-byte messages packed field by field with
+  `struct` and `socket` in the layout of packet-hsrp.c at commit
+  6f7207a6 (the TLV's diagram, lines 100-121, its reading, lines
+  320-344, and the rule that reads it only in a message of exactly 50
+  captured bytes whose bytes 20 and 21 are Type 4 and Length 28, lines
+  444-459), each labelled as hand-built. tshark 4.2.2 decodes each of
+  the nine hand-built 50-byte messages (the five `VECTORS`,
+  `raw_hsrp_md5_hello`, `tests/test_check_fixtures.py`'s `HSRP_MD5`,
+  `tests/test_hsrp.py`'s `HELLO` with `MD5_TLV` and
+  `tests/test_fuzz.py`'s first seed message with `_HSRP_MD5_TLV`),
+  wrapped in Ethernet/IPv4/UDP from and to port 1985 to 224.0.0.2 in a
+  temporary pcap that is not committed, as an HSRP message with good
+  IPv4 and UDP checksums and an "MD5 Authentication TLV: Type=4
+  Len=28" whose Algorithm, Padding, Flags, sender's IP Address, Key ID
+  and digest equal what `HSRP.decode()` reads from the same bytes. It
+  reports the same 50 bytes with Type 4 and Length 27, or Type 0, as
+  "Unknown TLV sequence in HSRPv1 dissection", and shows a 49- and a
+  51-byte message with no TLV, as `HSRP.decode()` leaves each of those
+  at its 20 bytes. **No real capture of the TLV exists here**:
+  every byte of it in this repository is hand-built, and what the
+  tests show is packet-hsrp.c's reading, not a router's. Nothing here
+  shows what a Cisco router puts in the Authentication Data, the
+  Padding or the Flags beside the TLV, or that a router sends the TLV
+  only in a 50-byte message. All but one of the five `VECTORS`, and
+  `raw_hsrp_md5_hello`, carry Authentication Data of 8 NUL bytes,
+  Padding 0 and Flags 0; `distinct` carries `np-hsrp`, Padding 0x5a
+  and Flags 0xabcd; `HSRP_MD5`, `HELLO` with `MD5_TLV` and the first
+  fuzz seed message with `_HSRP_MD5_TLV` carry the clear-text password
+  `cisco` beside the TLV, Padding 0 and Flags 0. The digest is not verified, here or by
+  `check_fixtures`: no sender available here computes it as IOS does,
+  and no primary source says which bytes it covers. `check_fixtures`
+  checks a 50-byte HSRPv1 message's TLV structurally, its Type 4, Length
+  28, Algorithm 1 and zero Padding (`_check_hsrp_md5`), and has none in
+  the corpus to read.
 - `tls.pcap` was produced by `scripts/capture_fixtures_tls.sh`. nginx
   1.24 (nginx-light, OpenSSL 3.0.13) serves HTTPS on 10.9.196.2:443 in
   one netns, with session tickets off and a self-signed ECDSA P-256

@@ -1,7 +1,9 @@
 """Test HSRPv1 (RFC 2281) decoding and dispatch.
 
 Covered: the 20-byte message, every Op Code and State, its round trips,
-truncation at every length, what follows it in the buffer, the
+truncation at every length, what follows it in the buffer (the MD5
+Authentication TLV that makes a 50-byte message among it, which
+tests/test_hsrp_md5.py covers in full), the
 decode-time guard against a wrong port guess (HSRPv2, decoded
 directly, and Cisco's Op Code 3 Advertise among what it rejects), the
 display helpers, construction, dispatch from UDP port 1985, and
@@ -195,10 +197,10 @@ ADVERTISE = bytes.fromhex("00030001000e02000001000000000000")
 #: ADVERTISE with Op Code 4, which no format on port 1985 has.
 OP_CODE_4 = ADVERTISE[:1] + b"\x04" + ADVERTISE[2:]
 
-#: An MD5 Authentication TLV as packet-hsrp.c lays it out after a
-#: 20-byte HSRPv1 message: type 4, length 28, algorithm 1 (MD5), a
-#: padding byte, 2 bytes of flags, the sender's address, a 4-byte Key
-#: ID and a 16-byte digest. 30 bytes in all.
+#: A hand-built MD5 Authentication TLV as packet-hsrp.c lays it out
+#: after a 20-byte HSRPv1 message: type 4, length 28, algorithm 1
+#: (MD5), a padding byte, 2 bytes of flags, the sender's address, a
+#: 4-byte Key ID and a 16-byte digest. 30 bytes in all.
 MD5_TLV = bytes.fromhex("041c01000000c000020b00000001") + bytes(range(16))
 
 
@@ -652,30 +654,33 @@ class TestMessage:
         [
             pytest.param(b"\xde\xad\xbe\xef", id="fcs"),
             pytest.param(bytes(30), id="zeros"),
-            pytest.param(MD5_TLV, id="md5-tlv"),
+            pytest.param(MD5_TLV + b"\xde\xad\xbe\xef", id="md5-tlv-and-fcs"),
+            pytest.param(MD5_TLV[:29], id="cut-md5-tlv"),
             pytest.param(hsrp_bytes(state=8), id="another-message"),
         ],
     )
     def test_what_follows_is_left_undecoded(self, raw_hsrp_hello, trailer):
-        """The message is always 20 bytes (decode contract rule 3), and
-        what follows stays outside the layer."""
+        """Short of an MD5 Authentication TLV that ends the buffer at 50
+        bytes, the message is 20 bytes (decode contract rule 3), and what
+        follows stays outside the layer."""
         hsrp = HSRP.decode(raw_hsrp_hello + trailer)
         assert hsrp == HSRP.decode(raw_hsrp_hello)
         assert hsrp.header_len == 20
         assert bytes(hsrp) == raw_hsrp_hello
 
-    def test_a_walk_leaves_an_md5_authentication_tlv(self):
+    def test_a_walk_decodes_an_md5_authentication_tlv(self):
         """A 50-byte HSRPv1 message, the 30-byte MD5 Authentication TLV
         after the 20 (type 4, length 28), as Wireshark's packet-hsrp.c
-        reads it: the walk decodes the 20 and stops there, leaving the
-        TLV in the frame, past ``consumed``."""
+        reads it: the walk decodes all 50 into one layer."""
         assert len(MD5_TLV) == 30
         frame = udp_frame(HELLO + MD5_TLV)
         packet = decode_frame(frame)
         assert [type(layer) for layer in packet] == [Ethernet, IPv4, UDP, HSRP]
-        assert packet.consumed == len(frame) - len(MD5_TLV)
-        assert frame[packet.consumed :] == MD5_TLV
-        assert packet[HSRP] == HSRP.decode(HELLO)
+        assert packet.consumed == len(frame)
+        assert bytes(packet[HSRP]) == HELLO + MD5_TLV
+        assert replace(packet[HSRP], md5_authentication=None) == HSRP.decode(
+            HELLO
+        )
 
     def test_memoryview_input_is_not_retained(self, raw_hsrp_hello):
         """A decode from a view copies the bytes out of it."""
@@ -1100,13 +1105,14 @@ class TestChecker:
             pytest.param(lambda raw: raw[:19], id="19-bytes"),
             pytest.param(lambda raw: raw[:0], id="empty"),
             pytest.param(lambda raw: raw + b"\x00", id="21-bytes"),
-            pytest.param(lambda raw: raw + MD5_TLV, id="md5-tlv"),
+            pytest.param(lambda raw: raw + MD5_TLV[:29], id="49-bytes"),
+            pytest.param(lambda raw: raw + MD5_TLV + b"\x00", id="51-bytes"),
             pytest.param(
                 lambda raw: b"\x02" + HSRPV2_HELLO[1:], id="52-bytes-version-2"
             ),
         ],
     )
-    def test_a_message_not_20_bytes_fails_its_length(self, index, cut):
+    def test_a_message_not_20_or_50_bytes_fails_its_length(self, index, cut):
         frame = retouched(self.FRAMES[index], cut(self.message_of(index)))
         stats = self.checker.Counter()
         assert self.check(frame, stats) == ["hsrp-length"]

@@ -1038,7 +1038,10 @@ the Version forced to 0,
 (`random.Random(0)`), near the 27 expected. Past those three bytes any
 17 are a message: the timers, the Priority, the Group, the Reserved
 byte, the Authentication Data and the Virtual IP Address are not
-judged.
+judged. Nor is the MD5 Authentication TLV that `HSRP.decode()` reads
+from a payload of exactly 50 bytes whose bytes 20 and 21 are 04 1c:
+it changes how much of such a payload the layer holds, 50 bytes rather
+than 20, and not which payloads are accepted.
 
 The guard is also what keeps HSRPv2 (Cisco's TLV-based successor,
 sent to 224.0.0.102 on the same port) from being read as HSRPv1: an
@@ -1478,7 +1481,8 @@ src/netprotocols/
 │                   RADIUSVendorAttribute),
 │                   stun.py (STUN messages, over UDP and TCP),
 │                   ntp.py (NTPv1-v4 time messages),
-│                   hsrp.py (HSRPv1 Hello, Coup and Resign;
+│                   hsrp.py (HSRPv1 Hello, Coup and Resign,
+│                   with the MD5 Authentication TLV;
 │                   the Op Code 3 Advertise; HSRPv2 and HSRP
 │                   for IPv6 with their TLVs),
 │                   tls.py (TLS records, the ClientHello and its
