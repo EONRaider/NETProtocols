@@ -1163,8 +1163,8 @@ The values are also hard-coded, independently, in
   checksums and the Active Groups and Passive Groups the library reads
   from the same bytes, but for one: after a TLV of Type 0, packet-hsrp.c
   stops and shows the rest as data, where the library walks on and
-  decodes the Interface State TLV after it. Every Length but 4 that
-  tshark was given it shows as data, where the library raises. That is
+  decodes the Interface State TLV after it. tshark shows every Length
+  but 4 that it was given as data, where the library raises. That is
   the dissector's reading, not a router's: nothing here shows when a
   Cisco router sends the TLV, what its counts hold, or where among the
   TLVs it puts it. `check_fixtures` judges its Length, 4, and not its
