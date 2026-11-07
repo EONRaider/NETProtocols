@@ -489,6 +489,22 @@ class TestCIWorkflow:
         assert "--check" not in block
         assert "baseline.json" not in block
 
+    @pytest.mark.parametrize(
+        ("filename", "job"),
+        [("ci.yml", "benchmark"), ("benchmark-noise.yml", "noise")],
+    )
+    def test_benchmark_checkouts_do_not_persist_credentials(
+        self, filename: str, job: str
+    ) -> None:
+        """The benchmark checkouts leave no token in the clone's config."""
+        block = job_blocks(WORKFLOWS / filename)[job]
+        checkout = block.partition("actions/checkout@")[2].partition(
+            "      - "
+        )[0]
+        assert "persist-credentials: false" in checkout, (
+            f"{filename}'s {job!r} checkout persists credentials"
+        )
+
     def test_ci_has_no_schedule(self) -> None:
         """ci.yml runs on push, pull_request and workflow_call only.
 

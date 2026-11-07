@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Same-machine A/B decode benchmark: a head tree against a base tree.
 
-    uv run --frozen python scripts/benchmark_ab.py --base origin/master
+    uv run --frozen python scripts/benchmark_ab.py \\
+        --base "$(git merge-base origin/master HEAD)"
     uv run --frozen python scripts/benchmark_ab.py --base HEAD
     uv run --frozen python scripts/benchmark_ab.py --base-src ../other/src
 
@@ -46,6 +47,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import os
 import shutil
 import statistics
@@ -257,7 +259,8 @@ def compare(
         ``netprotocols`` module from outside its tree, runs with
         ``site`` or bytecode writing on, the trees see different frame
         counts, no frame is left, or a timed run decodes a different
-        number of frames, or rejects any, than the probes predict.
+        number of frames, or rejects any, than the probes predict, or a
+        time is not a positive finite number.
     """
     probes = {
         "base": run_worker(base, fixtures, "probe"),
@@ -312,6 +315,11 @@ def compare(
             )
             check_timed(name, timed, total - len(skipped))
             seconds[name] = timed["seconds"]
+        if not all(math.isfinite(t) and t > 0 for t in seconds.values()):
+            raise ComparisonError(
+                f"pair {number + 1} measured {seconds}; each time must be "
+                "a positive finite number of seconds"
+            )
         ratio = seconds["head"] / seconds["base"]
         measured.append({"first": order[0], **seconds, "ratio": ratio})
         print(
@@ -360,7 +368,10 @@ def verdict(summary: dict[str, float], threshold: float) -> int:
     :param summary: :func:`summarize` of the ratios.
     :param threshold: The allowed slowdown, in percent.
     :returns: 0 within the threshold, 1 over it.
+    :raises ComparisonError: if the median is not a finite number.
     """
+    if not math.isfinite(summary["median"]):
+        raise ComparisonError(f"the median ratio is {summary['median']}")
     change = (summary["median"] - 1) * 100
     print(
         f"median ratio {summary['median']:.4f} ({change:+.1f}%); "
@@ -406,6 +417,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.pairs < 2 or args.pairs % 2:
         parser.error("--pairs must be even and at least 2")
+    if args.repetitions < 1:
+        parser.error("--repetitions must be at least 1")
+    if args.trials < 1:
+        parser.error("--trials must be at least 1")
 
     with tempfile.TemporaryDirectory(prefix="benchmark-ab-") as scratch:
         base_dir, head_dir = Path(scratch, "base"), Path(scratch, "head")
@@ -435,7 +450,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ComparisonError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
-    status = verdict(result["summary"], args.threshold)
+    try:
+        status = verdict(result["summary"], args.threshold)
+    except ComparisonError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     if args.json:
         result["threshold"] = args.threshold
         args.json.write_text(json.dumps(result, indent=2) + "\n")

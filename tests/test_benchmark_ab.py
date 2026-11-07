@@ -9,6 +9,7 @@ installed in this environment, leaks into the other.
 
 import importlib.util
 import json
+import math
 import shutil
 import struct
 import subprocess
@@ -537,6 +538,73 @@ class TestVerdict:
         )
         assert status == 2
         assert "fetch-depth" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("option", ["--repetitions", "--trials"])
+    @pytest.mark.parametrize("value", ["0", "-1"])
+    def test_main_rejects_fewer_than_one_repetition_or_trial(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        option: str,
+        value: str,
+    ) -> None:
+        def unreachable(*args: object) -> None:
+            raise AssertionError("compare ran")
+
+        monkeypatch.setattr(ab, "compare", unreachable)
+        argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        with pytest.raises(SystemExit) as exited:
+            ab.main([*argv, option, value])
+        assert exited.value.code == 2
+
+    @pytest.mark.parametrize("median", [math.nan, math.inf])
+    def test_a_non_finite_median_exits_2(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        median: float,
+    ) -> None:
+        with pytest.raises(ab.ComparisonError, match="median ratio is"):
+            ab.verdict(ab.summarize([median]), 5.0)
+
+        def fixed(*args: object) -> dict[str, object]:
+            return {"summary": ab.summarize([median])}
+
+        monkeypatch.setattr(ab, "compare", fixed)
+        argv = ["--base-src", str(ROOT / "src"), "--fixtures", str(fixtures)]
+        assert ab.main(argv) == 2
+        assert "median ratio is" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("seconds", [math.inf, math.nan, 0.0])
+    def test_a_time_that_is_not_positive_and_finite_is_an_error(
+        self,
+        ab: ModuleType,
+        fixtures: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        seconds: float,
+    ) -> None:
+        probe = {
+            "file": "x",
+            "version": "0",
+            "frames": 5,
+            "raises": [],
+            "outside": [],
+            "site": False,
+            "bytecode_written": False,
+        }
+        timed = {"seconds": seconds, "frames": 5, "rejected": 0, "outside": []}
+
+        def worker(
+            src: Path, fixtures: Path, mode: str, *options: str
+        ) -> dict[str, object]:
+            return dict(probe if mode == "probe" else timed)
+
+        monkeypatch.setattr(ab, "run_worker", worker)
+        with pytest.raises(ab.ComparisonError, match="positive finite"):
+            ab.compare(Path("b"), Path("h"), fixtures, 2, 1, 1)
 
     @pytest.mark.parametrize("pairs", ["0", "1", "3", "15"])
     def test_main_rejects_an_odd_or_zero_pair_count(
