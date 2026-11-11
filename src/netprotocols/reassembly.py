@@ -276,6 +276,7 @@ import bisect
 import enum
 import heapq
 import ipaddress
+import itertools
 import typing
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping
@@ -3067,15 +3068,12 @@ class _Run:
     def charge(self) -> int:
         """Return the bytes charged for the run.
 
-        That is :data:`PIECE_OVERHEAD`, its data and the eighth of it
-        a growing ``bytearray`` may hold in reserve, and
-        ``_SPAN_OVERHEAD`` per frame it names.
+        That is :data:`PIECE_OVERHEAD`, the bytes its ``bytearray`` has
+        allocated, and ``_SPAN_OVERHEAD`` per frame it names.
         """
-        size = len(self.data)
         return (
             PIECE_OVERHEAD
-            + size
-            + (size >> 3)
+            + self.data.__alloc__()
             + _SPAN_OVERHEAD * len(self.starts)
         )
 
@@ -3106,7 +3104,7 @@ class _Run:
         del self.starts[:index]
         del self.origins[:index]
         self.starts[0] = low
-        self.data = self.data[low - self.start :]
+        del self.data[: low - self.start]
         self.start = low
 
 
@@ -3147,8 +3145,10 @@ class _Dir:
         self.gaps: list[list[int]] | None = None
         #: The peer's highest acknowledgement, as an offset.
         self.ack: int | None = None
-        #: The capture clock when an acknowledgement first passed a hole.
-        self.pending: int | None = None
+        #: The capture clock when an acknowledgement first passed the
+        #: lowest hole, and the acknowledgement it holds the hole's
+        #: declaration to.
+        self.pending: tuple[int, int] | None = None
         #: The furthest right window edge its receiver advertised.
         self.edge: int | None = None
         #: The end its FIN fixed, and the FIN's frame.
@@ -4302,6 +4302,8 @@ class StreamReassembler:
             end = found.fin[0] + delta
             found.fin = (end, found.fin[1]) if end >= 0 else None
         found.ack = _shifted(found.ack, delta)
+        found.pending = None
+        self._rearm(found)
         found.edge = _shifted(found.edge, delta)
         found.mark = _shifted(found.mark, delta)
         if dropped:
@@ -4345,7 +4347,7 @@ class StreamReassembler:
         if found.base is not None:
             self._carry(conn, found, work)
         if peer is not None and acked is not None and acked > peer.next:
-            self._confirm(conn, peer, work)
+            self._confirm(conn, peer, work, acked)
         if not conn.full and all(
             side is not None and side.notes & _SENT for side in (conn.a, conn.b)
         ):
@@ -4369,7 +4371,7 @@ class StreamReassembler:
         self._deliver(conn, found, work.ref, work.own, True)
         self._retain_window(conn, found)
         if segment.length and end > found.next:
-            self._confirm(conn, found, work)
+            self._confirm(conn, found, work, None)
 
     def _fin(self, found: _Dir, end: int, work: _Work) -> None:
         """Fix a direction's end at a FIN, or report it inconsistent.
@@ -4463,33 +4465,55 @@ class StreamReassembler:
             edge = acked + (segment.window << shift)
             if peer.edge is None or edge > peer.edge:
                 peer.edge = edge
-        if peer.ack > peer.next:
-            if peer.pending is None:
-                peer.pending = self._clock or 0
-        else:
-            peer.pending = None
+        self._rearm(peer)
         self._retain_window(conn, peer)
         return acked
 
-    def _confirm(self, conn: _Conn, found: _Dir, work: _Work) -> None:
+    def _rearm(self, found: _Dir) -> None:
+        """Start the grace of a direction's lowest acknowledged hole.
+
+        A pending grace whose acknowledgement lies past the delivered
+        end stands; otherwise one starts at the capture clock, held to
+        the highest acknowledgement, when that lies past the delivered
+        end, and none is pending when it does not.
+
+        :param found: The direction.
+        """
+        ack = found.ack
+        if ack is None or ack <= found.next:
+            found.pending = None
+        elif found.pending is None or found.pending[1] <= found.next:
+            found.pending = (self._clock or 0, ack)
+
+    def _confirm(
+        self, conn: _Conn, found: _Dir, work: _Work, acked: int | None
+    ) -> None:
         """Declare the holes the peer acknowledged once their grace passed.
 
-        Each acknowledged hole, up to the highest offset the direction
-        received, becomes a ``Gap(ACKED)`` and the held bytes after it
-        are delivered, with the confirming frame's reference.
+        The pending grace holds an acknowledgement; once
+        ``ack_gap_grace`` has passed since it started, a frame confirms
+        it: an acknowledgement at or past it, or data of the direction
+        past the delivered end. Each hole below that acknowledgement, up
+        to the highest offset the direction received, becomes a
+        ``Gap(ACKED)`` and the held bytes after it are delivered, with
+        the confirming frame's reference; a grace for the holes past it
+        then starts.
 
         :param conn: The connection.
         :param found: The direction whose holes are acknowledged.
         :param work: The confirming segment.
+        :param acked: The offset the segment acknowledges, or ``None``
+            for data of the direction.
         """
-        ack = found.ack
-        if found.pending is None or ack is None or ack <= found.next:
+        pending = found.pending
+        if pending is None or (acked is not None and acked < pending[1]):
             return
-        if (self._clock or 0) < found.pending + self._bounds.ack_gap_grace:
+        since, point = pending
+        if (self._clock or 0) < since + self._bounds.ack_gap_grace:
             return
         side = 0 if found is conn.a else 1
-        limit = min(ack, found.reach)
-        if ack > found.reach and not found.notes & _NOTE_BEYOND:
+        limit = min(point, found.reach)
+        if point > found.reach and not found.notes & _NOTE_BEYOND:
             found.notes |= _NOTE_BEYOND
             segment = work.segment
             times = (segment.origin.timestamp, segment.origin.timestamp)
@@ -4498,7 +4522,7 @@ class StreamReassembler:
                     **_fields(conn.key, side, [], work.ref, times),
                     kind=AnomalyKind.ACK_BEYOND_DATA,
                     start=found.reach,
-                    end=ack,
+                    end=point,
                 )
             )
         while found.next < limit:
@@ -4507,8 +4531,7 @@ class StreamReassembler:
             self._gap(conn, found, bounds, GapReason.ACKED, work.ref, work.own)
             found.next = end
             self._deliver(conn, found, work.ref, work.own, True)
-        if ack <= found.next:
-            found.pending = None
+        self._rearm(found)
         self._retain_window(conn, found)
 
     def _gap(
@@ -4689,14 +4712,21 @@ class StreamReassembler:
         start, data = arriving
         captured = min(high, start + len(data))
         covered: list[tuple[int, int]] = []
-        for run in found.runs or ():
+        runs = found.runs or []
+        index = max(0, bisect.bisect_right(runs, low, key=_run_start) - 1)
+        for run in itertools.takewhile(
+            lambda run: run.start < captured, runs[index:]
+        ):
             begin, end = max(low, run.start), min(captured, run.end)
-            if begin < end:
-                for chunk in run.chunks(begin, end):
-                    gathered.opponents.append(chunk)
-                    gathered.winners.append(False)
-                    covered.append((chunk.start, chunk.end))
-        for gap in found.gaps or ():
+            for chunk in run.chunks(begin, end) if begin < end else ():
+                gathered.opponents.append(chunk)
+                gathered.winners.append(False)
+                covered.append((chunk.start, chunk.end))
+        gaps = found.gaps or []
+        index = max(0, bisect.bisect_right(gaps, low, key=_gap_start) - 1)
+        for gap in itertools.takewhile(
+            lambda gap: gap[0] < captured, gaps[index:]
+        ):
             begin, end = max(low, gap[0]), min(captured, gap[1])
             if begin < end:
                 gathered.late.append((begin, end))
@@ -4835,15 +4865,17 @@ class StreamReassembler:
                     data=piece,
                 )
             )
-            remaining: list[list[int]] = []
-            for gap in found.gaps or ():
-                if gap[0] < low:
-                    remaining.append([gap[0], min(gap[1], low)])
-                if gap[1] > high:
-                    remaining.append([max(gap[0], high), gap[1]])
-            count = len(found.gaps or ())
-            self._charge(conn, (len(remaining) - count) * PIECE_OVERHEAD)
-            found.gaps = remaining or None
+            gaps = typing.cast(list[list[int]], found.gaps)
+            index = bisect.bisect_right(gaps, low, key=_gap_start) - 1
+            gap = gaps[index]
+            remaining = [
+                part
+                for part in ([gap[0], low], [high, gap[1]])
+                if part[0] < part[1]
+            ]
+            gaps[index : index + 1] = remaining
+            self._charge(conn, (len(remaining) - 1) * PIECE_OVERHEAD)
+            found.gaps = gaps or None
             self._retain(conn, found, low, piece, origin)
 
     # -- delivering bytes -------------------------------------------------
@@ -4894,8 +4926,7 @@ class StreamReassembler:
                     data = typing.cast(bytes, chunk.data)
                     self._retain(conn, found, chunk.start, data, chunk.origin)
             index = stop
-        if found.ack is None or found.ack <= found.next:
-            found.pending = None
+        self._rearm(found)
         self._end_fin(conn, found, ref, out)
 
     def _emit(
@@ -5004,7 +5035,9 @@ class StreamReassembler:
         self._trim(conn, found, anchor - self._bounds.retain_bytes)
 
     def _trim(self, conn: _Conn, found: _Dir, low: int) -> None:
-        """Drop a direction's retained bytes and ACKED gaps before ``low``.
+        """Drop a direction's retained bytes before ``low``.
+
+        The ACKED gaps it records are kept.
 
         :param conn: The connection.
         :param found: The direction.
@@ -5022,33 +5055,35 @@ class StreamReassembler:
             runs[0].trim(low)
             change += runs[0].charge()
         found.runs = runs or None
-        kept: list[list[int]] = []
-        for gap in found.gaps or ():
-            if gap[1] <= low:
-                change -= PIECE_OVERHEAD
-            else:
-                gap[0] = max(gap[0], low)
-                kept.append(gap)
-        found.gaps = kept or None
         self._charge(conn, change)
 
     def _shed(self, conn: _Conn, found: _Dir, excess: int) -> None:
-        """Drop a direction's oldest retained bytes until ``excess`` is freed.
+        """Free ``excess`` bytes of a direction's retained state.
+
+        Its oldest retained bytes go first, then its oldest ACKED gaps.
+        A run that is cut drops at least an eighth of its bytes and is
+        copied to a ``bytearray`` of its new size.
 
         :param conn: The connection.
         :param found: The direction.
         :param excess: The bytes to free.
         """
-        while excess > 0 and (found.runs or found.gaps):
+        while excess > 0 and found.runs:
             before = conn.charge
-            low = found.next
-            if found.runs:
-                run = found.runs[0]
-                low = run.end
-                if len(run.data) > excess:
-                    low = run.start + excess
+            run = found.runs[0]
+            take = max(excess, len(run.data) >> 3)
+            low = run.end if take >= len(run.data) else run.start + take
             self._trim(conn, found, low)
+            if found.runs and found.runs[0] is run:
+                charge = run.charge()
+                run.data = bytearray(run.data)
+                self._charge(conn, run.charge() - charge)
             excess -= before - conn.charge
+        gaps = found.gaps or []
+        count = min(len(gaps), max(0, -(-excess // PIECE_OVERHEAD)))
+        del gaps[:count]
+        found.gaps = gaps or None
+        self._charge(conn, -count * PIECE_OVERHEAD)
 
     # -- bounds -----------------------------------------------------------
 
@@ -5204,6 +5239,14 @@ def _run_start(run: _Run) -> int:
     :param run: The run.
     """
     return run.start
+
+
+def _gap_start(gap: list[int]) -> int:
+    """Return where a recorded ACKED gap starts.
+
+    :param gap: The gap, as ``[start, end]``.
+    """
+    return gap[0]
 
 
 def _chunk_start(chunk: _Chunk) -> int:

@@ -234,6 +234,43 @@ def tiles(spans: tuple[Span, ...], start: int, end: int) -> bool:
     return cursor == end
 
 
+#: A capture time past every frame Talk.handshake() sends.
+T0 = 10 * SECOND
+
+
+def at(ref: int, start: int, end: int, ts: int | None = None) -> Span:
+    """The span of a Talk frame: ref n is sent at n + 1 seconds unless
+    ``ts`` says otherwise."""
+    return Span(ref, start, end, (ref + 1) * SECOND if ts is None else ts, 64)
+
+
+def assert_overlap(
+    event: object,
+    *,
+    bounds: tuple[int, int],
+    kept: bytes,
+    other: bytes,
+    kept_spans: tuple[Span, ...],
+    other_spans: tuple[Span, ...],
+    ref: int,
+    policy: OverlapPolicy,
+    contrary: bool,
+) -> None:
+    """Every field of a TCP Overlap."""
+    assert isinstance(event, Overlap)
+    assert (event.start, event.end) == bounds
+    assert (event.kept, event.other) == (kept, other)
+    assert event.kept_spans == kept_spans
+    assert event.other_spans == other_spans
+    assert event.completing_ref == ref
+    assert event.policy is policy
+    assert event.contrary is contrary
+    assert event.resolved is True
+    assert set(event.spans) == set(kept_spans) | set(other_spans)
+    assert tiles(event.kept_spans, *bounds)
+    assert tiles(event.other_spans, *bounds)
+
+
 class Talk:
     """A crafted connection between A:40000 (side a) and B:80 (side b).
 
@@ -638,7 +675,10 @@ class TestFlags:
         talk.syn()
         events = talk.a(0, b"abc", flags=PSH)
         assert kinds(events) == [AnomalyKind.DATA_WITHOUT_ACK]
-        assert talk.a(0, b"abc") != ()
+        assert not only(events, StreamData)
+        (data,) = talk.a(0, b"abc")
+        assert isinstance(data, StreamData)
+        assert (data.offset, data.data) == (0, b"abc")
 
     def test_fin_ends_the_direction_when_reached(self) -> None:
         talk = Talk()
@@ -730,11 +770,15 @@ class TestFlags:
 # --- 4.4: decision 12, option (b): an RST makes the end pending --------
 
 
-def rst_talk(held: bool = False, **bounds: object) -> Talk:
+def rst_talk(
+    held: bool = False,
+    policy: OverlapPolicy = OverlapPolicy.FIRST,
+    **bounds: object,
+) -> Talk:
     """A connection with 4 bytes each way delivered, with ``held`` 4
     bytes of b at 10-14 past a hole, then an RST from a at t = 10 s,
     ref 5 (6 with ``held``); the closed timeout is 120 s by default."""
-    talk = Talk(bounds=StreamBounds(**bounds))  # type: ignore[arg-type]
+    talk = Talk(bounds=StreamBounds(**bounds), policy=policy)  # type: ignore[arg-type]
     talk.handshake()
     talk.a(0, b"ping", ack=0)
     talk.b(0, b"pong", ack=4)
@@ -806,12 +850,25 @@ class TestReset:
         talk.b(4, ack=4, ts=110 * SECOND)
         assert only(talk.r.advance(130 * SECOND), StreamEnd)
 
-    def test_a_differing_retransmission_across_it_is_an_overlap(self) -> None:
-        talk = rst_talk()
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.FIRST, OverlapPolicy.LAST]
+    )
+    def test_a_differing_retransmission_across_it_is_an_overlap(
+        self, policy: OverlapPolicy
+    ) -> None:
+        talk = rst_talk(policy=policy)
         (overlap,) = talk.b(0, b"pang", ack=4, ts=11 * SECOND)
-        assert isinstance(overlap, Overlap)
-        assert (overlap.kept, overlap.other) == (b"o", b"a")
-        assert (overlap.start, overlap.end) == (1, 2)
+        assert_overlap(
+            overlap,
+            bounds=(1, 2),
+            kept=b"o",
+            other=b"a",
+            kept_spans=(at(4, 1, 2),),
+            other_spans=(at(6, 1, 2, 11 * SECOND),),
+            ref=6,
+            policy=policy,
+            contrary=policy is OverlapPolicy.LAST,
+        )
 
     @pytest.mark.parametrize("side", [0, 1])
     def test_data_after_it_cancels_it_in_order(self, side: int) -> None:
@@ -961,28 +1018,44 @@ class TestOverlaps:
         talk.syn()
         talk.a(0, b"abcdef")
         (overlap,) = talk.a(2, b"cXeY")
-        assert isinstance(overlap, Overlap)
-        assert (overlap.start, overlap.end) == (3, 6)
-        assert (overlap.kept, overlap.other) == (b"def", b"XeY")
-        assert overlap.kept_spans == (Span(1, 3, 6, 2 * SECOND, 64),)
-        assert overlap.other_spans == (Span(2, 3, 6, 3 * SECOND, 64),)
-        assert overlap.contrary is (policy is OverlapPolicy.LAST)
+        assert_overlap(
+            overlap,
+            bounds=(3, 6),
+            kept=b"def",
+            other=b"XeY",
+            kept_spans=(at(1, 3, 6),),
+            other_spans=(at(2, 3, 6),),
+            ref=2,
+            policy=policy,
+            contrary=policy is OverlapPolicy.LAST,
+        )
         assert talk.stream(0) == b"abcdef"
 
-    def test_one_overlap_spans_delivered_and_held_bytes(self) -> None:
-        talk = Talk(policy=OverlapPolicy.LAST)
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.FIRST, OverlapPolicy.LAST]
+    )
+    def test_one_overlap_spans_delivered_and_held_bytes(
+        self, policy: OverlapPolicy
+    ) -> None:
+        talk = Talk(policy=policy)
         talk.syn()
         talk.a(0, b"ab")
         talk.a(4, b"ef")
-        events = talk.a(0, b"XbcdEF")
-        (overlap,) = only(events, Overlap)
-        assert (overlap.start, overlap.end) == (0, 6)
-        assert overlap.kept == b"abcdEF"
-        assert overlap.other == b"XbcdEF"[:0] + b"Xbcdef"
-        assert overlap.contrary is True
-        assert talk.stream(0) == b"abcdEF"
-        assert tiles(overlap.kept_spans, 0, 6)
-        assert tiles(overlap.other_spans, 0, 6)
+        (overlap,) = only(talk.a(0, b"XbcdEF"), Overlap)
+        last = policy is OverlapPolicy.LAST
+        held, new = (at(2, 4, 6), at(3, 4, 6))
+        assert_overlap(
+            overlap,
+            bounds=(0, 6),
+            kept=b"abcdEF" if last else b"abcdef",
+            other=b"Xbcdef" if last else b"XbcdEF",
+            kept_spans=(at(1, 0, 2), at(3, 2, 4), new if last else held),
+            other_spans=(at(3, 0, 2), at(3, 2, 4), held if last else new),
+            ref=3,
+            policy=policy,
+            contrary=last,
+        )
+        assert talk.stream(0) == (b"abcdEF" if last else b"abcdef")
 
     def test_identical_bytes_are_a_verified_retransmission(self) -> None:
         talk = gap_talk(OverlapPolicy.FIRST)
@@ -996,21 +1069,37 @@ class TestOverlaps:
             Span(2, 4, 6, 3 * SECOND, 64),
         )
 
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.FIRST, OverlapPolicy.LAST]
+    )
     def test_a_repeat_older_than_the_retained_bytes_is_unverified(
-        self,
+        self, policy: OverlapPolicy
     ) -> None:
-        talk = Talk(bounds=StreamBounds(retain_bytes=4))
+        talk = Talk(bounds=StreamBounds(retain_bytes=4), policy=policy)
         talk.syn()
         talk.a(0, b"abcdefgh")
         (repeat,) = talk.a(0, b"XXcdefgh")
         assert isinstance(repeat, Retransmission)
         assert (repeat.start, repeat.end, repeat.verified) == (0, 8, False)
+        assert repeat.spans == (at(2, 0, 8), at(1, 4, 8))
+        assert repeat.completing_ref == 2
         (unverified, overlap) = talk.a(0, b"XXXXXXgZ")
-        assert isinstance(overlap, Overlap)
-        assert (overlap.start, overlap.end) == (4, 8)
-        assert (overlap.kept, overlap.other) == (b"efgh", b"XXgZ")
+        assert_overlap(
+            overlap,
+            bounds=(4, 8),
+            kept=b"efgh",
+            other=b"XXgZ",
+            kept_spans=(at(1, 4, 8),),
+            other_spans=(at(3, 4, 8),),
+            ref=3,
+            policy=policy,
+            contrary=policy is OverlapPolicy.LAST,
+        )
+        assert isinstance(unverified, Retransmission)
         assert (unverified.start, unverified.end) == (0, 4)
         assert unverified.verified is False
+        assert unverified.spans == (at(3, 0, 4),)
+        assert unverified.completing_ref == 3
 
     def test_retention_is_anchored_on_the_acknowledgement(self) -> None:
         talk = Talk(bounds=StreamBounds(retain_bytes=4))
@@ -1034,15 +1123,43 @@ class TestOverlaps:
         (repeat,) = talk.a(4, b"efgh")
         assert repeat.verified is True
 
-    def test_one_overlap_per_frame_however_many_pieces(self) -> None:
-        talk = gap_talk(OverlapPolicy.FIRST)
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.FIRST, OverlapPolicy.LAST]
+    )
+    def test_one_overlap_per_frame_however_many_pieces(
+        self, policy: OverlapPolicy
+    ) -> None:
+        talk = gap_talk(policy)
         talk.a(10, b"aa")
         talk.a(14, b"bb")
         events = talk.a(4, b"X" * 12)
-        assert len(only(events, Overlap)) == 1
-        overlap = only(events, Overlap)[0]
-        assert (overlap.start, overlap.end) == (4, 16)
-        assert overlap.kept == b"heldXXaaXXbb"
+        (overlap,) = only(events, Overlap)
+        held = (
+            at(1, 4, 8),
+            at(4, 8, 10),
+            at(2, 10, 12),
+            at(4, 12, 14),
+            at(3, 14, 16),
+        )
+        new = (
+            at(4, 4, 8),
+            at(4, 8, 10),
+            at(4, 10, 12),
+            at(4, 12, 14),
+            at(4, 14, 16),
+        )
+        last = policy is OverlapPolicy.LAST
+        assert_overlap(
+            overlap,
+            bounds=(4, 16),
+            kept=b"X" * 12 if last else b"heldXXaaXXbb",
+            other=b"heldXXaaXXbb" if last else b"X" * 12,
+            kept_spans=new if last else held,
+            other_spans=held if last else new,
+            ref=4,
+            policy=policy,
+            contrary=False,
+        )
 
     def test_targets_choose_the_policy_by_receiver(self) -> None:
         talk = Talk(
@@ -1237,8 +1354,11 @@ class TestDelivery:
             (6, 10),
         ]
 
-    def test_late_bytes_for_an_acked_gap(self) -> None:
-        talk = Talk()
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.FIRST, OverlapPolicy.LAST]
+    )
+    def test_late_bytes_for_an_acked_gap(self, policy: OverlapPolicy) -> None:
+        talk = Talk(policy=policy)
         talk.handshake()
         talk.a(4, b"held", ack=0, ts=10 * SECOND)
         talk.b(0, ack=8, ts=10 * SECOND)
@@ -1253,7 +1373,73 @@ class TestDelivery:
         assert isinstance(repeat, Retransmission)
         assert repeat.verified is True
         (overlap,) = talk.a(2, b"TE", ack=0, ts=15 * SECOND)
-        assert isinstance(overlap, Overlap)
+        assert_overlap(
+            overlap,
+            bounds=(2, 4),
+            kept=b"te",
+            other=b"TE",
+            kept_spans=(at(6, 2, 4, 13 * SECOND),),
+            other_spans=(at(8, 2, 4, 15 * SECOND),),
+            ref=8,
+            policy=policy,
+            contrary=policy is OverlapPolicy.LAST,
+        )
+
+    def test_the_grace_is_timed_per_hole(self) -> None:
+        talk = Talk()
+        talk.handshake()
+        talk.a(0, b"x" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(200, b"y" * 100, ack=0, ts=T0 + SECOND)
+        talk.b(0, ack=300, ts=T0 + 2 * SECOND)
+        talk.a(400, b"z" * 100, ack=0, ts=T0 + 2_980_000_000)
+        talk.b(0, ack=500, ts=T0 + 2_990_000_000)
+        events = talk.b(0, ack=500, ts=T0 + 3 * SECOND)
+        assert [(e.start, e.end) for e in only(events, Gap)] == [(100, 200)]
+        assert [(e.offset, len(e.data)) for e in only(events, StreamData)] == [
+            (200, 100)
+        ]
+        (data,) = talk.a(300, b"w" * 100, ack=0, ts=T0 + 3_020_000_000)
+        assert (data.offset, len(data.data)) == (300, 200)
+        assert not only(talk.events[-1:], Gap)
+        assert len(only(talk.events, Gap)) == 1
+
+    def test_a_later_hole_waits_for_its_own_grace(self) -> None:
+        talk = Talk()
+        talk.handshake()
+        talk.a(0, b"x" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(200, b"y" * 100, ack=0, ts=T0 + SECOND)
+        talk.b(0, ack=300, ts=T0 + 2 * SECOND)
+        talk.a(400, b"z" * 100, ack=0, ts=T0 + 2_500_000_000)
+        talk.b(0, ack=500, ts=T0 + 2_500_000_000)
+        assert only(talk.b(0, ack=500, ts=T0 + 3 * SECOND), Gap)
+        assert talk.b(0, ack=500, ts=T0 + 3 * SECOND + 999_999_999) == ()
+        events = talk.b(0, ack=500, ts=T0 + 4 * SECOND)
+        assert [(e.start, e.end) for e in only(events, Gap)] == [(300, 400)]
+
+    def test_a_lower_ack_does_not_confirm_a_higher_one(self) -> None:
+        talk = Talk()
+        talk.handshake()
+        talk.a(0, b"x" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(200, b"y" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(400, b"z" * 100, ack=0, ts=T0 + SECOND)
+        talk.b(0, ack=500, ts=T0 + 2 * SECOND)
+        assert talk.b(0, ack=300, ts=T0 + 4 * SECOND) == ()
+        events = talk.b(0, ack=500, ts=T0 + 5 * SECOND)
+        assert [(e.start, e.end) for e in only(events, Gap)] == [
+            (100, 200),
+            (300, 400),
+        ]
+
+    def test_a_pending_ack_confirms_no_further_than_itself(self) -> None:
+        talk = Talk()
+        talk.handshake()
+        talk.a(0, b"x" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(200, b"y" * 100, ack=0, ts=T0 + SECOND)
+        talk.a(400, b"z" * 100, ack=0, ts=T0 + SECOND)
+        talk.b(0, ack=300, ts=T0 + 2 * SECOND)
+        talk.b(0, ack=500, ts=T0 + 2_500_000_000)
+        events = talk.b(0, ack=500, ts=T0 + 3 * SECOND)
+        assert [(e.start, e.end) for e in only(events, Gap)] == [(100, 200)]
 
     def test_late_bytes_for_part_of_an_acked_gap(self) -> None:
         talk = Talk()
@@ -1337,7 +1523,20 @@ class TestChecksums:
         talk = Talk(checksums=mode)
         talk.syn()
         events = talk.a(0, b"abc", ip_checksum=0)
+        expected = [AnomalyKind.BAD_CHECKSUM]
+        if mode is ChecksumMode.AUTO:
+            expected.append(AnomalyKind.CHECKSUM_OFFLOAD)
+        assert kinds(events) == expected
         assert bool(only(events, StreamData)) is (mode is not ChecksumMode.DROP)
+
+    def test_a_zero_ipv4_header_checksum_from_a_source_not_local(
+        self,
+    ) -> None:
+        talk = Talk(local=["198.51.100.0/24"])
+        talk.syn()
+        events = talk.a(0, b"abc", ip_checksum=0)
+        assert kinds(events) == [AnomalyKind.BAD_CHECKSUM]
+        assert not only(events, StreamData)
 
     @pytest.mark.parametrize("mode", list(ChecksumMode))
     def test_a_zero_ip_length_is_unverified(self, mode: ChecksumMode) -> None:
@@ -1402,7 +1601,8 @@ def held_charge(size: int) -> int:
 def run_charge(size: int, frames: int = 1) -> int:
     from netprotocols.reassembly import _SPAN_OVERHEAD
 
-    return PIECE_OVERHEAD + size + (size >> 3) + _SPAN_OVERHEAD * frames
+    allocated = bytearray(bytes(size)).__alloc__()
+    return PIECE_OVERHEAD + allocated + _SPAN_OVERHEAD * frames
 
 
 def syn_from(
@@ -2156,6 +2356,8 @@ def feed_pieces(
         bounds = reassembler._bounds
         assert usage.flows <= bounds.max_flows
         assert usage.bytes <= bounds.max_total_bytes
+        if usage.flows == 1:
+            assert usage.bytes <= bounds.max_flow_bytes
     return events
 
 
@@ -2281,9 +2483,7 @@ class TestEdges:
         events = reassembler.advance(10**15)
         assert len(only(events, Expired)) == 1
 
-    def test_an_acked_gap_older_than_the_retained_bytes_is_forgotten(
-        self,
-    ) -> None:
+    def test_an_acked_gap_outlives_the_retained_bytes(self) -> None:
         talk = Talk(bounds=StreamBounds(retain_bytes=4))
         talk.handshake()
         talk.a(4, b"held", ack=0, ts=10 * SECOND)
@@ -2292,11 +2492,31 @@ class TestEdges:
         talk.a(8, b"later!", ack=0, ts=13 * SECOND)
         talk.b(0, ack=14, ts=14 * SECOND)
         assert talk.r.usage.bytes == (
-            FLOW_OVERHEAD + 2 * PIECE_OVERHEAD + run_charge(4)
+            FLOW_OVERHEAD + 3 * PIECE_OVERHEAD + run_charge(4)
         )
-        (repeat,) = talk.a(0, b"late", ack=0, ts=15 * SECOND)
-        assert isinstance(repeat, Retransmission)
+        (late,) = talk.a(0, b"late", ack=0, ts=15 * SECOND)
+        assert isinstance(late, LateData)
+        assert (late.offset, late.data) == (0, b"late")
+        (repeat,) = talk.a(0, b"late", ack=0, ts=16 * SECOND)
         assert repeat.verified is False
+
+    def test_acked_gaps_are_shed_under_the_cap(self) -> None:
+        cap = FLOW_OVERHEAD + 4 * PIECE_OVERHEAD
+        talk = Talk(bounds=StreamBounds(retain_bytes=4, max_flow_bytes=cap))
+        talk.handshake()
+        for hole in range(3):
+            base = 20 * hole
+            talk.a(base + 4, b"held", ack=0, ts=(10 + 3 * hole) * SECOND)
+            talk.b(0, ack=base + 8, ts=(10 + 3 * hole) * SECOND)
+            talk.b(0, ack=base + 8, ts=(12 + 3 * hole) * SECOND)
+        assert talk.r.usage.bytes <= cap
+        for offset in (0, 8):
+            (repeat,) = talk.a(offset, b"late", ack=0, ts=30 * SECOND)
+            assert isinstance(repeat, Retransmission)
+            assert repeat.verified is False
+        (late,) = talk.a(40, b"late", ack=0, ts=31 * SECOND)
+        assert isinstance(late, LateData)
+        assert talk.r.usage.bytes <= cap
 
     def test_a_flush_skips_to_a_known_fin(self) -> None:
         talk = Talk()
@@ -2320,3 +2540,75 @@ class TestEdges:
         assert events[2].bound is Bound.MAX_TOTAL_BYTES
         assert events[2].completing_ref == 1
         assert talk.r.usage == Usage(0, 0)
+
+
+class TestWithOtherParts:
+    def test_a_receiver_no_target_holds_takes_the_default_policy(
+        self,
+    ) -> None:
+        talk = Talk(
+            policy=OverlapPolicy.LAST,
+            targets={"198.51.100.0/24": OverlapPolicy.FIRST},
+        )
+        talk.syn()
+        talk.a(4, b"held")
+        (overlap,) = only(talk.a(4, b"HELD"), Overlap)
+        assert overlap.policy is OverlapPolicy.LAST
+        assert overlap.kept == b"HELD"
+
+    def test_a_segment_rebuilt_from_fragments(self) -> None:
+        """Crafted: a TCP segment with 24 data bytes cut into two IPv4
+        fragments; the Datagram is fed to the stream reassembler with the
+        ref of the frame that completed it, as the design note's section
+        1.6 loop does."""
+        from netprotocols.reassembly import Datagram, FragmentReassembler
+
+        whole = segment(1001, data=b"fragmented stream bytes!")
+        header, payload = bytearray(whole[:20]), whole[20:]
+
+        def fragment(offset: int, data: bytes, more: bool) -> bytes:
+            part = bytearray(header)
+            part[2:4] = (20 + len(data)).to_bytes(2, "big")
+            part[6:8] = ((0x2000 if more else 0) | offset // 8).to_bytes(
+                2, "big"
+            )
+            part[10:12] = b"\x00\x00"
+            part[10:12] = internet_checksum(bytes(part)).to_bytes(2, "big")
+            return bytes(part) + data
+
+        frames = [
+            segment(1000, flags=SYN),
+            fragment(0, payload[:24], True),
+            fragment(24, payload[24:], False),
+        ]
+        fragments = FragmentReassembler()
+        streams = StreamReassembler()
+        delivered: list[StreamEvent] = []
+        for ref, frame in enumerate(frames):
+            packet = packet_of(frame)
+            ts = (ref + 1) * SECOND
+            for event in fragments.feed(packet, frame, timestamp=ts, ref=ref):
+                assert isinstance(event, Datagram)
+                assert event.refs == (1, 2)
+                rebuilt = decode_frame(event.data, start=IPv4, lax=True)
+                delivered += streams.feed(
+                    rebuilt, event.data, timestamp=ts, ref=ref
+                )
+            assert streams.feed(packet, frame, timestamp=ts, ref=ref) == ()
+        (data,) = only(delivered, StreamData)
+        assert data.data == b"fragmented stream bytes!"
+        assert data.completing_ref == 2
+        assert data.refs == (2,)
+
+    def test_without_idle_timeouts_only_close_ends_a_connection(self) -> None:
+        bounds = StreamBounds(
+            idle_timeout_new=None,
+            idle_timeout_established=None,
+            idle_timeout_closed=None,
+        )
+        talk = Talk(bounds=bounds)
+        talk.syn()
+        assert talk.r.advance(10**18) == ()
+        (end, expired) = talk.r.close()
+        assert end.reason is EndReason.CLOSE
+        assert expired.timeout is Timeout.IDLE

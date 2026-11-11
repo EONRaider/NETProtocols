@@ -211,7 +211,8 @@ def test_connections_cost_no_more_than_they_are_charged(
 def test_held_chunks_and_retained_frames_cost_no_more(build: Build) -> None:
     """n one-byte segments held past a hole, then n delivered and
     retained: each costs no more than PIECE_OVERHEAD plus its byte, and
-    the per-frame charge of a retained run plus its byte."""
+    the per-frame charge of a retained run plus its byte, and the traced
+    growth never exceeds the growth of what is charged."""
     count = 3_000
     bounds = StreamBounds(
         max_flows=10,
@@ -224,6 +225,7 @@ def test_held_chunks_and_retained_frames_cost_no_more(build: Build) -> None:
     for reassembler in (held, kept):
         feed(reassembler, build, 1, 2, 1000, 80, 7, 0, SYN, b"", at=0)
         feed(reassembler, build, 1, 2, 1000, 80, 8, 0, ACK, b"x", at=0)
+    charged = (held.usage.bytes, kept.usage.bytes)
     gc.collect()
     with allocation_peak():
         before, _ = tracemalloc.get_traced_memory()
@@ -249,3 +251,5 @@ def test_held_chunks_and_retained_frames_cost_no_more(build: Build) -> None:
         after, _ = tracemalloc.get_traced_memory()
     assert (middle - before) / count <= PIECE_OVERHEAD + 1
     assert (after - middle) / count <= _SPAN_OVERHEAD + 1
+    assert middle - before <= held.usage.bytes - charged[0]
+    assert after - middle <= kept.usage.bytes - charged[1]
