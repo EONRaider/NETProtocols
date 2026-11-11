@@ -30,7 +30,9 @@ here.
 - IPv4 fragments and TCP segments that overlap are resolved by a
   policy chosen per target, in the Snort/Suricata style, defaulting to
   ``first``. Overlapping IPv6 fragments are always discarded
-  (`RFC 5722 §4 <https://www.rfc-editor.org/rfc/rfc5722.html#section-4>`__).
+  (`RFC 5722 §4 <https://www.rfc-editor.org/rfc/rfc5722.html#section-4>`__,
+  as corrected by
+  `erratum 3089 <https://www.rfc-editor.org/errata/eid3089>`__).
   An overlap whose bytes differ is always reported as an event, under
   every policy, and never resolved silently: that is the insertion and
   evasion class of
@@ -58,10 +60,14 @@ of ARCHITECTURE's port-dispatch section stay the caller's.
 1.1 Input: a decoded packet and its frame
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A :class:`netprotocols.packet.Packet` holds headers only:
-``bytes(packet)`` is the layers, and the bytes no decoder read (a TCP
-payload where the walk stopped at TCP, a non-first fragment's data,
-which :meth:`netprotocols.IPv4.next_protocol` gives no class) are
+A :class:`netprotocols.packet.Packet` holds the layers the walk
+decoded, and ``bytes(packet)`` is their encoding. For TCP that is the
+header only. ``HTTP``'s ``header_len`` covers its whole message and
+``TLS``'s its whole record, so a packet can hold application bytes, but
+only a unit a decoder accepted whole: a partial message or record
+stops the walk. A non-first fragment's data gets no layer at all, since
+:meth:`netprotocols.IPv4.next_protocol` gives it no class. The bytes no
+decoder read are
 ``frame[packet.consumed : len(frame) - len(packet.trailer)]``. A packet
 alone therefore cannot be reassembled, and the reassemblers take the
 packet *and* the frame it was decoded from::
@@ -77,7 +83,7 @@ header declares a length of 0 (a TSO capture), the end is the frame's
 end less the trailer, as :attr:`netprotocols.packet.Packet.trailer`
 already computes it.
 
-**Decision needed: the input type.** Three shapes were weighed.
+**Decision needed: the input type.** There are three possible shapes.
 
 .. list-table::
    :header-rows: 1
@@ -94,7 +100,8 @@ already computes it.
        in step with ``decode_frame``.
    * - ``Packet`` only
      - One decode; the module never calls a decoder.
-     - Does not work: the payload bytes are not in the packet.
+     - Does not work: a fragment's data and a segment's payload are
+       in the packet only where a decoder accepted them whole.
    * - ``Packet`` and frame (recommended)
      - One decode, done by the caller with whatever ``start``,
        registry and ``lax`` it uses. The module never calls a decoder
@@ -128,7 +135,7 @@ event types:
             bounds: FragmentBounds = FragmentBounds(),
             policy: OverlapPolicy = OverlapPolicy.FIRST,
             targets: Mapping[str, OverlapPolicy] | None = None,
-            checksums: ChecksumMode = ChecksumMode.DROP,
+            checksums: ChecksumMode = ChecksumMode.AUTO,
         ) -> None: ...
 
         def feed(
@@ -179,7 +186,11 @@ of the hosts in them, as Suricata's
 `host-os-policy <https://docs.suricata.io/en/latest/configuration/suricata-yaml.html#host-os-policy>`__
 does. The policy that applies is the longest prefix containing the
 *receiver*: a datagram's destination, or the receiving end of a TCP
-direction. No match means ``policy``. The constructor raises
+direction. Behind an IPv6 Routing header with segments left, the
+Destination Address is the next hop, not the receiver (RFC 8200 §8.1),
+so the receiver is :meth:`netprotocols.IPv6Routing.final_destination`,
+as :func:`netprotocols.flow.flow_key` resolves it. No match means
+``policy``. The constructor raises
 :class:`ValueError` for an unparsable network, and for a policy a
 reassembler does not offer (``StreamReassembler`` offers a subset,
 section 4.5).
@@ -226,9 +237,10 @@ keeps its own mapping from the integer it passes.
 1.4 Event types
 ~~~~~~~~~~~~~~~
 
-Every event is a frozen, slotted, keyword-only dataclass, as
+Every event is a frozen, slotted dataclass, as
 :class:`netprotocols.TCPOption` and the other non-layer values with
-structure are. Not a named tuple: two different event types with equal
+structure are, and is also keyword-only, which they are not. Not a
+named tuple: two different event types with equal
 fields must not compare equal, which tuples would, and dataclasses give
 ``match`` class patterns. ``Span``, ``Usage`` and ``FragmentKey`` are
 named tuples, like :class:`netprotocols.flow.FlowKey`: small values
@@ -251,12 +263,32 @@ Fields every event has:
      - The contributing frames, as ``Span`` (section 1.3), sorted by
        ``start`` then ``ref``.
    * - ``completing_ref``
-     - The ``ref`` of the frame whose ``feed`` produced the event;
-       ``None`` when ``advance`` or ``close`` produced it.
+     - The ``ref`` of the fed frame whose own fragment or segment
+       caused the event (below); ``None`` when a timeout, the eviction
+       of a flow, ``advance`` or ``close`` caused it.
    * - ``first_timestamp``, ``last_timestamp``
      - The earliest and latest ``timestamp`` among ``spans``.
 
 ``refs`` is a property: the sorted, distinct refs of ``spans``.
+
+``completing_ref`` has one definition for every event type. It is the
+``ref`` of the frame passed to ``feed`` when that frame's fragment or
+segment caused the event in its own flow: the fragment that filled a
+datagram's last hole (``Datagram``), the segment that made a run
+contiguous with the delivered end, that pushed its own direction past
+``max_flow_bytes``, or, if the ACK-based gap of section 4.7 is
+adopted, whose acknowledgement declared the gap before it
+(``StreamData``, ``Gap``), the fragment that
+pushed its own datagram past ``max_flow_bytes`` or ``max_fragments``
+(``Evicted``), and the arriving piece of an ``Overlap``,
+``Retransmission``, ``OutOfOrder`` or ``Anomaly``. It is ``None`` for every event a flush produces: an
+expiry, the eviction of a flow to make room (``max_total_bytes``,
+``max_flows``), ``advance`` and ``close``. A ``feed`` that triggers an
+expiry or eviction in another flow therefore returns that flow's
+events with ``None``, never with its own ref. A message decoded from a
+direction's runs (section 4.8) takes the ``completing_ref`` of the run
+that holds its last byte; when that is ``None``, no frame completed the
+message, and its frames are still the spans of its runs.
 
 The event types:
 
@@ -270,7 +302,7 @@ The event types:
    * - ``Datagram``
      - The last missing fragment of a datagram arrives.
      - ``version`` (4 or 6), ``data`` (the whole datagram, header
-       included, section 3.6), ``header_len``, ``header_ref`` (the
+       included, section 3.6), ``payload_offset``, ``header_ref`` (the
        first fragment's ref).
    * - ``StreamData``
      - Bytes of a direction become contiguous with what it has
@@ -283,11 +315,14 @@ The event types:
        (``EndReason``).
    * - ``Overlap``
      - Bytes of an arriving fragment or segment overlap held or
-       delivered bytes and differ from them.
+       delivered bytes and differ from them; or, under a rule that
+       discards a datagram on overlap (IPv6, the ``discard`` policy and,
+       if offered, ``linux-4.20``, section 3.4), overlap them other
+       than as a duplicate the rule allows, equal or not.
      - ``start``, ``end``, ``policy`` (the ``OverlapPolicy`` applied),
        ``kept`` and ``other`` (the two versions of the range),
-       ``kept_spans`` and ``other_spans``, ``resolved`` (``False`` for
-       IPv6, whose datagram is discarded), ``contrary`` (section 4.6).
+       ``kept_spans`` and ``other_spans``, ``resolved`` (``False``
+       when the datagram is discarded), ``contrary`` (section 4.6).
    * - ``Retransmission``
      - Arriving bytes repeat held or delivered bytes exactly, or
        repeat delivered bytes the reassembler no longer retains.
@@ -299,7 +334,8 @@ The event types:
      - ``start``, ``end``, ``expected``.
    * - ``Gap``
      - A TCP direction skips bytes it never received: a cap forced it,
-       the capture truncated them, or the flow is being flushed.
+       the capture truncated them, the flow is being flushed, or (if
+       adopted, section 4.7) the peer acknowledged past them.
      - ``start``, ``end``, ``reason`` (``GapReason``).
    * - ``Evicted``
      - A bound removed state (section 2.3).
@@ -321,10 +357,14 @@ exhaustive under ``mypy --strict`` with ``typing.assert_never``.
 ``Bound``, ``Timeout``, ``AnomalyKind`` and ``ChecksumMode`` are
 ``enum.Enum`` classes with string values, as
 :class:`netprotocols.HTTPAnomalyKind` is; ``OverlapPolicy``'s values are
-Suricata's spellings (``"first"``, ``"bsd"``, ...).
+frag3's policy-type spellings (``"first"``, ``"bsd"``, ...), which
+Suricata's defrag engine uses internally; Suricata's
+``host-os-policy`` keys are operating-system names instead
+(``hpux11``, ``old-linux``, ...).
 
 ``Overlap`` events are bounded: one per fed frame and flow, covering
-the smallest range that holds every differing byte, with ``kept`` and
+the smallest range that holds every differing byte (every overlapping
+byte, under a discarding rule), with ``kept`` and
 ``other`` the full contents of that range. A frame overlapping many
 held pieces yields one event, not one per piece, so the event volume
 an attacker can cause is linear in the frames sent.
@@ -369,16 +409,19 @@ any other packet, with the completing frame's ref:
         packet = decode_frame(captured.data, lax=True)
         frame, ts = captured.data, captured.timestamp
         for event in fragments.feed(packet, frame, timestamp=ts, ref=index):
+            handle((event,))
             if isinstance(event, Datagram):
                 start = IPv4 if event.version == 4 else IPv6
                 whole = decode_frame(event.data, start=start, lax=True)
                 handle(streams.feed(whole, event.data, timestamp=ts, ref=index))
-            handle((event,))
         handle(streams.feed(packet, frame, timestamp=ts, ref=index))
     handle(fragments.close() + streams.close())
 
-The ``Datagram`` event maps the ref the stream events carry to every
-fragment frame. A tunnelled datagram (IP in IP, GRE) whose outer
+The ``Datagram`` event is handled before the stream events its
+datagram causes, and maps the ref those events carry (``index``, the
+``Datagram``'s ``completing_ref``) to every fragment frame. Every call
+passes ``ref``: the default counts ``feed`` calls (section 1.3), so a
+re-fed datagram would shift it for every later frame. A tunnelled datagram (IP in IP, GRE) whose outer
 header is fragmented is handled the same way: the reassembler acts on
 the outermost IP header that is a fragment, and the caller feeds the
 rebuilt datagram back to reach the inner one. The module is imported
@@ -424,8 +467,7 @@ one-byte segments or eight-byte fragments cost what it really costs.
      - Charged bytes across all flows.
    * - ``max_flows``
      - the reassembler
-     - Flows held at once, IPv6 discard markers (section 3.3)
-       included.
+     - Flows held at once.
    * - ``max_fragments``
      - one datagram
      - Fragments one datagram may hold (fragments only).
@@ -459,7 +501,8 @@ one-byte segments or eight-byte fragments cost what it really costs.
        cap. Retained delivered bytes are trimmed first. The flow
        stays open. Data already captured is never silently dropped.
    * - ``max_total_bytes``, ``max_flows``
-     - Fragments: the oldest datagram by first-fragment time. Streams:
+     - Fragments: the oldest datagram by first-fragment time (the
+       order is a decision, below). Streams:
        the least recently active flow among those not yet carrying data
        in both directions (half-open, or one-sided), and if there is
        none, the least recently active flow.
@@ -469,7 +512,9 @@ one-byte segments or eight-byte fragments cost what it really costs.
        (reason ``EVICTED``) for each open direction, then
        ``Evicted``.
 
-Ties in age are broken by feed order, so eviction is deterministic.
+Every event of an evicted flow carries ``completing_ref=None``
+(section 1.4). Ties in age are broken by feed order, so eviction is
+deterministic.
 The cap is enforced before the arriving frame's data is stored: the
 reassembler evicts until the new piece fits, and a piece larger than
 ``max_flow_bytes`` on its own is reported as ``Evicted`` immediately.
@@ -478,7 +523,10 @@ After every call, ``usage.bytes <= max_total_bytes`` and
 
 Preferring half-open TCP flows as victims means a SYN flood evicts its
 own flows before an established, idle one (a BGP session between
-keepalives). An evicted TCP flow that sends again is picked up
+keepalives). The preference is bypassed by a flood that spoofs both
+directions of each flow, which makes every flooded flow two-sided; the
+caps still hold, and the victims are then the least recently active
+flows. An evicted TCP flow that sends again is picked up
 mid-stream (section 4.2), with an ``Anomaly`` saying so, so an attacker
 who floods to flush a flow's state does not make the rest of that flow
 invisible.
@@ -505,7 +553,30 @@ only the caps bound it.
 
 On expiry, a datagram is discarded (``Expired`` with its spans and
 missing ranges); a TCP flow is flushed as on eviction, with
-``StreamEnd`` reason ``IDLE`` or ``AGE`` and then ``Expired``.
+``StreamEnd`` reason ``IDLE`` or ``AGE`` and then ``Expired``. Every
+event of an expiry carries ``completing_ref=None``.
+
+**Decision needed: the fragment eviction order.** When
+``max_total_bytes`` or ``max_flows`` is reached, a datagram in progress
+must go, or the arriving one must be refused.
+
+- *Oldest first* (by first-fragment time): simple and deterministic,
+  and a datagram that has waited longest is the likeliest never to
+  complete. A flood of new datagrams evicts every legitimate datagram
+  still in progress, since each flooded one is younger.
+- *Refuse the arriving datagram*: datagrams in progress survive a
+  flood, but while the reassembler is full no new datagram, legitimate
+  or not, is reassembled until something expires.
+- *Largest source first*: evict from the source address holding the
+  most charged bytes, which isolates one flooding source. A flood from
+  spoofed sources defeats it, and the bookkeeping is a per-source
+  count.
+
+*Recommendation:* oldest first. Every eviction is an ``Evicted`` event
+with the spans and holes, so a flood that pushes out legitimate
+datagrams is visible, and the age timeout already removes old
+datagrams in the same order. *Trade-off:* the one stated above: under
+a flood the legitimate datagrams in progress are the victims.
 
 2.5 Defaults
 ~~~~~~~~~~~~
@@ -539,16 +610,23 @@ write them.
        Settable lower.
    * - ``max_fragments``
      - 128
-     - A 65,535-byte IPv4 datagram over a 576-byte MTU, the size every
-       host must accept (RFC 791 §3.1), takes 119 fragments of 552
-       data bytes; over IPv6's 1,280-byte minimum MTU, 52. Datagrams cut
-       finer than that come from no ordinary stack, and are the tiny-
-       fragment flood of section 5.
+     - A 65,535-byte IPv4 datagram cut into 576-byte fragments takes
+       119 fragments of 552 data bytes; over IPv6's 1,280-byte minimum
+       MTU, 54 of 1,232. 576 octets is the datagram every host must accept
+       (RFC 791 §3.1), not the smallest MTU: every module must forward
+       68 octets unfragmented
+       (`RFC 791 §3.2 <https://www.rfc-editor.org/rfc/rfc791.html#section-3.2>`__),
+       and a maximal datagram over a 68-byte MTU legally takes 1,365
+       fragments of 48 data bytes. The cap drops a maximal datagram
+       cut for an MTU under 532 bytes, which is rare, in exchange for
+       bounding the tiny-fragment flood of section 5.
    * - ``max_total_bytes``
      - 32 MiB
-     - Suricata's default defrag memcap. It holds some 500 maximal
-       datagrams at once, or over 5,000 typical ones, such as a
-       4,096-byte EDNS response cut for a 1,500-byte link.
+     - Suricata's default defrag memcap. With the overheads of section
+       2.1 it holds about 330 maximal datagrams at once (each at
+       ``max_flow_bytes``) to 430 (each in 45 fragments for a 1,500-byte
+       link), or over 5,000 typical ones, such as a 4,096-byte EDNS
+       response cut for a 1,500-byte link.
    * - ``max_flows``
      - 16,384
      - At about 1.3 KiB for the smallest datagram in progress (one
@@ -557,15 +635,18 @@ write them.
        single-fragment datagrams and bounds the expiry scan.
    * - idle timeout
      - none
-     - RFC 8200 §4.5 and
+     - RFC 8200 §4.5 times reassembly from the first-arriving
+       fragment, which the age timeout does.
        `RFC 1122 §3.3.2 <https://www.rfc-editor.org/rfc/rfc1122.html#page-56>`__
-       time reassembly from the first fragment, which the age timeout
-       does.
+       requires a reassembly timeout without saying where it starts.
    * - age timeout
-     - 60 s
+     - 60 s, both versions
      - RFC 8200 §4.5: 60 seconds from the first-arriving fragment.
        RFC 1122 §3.3.2 recommends 60 to 120 seconds; Suricata's
-       default is 60.
+       default is 60. Linux uses 30 seconds for IPv4
+       (``IP_FRAG_TIME`` in
+       `include/net/ip.h <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/net/ip.h>`__)
+       and 60 for IPv6; see the decision below.
 
 .. list-table:: ``StreamBounds`` defaults
    :header-rows: 1
@@ -587,20 +668,24 @@ write them.
    * - ``retain_bytes``
      - 64 KiB per direction
      - The largest unscaled window
-       (`RFC 9293 §3.1 <https://www.rfc-editor.org/rfc/rfc9293.html#section-3.1>`__):
-       a retransmission repeats unacknowledged data, which an unscaled
-       window bounds. Older repeats are reported unverified.
+       (`RFC 9293 §3.1 <https://www.rfc-editor.org/rfc/rfc9293.html#section-3.1>`__).
+       A scaled window, which ``max_flow_bytes`` assumes up to 2 MiB,
+       lets a retransmission repeat data further back; a repeat older
+       than ``retain_bytes`` is reported unverified, which is a
+       decision (section 4.6).
    * - ``max_total_bytes``
      - 128 MiB
      - 32 flows at their full per-flow cap at once. Half of
-       Suricata's stream reassembly memcap (256 MiB), which is sized
+       Suricata's ``stream.reassembly.memcap`` (256 MiB), which is sized
        for a sensor; a desktop analyzer process stays well under 1 GiB
        with the overhead measured in section 7.4.
    * - ``max_flows``
      - 65,536
-     - Suricata's default flow hash size. Empty flows alone are then
-       charged 64 MiB at a 1 KiB ``FLOW_OVERHEAD``, half the byte cap,
-       so a SYN flood cannot take the whole budget either way.
+     - Empty flows alone are then charged 64 MiB at a 1 KiB
+       ``FLOW_OVERHEAD``, half the byte cap, so a SYN flood cannot take
+       the whole budget either way. Suricata's ``flow.hash-size`` is
+       also 65,536, but it counts hash buckets, not flows; Suricata
+       bounds flows by ``flow.memcap``.
    * - idle timeout, new
      - 60 s
      - A flow that has not carried data in both directions. Suricata's
@@ -608,21 +693,58 @@ write them.
        the caps bound it in space.
    * - idle timeout, established
      - 3,600 s
-     - Suricata's ``flow-timeouts.tcp.established``. Long enough for a
-       BGP session's keepalive interval and an idle keep-alive HTTP
-       connection.
+     - Six times Suricata's ``flow-timeouts.tcp.established`` (600 s).
+       An analyzer keeps a connection that idles for minutes (a
+       database pool, an SSH session) rather than end it and pick it
+       up again mid-stream; the caps bound what idle flows hold.
    * - idle timeout, closed
      - 120 s
-     - After FIN in both directions, or RST. Suricata's
-       ``flow-timeouts.tcp.closed``, and one Maximum Segment Lifetime
-       (RFC 9293 §3.4.2), long enough to see late retransmissions and
-       the data-after-RST of section 4.4.
+     - After FIN in both directions, or RST. One Maximum Segment
+       Lifetime (RFC 9293 §3.4.2 takes it as 2 minutes), long enough to
+       see late retransmissions and the data after an RST of section
+       4.4. Suricata's ``flow-timeouts.tcp.closed`` is 60 s.
    * - age timeout
      - none
      - See below.
 
-The Suricata figures are its documented
-`defrag and flow defaults <https://docs.suricata.io/en/latest/configuration/suricata-yaml.html#ip-defrag>`__.
+The Suricata figures are the defaults in the
+`suricata.yaml.in <https://raw.githubusercontent.com/OISF/suricata/master/suricata.yaml.in>`__
+Suricata ships: ``defrag.memcap`` 32 MiB, ``defrag.timeout`` 60,
+``flow-timeouts.tcp`` ``new`` 60, ``established`` 600 and ``closed``
+60, ``stream.reassembly.memcap`` 256 MiB and ``stream.midstream``
+false. The example on the
+`configuration page <https://docs.suricata.io/en/latest/configuration/suricata-yaml.html#ip-defrag>`__
+shows other figures for the timeouts.
+
+**Decision needed: fragment timeouts per target, or one global
+timeout.** Linux expires an IPv4 datagram after 30 seconds and an IPv6
+one after 60. With one 60-second age timeout, the observer completes an
+IPv4 datagram whose last fragment arrives 30 to 60 seconds after its
+first, which a Linux target has already discarded: an insertion.
+
+- *One global age timeout* (60 s, both versions): the simplest
+  setting, and RFC 8200's figure, but it silently disagrees with Linux
+  IPv4 targets.
+- *Per version*: an IPv4 and an IPv6 default (30 s and 60 s, Linux's
+  figures). It matches Linux for both, and expires IPv4 datagrams
+  earlier than RFC 1122's 60 to 120 seconds for every other target.
+- *Per target*: ``targets`` maps a network to its policy and its
+  fragment timeouts, as Suricata's ``defrag.host-config`` sets a
+  timeout per network; the global value applies elsewhere. ``targets``
+  then takes a small record instead of a bare ``OverlapPolicy``.
+- *Global, with a report*: one 60-second timeout, and an
+  ``Anomaly(SLOW_REASSEMBLY)`` on a datagram that completes more than
+  30 seconds after its first fragment, so the caller sees the cases a
+  Linux target dropped.
+
+*Recommendation:* per target, with a global default of 60 s for both
+versions, and the ``SLOW_REASSEMBLY`` anomaly for IPv4 under the
+default. It keeps RFC 8200's figure where the target is unknown, lets
+a caller who knows its Linux hosts emulate them, and never leaves the
+30-to-60-second window silent. *Trade-off:* a richer ``targets`` value
+and one more anomaly kind; a caller who configures nothing still
+completes datagrams a Linux IPv4 target dropped, though each is
+reported.
 
 **Decision needed: a total-age timeout for TCP.** *Recommendation:*
 none by default, settable. A BGP session or a database connection
@@ -690,13 +812,26 @@ Arriving data that overlaps held data is compared byte for byte.
   versions and both sets of spans. The datagram goes on.
 - *Any other overlap, IPv6*, whether or not the bytes differ: the
   datagram is abandoned. ``Overlap`` (``resolved=False``) reports it,
-  with ``kept`` and ``other`` equal when the bytes agree; the held
-  fragments are dropped and the key is replaced by a *discard marker*
-  until the datagram's age timeout. RFC 5722 §4
-  requires discarding "any constituent fragments, including those not
-  yet received", so a fragment arriving for a marked key is dropped with
-  ``Anomaly(kind=FRAGMENT_AFTER_DISCARD)``. A marker is charged
-  ``FLOW_OVERHEAD`` and counts against ``max_flows``.
+  with ``kept`` and ``other`` equal when the bytes agree, and the held
+  fragments and the key's state are dropped.
+
+After a discard the reassembler keeps nothing for the key: a later
+fragment with the same key starts a new datagram, which completes if
+its fragments do. RFC 5722 §4 as published also discarded constituent
+fragments "not yet received"; verified erratum 3089 removed those words
+as not implementable, since honouring them means keeping state per key
+for a Maximum Segment Lifetime, a resource-exhaustion vector of its
+own. RFC 8200 §4.5 discards "all the fragments that have been received
+for that packet", and Linux keeps no state once it kills a queue
+(``inet_frag_kill`` in
+`net/ipv6/reassembly.c <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv6/reassembly.c>`__).
+An observer that refused later fragments would drop a datagram the
+target delivers, after one overlapping pair and a clean train under the
+same Identification: an evasion. No anomaly marks the new datagram,
+since that would need the per-key state back; the earlier ``Overlap``
+carries the same ``flow``, so a caller can correlate the two. The same
+holds for an IPv4 datagram discarded by the ``discard`` policy or any
+other rule of section 3.5.
 
 Policies resolve overlaps when a fragment arrives, against the held
 fragments it overlaps, so held state is always one non-overlapping
@@ -705,29 +840,36 @@ version of each byte plus the spans that supplied it.
 3.4 Named policies
 ~~~~~~~~~~~~~~~~~~
 
-The names are the target-based set of Snort's frag3 and Suricata's
-defrag engine, from Novak's *Target-Based Fragmentation Reassembly*
-(2005). "Held" is a fragment already stored; "arriving" is the one
-being fed.
+The names are the policy types of Snort's frag3, which the
+`Snort manual <http://manual-snort-org.s3-website-us-east-1.amazonaws.com/node17.html>`__
+credits to Shankar and Paxson's
+`Active Mapping <https://www.icir.org/vern/papers/activemap-oak03.pdf>`__
+(2003). Suricata's defrag engine implements the same set
+(`src/defrag.c <https://raw.githubusercontent.com/OISF/suricata/master/src/defrag.c>`__),
+and its ``DefragSturgesNovak*`` unit tests give the reassembled bytes of
+one overlapping fragment pattern under each policy, which serve as the
+reference vectors (section 7.2). "Held" is a fragment already stored;
+"arriving" is the one being fed.
 
 .. list-table::
    :header-rows: 1
-   :widths: 13 52 35
+   :widths: 13 47 40
 
    * - Policy
      - Which bytes win an overlap
-     - Targets, as frag3 documents them
+     - Targets in frag3's table
    * - ``first``
      - Held, always.
-     - Mac OS, HP-UX 11.00
+     - HP-UX 11.00, Mac OS, SunOS 5.5.1 to 5.8 (Solaris 2.5.1 to 8)
    * - ``last``
      - Arriving, always.
      - Cisco IOS
    * - ``bsd``
      - Held, where the held fragment begins at or before the arriving
        one; arriving, where the held fragment begins after it.
-     - AIX, FreeBSD, HP-UX 10.20, IRIX, OpenBSD, OpenVMS, OS/2, OSF/1,
-       SunOS 4.1.4, Tru64
+     - AIX 2 and 4.3, FreeBSD, HP-UX B.10.20, IRIX 4.0.5F to 6.4, NCD
+       thin clients, OpenVMS 7.1, OS/2, OSF/1 V3.0 to V5.1, SunOS
+       4.1.4, Tru64 V5.0A and V5.1, VAX/VMS
    * - ``bsd-right``
      - A variant of ``bsd`` that favours the arriving fragment in
        overlaps at a held fragment's right end.
@@ -735,36 +877,47 @@ being fed.
    * - ``linux``
      - As ``bsd``, except that the arriving fragment also wins over a
        held one that begins at the same offset.
-     - Linux 2.4 and 2.6
+     - Linux 2.2 and 2.4, OpenBSD
    * - ``windows``
      - Held, except over a held fragment the arriving one begins before
        and ends after, which the arriving one replaces.
-     - Windows 95 to XP
+     - Windows 95, 98, NT 4, 2000 and XP
    * - ``solaris``
      - Held, except over a held fragment the arriving one begins before
        and ends at or after the end of, which the arriving one
        replaces.
-     - Solaris 2.5.1 to 8
+     - None; Suricata maps its ``solaris`` host-os-policy key to it,
+       and its ``old-solaris`` key to ``first``
 
-These model the stacks Novak measured. Some current stacks discard an
-IPv4 datagram whose fragments overlap, as RFC 5722 requires for IPv6;
-a ``discard`` policy would model them, and is the IPv6 path applied to
-IPv4.
+These model stacks measured before 2005; ``linux`` is Linux before
+4.19. Current Linux discards an IPv4 datagram whose fragments
+partially overlap, as RFC 5722 requires for IPv6, since commit
+`7969e5c40dfd <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7969e5c40dfd04799d4341f1b7cd266b6e47f227>`__
+(August 2018, Linux 4.19), and drops a fragment contained in a run of
+fragments it already holds as a duplicate, without comparing its bytes,
+since commit
+`ade446403bfb <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ade446403bfb79d3528d56071a84b15351a139ad>`__
+(December 2018, Linux 4.20); Linux 4.19 itself discards on duplicates
+too. In both cases it keeps no state for the key afterwards.
+A ``discard`` policy, the IPv6 path applied to IPv4, models a stack
+that discards on every overlap but an exact duplicate.
 
 **Decision needed: which named policies to offer.** *Recommendation:*
 for IPv4 fragments, ``first`` (the default), ``last``, ``bsd``,
 ``linux``, ``windows``, ``solaris`` and ``discard``; not ``bsd-right``.
+The current-Linux policy is the next decision.
 
-- The six Novak policies other than ``bsd-right`` cover every general-
-  purpose operating system frag3 lists, and Novak's paper gives one
-  fragment pattern with the expected output under each, so each costs
-  one table row in the tests (section 7.2), not a separate design.
+- The six frag3 policies other than ``bsd-right`` cover every
+  general-purpose operating system frag3 lists, and Suricata's unit
+  tests give one fragment pattern with the expected output under each,
+  so each costs one table row in the tests (section 7.2), not a
+  separate design.
 - ``discard`` costs nothing beyond the IPv6 path already required, and
-  is the right model for stacks that follow RFC 5722's reasoning on
-  IPv4 too.
+  models a stack that applies RFC 5722's rule to IPv4 too.
 - ``bsd-right`` models one printer family, and its rule is the least
-  well documented of the set: its exact behaviour would have to be
-  established by testing a JetDirect, which no netns script can do.
+  well documented of the set: Suricata accepts the name but its
+  reassembly has no case for it, and its exact behaviour would have to
+  be established by testing a JetDirect, which no netns script can do.
   Adding it later is one more enum value, with no API change.
 
 *Trade-off:* a caller who must emulate an HP JetDirect, or a stack not
@@ -772,12 +925,41 @@ on the list, gets the nearest policy and still sees every disagreement
 as an ``Overlap`` event. The policies describe historical stacks, so
 the guarantee that matters is the event, not the emulation.
 
+**Decision needed: a policy for current Linux.** No policy above
+models Linux since 4.20: ``linux`` is its earlier behaviour, and
+``discard`` discards a datagram over a contained fragment with
+differing bytes, which current Linux drops as a duplicate while keeping
+the datagram.
+
+- *Add* ``linux-4.20``: a partial overlap discards the datagram, with
+  ``Overlap(resolved=False)`` even when the bytes agree, and a fragment
+  contained in a run of held contiguous fragments is dropped, the held
+  bytes winning, with an ``Overlap`` when its bytes differ. The
+  reassembler compares the bytes Linux does not, so the event is still
+  emitted. ``linux`` is documented as Linux before 4.19.
+- *Rely on* ``discard``: one policy fewer, but it disagrees with
+  current Linux on contained fragments with differing bytes, where the
+  observer drops a datagram the target delivers: an evasion, visible
+  only as the ``Overlap``.
+- *Neither*: the default ``first`` agrees with current Linux on
+  contained fragments and disagrees on partial overlaps, where the
+  observer completes a datagram the target discarded.
+
+*Recommendation:* add ``linux-4.20``. Linux is a common target in the
+captures this library reads, its rule is fixed by two cited commits,
+and its reference vectors can come from a netns capture against the
+running kernel. *Trade-off:* the name ties
+the policy to a kernel version and the rule to Linux's run structure;
+a later kernel change needs a new value, not a changed one.
+
 3.5 Rules applied to each fragment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The response to each rule is either *discard* (the fragment, or the
-datagram, as a receiver must) or *report* (an ``Anomaly``, and the
-fragment is used).
+The response to each rule is *discard* (the fragment, or the datagram,
+as a receiver must) or *report* (an ``Anomaly``, and the fragment is
+used). Every discard also emits its ``Anomaly``. For three rules
+receivers disagree on what is discarded, and the response is a
+decision (below the table).
 
 .. list-table::
    :header-rows: 1
@@ -786,22 +968,25 @@ fragment is used).
    * - Condition
      - Response
      - Source
-   * - Fragment would end past 65,535 bytes: IPv4 header + offset × 8
-       + data length; IPv6 Unfragmentable Part + offset × 8 + data
-       length.
-     - Discard the datagram: ``Anomaly(OVERSIZE)``, whose spans are
-       the fragments held and the arriving one. This is the "ping of
-       death".
+   * - Fragment would end past 65,535 bytes. IPv4: header + offset × 8
+       + data length, the Total Length. IPv6: the Per-Fragment headers
+       after the 40-byte IPv6 header + offset × 8 + data length, the
+       reassembled Payload Length, which excludes the IPv6 header.
+     - ``Anomaly(OVERSIZE)``, whose spans are the fragments held and
+       the arriving one: the "ping of death". The fragment or the
+       datagram is discarded, per the decision below.
      - RFC 791 §3.1; RFC 8200 §4.5
    * - IPv6 fragment with M set whose data length is not a multiple
        of 8.
-     - Discard the fragment, ``Anomaly(MISALIGNED)``.
+     - ``Anomaly(MISALIGNED)``; the fragment or the datagram is
+       discarded, per the decision below.
      - RFC 8200 §4.5
    * - IPv4 fragment with MF set whose data length is not a multiple
        of 8.
-     - Discard the fragment, ``Anomaly(MISALIGNED)``: no conforming
-       fragmenter produces it, since every non-final fragment ends on
-       an 8-octet boundary.
+     - ``Anomaly(MISALIGNED)``, then per the decision below. No
+       conforming fragmenter produces it, since every non-final
+       fragment ends on an 8-octet boundary, but RFC 791 sets no rule
+       for a receiver that gets one.
      - RFC 791 §2.3
    * - Last fragment (MF/M clear) disagrees with an end already known,
        or data lies past a known end.
@@ -809,7 +994,8 @@ fragment is used).
        datagram has no single length.
      -
    * - Fragment with no data.
-     - Discard the fragment, ``Anomaly(EMPTY_FRAGMENT)``.
+     - ``Anomaly(EMPTY_FRAGMENT)``; the fragment or the datagram is
+       discarded, per the decision below.
      -
    * - IPv6 first fragment that does not hold the whole header chain
        through the upper-layer header.
@@ -844,6 +1030,45 @@ deliberate: the reassembler observes; whether the target dropped them
 is not visible in a capture, and RFC 1858's rules are filtering
 advice for routers, not receiver requirements.
 
+**Decision needed: what OVERSIZE, MISALIGNED and EMPTY_FRAGMENT
+discard.** Receivers differ:
+
+- RFC 8200 §4.5 discards only the offending IPv6 fragment, for an
+  oversize or a misaligned one; the datagram can still complete.
+- Linux (`net/ipv6/reassembly.c`_, `net/ipv4/ip_fragment.c`_) kills
+  the whole queue for an IPv6 oversize or misaligned fragment, for an
+  empty fragment of either version, and for an IPv4 datagram whose
+  reassembled length exceeds 65,535. For a misaligned IPv4 fragment
+  it truncates the data to a multiple of 8 (``end &= ~7``) and keeps
+  the fragment, discarding the queue only if nothing is left.
+
+.. _net/ipv6/reassembly.c: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv6/reassembly.c
+.. _net/ipv4/ip_fragment.c: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv4/ip_fragment.c
+
+The options, for each of the three rules:
+
+- *Fragment*: discard the offending fragment only. RFC 8200's rule;
+  an observer that follows it completes datagrams a Linux target
+  discarded (an insertion).
+- *Datagram*: discard every held fragment. Linux's rule for most
+  cases; an observer that follows it drops datagrams an RFC-following
+  target completes after a valid replacement fragment (an evasion).
+- *Truncate and keep*, for a misaligned IPv4 fragment only: Linux's
+  rule. An observer that discards it misses datagrams Linux completes.
+- *By policy*: Linux's rules for an IPv4 receiver whose policy is
+  ``linux-4.20``, another choice elsewhere. IPv6 has no per-target
+  policy, so this applies to IPv4 only.
+
+*Recommendation:* for IPv6, *fragment* for OVERSIZE and MISALIGNED,
+following RFC 8200's text, and *datagram* for EMPTY_FRAGMENT, which
+the RFC does not cover. For IPv4, *truncate and keep* for MISALIGNED,
+the only receiver behaviour cited here, and *datagram* for OVERSIZE,
+whatever the policy; for EMPTY_FRAGMENT, *by policy*: *datagram* under
+``linux-4.20``, *fragment* elsewhere. *Trade-off:* no choice
+matches every target, so the guarantee is the ``Anomaly``: each case
+is reported whatever was discarded. Following the RFC for IPv6 means
+disagreeing with Linux there.
+
 3.6 The reassembled datagram
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -858,19 +1083,27 @@ decoders, checksums included.
   Offset is set to 0, DF and the reserved bit are kept as the first
   fragment had them, and the Header Checksum is recomputed. TTL,
   Identification and the rest are the first fragment's.
-- IPv6: the Unfragmentable Part is the first fragment's headers up to
-  the Fragment header; the Next Header of its last header is set to
+- IPv6: the Per-Fragment headers (RFC 8200's term; RFC 2460 called
+  them the Unfragmentable Part) are the first fragment's headers up to
+  the Fragment header; the Next Header of their last header is set to
   the Fragment header's Next Header; the Fragment header is removed;
   and Payload Length is recomputed, all as RFC 8200 §4.5 specifies. A
   Fragment header later fragments carry differently is not used.
 
-``header_len`` is the length of that header (IPv4) or of the IPv6
-header plus the Unfragmentable Part's extension headers.
+``payload_offset`` is where the reassembled payload starts in ``data``:
+the length of the IPv4 header, or of the Per-Fragment headers, the
+IPv6 header and the extension headers before the Fragment header. It
+is not called ``header_len``: for IPv6 it differs from
+``IPv6.header_len``, which is always 40, since the
+library decodes each extension header as a layer of its own.
 
 **Decision needed: a synthesized header, or the payload only.** The
 datagram's header is new bytes: no captured frame holds it. The decode
-contract still holds for it, as for any input:
-``bytes(IPv4.decode(event.data)) == event.data[:event.header_len]``. What
+contract still holds for it, as for any input: for IPv4,
+``bytes(IPv4.decode(event.data)) == event.data[:event.payload_offset]``,
+since any valid header round-trips; for IPv6, the ``header_len`` of
+the ``IPv6`` layer and of the extension-header layers ``decode_frame``
+yields before the payload sum to ``payload_offset``. What
 does not hold is any equality with a captured header: re-encoding the
 first fragment's decoded IPv4 header gives the first fragment's bytes,
 which differ in Total Length, flags, offset and checksum.
@@ -907,7 +1140,10 @@ direction by construction and is reported as
 
 A key's connection ends when both directions have ended or it expires;
 a SYN for a key whose connection has ended, or whose directions are
-closed, starts a new connection under the same key.
+closed, starts a new connection under the same key, as does data in
+sequence after an RST (section 4.4). A caller therefore treats a
+``StreamEnd`` as the end of that connection's runs: later
+``StreamData`` under the same ``flow`` belongs to a new connection.
 
 4.2 Stream offsets and mid-stream pickup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -948,12 +1184,17 @@ rejects a segment whose timestamp is older than the last one accepted,
 to protect against an old duplicate from a previous wrap being
 accepted as current.
 
-**Decision needed: implement PAWS.** *Recommendation:* no. PAWS only
-matters when 2\ :sup:`32` bytes cross a direction within one segment
-lifetime, which at the default idle and cap sizes makes a stale
-segment land beyond the window and be reported anyway; and a passive
-observer applying PAWS where the target does not, or the reverse, is
-itself an ambiguity (section 5). *Trade-off:* on a fast link a
+**Decision needed: implement PAWS.** *Recommendation:* no. A stale
+segment can pass for current data only when its direction's sequence
+space wraps within the segment's lifetime: 2\ :sup:`32` bytes inside
+one Maximum Segment Lifetime, about 290 Mbit/s sustained with RFC
+9293's 2-minute MSL. Even then the serial-number mapping places the
+stale segment behind the delivered end, where it is compared with the
+retained bytes, or ahead of it, where it is held and the current data
+for the same bytes later overlaps it; either way a difference is
+reported, never delivered silently. And a passive observer applying
+PAWS where the target does not, or the reverse, is itself an ambiguity
+(section 5). *Trade-off:* on a fast link a
 segment from 4 GiB earlier with differing bytes is reported as an
 ``Overlap`` against retained data, or as ``Retransmission(verified=False)``
 past ``retain_bytes``, rather than rejected; a target with PAWS would
@@ -976,10 +1217,12 @@ any event.
   SYN is ignored with ``Anomaly(ISN_CHANGED)``: a synchronized
   receiver answers an in-window SYN with a challenge ACK, not a reset
   (`RFC 5961 §4 <https://www.rfc-editor.org/rfc/rfc5961.html#section-4>`__).
-- *Data without ACK*: a segment other than a SYN with the ACK bit
-  clear is dropped, as a receiver must
+- *Data without ACK*: a segment other than a SYN or an RST with the
+  ACK bit clear is dropped, as a receiver must
   (`RFC 9293 §3.10.7.4 <https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4>`__),
-  with ``Anomaly(DATA_WITHOUT_ACK)``.
+  with ``Anomaly(DATA_WITHOUT_ACK)``. An RST is processed whether or
+  not ACK is set, since that section checks the RST bit before the ACK
+  field.
 - *FIN*: data on the FIN segment is stream data. The FIN fixes the
   direction's end at its sequence number plus its data length. When
   delivery reaches that end, ``StreamEnd(reason=FIN)``. A later FIN
@@ -987,24 +1230,31 @@ any event.
   ``Anomaly(INCONSISTENT_FIN)``; data past the end is dropped with
   ``Anomaly(DATA_AFTER_FIN)``; holes before the end may still fill.
 - *RST*: contiguous data is delivered, then ``StreamEnd(reason=RST)``
-  for both directions; the connection moves to the closed timeout
-  instead of being removed. Data on an RST is diagnostic text, not
-  stream data
+  for both directions. No ``StreamData`` follows a ``StreamEnd(RST)``
+  for that connection. Data on an RST is diagnostic text, not stream
+  data
   (`RFC 1122 §4.2.2.12 <https://www.rfc-editor.org/rfc/rfc1122.html#page-87>`__),
-  and is reported as ``Anomaly(RST_WITH_DATA)``. Data that arrives in
-  sequence after an RST is still reassembled and delivered, with
-  ``Anomaly(DATA_AFTER_RST)``: whether the target accepted the RST
-  depends on its window check
+  and is reported as ``Anomaly(RST_WITH_DATA)``. The ended connection
+  is kept for the closed timeout, holding no data, only so that what
+  follows is recognized: data that arrives in sequence after the RST
+  starts a new connection under the same key, picked up mid-stream at
+  that byte (section 4.2) with ``Anomaly(DATA_AFTER_RST)`` in place of
+  ``Anomaly(MIDSTREAM)``, as a SYN for an ended connection does
+  (section 4.1). Whether the target accepted the RST depends on its
+  window check
   (`RFC 5961 §3 <https://www.rfc-editor.org/rfc/rfc5961.html#section-3>`__),
-  which a capture cannot show, and tearing state down on an RST is the
-  evasion Ptacek & Newsham describe.
+  which a capture cannot show, and dropping what follows an RST is the
+  evasion Ptacek & Newsham describe; the new connection keeps those
+  bytes visible.
 
 4.5 Windows and overlaps
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-When both SYNs were seen with their Window Scale options
-(`RFC 7323 §2.2 <https://www.rfc-editor.org/rfc/rfc7323.html#section-2.2>`__),
-the reassembler tracks each receiver's right window edge from the
+When both SYNs were seen, the scale of each window is known: the
+shift each Window Scale option carries when both SYNs have one, and 0
+when either lacks it
+(`RFC 7323 §2.2 <https://www.rfc-editor.org/rfc/rfc7323.html#section-2.2>`__).
+The reassembler then tracks each receiver's right window edge from the
 other direction's ACK and window fields. Data past the furthest edge
 seen is ``Anomaly(OUT_OF_WINDOW)`` and is still stored, subject to the
 caps: a capture can miss the window update that made it valid, and
@@ -1015,7 +1265,7 @@ Overlapping segments follow the fragment rules of section 3.3:
 identical bytes are a ``Retransmission``, differing bytes an
 ``Overlap`` resolved by the receiver's policy.
 ``StreamReassembler`` offers ``first`` (the default) and ``last``.
-The Novak policies describe IP fragment reassembly; operating systems'
+The frag3 policies describe IP fragment reassembly; operating systems'
 TCP segment-overlap behaviour differs from their fragment behaviour,
 and Suricata's stream policies use a longer list of targets. Adding
 per-OS TCP policies needs its own reference vectors and is a
@@ -1040,6 +1290,36 @@ Policies therefore decide only among bytes not yet delivered: data
 held past a hole. The ``contrary`` flag makes the remaining case, a
 target that would have taken the later version, visible.
 
+**Decision needed: retransmissions older than** ``retain_bytes``. A
+segment that repeats delivered bytes more than ``retain_bytes`` behind
+the delivered end cannot be compared, and is reported as
+``Retransmission(verified=False)``. If its bytes differ, that is an
+inconsistent overlap the reassembler does not report as one: an
+exception to the rule that every inconsistent overlap is reported.
+With a scaled window, which ``max_flow_bytes`` assumes up to 2 MiB, a
+sender can retransmit that far back.
+
+- *64 KiB*, the largest unscaled window: covers every retransmission
+  of an unscaled connection, and leaves differing retransmissions
+  further back on scaled ones unverified.
+- *The tracked window*: retain as much as the receiver's advertised
+  window, up to half of ``max_flow_bytes``, when both SYNs were seen.
+  Every retransmission inside the window is verified, at up to 2 MiB
+  retained per direction; since retained bytes count against the caps,
+  a busy flow holds its cap with retained data alone, and
+  ``max_total_bytes`` holds 32 such flows before eviction.
+- *Report unverified repeats as overlaps*: an ``Overlap`` with
+  ``kept`` empty for every repeat older than the retained window. No
+  exception remains, but every ordinary retransmission that far back
+  is reported as a possible inconsistency, so the event stops meaning
+  that bytes differed.
+
+*Recommendation:* 64 KiB, with the exception accepted and documented:
+``Retransmission(verified=False)`` is the report, and SECURITY.md's
+scope (section 6.2) names it. *Trade-off:* a differing retransmission
+more than 64 KiB back on a scaled connection is an insertion the
+caller sees only as an unverified retransmission.
+
 **Decision needed: when to deliver.** Delivering on contiguity (the
 issue's "as they become available") delivers before a later, differing
 retransmission can be seen. The alternative delivers a run only once
@@ -1047,10 +1327,11 @@ the receiver has acknowledged it, as Suricata hands data to its
 application-layer parsers, so overlaps arriving before the ACK are
 resolved by policy first. *Recommendation:* deliver on contiguity, with
 the ``contrary`` flag, and offer ACK-gated delivery later as an option.
-Contiguity delivery makes the completing frame the frame that carried
-the last byte, which is what RootWire attaches messages to; ACK-gating
-would make it the peer's ACK, and delivers nothing for a one-sided
-capture without a fallback. *Trade-off:* under ``last``, and under any
+Contiguity delivery makes a run's ``completing_ref`` the segment of the
+sending direction that made the run contiguous (section 1.4), which is
+what RootWire attaches messages to; ACK-gating would make it the
+peer's ACK, and delivers nothing for a one-sided capture without a
+fallback. *Trade-off:* under ``last``, and under any
 future per-OS TCP policy that favours later data, the delivered stream
 can differ from what the target reassembled; every such case is an
 ``Overlap`` with ``contrary=True``, never silent.
@@ -1069,6 +1350,32 @@ declares) is a known loss: its captured bytes are delivered and a
 ``Gap`` with reason ``TRUNCATED`` covers the rest at once, so the next
 segment is not held behind a hole that can never fill. A segment with
 a bad checksum follows ``checksums`` (section 5.1).
+
+**Decision needed: a gap when the peer acknowledges past a hole.** A
+segment the capture missed but the receiver got is never
+retransmitted: the receiver acknowledges past it. The direction then
+holds everything after the hole until ``max_flow_bytes`` forces a
+``Gap`` (2 MiB of data) or the idle timeout ends the flow (3,600 s),
+and delivers nothing in between. Captures that drop packets show this
+routinely.
+
+- *No ACK-based gap*: the hole is filled only by data, a cap or a
+  timeout. Nothing is skipped on the receiver's word, and delivery
+  stalls as above.
+- *Gap on ACK*: when the other direction acknowledges a sequence
+  number past the start of a hole, the acknowledged part of the hole is
+  declared ``Gap(reason=ACKED)`` and the held data after it is
+  delivered. ``completing_ref`` is the ACK's frame. Bytes that arrive
+  later for the gap's range are behind the delivered end and are
+  reported as ``Retransmission(verified=False)``.
+
+*Recommendation:* gap on ACK. It needs no state beyond the
+acknowledgement tracking of section 4.5, applies only when both
+directions are captured, and turns a stall of up to an hour into a
+reported gap. *Trade-off:* an ACK the receiver never sent (spoofed, or
+from an attacker on the path) makes the observer skip bytes the
+receiver may still accept: an evasion, reported as the ``Gap`` and,
+when the bytes arrive, as the unverified retransmission.
 
 ``URG`` and the urgent pointer are ignored: urgent bytes stay inline,
 as most stacks deliver them and as
@@ -1114,8 +1421,9 @@ while the buffer ends inside a message:
 
 To attach a message to frames, the caller keeps the buffer's stream
 offset: the message occupies ``[offset, offset + message.header_len)``,
-and the spans of the runs that overlap that range are its frames, the
-last of them its completing frame. A desynchronized buffer (a
+the spans of the runs that overlap that range are its frames, and its
+completing frame is the ``completing_ref`` of the run that holds its
+last byte (section 1.4), or none when that is ``None``. A desynchronized buffer (a
 ``Gap`` inside a message, or a decoder error other than truncation) is
 the caller's to resynchronize, as a protocol decoder's framing rules
 are.
@@ -1155,14 +1463,47 @@ simplest insertion. Captures taken on a sending host with checksum
 offload record outgoing segments with checksums the NIC had yet to
 fill.
 
-**Decision needed: the default for bad checksums.** ``ChecksumMode``
-has ``DROP`` (the piece is not used) and ``KEEP`` (it is used); both
-emit ``Anomaly(BAD_CHECKSUM)``. *Recommendation:* ``DROP``. It closes
-the insertion, matches Suricata's ``checksum-validation: yes`` default
-and this library's habit of validating, and the anomaly tells a caller
-reading an offloaded capture exactly why a direction is empty.
-*Trade-off:* such a caller must pass ``checksums=ChecksumMode.KEEP``,
-and a capture mixing both kinds has no right setting for both.
+A checksum that cannot be computed is not checked under any mode,
+and the piece is used: a segment the snap length cut (``TRUNCATED``
+already marks it), or one whose IP header declares a length of 0, as
+in a TSO capture. ``Anomaly(UNVERIFIED_CHECKSUM)`` marks each direction
+or datagram that has one.
+
+**Decision needed: bad checksums.** ``decode()`` carries checksums
+verbatim and verification is explicit, through
+:mod:`netprotocols.checksum` (ARCHITECTURE.md, "The encode side, and
+the round-trip guarantee"), so the library has no default to follow
+here. ``ChecksumMode`` would
+have:
+
+- ``DROP``: a piece with a bad checksum is not used. It closes the
+  insertion. On a capture taken on a host with transmit checksum
+  offload, which is RootWire's usual case, every outgoing segment has
+  a checksum the NIC had yet to fill, so the host's own direction of
+  every connection disappears, and outgoing fragments with it. Suricata
+  validates in ``stream.checksum-validation: yes``, but its
+  ``pcap-file.checksum-checks`` defaults to ``auto``, which turns
+  validation off when it detects offload.
+- ``KEEP``: the piece is used. Nothing is lost on an offloaded capture,
+  and a bad-checksum piece that differs from another version of the
+  same bytes is still an ``Overlap``; but a bad-checksum piece that
+  fills a hole first wins under ``first``, an insertion reported only
+  by its ``BAD_CHECKSUM`` anomaly.
+- ``AUTO``: a sender whose checksums have all been bad so far is taken
+  to be offloaded and its pieces are used, with
+  ``Anomaly(CHECKSUM_OFFLOAD)`` once; from the first checksum of that
+  sender that verifies, its bad ones are dropped. The sender is the
+  source address for fragments and the direction for TCP.
+
+Each mode emits ``Anomaly(BAD_CHECKSUM)`` for every bad checksum.
+*Recommendation:* ``AUTO``. It keeps the outgoing direction of an
+offloaded capture, which ``DROP`` loses, and still drops bad
+checksums from a sender that has shown it sends good ones, which
+``KEEP`` uses. *Trade-off:* it is the most complex mode, and a sender
+whose first pieces are forged with bad checksums is taken for
+offloaded until a good one arrives, so those pieces are used; a
+capture where a host's offloaded and forwarded traffic share its
+address has no right setting.
 Transport checksums of fragmented datagrams are not checked by the
 fragment reassembler: they cover the whole datagram, which the caller
 verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
@@ -1192,8 +1533,9 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
      - Policy per target (section 3.4), and ``Overlap`` for any
        differing byte, under every policy.
    * - Overlapping IPv6 fragments
-     - Datagram discarded and later fragments refused (RFC 5722 §4);
-       ``Overlap`` with ``resolved=False``.
+     - Datagram discarded (RFC 5722 §4, erratum 3089), ``Overlap``
+       with ``resolved=False``; a later fragment under the same key
+       starts a new datagram, as at the target (section 3.3).
    * - Overlapping TCP segments, retransmission with different data
      - Policy for undelivered bytes, ``Overlap`` (with ``contrary``)
        for delivered ones (sections 4.5, 4.6).
@@ -1209,13 +1551,17 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
    * - Atomic fragment colliding with a real fragment train (RFC 6946)
      - Processed in isolation; never joins a train.
    * - Oversized datagram ("ping of death")
-     - Discarded, ``Anomaly(OVERSIZE)``.
+     - ``Anomaly(OVERSIZE)``; the fragment or the datagram discarded
+       (section 3.5).
    * - Fragment timeout desynchronization (the observer and the target
        time out at different moments)
-     - Age timeout of 60 s from the first fragment; every abandoned
-       datagram is an ``Expired`` event with its spans and holes, so a
-       train completed after the observer gave up is visible as an
-       ``Expired`` followed by a new datagram under the same key.
+     - Age timeout from the first fragment, per target if so decided
+       (section 2.5); every abandoned datagram is an ``Expired`` event
+       with its spans and holes, so a train completed after the
+       observer gave up is visible as an ``Expired`` followed by a new
+       datagram under the same key. A datagram the observer completes
+       after a Linux IPv4 target's 30 seconds is the reverse case,
+       which section 2.5's decision covers.
    * - Inconsistent last fragment or length
      - Datagram discarded, ``Anomaly(INCONSISTENT_END)``.
    * - Data on SYN
@@ -1224,8 +1570,9 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
      - ``Anomaly(ISN_CHANGED)``; ISN replaced only before data
        (section 4.4).
    * - Spoofed or out-of-window RST tearing down observer state
-     - State kept for the closed timeout, later data delivered with
-       ``Anomaly(DATA_AFTER_RST)``.
+     - ``StreamEnd(RST)``; data in sequence after it starts a new
+       connection under the same key, with ``Anomaly(DATA_AFTER_RST)``
+       (section 4.4).
    * - FIN games: data after FIN, second FIN
      - ``Anomaly(DATA_AFTER_FIN)``, ``Anomaly(INCONSISTENT_FIN)``.
    * - Data without ACK
@@ -1271,9 +1618,6 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
    * - Overlap storm (many differing retransmissions)
      - No state grows: resolution replaces bytes. At most one
        ``Overlap`` per frame and flow (section 1.4).
-   * - IPv6 overlap to plant discard markers
-     - Markers are charged and count against ``max_flows``; they
-       expire with the age timeout.
    * - Hash-collision flooding of the flow table
      - Keys are tuples of ``str`` and ``int``, hashed with Python's
        randomized string hashing. Iteration order, and therefore event
@@ -1341,8 +1685,9 @@ Every line ``grep -n -i reassembl ARCHITECTURE.md`` finds at master
 Also: a new section after "Port-based dispatch is best-effort" that
 states the module's contract (sections 1 to 4 of this note, as
 shipped), a sentence in "The decode contract" that ``decode()`` stays
-stateless and the reassemblers are the library's only stateful
-objects, and a ``reassembly.py`` entry in "Layout map".
+stateless and the reassemblers are the library's only objects that
+keep state across frames (a ``Registry`` is mutable, but holds
+configuration, not traffic), and a ``reassembly.py`` entry in "Layout map".
 
 6.2 README.md, SECURITY.md and docstrings
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1357,7 +1702,9 @@ objects, and a ``reassembly.py`` entry in "Layout map".
   segment-overlap tricks outside ``HTTP``'s, ``BGP``'s and ``TLS``'s
   scope: they stay outside the decoders' scope, and a new paragraph
   puts them in the module's: state beyond the documented bounds, an
-  inconsistent overlap resolved without an ``Overlap`` event, an event
+  inconsistent overlap resolved without an ``Overlap`` event (a
+  retransmission older than ``retain_bytes``, reported as unverified,
+  is the documented exception, section 4.6), an event
   missing a contributing or completing frame, or output that depends on
   anything but the input and its timestamps.
 - Docstrings that say the same: ``layer7/http.py`` lines 7-8,
@@ -1380,19 +1727,38 @@ Affected:
   re-measured at the release, under Rule 4. Import time is unaffected
   if the package does not import the module (section 6.4).
 - §6, "Claims we must not make", gains: "reassembles exactly as
-  <operating system> does". The named policies follow Novak's 2005
-  measurements, not current kernels.
+  <operating system> does". The named policies follow frag3's mapping
+  of stacks measured before 2005, and ``linux-4.20``, if offered,
+  follows two kernel commits, not every kernel since.
 
 6.4 Package exports
 ~~~~~~~~~~~~~~~~~~~
 
-**Decision needed: re-export from** ``netprotocols``. *Recommendation:*
-no. The reassemblers are reached as ``netprotocols.reassembly`` and
-``import netprotocols`` does not import them, so the per-frame decoder
-pays no import cost (CLAIMS §1.4) and the stateful API is visibly
-separate from the stateless one. *Trade-off:* one more import line for
-callers, and ``tests/test_exports.py`` records the module as a public
-submodule rather than top-level names.
+**Decision needed: re-export from** ``netprotocols``. The package's
+convention is to re-export: ``netprotocols/__init__.py`` imports the
+public names of ``pcap``, ``flow`` and ``checksum`` as well as every
+protocol, and the docstring of ``tests/test_exports.py`` states that
+"the top-level package re-exports every public name".
+
+- *No re-export*: the reassemblers are reached as
+  ``netprotocols.reassembly`` only, and ``import netprotocols`` does not
+  import them.
+- *Eager re-export*: the names are imported in ``__init__.py`` like the
+  rest, and every ``import netprotocols`` pays for the module.
+- *Lazy re-export*: a module ``__getattr__``
+  (`PEP 562 <https://peps.python.org/pep-0562/>`__) imports
+  ``netprotocols.reassembly`` on the first access to one of its names,
+  so ``from netprotocols import FragmentReassembler`` works with no
+  import cost until it is used; ``__all__`` lists the names and a
+  ``TYPE_CHECKING`` import gives type checkers the same view.
+
+*Recommendation:* no re-export. The per-frame decoder pays no import
+cost (CLAIMS §1.4) and the stateful API is visibly separate from the
+stateless one. *Trade-off:* it breaks the re-export convention above,
+callers write one more import line, and ``tests/test_exports.py`` has
+no notion of a public submodule today: recording the module as one is
+new work. The lazy re-export keeps the convention at no import cost,
+at the price of the only ``__getattr__`` in the package.
 
 6.5 CHANGELOG.md
 ~~~~~~~~~~~~~~~~
@@ -1440,20 +1806,24 @@ datagrams from the real captures into overlap cases and writes them as
 pcaps, each labelled **crafted** in MANIFEST with the generator and the
 source frame:
 
-- Novak's fragment pattern, once per offered IPv4 policy, with the
-  expected reassembled bytes in a table in the test, one row per
-  policy, taken from Novak's paper;
-- the same pattern over IPv6, expecting the RFC 5722 discard and the
-  refusal of a later fragment;
+- the overlapping fragment pattern of Suricata's ``DefragSturgesNovak*``
+  tests, once per offered IPv4 policy, with the expected reassembled
+  bytes in a table in the test, one row per policy, taken from those
+  tests; for ``linux-4.20``, if offered, the pattern and the expected
+  outcome come from a netns capture against the running kernel;
+- the same pattern over IPv6, expecting the RFC 5722 discard, and then
+  a clean train under the same key, expecting a new ``Datagram``;
 - identical duplicates (``Retransmission``, no ``Overlap``) for both
   versions;
 - RFC 1858 tiny-fragment and offset-1 cases, an oversized datagram,
-  a misaligned fragment, two inconsistent last fragments and an IPv6
-  first fragment with a split header chain;
+  a misaligned fragment, an empty fragment, two inconsistent last
+  fragments and an IPv6 first fragment with a split header chain, each
+  asserting the discard decided in section 3.5;
 - TCP: a retransmission with different bytes, before and after
   delivery, under ``first`` and ``last``; data after FIN; data after
   RST; a SYN with a changed ISN; a sequence wrap inside a stream;
-  data without ACK; a bad checksum under both ``ChecksumMode`` values.
+  data without ACK; an RST without ACK; a bad checksum under each
+  ``ChecksumMode`` value, and an offloaded direction under ``AUTO``.
 
 Every ``Overlap`` case also asserts the event's ``kept``, ``other``,
 both span sets, ``completing_ref``, and that the case produces it under
@@ -1527,7 +1897,8 @@ pypacker, which neither ``src/`` nor ``tests/`` imports:
   tshark's reassembled data and reassembled-in frame, and the
   concatenated ``StreamData`` with the followed stream, so CI needs no
   tshark. On the crafted captures, ``ip.fragment.overlap.conflict``
-  must flag the frames ``Overlap`` names.
+  (``ipv6.fragment.overlap.conflict`` for IPv6) must flag the frames
+  ``Overlap`` names where their bytes differ.
 - ``scripts/extract_http_streams.py``, the stdlib-only extractor the
   HTTP and TLS tests already use: its ``NN.request`` and
   ``NN.response`` files must equal the module's streams for
@@ -1554,7 +1925,10 @@ policies decided in section 3.4, and ``ChecksumMode``. Acceptance:
   reassembled data, with ``completing_ref`` equal to tshark's
   reassembled-in frame;
 - the crafted overlap captures produce each policy's expected bytes
-  and an ``Overlap`` under every policy; IPv6 discards;
+  and an ``Overlap`` under every policy; IPv6 discards, and a later
+  train under the same key reassembles as a new datagram;
+- a datagram discarded by an expiry or an eviction that another
+  datagram's fragment triggered carries ``completing_ref=None``;
 - the bound, determinism, memory and property tests of section 7 for
   fragments, with ``FLOW_OVERHEAD`` and ``PIECE_OVERHEAD`` measured and
   fixed;
@@ -1575,7 +1949,9 @@ machinery, ``Span``, ``Overlap``, ``Retransmission``, ``Evicted``,
   extractor's files and to tshark's followed streams; the new HTTP
   capture decodes, message by message, with ``HTTP.decode()`` on the
   runs as in section 4.8, and each message's completing frame is the
-  frame that carried its last byte;
+  ``completing_ref`` of the run that holds its last byte (section 1.4);
+- a flow flushed by an expiry or an eviction that another flow's frame
+  triggered carries ``completing_ref=None`` on every event;
 - the crafted TCP cases of section 7.2 and the stream properties of
   section 7.5;
 - the SYN-flood memory bound of section 7.4;
@@ -1584,6 +1960,11 @@ machinery, ``Span``, ``Overlap``, ``Retransmission``, ``Evicted``,
 
 Follow-ups, filed when wanted: per-OS TCP overlap policies with
 reference vectors, ACK-gated delivery, PAWS, and ``bsd-right``.
+
+A decision of :ref:`reassembly-decisions` that adds a name
+(``linux-4.20``, ``ChecksumMode.AUTO``, ``GapReason.ACKED``, per-target
+fragment timeouts) ships, if accepted, in the issue of its step, with
+its tests.
 
 
 .. _reassembly-decisions:
@@ -1605,28 +1986,51 @@ Decisions needed
      - Type of a frame reference (1.3)
      - ``int``, defaulting to the feed count.
    * - 3
+     - Fragment eviction order (2.3)
+     - Oldest datagram first, by first-fragment time.
+   * - 4
+     - Fragment timeouts, per target or global (2.5)
+     - Per target, 60 s for both versions by default, and
+       ``Anomaly(SLOW_REASSEMBLY)`` past 30 s for IPv4.
+   * - 5
      - TCP total-age timeout (2.5)
      - None by default, settable.
-   * - 4
+   * - 6
      - Named IPv4 fragment policies (3.4)
      - ``first`` (default), ``last``, ``bsd``, ``linux``, ``windows``,
        ``solaris`` and ``discard``; not ``bsd-right``.
-   * - 5
-     - Reassembled IPv4 header (3.6)
+   * - 7
+     - A policy for current Linux (3.4)
+     - Add ``linux-4.20``; document ``linux`` as Linux before 4.19.
+   * - 8
+     - What OVERSIZE, MISALIGNED and EMPTY_FRAGMENT discard (3.5)
+     - IPv6: the fragment for OVERSIZE and MISALIGNED, the datagram for
+       EMPTY_FRAGMENT. IPv4: truncate and keep a MISALIGNED fragment,
+       the datagram for OVERSIZE, and for EMPTY_FRAGMENT the datagram
+       under ``linux-4.20``, the fragment otherwise.
+   * - 9
+     - Reassembled header (3.6)
      - Synthesized from the first fragment, with ``header_ref``.
-   * - 6
+   * - 10
      - Mid-stream pickup (4.2)
      - On, with ``Anomaly(MIDSTREAM)``.
-   * - 7
+   * - 11
      - PAWS (4.3)
      - Not implemented.
-   * - 8
+   * - 12
      - When to deliver TCP data (4.6)
      - On contiguity, with ``Overlap.contrary``; ACK-gating later.
-   * - 9
+   * - 13
+     - Retransmissions older than ``retain_bytes`` (4.6)
+     - 64 KiB, reported as ``Retransmission(verified=False)``: the
+       documented exception to "always reported".
+   * - 14
+     - Gap when the peer acknowledges past a hole (4.7)
+     - Yes, ``Gap(reason=ACKED)``.
+   * - 15
      - Bad checksums (5.1)
-     - ``ChecksumMode.DROP``.
-   * - 10
+     - ``ChecksumMode.AUTO``.
+   * - 16
      - Re-export from ``netprotocols`` (6.4)
      - No; ``netprotocols.reassembly`` only.
 
