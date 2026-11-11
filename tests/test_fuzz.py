@@ -1244,6 +1244,27 @@ def _sctp_init_chunks(draw: st.DrawFn) -> SCTPChunk:
     )
 
 
+@st.composite
+def _sctp_sack_chunks(draw: st.DrawFn) -> SCTPChunk:
+    """A SACK: 8 drawn bytes, counts of 0-4 blocks and 0-4 duplicate
+    TSNs (or any 16-bit count), and as many drawn 4-byte entries as the
+    counts declare, or 0-8; then a cut, or a 1-3-byte tail, now and
+    then."""
+    blocks = draw(st.one_of(st.integers(0, 4), st.integers(0, 0xFFFF)))
+    dups = draw(st.one_of(st.integers(0, 4), st.integers(0, 0xFFFF)))
+    entries = draw(st.one_of(st.just(blocks + dups), st.integers(0, 8)))
+    entries = min(entries, 16)
+    raw = draw(st.binary(min_size=8, max_size=8))
+    raw += blocks.to_bytes(2) + dups.to_bytes(2)
+    raw += draw(st.binary(min_size=4 * entries, max_size=4 * entries))
+    damage = draw(st.sampled_from(["none", "none", "cut", "tail"]))
+    if damage == "cut":
+        raw = raw[: draw(st.integers(0, len(raw)))]
+    elif damage == "tail":
+        raw += draw(st.binary(min_size=1, max_size=3))
+    return SCTPChunk(3, draw(st.integers(0, 255)), raw)
+
+
 class TestSCTPChunkAccessorSafety:
     @given(
         data=st.one_of(
@@ -1299,16 +1320,30 @@ class TestSCTPChunkAccessorSafety:
     def test_typed_accessors_answer_and_parameters_tile_or_raise(
         self, chunk: SCTPChunk
     ) -> None:
-        """Every typed accessor but parameters answers a value or None
-        for any value of the five chunk types they read. The parameters
-        either tile the value after the 16 fixed bytes exactly, each but
-        the last padded to 4 bytes and the last with its padding or
-        without it, or raise InvalidFieldError, where the reference walk
-        says so."""
+        """Every typed accessor but parameters and the SACK lists
+        answers a value or None for any value of the five chunk types
+        they read. The parameters either tile the value after the 16
+        fixed bytes exactly, each but the last padded to 4 bytes and the
+        last with its padding or without it, or raise InvalidFieldError,
+        where the reference walk says so; so do the SACK lists, each of
+        exactly as many entries as its count declares."""
         _read_every_sctp_chunk_accessor(chunk)
-        blocks = chunk.gap_ack_blocks
-        if blocks is not None:
-            assert len(blocks) == chunk.num_gap_ack_blocks
+        with contextlib.suppress(InvalidFieldError):
+            blocks = chunk.gap_ack_blocks
+            if blocks is not None:
+                assert len(blocks) == chunk.num_gap_ack_blocks
+        with contextlib.suppress(InvalidFieldError):
+            tsns = chunk.duplicate_tsns
+            if tsns is not None:
+                assert len(tsns) == chunk.num_duplicate_tsns
+
+    @given(chunk=_sctp_sack_chunks())
+    def test_sack_lists_walk_or_raise(self, chunk: SCTPChunk) -> None:
+        """A SACK's Gap Ack Blocks and Duplicate TSNs are the entries
+        their counts declare, or raise InvalidFieldError at the first
+        entry cut short, where the reference walk says so; None only
+        for a value short of the 12 fixed bytes."""
+        _read_every_sctp_chunk_accessor(chunk)
 
     @given(header=sctp_headers())
     def test_zero_padding_after_a_packet_is_left_undecoded(
@@ -1343,8 +1378,8 @@ class TestSCTPChunkAccessorSafety:
         assert list(sctp.parsed_chunks) == chunks
 
 
-#: Every typed SCTPChunk accessor but parameters, each of which must
-#: answer a value or None on any chunk.
+#: Every typed SCTPChunk accessor but parameters and the SACK lists,
+#: each of which must answer a value or None on any chunk.
 _SCTP_CHUNK_ACCESSORS = (
     "immediate",
     "unordered",
@@ -1366,19 +1401,69 @@ _SCTP_CHUNK_ACCESSORS = (
     "cumulative_tsn_ack",
     "num_gap_ack_blocks",
     "num_duplicate_tsns",
-    "gap_ack_blocks",
-    "duplicate_tsns",
 )
+
+#: SCTPChunk's count-given lists, which _read_sctp_sack_lists reads.
+_SCTP_SACK_LISTS = ("gap_ack_blocks", "duplicate_tsns")
 
 
 def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
     """Read every typed accessor, check the parameters against
-    _reference_parameter_walk, and decode the user data through the
-    default, empty ``sctp.ppid`` table."""
+    _reference_parameter_walk and the SACK lists against
+    _reference_sack_walk, and decode the user data through the default,
+    empty ``sctp.ppid`` table."""
     for name in _SCTP_CHUNK_ACCESSORS:
         getattr(chunk, name)
     _read_sctp_parameters(chunk)
+    _read_sctp_sack_lists(chunk)
     assert chunk.decode_user_data() is None
+
+
+def _reference_sack_walk(
+    chunk: SCTPChunk, entries: int
+) -> tuple[bytes, ...] | int | None:
+    """Read ``entries`` 4-byte entries after a SACK's 12 fixed bytes,
+    independently of netprotocols: ``None`` for another chunk type or a
+    value shorter than the 12 fixed bytes, the offset in the value of
+    the first entry cut short, and the entries otherwise."""
+    if chunk.type != 3 or len(chunk.value) < 12:
+        return None
+    found = []
+    for at in range(12, 12 + 4 * entries, 4):
+        if at + 4 > len(chunk.value):
+            return at
+        found.append(chunk.value[at : at + 4])
+    return tuple(found)
+
+
+def _read_sctp_sack_lists(chunk: SCTPChunk) -> None:
+    """Read a chunk's Gap Ack Blocks and Duplicate TSNs: each raises
+    InvalidFieldError at the offset _reference_sack_walk gives for the
+    entries its counts declare, is None, or is those entries."""
+    blocks = chunk.num_gap_ack_blocks or 0
+    dups = chunk.num_duplicate_tsns or 0
+    for name, entries, skip in (
+        ("gap_ack_blocks", blocks, 0),
+        ("duplicate_tsns", blocks + dups, blocks),
+    ):
+        expected = _reference_sack_walk(chunk, entries)
+        try:
+            found = getattr(chunk, name)
+        except InvalidFieldError as error:
+            assert isinstance(expected, int)
+            assert (error.field, error.offset) == ("value", expected)
+            event(f"SCTP {name}: malformed")
+            continue
+        if found is None:
+            assert expected is None
+            continue
+        assert isinstance(expected, tuple)
+        if name == "gap_ack_blocks":
+            wire = [start.to_bytes(2) + end.to_bytes(2) for start, end in found]
+        else:
+            wire = [tsn.to_bytes(4) for tsn in found]
+        assert tuple(wire) == expected[skip:]
+        event(f"SCTP {name}: {min(len(found), 2)}")
 
 
 def _reference_parameter_walk(
@@ -1446,7 +1531,7 @@ def _read_sctp_parameters(chunk: SCTPChunk) -> None:
 
 
 def test_the_sctp_accessor_lists_name_every_property() -> None:
-    """_SCTP_CHUNK_ACCESSORS and parameters, which
+    """_SCTP_CHUNK_ACCESSORS, _SCTP_SACK_LISTS and parameters, which
     _read_sctp_parameters reads, and test_sctp.py's ACCESSOR_TYPES,
     cover every SCTPChunk property beyond the display helpers the walk
     property reads itself."""
@@ -1456,7 +1541,11 @@ def test_the_sctp_accessor_lists_name_every_property() -> None:
         if isinstance(attr, property)
     }
     display = {"length", "type_name", "flags_str", "unrecognized_action"}
-    assert properties - display == {*_SCTP_CHUNK_ACCESSORS, "parameters"}
+    assert properties - display == {
+        *_SCTP_CHUNK_ACCESSORS,
+        *_SCTP_SACK_LISTS,
+        "parameters",
+    }
     assert properties - display == set(ACCESSOR_TYPES)
 
 
