@@ -548,10 +548,12 @@ Every event of a flow evicted to make room for another flow's frame
 carries ``completing_ref=None``; when the arriving frame's own flow is
 evicted, every event of its flush carries that frame's ref (section
 1.4). Ties in age are broken by feed order, so eviction is
-deterministic. The cap is enforced before the arriving frame's data is
-stored: the reassembler evicts until the new piece fits, and a fragment
-larger than ``max_flow_bytes`` on its own is reported as ``Evicted``
-immediately. A TCP segment never is: past its direction's lowest hole
+deterministic. For fragments the cap is enforced before the arriving
+frame's data is stored: the reassembler evicts until the new piece
+fits, and a fragment larger than ``max_flow_bytes`` on its own is
+reported as ``Evicted`` immediately. For streams the arriving segment
+is stored first and the caps are then enforced, so they hold when the
+call returns. A TCP segment is never evicted on its own: past its direction's lowest hole
 it goes out through ``Gap(CAP)`` as above, and a connection is evicted
 under ``max_flow_bytes`` only when its state, with no data held or
 retained, does not fit. After every call, ``usage.bytes <= max_total_bytes`` and
@@ -1647,7 +1649,7 @@ routinely.
 - *Gap on ACK, late bytes delivered*: as above, but bytes that arrive
   for a declared gap's range are delivered in a ``LateData`` event
   (``offset``, ``data``, ``spans``), outside the ordered runs, so no
-  captured byte is lost. A caller that has already decoded past the gap
+  captured byte is lost while the gap's range is recorded. A caller that has already decoded past the gap
   decides whether to use them.
 
 In both gap options the acknowledgement is mapped to stream offsets by
@@ -1681,17 +1683,20 @@ gap (section 1.4), since that frame made the bytes deliverable; the
 alternative is ``None``, as for a flush, which leaves such a run with
 no completing frame.
 
-A declared gap's range is recorded for as long as the connection is
-held, independently of the retained bytes, so bytes arriving for it
-however late are ``LateData``. Each recorded range is charged
-``PIECE_OVERHEAD``, and under ``max_flow_bytes`` the oldest go after
-the retained bytes (section 2.3).
+A declared gap's range is recorded independently of the retained
+bytes, so bytes arriving for it, however late, are ``LateData`` while
+its record is held. Each recorded range is charged ``PIECE_OVERHEAD``,
+and under ``max_flow_bytes`` the oldest go after the retained bytes
+(section 2.3); bytes that arrive for a range whose record was shed are
+a ``Retransmission(verified=False)``, and their content is not
+delivered.
 
 *Accepted:* gap on ACK, late bytes delivered, with the cap, the
 confirmation, and the confirming frame as ``completing_ref``. It turns
 a stall of up to an hour into a reported gap on exactly the lossy,
 often mid-stream captures where it happens, and keeps every captured
-byte. *Trade-off:* one more event type, which a caller that ignores it
+byte that arrives for a gap while the gap's record is held, which only
+``max_flow_bytes`` can shed. *Trade-off:* one more event type, which a caller that ignores it
 treats as a loss. The grace period delays delivery past a real loss by
 ``ack_gap_grace``; a reordering longer than that still yields a
 spurious ``Gap`` and ``LateData`` in a benign capture; a shorter grace

@@ -204,7 +204,9 @@ timestamp causes; the caller feeds the reassembled datagram instead.
   frame's reference; a grace for the holes past it then starts. An
   acknowledgement past the highest offset received is
   :attr:`AnomalyKind.ACK_BEYOND_DATA`, once per direction. Bytes that
-  arrive later for an acknowledged gap are :class:`LateData`.
+  arrive later for an acknowledged gap are :class:`LateData` while its
+  record is held; under ``max_flow_bytes`` the oldest records are shed,
+  and bytes for a shed one are a ``Retransmission(verified=False)``.
 - **RST.** An RST is :attr:`AnomalyKind.RST_RECEIVED` at once and makes
   the connection's end pending until the closed timeout after it. Data
   of either direction past what it had received when the RST came
@@ -4557,8 +4559,8 @@ class StreamReassembler:
     ) -> None:
         """Append a :class:`Gap`.
 
-        A ``Gap(ACKED)`` is also recorded among the retained bytes, so
-        bytes arriving for it later are :class:`LateData`.
+        A ``Gap(ACKED)`` is also recorded, so bytes arriving for it
+        later, while the record is held, are :class:`LateData`.
 
         :param conn: The connection.
         :param found: The direction.

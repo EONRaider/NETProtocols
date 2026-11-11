@@ -1024,8 +1024,8 @@ caller who follows the transfer has the server's port from the source
 port of its first reply, and names it for the walk,
 `decode_as={"udp.port": {tid: TFTP}}`, which covers both directions
 since every later datagram has it as one of its two ports; tracking the
-transfer is the caller's, as reassembling the stream is for `HTTP` and
-`BGP`, unless `netprotocols.reassembly` does it. A
+transfer is the caller's. For `HTTP` and `BGP`, which run over TCP,
+the caller reassembles the stream, or `netprotocols.reassembly` does. A
 server that answers from port 69 itself, which RFC 1350 does not allow,
 has its replies dispatched by the source-port fallback.
 
@@ -1481,8 +1481,9 @@ overlap reported without an `Overlap`. A hole the peer acknowledges
 past and that stays open for `ack_gap_grace` (1 s) of capture time,
 timed from the first acknowledgement past it once it is the lowest, is
 declared a `Gap(ACKED)` by the next frame that confirms it, up to that
-acknowledgement and the highest offset received, and bytes that arrive for it later are
-`LateData`; a segment the snap length cut is an immediate
+acknowledgement and the highest offset received, and bytes that arrive
+for it later are `LateData` while its record is held (the per-connection
+cap can shed the oldest records, after the retained bytes); a segment the snap length cut is an immediate
 `Gap(TRUNCATED)`. An RST never ends a connection on its own: it is an
 `Anomaly(RST_RECEIVED)` at once, data after it continues the same
 stream with `Anomaly(DATA_AFTER_RST)`, and `StreamEnd(RST)` comes at
@@ -1502,10 +1503,14 @@ evicts its own connections before an idle established one. An evicted
 or expired connection is flushed: each hole a `Gap(FLUSH)`, the held
 bytes delivered, then `StreamEnd` and `Evicted` or `Expired`, all with
 `completing_ref=None` when another connection's frame or the clock
-caused it. The reassembler delivers bytes, never messages: a caller
-appends each direction's runs to a buffer and decodes `HTTP`, `TLS`,
-`BGP` or `DNSOverTCP` from its start, and a message's completing frame
-is the `completing_ref` of the run that holds its last byte.
+caused it. The reassembler delivers bytes, never messages: each
+`StreamData` starts where the previous `StreamData` or `Gap` of its
+direction ended, and a caller appends each direction's runs to a
+buffer and decodes `HTTP`, `TLS`, `BGP` or `DNSOverTCP` from its start;
+a message's completing frame is the `completing_ref` of the run that
+holds its last byte. A `Gap` leaves the message pending in that
+direction incomplete: its bytes must not be joined across the gap, and
+decoding resumes at a message boundary after it.
 
 **What it is not.** It does not emulate any one operating system: the
 named policies follow frag3's table of stacks measured before 2005, and

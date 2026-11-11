@@ -389,9 +389,13 @@ handle(fragments.close() + streams.close())
 Each `Datagram` carries the whole datagram with a rebuilt header, so
 the ordinary decoders and checksum helpers read it. Each `StreamData`
 carries bytes that just became contiguous in one direction of a TCP
-connection, at their stream `offset`; append them to that direction's
-buffer and decode `HTTP`, `TLS` or `BGP` messages from its start (see
-*Decoding HTTP*). Every event names its frames by the `ref` you passed:
+connection, at their stream `offset`, which is where the previous
+`StreamData` or `Gap` of that direction ended. Append them to that
+direction's buffer and decode `HTTP`, `TLS` or `BGP` messages from its
+start (see *Decoding HTTP*). A `Gap` means bytes are missing: the
+message pending in that direction's buffer is incomplete, so do not
+join the bytes before the gap to those after it; drop the buffer and
+resume decoding at a message boundary after the gap. Every event names its frames by the `ref` you passed:
 `event.refs` are every frame it came from, `event.completing_ref` the
 frame that completed it, and a message's completing frame is that of
 the run holding its last byte.
