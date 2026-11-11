@@ -3685,7 +3685,8 @@ _pim_like = st.tuples(
 
 
 def _read_pim_message(pim: PIM) -> None:
-    """Read every accessor of a PIM message's typed form."""
+    """Read every accessor of a PIM message's typed form: the Address
+    List raises nothing but InvalidFieldError."""
     message = pim.message
     if isinstance(message, PIMHello):
         for option in message.options:
@@ -3695,10 +3696,14 @@ def _read_pim_message(pim: PIM) -> None:
             "lan_prune_delay",
             "dr_priority",
             "generation_id",
-            "address_list",
         ):
             with contextlib.suppress(InvalidFieldError, ProtocolError):
                 getattr(message, name)
+        try:
+            _ = message.address_list
+        except ProtocolError as error:
+            assert type(error) is InvalidFieldError
+            event("PIM Address List: malformed")
     elif isinstance(message, PIMJoinPrune):
         for group in message.groups:
             _ = group.group.bidirectional, group.group.admin_scope

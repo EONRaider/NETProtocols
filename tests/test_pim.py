@@ -918,12 +918,38 @@ class TestHelloOptions:
         hello = self.hello(PIMHelloOption(24, b"".join(map(bytes, addresses))))
         assert hello.address_list == addresses
 
-    def test_a_cut_address_list_raises(self):
-        """Test a cut address list raises."""
-        hello = self.hello(PIMHelloOption(24, bytes(unicast(R1))[:-1]))
-        with pytest.raises(TruncatedHeaderError) as excinfo:
+    @pytest.mark.parametrize("cut", [1, 5])
+    def test_a_cut_address_list_raises(self, cut):
+        """An address cut inside its family and encoding, or inside the
+        address, runs past the option: InvalidFieldError, as any walk
+        raises for a length past the end."""
+        hello = self.hello(PIMHelloOption(24, bytes(unicast(R1))[:cut]))
+        with pytest.raises(InvalidFieldError) as excinfo:
             _ = hello.address_list
-        assert excinfo.value.offset == 0
+        error = excinfo.value
+        assert not isinstance(error, TruncatedHeaderError)
+        assert (error.protocol, error.field, error.offset) == (PIM, "body", 0)
+        assert (error.expected, error.actual) == (2 if cut < 2 else 6, cut)
+
+    def test_a_second_address_past_the_option_raises_at_its_offset(self):
+        """The offset is relative to the option's value."""
+        first = bytes(unicast(R1))
+        hello = self.hello(PIMHelloOption(24, first + first[:4]))
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _ = hello.address_list
+        assert excinfo.value.offset == len(first)
+
+    @pytest.mark.parametrize(
+        "head", [b"\x03\x00", b"\x01\x01"], ids=["family", "encoding"]
+    )
+    def test_an_address_it_cannot_size_raises(self, head):
+        hello = self.hello(PIMHelloOption(24, head + bytes(4)))
+        with pytest.raises(InvalidFieldError) as excinfo:
+            _ = hello.address_list
+        assert (excinfo.value.field, excinfo.value.offset) == ("body", 0)
+
+    def test_an_empty_address_list_is_empty(self):
+        assert self.hello(PIMHelloOption(24)).address_list == ()
 
     def test_option_names(self):
         """Test option names."""
