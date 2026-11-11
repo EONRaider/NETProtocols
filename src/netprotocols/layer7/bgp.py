@@ -63,7 +63,8 @@ Messages and segments
 ---------------------
 TCP delivers BGP as a byte stream. A segment may hold several messages
 back to back, the tail of one message, the head of the next, or none
-at all; reassembling the stream is the caller's job, as it is for
+at all; reassembling the stream is the caller's job, or
+:mod:`netprotocols.reassembly`'s, as it is for
 :class:`~netprotocols.HTTP` (SECURITY.md). Within one segment the
 decoder does what it can without reassembly:
 

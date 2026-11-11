@@ -1399,12 +1399,12 @@ classic pcap only, does not read it. `tests/test_pcap.py` reads it
 with `read_packets` and derives its `if_name` edge cases from it by
 editing Interface Description Block option bytes only.
 
-## Fragment reassembly captures (`tests/fixtures/reassembly/`)
+## Reassembly captures (`tests/fixtures/reassembly/`)
 
 Outside the corpus on purpose: the corpus globs are non-recursive, and
 none of the counts above include these. They are inputs to
-`netprotocols.reassembly`, whose tests are `tests/test_reassembly.py`.
-Both were captured on 2026-11-11 by
+`netprotocols.reassembly`. The two fragment captures, whose tests are
+`tests/test_reassembly.py`, were captured on 2026-11-11 by
 `scripts/capture_fixtures_reassembly.sh`, with tcpdump 4.99.4
 (libpcap 1.10.4), dnsmasq 2.91, DiG 9.18.39, iproute2 6.1.0 and
 Python 3.13 on Linux 6.18.44, over a veth pair between the netns
@@ -1492,6 +1492,43 @@ ReasmOverlaps counted (`KERNEL_COUNTERS`), and completes trains 2, 3,
 5 and 7 with the bytes each reply echoes. tshark 4.2.2 reassembles every
 train, flagging `ip.fragment.overlap.conflict` in trains 1, 2 and 3,
 and an overlap without a conflict in trains 4 to 7.
+
+`http_stream.pcap` (593 frames) is the input to
+`netprotocols.reassembly`'s `StreamReassembler`, whose tests are
+`tests/test_stream_reassembly.py`. It was captured on 2026-11-11 by
+`scripts/capture_fixtures_reassembly_tcp.sh`, with tcpdump 4.99.4
+(libpcap 1.10.4), curl 8.5.0, iproute2 6.1.0 and Python 3.13 on Linux
+6.18.44, over a veth pair between the netns `nprts` (`nprtsv`,
+10.9.80.1/24, MAC `02:00:0a:09:50:01`, the server) and `nprtc`
+(`nprtcv`, 10.9.80.2/24, `02:00:0a:09:50:02`, the client), with
+permanent neighbor entries, no IPv6 (the kernel used has none),
+checksum offload, TSO, GSO and GRO off on both ends, and both ends
+routing the subnet with `advmss 536`, so no segment carries more than 524 data bytes (536 less the
+timestamps option). The capture subnet, 10.9.80.0/24, is used by no
+other script. Every IPv4 header and TCP checksum is verified by
+`check_fixtures`. The capture, on the server's veth end with the
+filter `tcp port 80`, keeps every segment of two connections to a
+stdlib `http.server` handler (`protocol_version = "HTTP/1.1"`), the
+handshakes, bare ACKs and teardowns included:
+
+| Connection | Frames | Client | Exchange | End |
+|---|---|---|---|---|
+| 1 | 0-582 | curl, port 48988 | `GET /big`, answered 200 with `Content-Length: 200000` and the body `bytes((i * 7 + i // 251) % 256 for i in range(200000))`; then `GET /chunked` on the same connection, answered 200, chunked: eight 2,500-byte chunks (`a` to `h`) and the trailer `X-Fixture: trailer` | curl's FIN, frame 580, and the server's, frame 581 |
+| 2 | 583-592 | a python3 socket, port 49000 | `GET /hello`, answered 200 with a 44-byte body | the client closes with `SO_LINGER` 0 once the response is read, so its kernel sends an RST, frame 592 |
+
+Every frame is from the real kernels; nothing in it is script-built
+but the HTTP payloads the two programs chose. tshark 4.2.2 finds two
+TCP streams, and its `-z follow,tcp,raw` gives, per direction, the
+byte count and SHA-256 recorded in `tests/test_stream_reassembly.py`
+(`TSHARK_FOLLOWED`): connection 1, client 154 bytes
+(`e7f6b8bf...77752d8`), server 220,406 (`35d4e16f...dd226fee7`);
+connection 2, client 40 (`bff3b97d...5a49680`), server 190
+(`459db198...31417c635`). Its HTTP dissector completes the four
+messages of connection 1 in frames 3, 477, 515 and 578 and the two of
+connection 2 in frames 586 and 590 (0-based), the frames the test
+expects as each message's completing reference. The same test records
+tshark's followed streams of `http/http.pcap` and `tls/tls_session.pcap`,
+taken on 2026-11-11 with the same tshark.
 
 ## Provenance note
 

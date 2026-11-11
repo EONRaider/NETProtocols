@@ -792,7 +792,9 @@ and a user message can span several chunks (the B and E flags), so the
 user data has no single successor layer. `SCTPChunk.decode_user_data()`
 reads the table for one chunk that holds a whole message, both B and E
 set, and answers `None` for a fragment, a PPID with no entry or a
-withheld one; reassembly is the caller's, as for HTTP over TCP. The
+withheld one; reassembly is the caller's. A TCP stream, such as one
+carrying HTTP, can be reassembled by `netprotocols.reassembly`; an
+SCTP user message cannot. The
 table ships empty, since this library decodes no PPID's payload, takes
 keys of 0 to 2**32 - 1, the PPID's width, and `decode_as` accepts its
 name but no walk consults it.
@@ -1022,7 +1024,8 @@ caller who follows the transfer has the server's port from the source
 port of its first reply, and names it for the walk,
 `decode_as={"udp.port": {tid: TFTP}}`, which covers both directions
 since every later datagram has it as one of its two ports; tracking the
-transfer is the caller's, as reassembly is for `HTTP` and `BGP`. A
+transfer is the caller's. For `HTTP` and `BGP`, which run over TCP,
+the caller reassembles the stream, or `netprotocols.reassembly` does. A
 server that answers from port 69 itself, which RFC 1350 does not allow,
 has its replies dispatched by the source-port fallback.
 
@@ -1204,7 +1207,8 @@ lax walk's packet over
 that starts there has room for 32 messages, so the 76 KEEPALIVEs take
 three walks); the busiest segment of the captured session in the corpus, taken with
 offload off, carries 7. Reassembling
-the stream is the caller's, as it is for `HTTP` below: see
+the stream is the caller's, or `netprotocols.reassembly`'s, as it is
+for `HTTP` below: see
 [`layer7/bgp.py`](src/netprotocols/layer7/bgp.py)'s module docstring.
 
 STUN on UDP and TCP 3478 (RFC 8489, RFC 5389) is guarded nearly as
@@ -1280,7 +1284,8 @@ that TCP carried in two segments in
 `tests/fixtures/tls/tls_session.pcap`, so a strict walk raises at both
 and a lax one stops at TCP. There is no lenient mode of `TLS.decode()`
 that reads a partial hello: the SNI of such a client comes for certain
-from reassembling its stream and calling `TLS.decode()` on that, as for
+from reassembling its stream, yourself or with
+`netprotocols.reassembly`, and calling `TLS.decode()` on that, as for
 `HTTP` below. Without reassembly, `peek_server_name()` (#285), a
 separate, opt-in function and not a decode mode, walks a ClientHello
 from the start of its record as far as the bytes go, the first record
@@ -1346,38 +1351,50 @@ that happen to fit in one segment. Of the 98 frames in
 (handshake, ACKs, FINs) and the 8 holding only the start of a message
 raise `TruncatedHeaderError`, and the 12 that begin mid-message raise
 `InvalidFieldError`. So it needs `lax=True`, and it is still not
-reassembly. Reassemble the connection and call `HTTP.decode()` on its
-bytes instead. HTTPS is not HTTP on the wire: port 443 dispatches to
+reassembly. Reassemble the connection, with `netprotocols.reassembly` or
+your own, and call `HTTP.decode()` on its bytes instead. HTTPS is not HTTP on the wire: port 443 dispatches to
 `TLS`, and the HTTP inside it is encrypted.
 
 ## Reassembly is a separate, stateful step
 
 `decode()` and `decode_frame()` see one frame. A datagram cut into IP
-fragments spans several, and `netprotocols.reassembly` puts it back
-together: it is opt-in, imported as `netprotocols.reassembly` (the
-package does not re-export it, so `import netprotocols` does not import
-it), and its `FragmentReassembler` is the only stateful object in the
-library. The design note `docs/design/reassembly.rst` holds the full
-contract and the decisions behind it; this is what ships.
+fragments spans several, and so does a TCP byte stream;
+`netprotocols.reassembly` puts both back together: it is opt-in,
+imported as `netprotocols.reassembly` (the package does not re-export
+it, so `import netprotocols` does not import it), and its
+`FragmentReassembler` and `StreamReassembler` are the only stateful
+objects in the library. The design note `docs/design/reassembly.rst`
+holds the full contract and the decisions behind it; this is what
+ships.
 
 **Input.** The caller decodes each frame once, with whatever `start`,
-registry and `lax` it uses, and passes the packet *and* the frame:
+registry and `lax` it uses, and passes the packet *and* the frame. A
+TCP segment rebuilt from fragments is fed to the stream reassembler
+like any other, with the completing frame's ref:
 
 ```python
 from netprotocols import IPv4, IPv6, decode_frame
 from netprotocols.pcap import read_pcap
-from netprotocols.reassembly import Datagram, FragmentReassembler
+from netprotocols.reassembly import (
+    Datagram,
+    FragmentReassembler,
+    StreamReassembler,
+)
 
 fragments = FragmentReassembler()
+streams = StreamReassembler()
 for index, captured in enumerate(read_pcap(buffer)):
     packet = decode_frame(captured.data, lax=True)
-    for event in fragments.feed(
-        packet, captured.data, timestamp=captured.timestamp, ref=index
-    ):
+    frame, ts = captured.data, captured.timestamp
+    for event in fragments.feed(packet, frame, timestamp=ts, ref=index):
+        handle((event,))
         if isinstance(event, Datagram):
             start = IPv4 if event.version == 4 else IPv6
-            whole = decode_frame(event.data, start=start, lax=True)
-closed = fragments.close()
+            data = event.data
+            whole = decode_frame(data, start=start, lax=True)
+            handle(streams.feed(whole, data, timestamp=ts, ref=index))
+    handle(streams.feed(packet, frame, timestamp=ts, ref=index))
+handle(fragments.close() + streams.close())
 ```
 
 A packet alone cannot be reassembled: a non-first fragment's data gets
@@ -1443,12 +1460,67 @@ replay produces the same events; per-target timeouts come with
 `targets`. Flows live in insertion-ordered structures, so event order
 never depends on hash values.
 
+**TCP streams.** `StreamReassembler` keys a connection by the
+`flow_key()` of the packet's first TCP layer and the IP header nearest
+before it, and delivers each direction as a byte stream numbered from
+0, the byte after the SYN, or the first segment's first byte when the
+capture began mid-stream (an `Anomaly(MIDSTREAM)`). Sequence numbers
+map to offsets by serial-number arithmetic, so a stream crosses a wrap
+of the sequence space. Bytes are delivered as soon as they are
+contiguous, one `StreamData` per `feed()` and direction, split where a
+`Gap` falls, whose spans tile its data; a
+segment past a hole is held (`OutOfOrder`). Overlapping bytes not yet
+delivered are resolved by a per-receiver `OverlapPolicy`, `first` (the
+default) or `last`, with an `Overlap` for any byte that differs;
+delivered bytes are final, and a repeat of them is compared with the
+bytes the direction retains, `retain_bytes` (64 KiB) below the peer's
+highest acknowledgement: a difference is an `Overlap` keeping the
+delivered version, flagged `contrary` under `last`, and a repeat older
+than that is a `Retransmission(verified=False)`, the one inconsistent
+overlap reported without an `Overlap`. A hole the peer acknowledges
+past and that stays open for `ack_gap_grace` (1 s) of capture time,
+timed from the first acknowledgement past it once it is the lowest, is
+declared a `Gap(ACKED)` by the next frame that confirms it, up to that
+acknowledgement and the highest offset received, and bytes that arrive
+for it later are `LateData` while its record is held (the per-connection
+cap can shed the oldest records, after the retained bytes); a segment the snap length cut is an immediate
+`Gap(TRUNCATED)`. An RST never ends a connection on its own: it is an
+`Anomaly(RST_RECEIVED)` at once, data after it continues the same
+stream with `Anomaly(DATA_AFTER_RST)`, and `StreamEnd(RST)` comes at
+the closed timeout (120 s) after it, at `close()`, or at once when a
+SYN with a new ISN follows, which starts a new connection
+(`Anomaly(SYN_AFTER_RST)`). A FIN ends its direction with
+`StreamEnd(FIN)` when delivery reaches it. Every other rule a segment
+breaks is an `Anomaly`. `StreamBounds` charges `FLOW_OVERHEAD` per
+connection, `PIECE_OVERHEAD` per direction and per held chunk, and the
+retained bytes with their frames; a connection over `max_flow_bytes`
+sheds retained bytes and recorded `Gap(ACKED)` ranges and then
+declares its lowest hole a `Gap(CAP)`,
+so captured data is delivered rather than dropped, and to make room
+under `max_flows` or `max_total_bytes` the least recently active
+connection not yet carrying data both ways goes first, so a SYN flood
+evicts its own connections before an idle established one. An evicted
+or expired connection is flushed: each hole a `Gap(FLUSH)`, the held
+bytes delivered, then `StreamEnd` and `Evicted` or `Expired`, all with
+`completing_ref=None` when another connection's frame or the clock
+caused it. The reassembler delivers bytes, never messages: each
+`StreamData` starts where the previous `StreamData` or `Gap` of its
+direction ended, and a caller appends each direction's runs to a
+buffer and decodes `HTTP`, `TLS`, `BGP` or `DNSOverTCP` from its start;
+a message's completing frame is the `completing_ref` of the run that
+holds its last byte. A `Gap` leaves the message pending in that
+direction incomplete: its bytes must not be joined across the gap, and
+decoding resumes at a message boundary after it.
+
 **What it is not.** It does not emulate any one operating system: the
 named policies follow frag3's table of stacks measured before 2005, and
-`linux-discard` the Linux commits the design note cites. It checks the
-IPv4 header checksum (`ChecksumMode`), never a transport checksum,
-which spans the reassembled datagram and is verified on the `Datagram`
-with `netprotocols.checksum`.
+`linux-discard` the Linux commits the design note cites; TCP offers
+`first` and `last` only. It checks a fragment's IPv4 header checksum
+and a segment's IPv4 header and TCP checksums (`ChecksumMode`), never
+the transport checksum of a fragmented datagram, which spans the
+reassembled datagram and is verified on the `Datagram` with
+`netprotocols.checksum`. It does not interpret SACK, emulate PAWS or
+the receiver's exact window, or reassemble anything above TCP.
 
 ## The encode side, and the round-trip guarantee
 
@@ -1613,10 +1685,11 @@ src/netprotocols/
 │                   FINGERPRINT among them), OSPF's LSA Fletcher
 │                   checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
-├── reassembly.py   FragmentReassembler: IPv4/IPv6 fragment
-│                   reassembly, the one module that keeps state
-│                   across frames; imported as netprotocols.reassembly,
-│                   not re-exported by the package
+├── reassembly.py   FragmentReassembler, StreamReassembler: IPv4/IPv6
+│                   fragment and TCP stream reassembly, the one module
+│                   that keeps state across frames; imported as
+│                   netprotocols.reassembly, not re-exported by the
+│                   package
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from a buffer or a binary
 │                   stream, not a filename; a buffer is copied once,

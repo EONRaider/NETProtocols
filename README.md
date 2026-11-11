@@ -191,10 +191,10 @@ ip.proto                  → error: "IPv4" has no attribute
 | 7 | RADIUS | `RADIUS`, `RADIUSAttribute`, `RADIUSVendorAttribute` | RFC 2865/2866, over UDP 1812 (authentication) and 1813 (accounting); the 20-byte header (Code, Identifier, Length, the Authenticator raw) and the attribute list (`RADIUSAttribute`), parsed on demand: User-Name, NAS-IP-Address, NAS-Port and Framed-IP-Address typed, User-Password raw and named, Vendor-Specific's Vendor-Id read and its sub-attributes (`RADIUSVendorAttribute`, values raw) walked in RFC 2865 §5.26's recommended format, except for vendors with another format, kept raw; the RFC 6929 Extended-Type and Long-Extended-Type attributes (241-246) named and kept raw; every other type raw, named if RFC 2865/2866/3579 (or, for four types, RFC 2869) defines it; nothing that needs the shared secret (authenticators, Message-Authenticator, password hiding) is computed or verified |
 | 7 | NTP | `NTP`, `NTPControl` | RFC 5905 (NTPv4) and RFC 1305 (NTPv3), and RFC 9327's mode 6 control messages, over UDP 123, the walk choosing `NTPControl` by the mode in the first byte; the 48-byte header with every field raw, timestamps also as UTC `datetime`s (`transmit_time` and the rest, RFC 4330's era rule past 2036), Root Delay in seconds (signed below NTPv4, as RFC 1305 and RFC 2030 define it), stratum, kiss code and Reference ID display; RFC 7822 extension fields (`NTPExtensionField`, NTS's named, RFC 9748's experimental range said so) and the symmetric-key MAC (`NTPMAC`, not verified) parsed on demand; `NTPControl` decodes `ntpq`'s mode 6 header (R, E and M bits, opcode names, sequence, status, association ID, offset, count), keeps the data raw with a `name=value` splitter (`variables`) that never raises, splits a system status word (`NTPSystemStatus`) and names an error response's code, and finds the MAC where ntpd and ntpsec put it (`NTPMAC`, not verified); ntpd's private mode 7 (`ntpdc`) is not decoded, so a strict walk raises `InvalidFieldError` on it: walk with `lax=True`, or take port 123 out of the walk with `WITHHELD` in `decode_as` (`decode_as={"udp.port": {123: WITHHELD}}`) |
 | 7 | HSRP | `HSRP`, `HSRPAdvertise`, `HSRPv2`, `HSRPv2GroupState`, `HSRPv2InterfaceState`, `HSRPv2TextAuthentication`, `HSRPv2MD5Authentication`, `HSRPv2TLV` | RFC 2281, HSRPv1 (version 0 on the wire) over UDP 1985; the 20-byte Hello, Coup and Resign message with every field raw, the Op Code and State named, the clear-text Authentication Data raw and unpadded (`password`), and the group's well-known virtual MAC address (`virtual_mac`). HSRPv2 over UDP 1985, the walk choosing `HSRPv2` by the first byte, and HSRP for IPv6 over UDP 2029, in the layout of Wireshark's packet-hsrp.c: its TLVs, the Group State TLV typed (version, Op Code and State named, IP version, 12-bit group, the sender's MAC as identifier, priority, hello and hold times in milliseconds, the IPv4 or IPv6 virtual address, the HSRPv2 virtual MAC), the Interface State TLV with its active and passive group counts, the Text Authentication TLV as HSRPv1's password and the MD5 Authentication TLV with its digest raw and not verified, other TLVs raw; tested against hand-built vectors only, since no capture holds HSRPv2. Cisco's Op Code 3 interface-state Advertise over UDP 1985, the walk choosing `HSRPAdvertise` by the first two bytes, in the layout of packet-hsrp.c: the 16-byte message with the TLV Type and the interface's State (Dormant, Passive, Active) named and its active and passive group counts, the TLV Length and Reserved fields raw; tested against hand-built vectors only, since no capture holds an Advertise. The MD5 Authentication TLV a router with MD5 authentication appends to an HSRPv1 message, read where packet-hsrp.c reads it, a message of exactly 50 bytes whose bytes 20 and 21 are Type 4 and Length 28, as `HSRP.md5_authentication`, an `HSRPv2MD5Authentication` with its digest raw and not verified (`None` for every other message, decoded to its 20 bytes); tested against hand-built vectors only, since no capture holds one |
-| 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; no reassembly |
+| 7 | BGP-4 | `BGP` | RFC 4271, over TCP 179; one layer per message, chaining to the next in the same segment; OPEN fields and optional parameters, UPDATE withdrawn routes, path attributes (`BGPPathAttribute`, ORIGIN/NEXT_HOP/MED/LOCAL_PREF values decoded) and NLRI (`BGPPrefix`), NOTIFICATION codes; KEEPALIVE and ROUTE-REFRESH; a message split across segments needs the stream, reassembled with `netprotocols.reassembly` or your own |
 | 7 | STUN | `STUN` | RFC 8489 (and RFC 5389, which it obsoletes), over UDP and TCP 3478; the 20-byte header with its magic cookie verified (RFC 3489 messages, which have none, are rejected), the message type split into class and method by accessors, attributes (`STUNAttribute`) parsed on demand with their 4-byte padding kept raw; MAPPED-ADDRESS and XOR-MAPPED-ADDRESS (`STUNAddress`, un-XORed for IPv4 and IPv6), SOFTWARE, ERROR-CODE, UNKNOWN-ATTRIBUTES; MESSAGE-INTEGRITY kept raw (it needs a key), FINGERPRINT compute/verify; over TCP one layer per message, chaining to the next in the same segment |
-| 7 | TLS | `TLS`, `TLSClientHello`, `TLSExtension`, `peek_server_name`, `TLSServerNamePeek` | RFC 9846 §5.1 (TLS 1.3, obsoleting RFC 8446) and RFC 5246 §6.2 (TLS 1.2, also obsoleted by RFC 9846) record framing, over TCP 443; one layer per record (content type, legacy version, length, the fragment raw), chaining to the next in the same segment; the handshake type and, parsed on demand, the ClientHello (`TLSClientHello`, its extensions as `TLSExtension`) and its SNI host name (`server_name`, RFC 6066), read from a reassembled stream when the ClientHello spans segments, or, opt-in, peeked from its first segment with `peek_server_name()` (found, absent, or not reached, which is not "no SNI"); no crypto and no handshake beyond the ClientHello's fields: nothing is decrypted, and the ServerHello, certificates and every other extension stay raw; 853, 465, 993, 995 and 8443 need `decode_as`; no DTLS or QUIC |
-| 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer you reassembled; ambiguities reported as anomalies; not port-dispatched |
+| 7 | TLS | `TLS`, `TLSClientHello`, `TLSExtension`, `peek_server_name`, `TLSServerNamePeek` | RFC 9846 §5.1 (TLS 1.3, obsoleting RFC 8446) and RFC 5246 §6.2 (TLS 1.2, also obsoleted by RFC 9846) record framing, over TCP 443; one layer per record (content type, legacy version, length, the fragment raw), chaining to the next in the same segment; the handshake type and, parsed on demand, the ClientHello (`TLSClientHello`, its extensions as `TLSExtension`) and its SNI host name (`server_name`, RFC 6066), read from a stream reassembled with `netprotocols.reassembly` or your own when the ClientHello spans segments, or, opt-in, peeked from its first segment with `peek_server_name()` (found, absent, or not reached, which is not "no SNI"); no crypto and no handshake beyond the ClientHello's fields: nothing is decrypted, and the ServerHello, certificates and every other extension stay raw; 853, 465, 993, 995 and 8443 need `decode_as`; no DTLS or QUIC |
+| 7 | HTTP/1.1 | `HTTP` | RFC 9112/9110; one message per decode from a buffer reassembled with `netprotocols.reassembly` or your own; ambiguities reported as anomalies; not port-dispatched |
 
 ## Decoding a captured frame
 
@@ -353,44 +353,70 @@ enclosing IP layer, no TCP/UDP/SCTP layer, or a transport layer without
 ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
 convention for message types that have none).
 
-## Reassembling fragments
+## Reassembling fragments and streams
 
 `decode()` and `decode_frame()` stay per-frame. To put IP fragments
-back together, feed every decoded packet, with the frame it came from,
-to a `FragmentReassembler` from `netprotocols.reassembly`, a module the
-package does not import on its own:
+back together, and TCP segments into each direction's byte stream, feed
+every decoded packet, with the frame it came from, to a
+`FragmentReassembler` and a `StreamReassembler` from
+`netprotocols.reassembly`, a module the package does not import on its
+own. A TCP segment rebuilt from fragments is fed to the stream
+reassembler with the frame that completed it:
 
 ```python
 from netprotocols import IPv4, IPv6, decode_frame, read_captures
-from netprotocols.reassembly import Datagram, FragmentReassembler
+from netprotocols.reassembly import (
+    Datagram,
+    FragmentReassembler,
+    StreamReassembler,
+)
 
 fragments = FragmentReassembler()
-for index, (timestamp, frame) in enumerate(read_captures(data)):
+streams = StreamReassembler()
+for index, (ts, frame) in enumerate(read_captures(data)):
     packet = decode_frame(frame, lax=True)
-    for event in fragments.feed(packet, frame, timestamp=timestamp, ref=index):
+    for event in fragments.feed(packet, frame, timestamp=ts, ref=index):
+        handle((event,))
         if isinstance(event, Datagram):
             start = IPv4 if event.version == 4 else IPv6
-            whole = decode_frame(event.data, start=start, lax=True)
-            # event.refs: every frame it came from;
-            # event.completing_ref: the frame that completed it
-for event in fragments.close():
-    ...  # the datagrams still missing fragments, as Expired events
+            data = event.data
+            whole = decode_frame(data, start=start, lax=True)
+            handle(streams.feed(whole, data, timestamp=ts, ref=index))
+    handle(streams.feed(packet, frame, timestamp=ts, ref=index))
+handle(fragments.close() + streams.close())
 ```
 
 Each `Datagram` carries the whole datagram with a rebuilt header, so
-the ordinary decoders and checksum helpers read it. Overlapping IPv4
-fragments are resolved by a per-target `OverlapPolicy` (`first` by
-default; `last`, `bsd`, `linux`, `windows`, `solaris`, `discard`,
-`linux-discard`), and any overlap whose bytes differ is reported as an
-`Overlap` event under every policy; an overlapping IPv6 fragment
-discards its datagram (RFC 5722). Every other rule a fragment breaks is
-an `Anomaly` event, never an exception. What the reassembler holds is
-bounded by `FragmentBounds`, measured on capture timestamps. Every
-`feed()` moves the capture clock, a frame without fragments included,
-and returns the `Expired` events that causes; call `advance(timestamp)`
-while a live capture is idle:
+the ordinary decoders and checksum helpers read it. Each `StreamData`
+carries bytes that just became contiguous in one direction of a TCP
+connection, at their stream `offset`, which is where the previous
+`StreamData` or `Gap` of that direction ended. Append them to that
+direction's buffer and decode `HTTP`, `TLS` or `BGP` messages from its
+start (see *Decoding HTTP*). A `Gap` means bytes are missing: the
+message pending in that direction's buffer is incomplete, so do not
+join the bytes before the gap to those after it; drop the buffer and
+resume decoding at a message boundary after the gap. Every event names its frames by the `ref` you passed:
+`event.refs` are every frame it came from, `event.completing_ref` the
+frame that completed it, and a message's completing frame is that of
+the run holding its last byte.
 
-| Bound | Default |
+Overlapping IPv4 fragments are resolved by a per-target
+`OverlapPolicy` (`first` by default; `last`, `bsd`, `linux`,
+`windows`, `solaris`, `discard`, `linux-discard`), and overlapping TCP
+segments not yet delivered by `first` or `last`; any overlap whose
+bytes differ is reported as an `Overlap` event under every policy, and
+an overlapping IPv6 fragment discards its datagram (RFC 5722). Holes a
+capture missed but the receiver acknowledged become `Gap` events, an
+RST is reported at once and ends the stream at the closed timeout after
+it when no data follows it, at `close()`, or at once when a SYN with a
+new ISN follows, and every other rule a fragment or segment breaks is an `Anomaly`
+event, never an exception. What each reassembler holds is bounded, and
+measured on capture timestamps. Every `feed()` moves the capture
+clock, a frame with nothing to reassemble included, and returns the
+`Expired` events that causes; call `advance(timestamp)` while a live
+capture is idle:
+
+| `FragmentBounds` | Default |
 |---|---|
 | `max_flow_bytes` | one maximal datagram and its overheads |
 | `max_total_bytes` | 32 MiB |
@@ -399,12 +425,24 @@ while a live capture is idle:
 | `age_timeout` | 60 s from the first fragment |
 | `idle_timeout` | none |
 
+| `StreamBounds` | Default |
+|---|---|
+| `max_flow_bytes` | 4 MiB per connection |
+| `max_total_bytes` | 128 MiB |
+| `max_flows` | 65,536 connections |
+| `retain_bytes` | 64 KiB per direction, below the peer's acknowledgement |
+| `idle_timeout_new` | 60 s, until data has gone both ways |
+| `idle_timeout_established` | 3,600 s |
+| `idle_timeout_closed` | 120 s, after FIN both ways or an RST |
+| `age_timeout` | none |
+| `ack_gap_grace` | 1 s |
+
 ## Decoding HTTP
 
 `HTTP.decode()` reads one HTTP/1.1 message (RFC 9112) from the start of
 a buffer and leaves whatever follows it alone; `header_len` says where
 the message ended. The buffer has to be the connection's bytes, which
-you reassemble: a TCP segment is rarely a whole message, so `HTTP` is
+you reassemble with `netprotocols.reassembly` (see above) or your own: a TCP segment is rarely a whole message, so `HTTP` is
 not in the port tables and `decode_frame` stops at TCP. Reading the
 messages pipelined on one side of a connection is a loop:
 

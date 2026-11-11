@@ -1560,9 +1560,12 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
 
-17 stdlib modules imported (`__future__` and the type-checking-only
+17 stdlib modules imported, counted by top-level module name, so
+`collections` and `collections.abc` count once (`__future__` and the
+type-checking-only
 `_typeshed` aside; `netprotocols.reassembly` adds `bisect` and
-`heapq`); `socket` used for exactly two
+`heapq`, and its `collections.OrderedDict` comes from a package
+`collections.abc` already imports); `socket` used for exactly two
 `inet_pton`/`inet_ntop` calls (`_base.py:244-249`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
@@ -2054,9 +2057,13 @@ section to begin with.
   `OverlapPolicy` values of `netprotocols.reassembly` follow Snort
   frag3's mapping of stacks measured before 2005, and `linux-discard`
   follows the Linux commits its design note cites (7969e5c40dfd,
-  ade446403bfb, 0ff89efb5246), not every kernel since. What the module
-  guarantees is the `Overlap` event for every overlap whose bytes
-  differ, under every policy, not the emulation.
+  ade446403bfb, 0ff89efb5246), not every kernel since. TCP segment
+  overlaps are resolved by `first` or `last` only, which model no
+  operating system's TCP stack. What the module guarantees is the
+  `Overlap` event for every overlap whose bytes differ, under every
+  policy, not the emulation; the one exception is a TCP
+  retransmission older than the retained bytes, reported as an
+  unverified `Retransmission`.
 
 ---
 

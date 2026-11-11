@@ -287,7 +287,9 @@ contiguous with the delivered end, that pushed its own direction past
 the fragment that pushed its own datagram past ``max_flow_bytes`` or
 ``max_fragments``, or past ``max_total_bytes`` on its own, or whose own
 datagram is evicted as the oldest to make room under
-``max_total_bytes`` or ``max_flows`` (``Evicted``), and the arriving
+``max_total_bytes`` or ``max_flows`` (``Evicted``), the segment whose
+own TCP connection is evicted, under a cap or to make room
+(``Evicted`` and every event of the connection's flush), and the arriving
 piece of an
 ``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
 ``Anomaly``. It is ``None`` for every event a flush produces: an
@@ -459,12 +461,16 @@ documented eviction, and an event.
 
 Each flow (a datagram in progress, or a TCP connection) is charged
 ``FLOW_OVERHEAD`` bytes, and each stored piece (a fragment, a held
-segment, a retained delivered run) is charged its data length plus
-``PIECE_OVERHEAD``. A fragment's declared range that is kept with no
+segment) is charged its data length plus ``PIECE_OVERHEAD``. A
+retained delivered run is charged ``PIECE_OVERHEAD``, the size its
+``bytearray`` has allocated, and ``_SPAN_OVERHEAD`` for each frame it
+names; cutting a run under the cap drops at least an eighth of it. A fragment's declared range that is kept with no
 captured byte in it (a fragment the snap length cut to its header,
 under a rule that decides overlaps on declared ranges, section 3.3) is
 charged ``PIECE_OVERHEAD`` and counts against ``max_fragments`` like a
-piece. The two constants are module-level and are fixed
+piece. A TCP connection's state per direction, which holds no
+captured byte, is charged ``PIECE_OVERHEAD`` for each direction it
+holds. The two constants are module-level and are fixed
 in the fragment pull request by measuring CPython's actual allocation
 per flow and per piece with ``tracemalloc``; the test in section 7.4
 holds them to it. The figures below assume the expected order of
@@ -522,7 +528,9 @@ fragments cost what it really costs.
      - Not discarded: the lowest hole is declared a ``Gap`` (reason
        ``CAP``), the held bytes after it are delivered as
        ``StreamData``, and this repeats until the flow is under the
-       cap. Retained delivered bytes are trimmed first. The flow
+       cap. The retained delivered bytes of both directions, then the
+       recorded ``Gap(ACKED)`` ranges of both (section 4.7), are
+       trimmed first. The flow
        stays open. Data already captured is never silently dropped.
    * - ``max_total_bytes``, ``max_flows``
      - Fragments: the oldest datagram by first-fragment time (the
@@ -536,12 +544,19 @@ fragments cost what it really costs.
        (reason ``EVICTED``) for each open direction, then
        ``Evicted``.
 
-Every event of an evicted flow carries ``completing_ref=None``
-(section 1.4). Ties in age are broken by feed order, so eviction is
-deterministic. The cap is enforced before the arriving frame's data is
-stored: the reassembler evicts until the new piece fits, and a piece
-larger than ``max_flow_bytes`` on its own is reported as ``Evicted``
-immediately. After every call, ``usage.bytes <= max_total_bytes`` and
+Every event of a flow evicted to make room for another flow's frame
+carries ``completing_ref=None``; when the arriving frame's own flow is
+evicted, every event of its flush carries that frame's ref (section
+1.4). Ties in age are broken by feed order, so eviction is
+deterministic. For fragments the cap is enforced before the arriving
+frame's data is stored: the reassembler evicts until the new piece
+fits, and a fragment larger than ``max_flow_bytes`` on its own is
+reported as ``Evicted`` immediately. For streams the arriving segment
+is stored first and the caps are then enforced, so they hold when the
+call returns. A TCP segment is never evicted on its own: past its direction's lowest hole
+it goes out through ``Gap(CAP)`` as above, and a connection is evicted
+under ``max_flow_bytes`` only when its state, with no data held or
+retained, does not fit. After every call, ``usage.bytes <= max_total_bytes`` and
 ``usage.flows <= max_flows``.
 
 Preferring half-open TCP flows as victims means a SYN flood evicts its
@@ -1424,8 +1439,9 @@ Three terms hold under every option below:
   - *Data after the RST* cancels the pending end: the RST is taken as
     rejected, ``Anomaly(DATA_AFTER_RST)`` is emitted once per
     direction, the data continues the same connection at the same
-    offsets, in order or not, and the connection returns to the
-    established idle timeout. It can later end by FIN, by timeout, or
+    offsets, in order or not, and the connection returns to the idle
+    timeout of its class, new or established (section 2.5). It can later
+    end by FIN, by timeout, or
     by another RST, which starts a new pending end.
   - *Confirmation.* When the deadline passes with no data after the
     RST, or at ``close()``, held data is flushed as on expiry and
@@ -1633,7 +1649,7 @@ routinely.
 - *Gap on ACK, late bytes delivered*: as above, but bytes that arrive
   for a declared gap's range are delivered in a ``LateData`` event
   (``offset``, ``data``, ``spans``), outside the ordered runs, so no
-  captured byte is lost. A caller that has already decoded past the gap
+  captured byte is lost while the gap's range is recorded. A caller that has already decoded past the gap
   decides whether to use them.
 
 In both gap options the acknowledgement is mapped to stream offsets by
@@ -1651,21 +1667,36 @@ tracking (section 4.5) is not required. Two limits apply to both:
   acknowledges: merged multi-interface captures and multi-queue
   capture reorder frames (section 2.4). A hole is therefore declared a
   gap only when it is still open ``ack_gap_grace`` of capture time
-  after the first ACK past it (1 s by default), and a later frame, an
-  ACK at or past the same point or data of the direction beyond the
-  hole, confirms it. Data that fills the hole within the grace period
-  cancels it.
+  after the first ACK past it while it is the direction's lowest hole
+  (1 s by default), and a later frame, an ACK at or past that ACK or
+  data of the direction beyond the hole, confirms it. Data that fills
+  the hole within the grace period cancels it. Each direction holds one
+  pending grace, the time it started and the ACK it holds, capped at
+  the highest offset the direction has received: the confirming frame
+  declares the holes below that point only, and once delivery passes
+  it a new grace starts for the holes the highest ACK, capped the same
+  way, still covers, so each hole waits out its own grace and an ACK
+  far ahead holds back none.
 
 The released run's ``completing_ref`` is the frame that confirmed the
 gap (section 1.4), since that frame made the bytes deliverable; the
 alternative is ``None``, as for a flush, which leaves such a run with
 no completing frame.
 
+A declared gap's range is recorded independently of the retained
+bytes, so bytes arriving for it, however late, are ``LateData`` while
+its record is held. Each recorded range is charged ``PIECE_OVERHEAD``,
+and under ``max_flow_bytes`` the oldest go after the retained bytes
+(section 2.3); bytes that arrive for a range whose record was shed are
+a ``Retransmission(verified=False)``, and their content is not
+delivered.
+
 *Accepted:* gap on ACK, late bytes delivered, with the cap, the
 confirmation, and the confirming frame as ``completing_ref``. It turns
 a stall of up to an hour into a reported gap on exactly the lossy,
 often mid-stream captures where it happens, and keeps every captured
-byte. *Trade-off:* one more event type, which a caller that ignores it
+byte that arrives for a gap while the gap's record is held, which only
+``max_flow_bytes`` can shed. *Trade-off:* one more event type, which a caller that ignores it
 treats as a loss. The grace period delays delivery past a real loss by
 ``ack_gap_grace``; a reordering longer than that still yields a
 spurious ``Gap`` and ``LateData`` in a benign capture; a shorter grace

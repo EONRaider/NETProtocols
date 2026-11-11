@@ -128,8 +128,9 @@ bytes that do not begin like a message, end the walk there, with the
 rest of the segment undecoded. A message the segment cuts short raises
 :class:`~netprotocols.TruncatedHeaderError`, as it does over UDP when a
 snap length cuts the datagram. Reassembling a stream is the caller's,
-as it is for BGP and HTTP. TURN's ChannelData messages, which share a
-TCP connection with STUN, end the walk at their first byte.
+or :mod:`netprotocols.reassembly`'s, as it is for BGP and HTTP. TURN's
+ChannelData messages, which share a TCP connection with STUN, end the
+walk at their first byte.
 
 Each message being a layer, a segment of many is a deep chain, as it is
 for BGP: Ethernet, IPv4 and TCP are three layers, and the walk's

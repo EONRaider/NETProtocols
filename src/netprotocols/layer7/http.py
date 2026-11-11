@@ -5,7 +5,8 @@ back byte-exactly. Underneath it, this module's byte-level grammar
 finds where the message ends and reports every way it departs from the
 RFCs, without choosing silently between readings that real
 implementations disagree on. It decodes a single, already-reassembled
-buffer; TCP stream reassembly is the caller's.
+buffer; TCP stream reassembly is the caller's, or
+:mod:`netprotocols.reassembly`'s.
 
 Three rules shape it:
 
