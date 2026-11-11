@@ -425,7 +425,7 @@ ProtocolError
 │   ├── InvalidMACAddressError
 │   ├── InvalidIPv4AddressError
 │   └── InvalidManufacturerCodeError
-├── MalformedCaptureError    buffer is not a well-formed pcap or pcapng capture
+├── MalformedCaptureError    buffer or stream is not a well-formed pcap or pcapng capture
 ├── MaxDepthExceededError    a frame's chain exceeded decode_frame's max_depth
 ├── UnknownTableError        registration or lookup named no such table
 ├── InvalidRegistryKeyError  key outside what its table's wire field can carry
@@ -1503,7 +1503,10 @@ src/netprotocols/
 │                   checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
-│                   pcap and pcapng readers, from bytes not filenames;
+│                   pcap and pcapng readers, from a buffer or a binary
+│                   stream, not a filename; a buffer is copied once,
+│                   a stream read one record or block at a time, both
+│                   through one parsing path over a window of bytes;
 │                   read_packets(): the same frames with the pcapng
 │                   interface each was captured on
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),

@@ -118,7 +118,7 @@ class InvalidManufacturerCodeError(InvalidFieldError):
 
 
 class MalformedCaptureError(ProtocolError):
-    """A byte buffer does not hold a well-formed classic-pcap or pcapng capture.
+    """A buffer or stream is not a well-formed classic-pcap or pcapng capture.
 
     The causes are a bad magic number, a block/record header that runs
     past the buffer, a length field that disagrees with the bytes

@@ -1,4 +1,4 @@
-"""Read classic pcap and pcapng captures from bytes, not filenames.
+"""Read classic pcap and pcapng captures from bytes or streams, not filenames.
 
 ``read_captures`` auto-detects the format from its magic bytes and
 yields :class:`CapturedFrame` — a timestamp normalized to nanoseconds
@@ -8,16 +8,34 @@ one known format. ``read_packets`` detects the format as
 ``read_captures`` does and yields :class:`CapturedPacket`, which adds
 the pcapng interface a frame was captured on.
 
-Each reader copies its input once (``bytes(buffer)``) and slices every
-frame from that copy, so ``CapturedFrame.data`` is always plain
-``bytes``, whether the input was ``bytes`` or a ``memoryview``. The
-copy is taken when iteration starts, not on the call: a ``memoryview``
-over a ``bytearray`` that is mutated between the call and the first
+Each reader takes the capture as a buffer or as a binary stream.
+
+A buffer is any object with the buffer protocol: ``bytes``,
+``bytearray``, ``memoryview``, or a ``memoryview`` over an
+:class:`mmap.mmap`. The reader copies it once (``bytes(buffer)``) and
+slices every frame from that copy, so ``CapturedFrame.data`` is always
+plain ``bytes``, whatever the buffer's type. The copy is taken when
+iteration starts, not on the call: a ``memoryview`` over a
+``bytearray`` that is mutated between the call and the first
 ``next()`` is read as mutated.
+
+Any other object is read as a binary stream: a file opened with
+``open(path, "rb")``, an :class:`io.BytesIO`, a pipe, or anything else
+whose ``read(size)`` returns up to ``size`` bytes, and ``b""`` only at
+the end of the stream. The stream is read forward from its current
+position, one record or block at a time, and is never seeked or
+closed, so memory holds about one record or block, not the whole
+capture. No ``read`` call asks for more than :data:`_READ_CHUNK`
+bytes, so a length field that declares more bytes than the stream
+holds allocates no more than the stream gives. Frames, timestamps and
+errors are the ones the same bytes give as a buffer, and an error's
+``offset`` counts from the stream's position when reading started.
+``CapturedFrame.data`` is plain ``bytes`` here too.
 
 ``read_captures`` and ``read_packets`` check the magic number on the
 call itself: a buffer too short to hold one, or one matching neither
-format, raises immediately. ``read_pcap`` and ``read_pcapng`` are
+format, raises immediately, and a stream has its first 4 bytes read
+on the call to get it. ``read_pcap`` and ``read_pcapng`` are
 generators: they check the magic number and the header after it, and
 read each record or block, only as iteration reaches it. A malformed
 record or block raises at that point, the frames already yielded stay
@@ -38,9 +56,9 @@ skipping the bad part.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Buffer, Iterator
 from struct import Struct
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, Protocol
 
 from netprotocols.utils.exceptions import MalformedCaptureError
 
@@ -57,6 +75,19 @@ __all__ = [
 #: want it — both formats fix their byte order per capture (pcap) or
 #: per section (pcapng), decided once from a magic number.
 _Endian = Literal["little", "big"]
+
+#: The most bytes one ``read`` call on a stream asks for.
+_READ_CHUNK = 1 << 20
+
+
+class _Readable(Protocol):
+    """A binary stream a capture is read from.
+
+    ``read(size)`` returns up to ``size`` bytes, and ``b""`` only at
+    the end of the stream.
+    """
+
+    def read(self, size: int, /) -> bytes: ...
 
 
 class CapturedFrame(NamedTuple):
@@ -77,8 +108,8 @@ class CapturedFrame(NamedTuple):
         captured frame. Shorter than the original frame on the wire
         when the capture's snapshot length truncated it; pass it to
         :func:`~netprotocols.decode_frame` as any other possibly
-        truncated buffer. Always plain ``bytes``, whether the source
-        buffer was ``bytes`` or a ``memoryview`` (see the module
+        truncated buffer. Always plain ``bytes``, whether the capture
+        was a buffer of any type or a stream (see the module
         docstring).
     """
 
@@ -113,6 +144,91 @@ class CapturedPacket(NamedTuple):
     interface_name: str | None
 
 
+# -- capture sources --
+
+
+def _read(stream: _Readable, size: int) -> bytes:
+    """Read ``size`` bytes from a stream, or every byte left if fewer.
+
+    Each ``read`` call asks for at most :data:`_READ_CHUNK` bytes, and
+    reading stops at the first call that returns ``b""``.
+
+    :param stream: The stream to read from.
+    :param size: How many bytes to read.
+    """
+    data = stream.read(min(size, _READ_CHUNK))
+    if len(data) == size:
+        return data if type(data) is bytes else bytes(data)
+    parts = [data]
+    got = len(data)
+    while data and got < size:
+        data = stream.read(min(size - got, _READ_CHUNK))
+        parts.append(data)
+        got += len(data)
+    return b"".join(parts)
+
+
+class _Window:
+    """Where a reader's bytes come from beyond the ones it holds.
+
+    A reader holds a window of the capture, ``data``, and a cursor into
+    it. For a buffer, the window is the whole capture and nothing lies
+    beyond it. For a stream, :meth:`fill` drops the bytes before the
+    cursor and reads more.
+
+    :ivar base: The capture offset of the window's first byte.
+    """
+
+    __slots__ = ("_stream", "base")
+
+    def __init__(self, stream: _Readable | None) -> None:
+        self._stream = stream
+        self.base = 0
+
+    def fill(self, data: bytes, cursor: int, size: int) -> tuple[bytes, int]:
+        """Return a window and cursor with ``size`` bytes after the cursor.
+
+        Fewer than ``size`` bytes follow the cursor only when the
+        capture ends before them.
+
+        :param data: The current window.
+        :param cursor: The window offset the bytes are wanted from.
+        :param size: How many bytes are wanted from ``cursor``.
+        """
+        stream = self._stream
+        if stream is None:
+            return data, cursor
+        self.base += cursor
+        kept = data[cursor:]
+        return kept + _read(stream, size - len(kept)), 0
+
+    def remaining(self) -> int:
+        """Read the rest of the capture and return how many bytes it held."""
+        stream = self._stream
+        count = 0
+        if stream is not None:
+            while chunk := stream.read(_READ_CHUNK):
+                count += len(chunk)
+        return count
+
+
+#: The window of every buffer: the buffer holds the whole capture.
+_BUFFER_WINDOW = _Window(None)
+
+
+def _open(
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
+) -> tuple[bytes, _Window]:
+    """Return a capture's first window and the :class:`_Window` behind it.
+
+    :param buffer: The capture, a buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
+    """
+    if isinstance(buffer, Buffer):
+        return bytes(buffer), _BUFFER_WINDOW
+    return head, _Window(buffer)
+
+
 # -- classic pcap (https://www.tcpdump.org/manpages/pcap-savefile.5.html) --
 
 #: Magic numbers: {byte-order, timestamp resolution} x {big, little}.
@@ -134,21 +250,40 @@ _PCAP_GLOBAL_HEADER_SIZE = 4 + _PCAP_GLOBAL_REST_SIZE
 _PCAP_RECORD_HEADER_SIZE = 16
 
 
-def read_pcap(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
+def read_pcap(
+    buffer: bytes | bytearray | memoryview | _Readable,
+) -> Iterator[CapturedFrame]:
     """Read a classic-pcap capture.
 
     A generator: the magic number and global header are checked, and
     each record read, only as iteration reaches them (see the module
     docstring).
 
-    :param buffer: The whole capture, starting at its magic number.
+    :param buffer: The whole capture, starting at its magic number: a
+        buffer, or a binary stream positioned at the magic number (see
+        the module docstring).
     :raises MalformedCaptureError: if the buffer is too short for the
         4-byte magic number; the magic number is not a classic-pcap one;
         the buffer is too short for the 24-byte global header; a
         16-byte record header runs past the buffer; or a record's
-        ``incl_len`` runs past the buffer.
+        ``incl_len`` runs past the buffer. For a stream, the buffer is
+        the bytes the stream holds.
     """
-    data = bytes(buffer)
+    yield from _read_pcap(buffer, b"")
+
+
+def _read_pcap(
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
+) -> Iterator[CapturedFrame]:
+    """Read a classic-pcap capture whose first bytes may already be read.
+
+    :param buffer: The whole capture, a buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
+    :raises MalformedCaptureError: as :func:`read_pcap` raises.
+    """
+    data, window = _open(buffer, head)
+    if len(data) < _PCAP_GLOBAL_HEADER_SIZE:
+        data, _ = window.fill(data, 0, _PCAP_GLOBAL_HEADER_SIZE)
     if len(data) < 4:
         raise MalformedCaptureError(
             f"buffer holds {len(data)} bytes, too short for a pcap "
@@ -181,37 +316,57 @@ def read_pcap(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
             actual=len(data),
         )
     yield from _read_pcap_records(
-        data, magic in (_PCAP_MAGIC_NS_BE, _PCAP_MAGIC_NS_LE), endian
+        data, window, magic in (_PCAP_MAGIC_NS_BE, _PCAP_MAGIC_NS_LE), endian
     )
 
 
 def _read_pcap_records(
-    data: bytes, nanosecond_resolution: bool, endian: str
+    data: bytes, window: _Window, nanosecond_resolution: bool, endian: str
 ) -> Iterator[CapturedFrame]:
+    """Read the records after a classic-pcap global header.
+
+    :param data: The capture's first window, holding the global header.
+    :param window: Where the bytes after ``data`` come from.
+    :param nanosecond_resolution: Whether ``ts_frac`` counts
+        nanoseconds rather than microseconds.
+    :param endian: The ``struct`` byte-order character.
+    :raises MalformedCaptureError: if a record header or a record's
+        ``incl_len`` runs past the capture.
+    """
     record_struct = Struct(f"{endian}IIII")
     cursor = _PCAP_GLOBAL_HEADER_SIZE
-    while cursor < len(data):
-        if cursor + _PCAP_RECORD_HEADER_SIZE > len(data):
-            raise MalformedCaptureError(
-                "classic pcap record header runs past the end of the buffer",
-                field="record header",
-                offset=cursor,
-                expected=_PCAP_RECORD_HEADER_SIZE,
-                actual=len(data) - cursor,
-            )
+    end = len(data)
+    while True:
+        if cursor + _PCAP_RECORD_HEADER_SIZE > end:
+            data, cursor = window.fill(data, cursor, _PCAP_RECORD_HEADER_SIZE)
+            end = len(data)
+            if cursor == end:
+                return
+            if cursor + _PCAP_RECORD_HEADER_SIZE > end:
+                raise MalformedCaptureError(
+                    "classic pcap record header runs past the end of the "
+                    "buffer",
+                    field="record header",
+                    offset=window.base + cursor,
+                    expected=_PCAP_RECORD_HEADER_SIZE,
+                    actual=end - cursor,
+                )
         ts_sec, ts_frac, incl_len, _orig_len = record_struct.unpack_from(
             data, cursor
         )
         cursor += _PCAP_RECORD_HEADER_SIZE
-        if cursor + incl_len > len(data):
-            raise MalformedCaptureError(
-                "classic pcap record declares more captured bytes than "
-                "the buffer holds",
-                field="incl_len",
-                offset=cursor - _PCAP_RECORD_HEADER_SIZE,
-                expected=incl_len,
-                actual=len(data) - cursor,
-            )
+        if cursor + incl_len > end:
+            data, cursor = window.fill(data, cursor, incl_len)
+            end = len(data)
+            if cursor + incl_len > end:
+                raise MalformedCaptureError(
+                    "classic pcap record declares more captured bytes than "
+                    "the buffer holds",
+                    field="incl_len",
+                    offset=window.base + cursor - _PCAP_RECORD_HEADER_SIZE,
+                    expected=incl_len,
+                    actual=end - cursor,
+                )
         timestamp = ts_sec * 1_000_000_000 + (
             ts_frac if nanosecond_resolution else ts_frac * 1_000
         )
@@ -254,8 +409,8 @@ class _Interface(NamedTuple):
     :param tsresol: The raw ``if_tsresol`` byte.
     :param name: The first non-empty ``if_name`` value, up to its
         first zero byte, undecoded, or ``None``.
-    :param name_offset: The buffer offset of ``name``'s first byte, or
-        of the block when ``name`` is ``None``.
+    :param name_offset: The capture offset of ``name``'s first byte,
+        or of the block when ``name`` is ``None``.
     """
 
     interface_id: int
@@ -264,20 +419,23 @@ class _Interface(NamedTuple):
     name_offset: int
 
 
-def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
+def read_pcapng(
+    buffer: bytes | bytearray | memoryview | _Readable,
+) -> Iterator[CapturedFrame]:
     """Read a pcapng capture.
 
     A generator: the first Section Header Block is checked, and each
     block read, only as iteration reaches it. The module docstring
     lists the block types read.
 
-    A buffer may hold multiple concatenated sections (each starting
+    A capture may hold multiple concatenated sections (each starting
     with its own Section Header Block); each section's byte order and
     interface list are independent of any that came before it, exactly
     as the format specifies.
 
     :param buffer: The whole capture, starting at its first Section
-        Header Block.
+        Header Block: a buffer, or a binary stream positioned at that
+        block (see the module docstring).
     :raises MalformedCaptureError: if the buffer does not start with a
         Section Header Block's type; an 8-byte block header runs past
         the buffer; a Section Header Block is too short for its
@@ -287,24 +445,35 @@ def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
         shorter than 32 bytes, declares more captured bytes than it
         holds, or references an interface no Interface Description Block
         in its section has declared yet; or a Simple Packet Block is
-        shorter than 16 bytes.
+        shorter than 16 bytes. For a stream, the buffer is the bytes the
+        stream holds.
     """
-    yield from _read_pcapng_blocks(_pcapng_data(buffer), [None])
+    yield from _read_pcapng_blocks(*_pcapng_data(buffer, b""), [None])
 
 
-def _pcapng_data(buffer: bytes | memoryview) -> bytes:
-    """Return a copy of a pcapng capture, checked to start with an SHB.
+def _pcapng_data(
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
+) -> tuple[bytes, _Window]:
+    """Return a pcapng capture's first window, checked to start with an SHB.
+
+    For a buffer, the window is a copy of the whole capture. When the
+    capture does not start with a Section Header Block, the rest of a
+    stream is read to count its bytes for the error message.
 
     :param buffer: The whole capture, starting at its first Section
-        Header Block.
-    :raises MalformedCaptureError: if the buffer does not start with a
+        Header Block: a buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
+    :raises MalformedCaptureError: if the capture does not start with a
         Section Header Block's type.
     """
-    data = bytes(buffer)
+    data, window = _open(buffer, head)
+    if len(data) < 4:
+        data, _ = window.fill(data, 0, 4)
     if len(data) < 4 or data[:4] != _SHB_TYPE:
+        size = len(data) + window.remaining()
         raise MalformedCaptureError(
             "not a pcapng capture: does not start with a Section Header "
-            f"Block (buffer holds {len(data)} bytes"
+            f"Block (buffer holds {size} bytes"
             + (f", magic {data[:4].hex()}" if len(data) >= 4 else "")
             + ")",
             field="block type",
@@ -312,16 +481,17 @@ def _pcapng_data(buffer: bytes | memoryview) -> bytes:
             expected=_SHB_TYPE.hex(),
             actual=data[:4].hex() if len(data) >= 4 else data.hex(),
         )
-    return data
+    return data, window
 
 
 def _read_pcapng_blocks(
-    data: bytes, interface_cell: list[_Interface | None]
+    data: bytes, window: _Window, interface_cell: list[_Interface | None]
 ) -> Iterator[CapturedFrame]:
     """Walk a pcapng capture's blocks, yielding each frame.
 
-    :param data: The whole capture, starting at its first Section
-        Header Block.
+    :param data: The capture's first window, starting at its first
+        Section Header Block.
+    :param window: Where the bytes after ``data`` come from.
     :param interface_cell: A one-item list. Before each frame is
         yielded, its item is set to the :class:`_Interface` the frame's
         Enhanced Packet Block names, or to ``None`` for a Simple Packet
@@ -337,18 +507,27 @@ def _read_pcapng_blocks(
     endian: _Endian | None = None
     interfaces: list[_Interface] = []
     cursor = 0
-    while cursor < len(data):
-        if cursor + 8 > len(data):
-            raise MalformedCaptureError(
-                "pcapng block header runs past the end of the buffer",
-                field="block header",
-                offset=cursor,
-                expected=8,
-                actual=len(data) - cursor,
-            )
+    end = len(data)
+    while True:
+        if cursor + 8 > end:
+            data, cursor = window.fill(data, cursor, 8)
+            end = len(data)
+            if cursor == end:
+                return
+            if cursor + 8 > end:
+                raise MalformedCaptureError(
+                    "pcapng block header runs past the end of the buffer",
+                    field="block header",
+                    offset=window.base + cursor,
+                    expected=8,
+                    actual=end - cursor,
+                )
         raw_type = data[cursor : cursor + 4]
         if raw_type == _SHB_TYPE:
-            endian = _detect_shb_endian(data, cursor)
+            if cursor + 12 > end:
+                data, cursor = window.fill(data, cursor, 12)
+                end = len(data)
+            endian = _detect_shb_endian(data, cursor, window.base)
             interfaces = []
             block_type: bytes | int = _SHB_TYPE
         else:
@@ -361,18 +540,21 @@ def _read_pcapng_blocks(
                 "pcapng block length must be at least 12 and a multiple "
                 f"of 4, got {block_len}",
                 field="block total length",
-                offset=cursor + 4,
+                offset=window.base + cursor + 4,
                 expected="a multiple of 4, >= 12",
                 actual=block_len,
             )
-        if cursor + block_len > len(data):
-            raise MalformedCaptureError(
-                "pcapng block declares more bytes than the buffer holds",
-                field="block total length",
-                offset=cursor + 4,
-                expected=block_len,
-                actual=len(data) - cursor,
-            )
+        if cursor + block_len > end:
+            data, cursor = window.fill(data, cursor, block_len)
+            end = len(data)
+            if cursor + block_len > end:
+                raise MalformedCaptureError(
+                    "pcapng block declares more bytes than the buffer holds",
+                    field="block total length",
+                    offset=window.base + cursor + 4,
+                    expected=block_len,
+                    actual=end - cursor,
+                )
         trailing_len = int.from_bytes(
             data[cursor + block_len - 4 : cursor + block_len], endian
         )
@@ -381,22 +563,35 @@ def _read_pcapng_blocks(
                 "pcapng block's trailing length disagrees with its "
                 f"leading length ({trailing_len} != {block_len})",
                 field="block total length",
-                offset=cursor + block_len - 4,
+                offset=window.base + cursor + block_len - 4,
                 expected=block_len,
                 actual=trailing_len,
             )
 
         if block_type == _IDB_TYPE:
             interfaces.append(
-                _idb_interface(data, cursor, block_len, endian, len(interfaces))
+                _idb_interface(
+                    data,
+                    cursor,
+                    block_len,
+                    endian,
+                    len(interfaces),
+                    window.base,
+                )
             )
         elif block_type == _EPB_TYPE:
             yield _epb_frame(
-                data, cursor, block_len, endian, interfaces, interface_cell
+                data,
+                cursor,
+                block_len,
+                endian,
+                interfaces,
+                interface_cell,
+                window.base,
             )
         elif block_type == _SPB_TYPE:
             interface_cell[0] = None
-            yield _spb_frame(data, cursor, block_len, endian)
+            yield _spb_frame(data, cursor, block_len, endian, window.base)
         # Every other block type (Interface Statistics, Name
         # Resolution, Decryption Secrets, Custom, ...) is skipped
         # wholesale — see the module docstring.
@@ -404,12 +599,20 @@ def _read_pcapng_blocks(
         cursor += block_len
 
 
-def _detect_shb_endian(data: bytes, block_start: int) -> _Endian:
+def _detect_shb_endian(data: bytes, block_start: int, base: int) -> _Endian:
+    """Return a Section Header Block's byte order, from its magic.
+
+    :param data: The window holding the block.
+    :param block_start: The block's offset in ``data``.
+    :param base: The capture offset of ``data``'s first byte.
+    :raises MalformedCaptureError: if the window ends before the magic
+        does, or the magic is unrecognized.
+    """
     if block_start + 12 > len(data):
         raise MalformedCaptureError(
             "pcapng Section Header Block is too short for its byte-order magic",
             field="byte-order magic",
-            offset=block_start,
+            offset=base + block_start,
             expected=12,
             actual=len(data) - block_start,
         )
@@ -422,14 +625,19 @@ def _detect_shb_endian(data: bytes, block_start: int) -> _Endian:
         "pcapng Section Header Block has an unrecognized byte-order "
         f"magic: {magic_bytes.hex()}",
         field="byte-order magic",
-        offset=block_start + 8,
+        offset=base + block_start + 8,
         expected="1a2b3c4d in either byte order",
         actual=magic_bytes.hex(),
     )
 
 
 def _idb_interface(
-    data: bytes, block_start: int, block_len: int, endian: _Endian, index: int
+    data: bytes,
+    block_start: int,
+    block_len: int,
+    endian: _Endian,
+    index: int,
+    base: int,
 ) -> _Interface:
     """Return what an Interface Description Block declares.
 
@@ -439,6 +647,13 @@ def _idb_interface(
     ``if_tsresol`` is present (draft-ietf-opsawg-pcapng §4.2). An
     ``if_name`` value is cut at the end of the options list and then
     at its first zero byte; one with no bytes left is ignored.
+
+    :param data: The window holding the block.
+    :param block_start: The block's offset in ``data``.
+    :param block_len: The block's total length.
+    :param endian: The section's byte order.
+    :param index: The block's index within its section.
+    :param base: The capture offset of ``data``'s first byte.
     """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
@@ -466,7 +681,7 @@ def _idb_interface(
         interface_id=index,
         tsresol=_DEFAULT_TSRESOL if tsresol is None else tsresol,
         name=name,
-        name_offset=name_offset,
+        name_offset=base + name_offset,
     )
 
 
@@ -493,7 +708,22 @@ def _epb_frame(
     endian: _Endian,
     interfaces: list[_Interface],
     interface_cell: list[_Interface | None],
+    base: int,
 ) -> CapturedFrame:
+    """Return an Enhanced Packet Block's frame.
+
+    :param data: The window holding the block.
+    :param block_start: The block's offset in ``data``.
+    :param block_len: The block's total length.
+    :param endian: The section's byte order.
+    :param interfaces: The section's interfaces so far.
+    :param interface_cell: A one-item list, set to the interface the
+        block names.
+    :param base: The capture offset of ``data``'s first byte.
+    :raises MalformedCaptureError: if the block is shorter than 32
+        bytes, declares more captured bytes than it holds, or names an
+        interface not in ``interfaces``.
+    """
     # Block Type(4) + Block Total Length(4) + Interface ID(4) +
     # Timestamp High(4) + Timestamp Low(4) + Captured Packet Length(4)
     # + Original Packet Length(4) = 28 bytes of fixed fields, plus the
@@ -503,7 +733,7 @@ def _epb_frame(
             "pcapng Enhanced Packet Block is too short for its fixed "
             f"fields ({block_len} < 32)",
             field="Enhanced Packet Block",
-            offset=block_start,
+            offset=base + block_start,
             expected=32,
             actual=block_len,
         )
@@ -519,7 +749,7 @@ def _epb_frame(
             "pcapng Enhanced Packet Block declares more captured bytes "
             "than its block holds",
             field="captured packet length",
-            offset=body + 12,
+            offset=base + body + 12,
             expected=captured_len,
             actual=available,
         )
@@ -529,7 +759,7 @@ def _epb_frame(
             f"{interface_id}, but only {len(interfaces)} "
             "Interface Description Block(s) precede it in this section",
             field="interface id",
-            offset=body,
+            offset=base + body,
             expected=f"< {len(interfaces)}",
             actual=interface_id,
         )
@@ -543,8 +773,18 @@ def _epb_frame(
 
 
 def _spb_frame(
-    data: bytes, block_start: int, block_len: int, endian: _Endian
+    data: bytes, block_start: int, block_len: int, endian: _Endian, base: int
 ) -> CapturedFrame:
+    """Return a Simple Packet Block's frame.
+
+    :param data: The window holding the block.
+    :param block_start: The block's offset in ``data``.
+    :param block_len: The block's total length.
+    :param endian: The section's byte order.
+    :param base: The capture offset of ``data``'s first byte.
+    :raises MalformedCaptureError: if the block is shorter than 16
+        bytes.
+    """
     # Simple Packet Block carries no timestamp and no interface
     # reference at all (draft-ietf-opsawg-pcapng §4.4), so
     # CapturedFrame.timestamp is 0 for these, documented on the class.
@@ -553,7 +793,7 @@ def _spb_frame(
             "pcapng Simple Packet Block is too short for its fixed "
             f"fields ({block_len} < 16)",
             field="Simple Packet Block",
-            offset=block_start,
+            offset=base + block_start,
             expected=16,
             actual=block_len,
         )
@@ -572,10 +812,11 @@ def _spb_frame(
     )
 
 
-def _is_pcapng(buffer: bytes | memoryview) -> bool:
+def _is_pcapng(buffer: bytes | bytearray | memoryview) -> bool:
     """Return whether ``buffer``'s magic number is pcapng's.
 
-    :param buffer: The whole capture, starting at its magic number.
+    :param buffer: The whole capture, starting at its magic number, or
+        the first 4 bytes read from a stream.
     :raises MalformedCaptureError: if the buffer is too short to hold a
         magic number, or its magic bytes match neither format.
     """
@@ -607,25 +848,61 @@ def _is_pcapng(buffer: bytes | memoryview) -> bool:
     )
 
 
-def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
+def _detect(
+    buffer: bytes | bytearray | memoryview | _Readable,
+) -> tuple[bool, bytes]:
+    """Return whether a capture is pcapng, and the bytes read to tell.
+
+    A stream has its first 4 bytes read; a buffer is not copied.
+
+    :param buffer: The whole capture, a buffer or a stream.
+    :raises MalformedCaptureError: as :func:`_is_pcapng` raises.
+    """
+    if isinstance(buffer, Buffer):
+        return _is_pcapng(buffer), b""
+    head = _read(buffer, 4)
+    return _is_pcapng(head), head
+
+
+def read_captures(
+    buffer: bytes | bytearray | memoryview | _Readable,
+) -> Iterator[CapturedFrame]:
     """Read a capture, detecting classic pcap or pcapng by its magic bytes.
 
     :func:`read_pcap` and :func:`read_pcapng` read a known format
     without this detection.
 
-    :param buffer: The whole capture, starting at its magic number.
+    :param buffer: The whole capture, starting at its magic number: a
+        buffer, or a binary stream positioned at the magic number, of
+        which the 4 magic bytes are read on the call (see the module
+        docstring).
     :raises MalformedCaptureError: if the buffer is too short to hold a
         magic number, or its magic bytes match neither format. These
         two are raised on the call itself; every other error, raised by
         :func:`read_pcap` or :func:`read_pcapng`, comes during
         iteration (see the module docstring).
     """
-    if _is_pcapng(buffer):
-        return read_pcapng(buffer)
-    return read_pcap(buffer)
+    is_pcapng, head = _detect(buffer)
+    if is_pcapng:
+        return _read_pcapng_frames(buffer, head)
+    return _read_pcap(buffer, head)
 
 
-def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
+def _read_pcapng_frames(
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
+) -> Iterator[CapturedFrame]:
+    """Read a pcapng capture whose first bytes may already be read.
+
+    :param buffer: The whole capture, a buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
+    :raises MalformedCaptureError: as :func:`read_pcapng` raises.
+    """
+    yield from _read_pcapng_blocks(*_pcapng_data(buffer, head), [None])
+
+
+def read_packets(
+    buffer: bytes | bytearray | memoryview | _Readable,
+) -> Iterator[CapturedPacket]:
     """Read a capture with the interface each frame was captured on.
 
     The format is detected as :func:`read_captures` detects it, and the
@@ -634,7 +911,10 @@ def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
     references an interface whose ``if_name``, up to its first zero
     byte, is not valid UTF-8.
 
-    :param buffer: The whole capture, starting at its magic number.
+    :param buffer: The whole capture, starting at its magic number: a
+        buffer, or a binary stream positioned at the magic number, of
+        which the 4 magic bytes are read on the call (see the module
+        docstring).
     :raises MalformedCaptureError: if the buffer is too short to hold a
         magic number, or its magic bytes match neither format, both on
         the call itself; and during iteration, for every error
@@ -643,30 +923,34 @@ def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
         whose ``if_name``, up to its first zero byte, is not valid
         UTF-8.
     """
-    if _is_pcapng(buffer):
-        return _read_pcapng_packets(buffer)
-    return _read_pcap_packets(buffer)
+    is_pcapng, head = _detect(buffer)
+    if is_pcapng:
+        return _read_pcapng_packets(buffer, head)
+    return _read_pcap_packets(buffer, head)
 
 
 def _read_pcap_packets(
-    buffer: bytes | memoryview,
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
 ) -> Iterator[CapturedPacket]:
     """Read a classic pcap capture as :class:`CapturedPacket`.
 
-    :param buffer: The whole capture, starting at its magic number.
+    :param buffer: The whole capture, starting at its magic number: a
+        buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
     :raises MalformedCaptureError: as :func:`read_pcap` raises.
     """
-    for timestamp, data in read_pcap(buffer):
+    for timestamp, data in _read_pcap(buffer, head):
         yield CapturedPacket(timestamp, data, None, None)
 
 
 def _read_pcapng_packets(
-    buffer: bytes | memoryview,
+    buffer: bytes | bytearray | memoryview | _Readable, head: bytes
 ) -> Iterator[CapturedPacket]:
     """Read a pcapng capture as :class:`CapturedPacket`.
 
     :param buffer: The whole capture, starting at its first Section
-        Header Block.
+        Header Block: a buffer or a stream.
+    :param head: The bytes already read from a stream, empty if none.
     :raises MalformedCaptureError: as :func:`read_pcapng` raises, or if
         an Enhanced Packet Block references an Interface Description
         Block whose ``if_name``, up to its first zero byte, is not valid
@@ -674,7 +958,7 @@ def _read_pcapng_packets(
     """
     interface_cell: list[_Interface | None] = [None]
     for timestamp, data in _read_pcapng_blocks(
-        _pcapng_data(buffer), interface_cell
+        *_pcapng_data(buffer, head), interface_cell
     ):
         interface = interface_cell[0]
         if interface is None:

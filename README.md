@@ -296,17 +296,27 @@ elsewhere is a capture tool's choice, not a default.
 
 ## Reading captures
 
-`read_captures()` takes the bytes of a capture file — not a path — and
-auto-detects classic pcap vs. pcapng from its magic number:
+`read_captures()` takes a capture file opened in binary mode, or its
+bytes — not a path — and auto-detects classic pcap vs. pcapng from its
+magic number:
 
 ```python
 from netprotocols import decode_frame, read_captures
 
-data = open("traffic.pcap", "rb").read()  # or however you got the bytes
-for timestamp, frame in read_captures(data):
-    packet = decode_frame(frame, lax=True)
-    ...
+with open("traffic.pcap", "rb") as file:
+    for timestamp, frame in read_captures(file):
+        packet = decode_frame(frame, lax=True)
+        ...
 ```
+
+A file, an `io.BytesIO`, a pipe or any other object with a
+`read(size)` method is read forward from its current position, one
+record or block at a time and never seeked, so memory use follows the
+largest record or block, not the size of the capture; the 4-byte magic number is read on
+the call, the rest as you iterate. `bytes`, `bytearray` and
+`memoryview` (an `mmap` included) are copied once when iteration
+starts. Both give the same frames, and the same errors, offsets
+included.
 
 Each `CapturedFrame` is `(timestamp, data)` — `timestamp` normalized to
 nanoseconds since the Unix epoch regardless of the source format's own
