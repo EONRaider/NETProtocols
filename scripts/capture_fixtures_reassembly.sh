@@ -21,10 +21,17 @@
 #       python3 program below, overlapping or duplicated on purpose,
 #       sent from the client with an AF_PACKET socket, and the server's
 #       echo replies, both directions on the server's veth end. The
-#       running kernel reassembles each train or discards it; a reply
-#       carries the reassembled data back, and no reply means the
-#       kernel discarded the datagram. The trains are listed in the
-#       program and in tests/fixtures/MANIFEST.md.
+#       running kernel reassembles each train or discards it. Its
+#       reassembly counters in the server's netns (/proc/net/snmp
+#       ReasmReqds, ReasmOKs and ReasmFails, /proc/net/netstat
+#       ReasmOverlaps), read before and after each train, say which:
+#       their differences are written, one row per train, to
+#       linux_overlaps.counters beside the capture. A reply carries the
+#       reassembled data back when it is a valid echo request; a train
+#       whose bytes break the ICMP checksum gets no reply even when it
+#       is reassembled, so the counters, not the replies, show a
+#       discard. The trains are listed in the program and in
+#       tests/fixtures/MANIFEST.md.
 #
 # The first keeps only fragments (BPF: a nonzero MF flag or Fragment
 # Offset), so the DNS queries, the ICMP port unreachable the 4000-byte
@@ -34,7 +41,9 @@
 # Each capture is checked by scripts/check_fixtures.py, then by tshark,
 # which must report three datagrams reassembled in
 # ipv4_udp_fragments.pcap, and echo replies in linux_overlaps.pcap for
-# exactly the trains the kernel is expected to reassemble: 2, 3 and 5.
+# exactly the trains the kernel is expected to reassemble, 2, 3 and 5,
+# whose ReasmOKs must each rise by 1, while trains 1 and 4 leave
+# ReasmOKs unchanged and raise ReasmOverlaps.
 # Any other outcome stops the script with an error, and whatever was
 # captured by then is left in the staging directory for inspection and
 # must not be folded in.
@@ -147,13 +156,13 @@ stop_capture
 echo "[>] linux_overlaps.pcap (script-built trains against the kernel)"
 start_capture "$NSS" "$S" "$OUT/linux_overlaps.pcap" \
     'icmp[0] == 0 or icmp[0] == 8 or (ip and ip[6:2] & 0x3fff != 0)'
-ip netns exec "$NSC" python3 -I - "$C" "$MAC_C" "$MAC_S" <<'PY'
+SENDER=$(cat <<'PY'
 import socket
 import struct
 import sys
 import time
 
-interface, mac_c, mac_s = sys.argv[1:4]
+interface, mac_c, mac_s, number = sys.argv[1:5]
 CLIENT, SERVER = "10.9.79.2", "10.9.79.1"
 
 
@@ -247,12 +256,31 @@ TRAINS = [
 ]
 with socket.socket(socket.AF_PACKET, socket.SOCK_RAW) as sock:
     sock.bind((interface, 0))
-    for frames in TRAINS:
-        for frame in frames:
-            sock.send(frame)
-            time.sleep(0.05)
-        time.sleep(0.5)
+    for frame in TRAINS[int(number) - 1]:
+        sock.send(frame)
+        time.sleep(0.05)
 PY
+)
+reasm_counters() {  # ReasmReqds ReasmOKs ReasmFails ReasmOverlaps, server netns
+    ip netns exec "$NSS" python3 -I -c '
+def table(path, prefix):
+    rows = [line.split() for line in open(path) if line.startswith(prefix)]
+    return dict(zip(rows[0][1:], map(int, rows[1][1:])))
+ip = table("/proc/net/snmp", "Ip:")
+ext = table("/proc/net/netstat", "IpExt:")
+print(ip["ReasmReqds"], ip["ReasmOKs"], ip["ReasmFails"], ext["ReasmOverlaps"])'
+}
+COUNTERS="$OUT/linux_overlaps.counters"
+printf 'train\tReasmReqds\tReasmOKs\tReasmFails\tReasmOverlaps\n' >"$COUNTERS"
+for train in 1 2 3 4 5; do
+    read -r reqds0 oks0 fails0 overlaps0 < <(reasm_counters)
+    ip netns exec "$NSC" python3 -I -c "$SENDER" "$C" "$MAC_C" "$MAC_S" "$train"
+    sleep 0.5
+    read -r reqds1 oks1 fails1 overlaps1 < <(reasm_counters)
+    printf '%s\t%s\t%s\t%s\t%s\n' "$train" $((reqds1 - reqds0)) \
+        $((oks1 - oks0)) $((fails1 - fails0)) $((overlaps1 - overlaps0)) \
+        >>"$COUNTERS"
+done
 sleep 1
 stop_capture
 
@@ -269,6 +297,14 @@ replies=$(tshark -r "$OUT/linux_overlaps.pcap" -Y 'icmp.type == 0' \
     -T fields -e icmp.ident 2>/dev/null | tr '\n' ' ')
 [[ $replies == "20226 20227 20229 " ]] ||
     fail "linux_overlaps.pcap: echo replies for identifiers '$replies'."
+echo "[*] Checking the kernel's reassembly counters..."
+cat "$COUNTERS"
+oks=$(awk 'NR > 1 {printf "%s ", $3}' "$COUNTERS")
+[[ $oks == "0 1 1 0 1 " ]] ||
+    fail "linux_overlaps.counters: ReasmOKs rose by '$oks', not 0 1 1 0 1."
+overlaps=$(awk 'NR > 1 {printf "%s ", ($5 > 0)}' "$COUNTERS")
+[[ $overlaps == "1 1 0 1 0 " ]] ||
+    fail "linux_overlaps.counters: ReasmOverlaps rose for '$overlaps'."
 
 if [[ -n ${SUDO_USER:-} ]]; then
     chown -R "$SUDO_USER" "$OUT"
