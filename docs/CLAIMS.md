@@ -980,6 +980,36 @@ old hand-rolled benchmark loop never exercised).
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
 
+Per-capture figures can be re-measured with the same command
+restricted to those captures with `--fixture`, once per capture or
+group, for example `--fixture ospf.pcap --fixture bgp.pcap`. The
+same-work subset can be re-measured with
+`uv run --group bench python scripts/benchmark.py --compare --same-depth --repetitions 30 --trials 9`.
+Before timing, `--same-depth` decodes each frame with netprotocols and
+dpkt and keeps it only if both accept it and their layer chains are
+equal after a fixed fold. netprotocols' `VLAN`, `MPLS`, `SNAP`,
+`IPv6Fragment` and `IPv6HopByHopOptions` layers, which dpkt decodes
+as attributes of the object before them, are dropped from its chain.
+dpkt's `Echo`, `TimeExceed`, `Unreach` and `str` objects, which
+netprotocols keeps as fields of its ICMP and VRRP layers, and dpkt's
+raw payloads are dropped from dpkt's. The two libraries' names for
+IPv4, IPv6, ICMP and ICMPv6 are then mapped to one name each. The
+packet a `TimeExceed` or `Unreach` quotes is not dropped, so a frame
+on which dpkt decodes it is left out, as is a frame on which the two
+reach different protocols, such as netprotocols' `LLC` against dpkt's
+`IPX`. The tables are `NETPROTOCOLS_FOLDED`, `DPKT_FOLDED` and
+`COMMON_NAMES` in `scripts/benchmark.py`. The selection is made
+against dpkt alone: scapy is timed on the same frames, but what it
+decodes of them is not checked. On the 509-frame corpus the command
+keeps 324 frames and prints the count. The subset leans toward the
+routing captures and toward frames that end at layer 3 or 4: the two
+OSPF captures give 106 of the 324 (54 + 52), TFTP 27, the two VRRP
+captures 27 between them (18 + 9), STP, SCTP and PIM 44 between them
+(16 + 15 + 13), and 20 other captures the remaining 120
+(106 + 27 + 27 + 44 + 120 = 324).
+`--json` records the captures, the `--same-depth` flag and the selected
+and total frame counts.
+
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 99,814 against dpkt's 106,497, **~6% slower**, inside the band.*
 
@@ -1268,6 +1298,12 @@ dpkt:         Ethernet -> IP   -> UDP -> <300 raw bytes>
 ```
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --depth`.
+`--depth` counts a frame as "the same layer" whenever netprotocols'
+layer count does not exceed dpkt's, raw payloads not counted, so the
+306 frames it puts there on the 509-frame corpus include the frames
+on which dpkt decodes further. `benchmark.py --compare --same-depth`
+(see 1.2) selects its workload by a different rule, folded protocol
+chains rather than layer counts.
 
 This is the control on every throughput figure in 1.1-1.3, not a
 footnote to them: a decoder that stops earlier has less to do, so
