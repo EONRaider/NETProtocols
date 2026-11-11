@@ -182,8 +182,8 @@ timestamp causes; the caller feeds the reassembled datagram instead.
   split where a :class:`Gap` falls, ``spans`` tiling its ``data``; a
   segment past a hole is held, with :class:`OutOfOrder`. Delivered
   bytes are final. A segment the snap length cut delivers its captured
-  bytes and a ``Gap(TRUNCATED)`` for the rest. A direction ends with ``StreamEnd(FIN)`` when delivery
-  reaches the end its FIN fixed.
+  bytes and a ``Gap(TRUNCATED)`` for the rest. A direction ends with
+  ``StreamEnd(FIN)`` when delivery reaches the end its FIN fixed.
 - **Overlaps.** Bytes that overlap held bytes are resolved by the
   receiver's :class:`OverlapPolicy`, ``first`` or ``last``, chosen
   through ``targets`` as for fragments. Bytes that repeat delivered
