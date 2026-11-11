@@ -317,6 +317,13 @@ detection. A malformed or truncated capture raises
 `MalformedCaptureError`, the same `ProtocolError` family every other
 exception in this library belongs to.
 
+`read_packets()` detects the format the same way and yields
+`CapturedPacket(timestamp, data, interface_id, interface_name)`: for a
+frame from a pcapng Enhanced Packet Block, the Interface ID it names
+and that interface's `if_name` (`None` when the interface has none);
+for a pcapng Simple Packet Block or a classic-pcap record, `None` for
+both.
+
 ## Flow keys
 
 `Packet.flow_key()` (or the free function, `netprotocols.flow_key()`,

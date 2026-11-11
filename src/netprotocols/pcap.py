@@ -4,7 +4,9 @@
 yields :class:`CapturedFrame` — a timestamp normalized to nanoseconds
 since the Unix epoch, and the frame's raw bytes, ready for
 :func:`~netprotocols.decode_frame`. ``read_pcap``/``read_pcapng`` read
-one known format.
+one known format. ``read_packets`` detects the format as
+``read_captures`` does and yields :class:`CapturedPacket`, which adds
+the pcapng interface a frame was captured on.
 
 Each reader copies its input once (``bytes(buffer)``) and slices every
 frame from that copy, so ``CapturedFrame.data`` is always plain
@@ -13,20 +15,21 @@ copy is taken when iteration starts, not on the call: a ``memoryview``
 over a ``bytearray`` that is mutated between the call and the first
 ``next()`` is read as mutated.
 
-``read_captures`` checks the magic number on the call itself: a buffer
-too short to hold one, or one matching neither format, raises
-immediately. ``read_pcap`` and ``read_pcapng`` are generators: they
-check the magic number and the header after it, and read each record
-or block, only as iteration reaches it. A malformed record or block
-raises at that point, the frames already yielded stay valid, and the
-frames are never collected into a list.
+``read_captures`` and ``read_packets`` check the magic number on the
+call itself: a buffer too short to hold one, or one matching neither
+format, raises immediately. ``read_pcap`` and ``read_pcapng`` are
+generators: they check the magic number and the header after it, and
+read each record or block, only as iteration reaches it. A malformed
+record or block raises at that point, the frames already yielded stay
+valid, and the frames are never collected into a list.
 
 Supported pcapng block types are exactly the ones frames can come
 from: Section Header (SHB), Interface Description (IDB, read only for
-its ``if_tsresol`` option), Enhanced Packet (EPB), and Simple Packet
-(SPB). Every other block type is skipped wholesale — Interface
-Statistics, Name Resolution, Decryption Secrets, and any vendor-
-specific block carry nothing :class:`CapturedFrame` can represent.
+its ``if_tsresol`` and ``if_name`` options), Enhanced Packet (EPB),
+and Simple Packet (SPB). Every other block type is skipped wholesale
+— Interface Statistics, Name Resolution, Decryption Secrets, and any
+vendor-specific block carry nothing :class:`CapturedFrame` can
+represent.
 
 No ``lax`` mode: a corrupt or truncated capture raises
 :class:`~netprotocols.MalformedCaptureError` rather than silently
@@ -41,7 +44,14 @@ from typing import Literal, NamedTuple
 
 from netprotocols.utils.exceptions import MalformedCaptureError
 
-__all__ = ["CapturedFrame", "read_captures", "read_pcap", "read_pcapng"]
+__all__ = [
+    "CapturedFrame",
+    "CapturedPacket",
+    "read_captures",
+    "read_packets",
+    "read_pcap",
+    "read_pcapng",
+]
 
 #: Byte order, spelled the way ``int.from_bytes``/``struct.Struct``
 #: want it — both formats fix their byte order per capture (pcap) or
@@ -74,6 +84,32 @@ class CapturedFrame(NamedTuple):
 
     timestamp: int
     data: bytes
+
+
+class CapturedPacket(NamedTuple):
+    """One captured frame and the interface it was captured on.
+
+    Yielded by :func:`read_packets`. The first two fields are
+    :class:`CapturedFrame`'s.
+
+    :param timestamp: As :class:`CapturedFrame`'s ``timestamp``.
+    :param data: As :class:`CapturedFrame`'s ``data``.
+    :param interface_id: The Interface ID of the pcapng Enhanced Packet
+        Block the frame came from: the index, within its section, of
+        the Interface Description Block that describes the interface.
+        ``None`` for a frame from a pcapng Simple Packet Block, which
+        records no interface, and for a classic-pcap record.
+    :param interface_name: That Interface Description Block's
+        ``if_name`` option, decoded as UTF-8, or ``None`` when the
+        block has no ``if_name`` or an empty one. When the block holds
+        more than one non-empty ``if_name``, the first is used.
+        ``None`` whenever ``interface_id`` is ``None``.
+    """
+
+    timestamp: int
+    data: bytes
+    interface_id: int | None
+    interface_name: str | None
 
 
 # -- classic pcap (https://www.tcpdump.org/manpages/pcap-savefile.5.html) --
@@ -198,14 +234,33 @@ _IDB_TYPE = 0x00000001
 _EPB_TYPE = 0x00000006
 _SPB_TYPE = 0x00000003
 
-#: Interface Description Block option carrying the timestamp
-#: resolution of that interface's Enhanced Packet Blocks.
+#: Interface Description Block options: the interface's name, and the
+#: timestamp resolution of its Enhanced Packet Blocks.
+_OPT_IF_NAME = 2
 _OPT_IF_TSRESOL = 9
 _OPT_END_OF_OPT = 0
 
 #: if_tsresol default when an Interface Description Block omits the
 #: option: microseconds, matching classic pcap's usual resolution.
 _DEFAULT_TSRESOL = 6
+
+
+class _Interface(NamedTuple):
+    """What a section's Interface Description Block declares.
+
+    :param interface_id: The block's index within its section, the
+        Interface ID an Enhanced Packet Block names it by.
+    :param tsresol: The raw ``if_tsresol`` byte.
+    :param name: The first non-empty ``if_name`` value, undecoded, or
+        ``None``.
+    :param name_offset: The buffer offset of ``name``'s first byte, or
+        of the block when ``name`` is ``None``.
+    """
+
+    interface_id: int
+    tsresol: int
+    name: bytes | None
+    name_offset: int
 
 
 def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
@@ -233,6 +288,17 @@ def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
         in its section has declared yet; or a Simple Packet Block is
         shorter than 16 bytes.
     """
+    yield from _read_pcapng_blocks(_pcapng_data(buffer), [None])
+
+
+def _pcapng_data(buffer: bytes | memoryview) -> bytes:
+    """Return a copy of a pcapng capture, checked to start with an SHB.
+
+    :param buffer: The whole capture, starting at its first Section
+        Header Block.
+    :raises MalformedCaptureError: if the buffer does not start with a
+        Section Header Block's type.
+    """
     data = bytes(buffer)
     if len(data) < 4 or data[:4] != _SHB_TYPE:
         raise MalformedCaptureError(
@@ -245,17 +311,30 @@ def read_pcapng(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
             expected=_SHB_TYPE.hex(),
             actual=data[:4].hex() if len(data) >= 4 else data.hex(),
         )
-    yield from _read_pcapng_blocks(data)
+    return data
 
 
-def _read_pcapng_blocks(data: bytes) -> Iterator[CapturedFrame]:
-    # read_pcapng checks that data starts with a Section Header Block
-    # before calling this, so the loop's first iteration always takes
-    # the `raw_type == _SHB_TYPE` branch and sets `endian` before
+def _read_pcapng_blocks(
+    data: bytes, interface_cell: list[_Interface | None]
+) -> Iterator[CapturedFrame]:
+    """Walk a pcapng capture's blocks, yielding each frame.
+
+    :param data: The whole capture, starting at its first Section
+        Header Block.
+    :param interface_cell: A one-item list. Before each frame is
+        yielded, its item is set to the :class:`_Interface` the frame's
+        Enhanced Packet Block names, or to ``None`` for a Simple Packet
+        Block.
+    :raises MalformedCaptureError: as :func:`read_pcapng` lists,
+        except for a missing first Section Header Block.
+    """
+    # Every caller passes data that _pcapng_data has checked starts
+    # with a Section Header Block, so the loop's first iteration always
+    # takes the `raw_type == _SHB_TYPE` branch and sets `endian` before
     # anything else reads it. The assert below states that invariant
     # for mypy; it never fails.
     endian: _Endian | None = None
-    tsresol_by_interface: list[int] = []
+    interfaces: list[_Interface] = []
     cursor = 0
     while cursor < len(data):
         if cursor + 8 > len(data):
@@ -269,7 +348,7 @@ def _read_pcapng_blocks(data: bytes) -> Iterator[CapturedFrame]:
         raw_type = data[cursor : cursor + 4]
         if raw_type == _SHB_TYPE:
             endian = _detect_shb_endian(data, cursor)
-            tsresol_by_interface = []
+            interfaces = []
             block_type: bytes | int = _SHB_TYPE
         else:
             assert endian is not None
@@ -307,14 +386,15 @@ def _read_pcapng_blocks(data: bytes) -> Iterator[CapturedFrame]:
             )
 
         if block_type == _IDB_TYPE:
-            tsresol_by_interface.append(
-                _idb_tsresol(data, cursor, block_len, endian)
+            interfaces.append(
+                _idb_interface(data, cursor, block_len, endian, len(interfaces))
             )
         elif block_type == _EPB_TYPE:
             yield _epb_frame(
-                data, cursor, block_len, endian, tsresol_by_interface
+                data, cursor, block_len, endian, interfaces, interface_cell
             )
         elif block_type == _SPB_TYPE:
+            interface_cell[0] = None
             yield _spb_frame(data, cursor, block_len, endian)
         # Every other block type (Interface Statistics, Name
         # Resolution, Decryption Secrets, Custom, ...) is skipped
@@ -347,28 +427,42 @@ def _detect_shb_endian(data: bytes, block_start: int) -> _Endian:
     )
 
 
-def _idb_tsresol(
-    data: bytes, block_start: int, block_len: int, endian: _Endian
-) -> int:
-    """Return the raw ``if_tsresol`` byte of an Interface Description Block.
+def _idb_interface(
+    data: bytes, block_start: int, block_len: int, endian: _Endian, index: int
+) -> _Interface:
+    """Return what an Interface Description Block declares.
 
-    It is read from the block's options list; the format default is
-    returned if the option is absent (draft-ietf-opsawg-pcapng §4.2).
+    The first ``if_tsresol`` and the first non-empty ``if_name`` are
+    read from the block's options list, each ignored when its length
+    is 0. The format default resolution is used when no ``if_tsresol``
+    is present (draft-ietf-opsawg-pcapng §4.2). An ``if_name`` value
+    is cut at the end of the options list.
     """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
     cursor = block_start + 16
     options_end = block_start + block_len - 4
+    tsresol: int | None = None
+    name: bytes | None = None
+    name_offset = block_start
     while cursor + 4 <= options_end:
         code = int.from_bytes(data[cursor : cursor + 2], endian)
         length = int.from_bytes(data[cursor + 2 : cursor + 4], endian)
         if code == _OPT_END_OF_OPT:
             break
         value_start = cursor + 4
-        if code == _OPT_IF_TSRESOL and length >= 1:
-            return data[value_start]
+        if code == _OPT_IF_TSRESOL and length >= 1 and tsresol is None:
+            tsresol = data[value_start]
+        elif code == _OPT_IF_NAME and length >= 1 and name is None:
+            name = data[value_start : min(value_start + length, options_end)]
+            name_offset = value_start
         cursor = value_start + length + (-length % 4)
-    return _DEFAULT_TSRESOL
+    return _Interface(
+        interface_id=index,
+        tsresol=_DEFAULT_TSRESOL if tsresol is None else tsresol,
+        name=name,
+        name_offset=name_offset,
+    )
 
 
 def _timestamp_ns(raw: int, if_tsresol: int) -> int:
@@ -392,7 +486,8 @@ def _epb_frame(
     block_start: int,
     block_len: int,
     endian: _Endian,
-    tsresol_by_interface: list[int],
+    interfaces: list[_Interface],
+    interface_cell: list[_Interface | None],
 ) -> CapturedFrame:
     # Block Type(4) + Block Total Length(4) + Interface ID(4) +
     # Timestamp High(4) + Timestamp Low(4) + Captured Packet Length(4)
@@ -423,18 +518,19 @@ def _epb_frame(
             expected=captured_len,
             actual=available,
         )
-    if interface_id >= len(tsresol_by_interface):
+    if interface_id >= len(interfaces):
         raise MalformedCaptureError(
             f"pcapng Enhanced Packet Block references interface "
-            f"{interface_id}, but only {len(tsresol_by_interface)} "
+            f"{interface_id}, but only {len(interfaces)} "
             "Interface Description Block(s) precede it in this section",
             field="interface id",
             offset=body,
-            expected=f"< {len(tsresol_by_interface)}",
+            expected=f"< {len(interfaces)}",
             actual=interface_id,
         )
-    tsresol = tsresol_by_interface[interface_id]
-    timestamp = _timestamp_ns((ts_high << 32) | ts_low, tsresol)
+    interface = interfaces[interface_id]
+    interface_cell[0] = interface
+    timestamp = _timestamp_ns((ts_high << 32) | ts_low, interface.tsresol)
     return CapturedFrame(
         timestamp=timestamp,
         data=data[packet_start : packet_start + captured_len],
@@ -471,18 +567,12 @@ def _spb_frame(
     )
 
 
-def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
-    """Read a capture, detecting classic pcap or pcapng by its magic bytes.
-
-    :func:`read_pcap` and :func:`read_pcapng` read a known format
-    without this detection.
+def _is_pcapng(buffer: bytes | memoryview) -> bool:
+    """Return whether ``buffer``'s magic number is pcapng's.
 
     :param buffer: The whole capture, starting at its magic number.
     :raises MalformedCaptureError: if the buffer is too short to hold a
-        magic number, or its magic bytes match neither format. These
-        two are raised on the call itself; every other error, raised by
-        :func:`read_pcap` or :func:`read_pcapng`, comes during
-        iteration (see the module docstring).
+        magic number, or its magic bytes match neither format.
     """
     if len(buffer) < 4:
         raise MalformedCaptureError(
@@ -500,9 +590,9 @@ def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
         _PCAP_MAGIC_NS_BE,
         _PCAP_MAGIC_NS_LE,
     ):
-        return read_pcap(buffer)
+        return False
     if magic == _SHB_TYPE:
-        return read_pcapng(buffer)
+        return True
     raise MalformedCaptureError(
         f"unrecognized capture format: magic bytes {magic.hex()}",
         field="magic",
@@ -510,3 +600,89 @@ def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
         expected="a classic pcap or pcapng magic number",
         actual=magic.hex(),
     )
+
+
+def read_captures(buffer: bytes | memoryview) -> Iterator[CapturedFrame]:
+    """Read a capture, detecting classic pcap or pcapng by its magic bytes.
+
+    :func:`read_pcap` and :func:`read_pcapng` read a known format
+    without this detection.
+
+    :param buffer: The whole capture, starting at its magic number.
+    :raises MalformedCaptureError: if the buffer is too short to hold a
+        magic number, or its magic bytes match neither format. These
+        two are raised on the call itself; every other error, raised by
+        :func:`read_pcap` or :func:`read_pcapng`, comes during
+        iteration (see the module docstring).
+    """
+    if _is_pcapng(buffer):
+        return read_pcapng(buffer)
+    return read_pcap(buffer)
+
+
+def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
+    """Read a capture with the interface each frame was captured on.
+
+    The format is detected as :func:`read_captures` detects it, and the
+    frames, timestamps and errors are the ones :func:`read_captures`
+    gives, with one more error: a pcapng Enhanced Packet Block that
+    references an interface whose ``if_name`` is not valid UTF-8.
+
+    :param buffer: The whole capture, starting at its magic number.
+    :raises MalformedCaptureError: if the buffer is too short to hold a
+        magic number, or its magic bytes match neither format, both on
+        the call itself; and during iteration, for every error
+        :func:`read_pcap` or :func:`read_pcapng` raises, or if an
+        Enhanced Packet Block references an Interface Description Block
+        whose ``if_name`` is not valid UTF-8.
+    """
+    if _is_pcapng(buffer):
+        return _read_pcapng_packets(buffer)
+    return _read_pcap_packets(buffer)
+
+
+def _read_pcap_packets(
+    buffer: bytes | memoryview,
+) -> Iterator[CapturedPacket]:
+    for timestamp, data in read_pcap(buffer):
+        yield CapturedPacket(timestamp, data, None, None)
+
+
+def _read_pcapng_packets(
+    buffer: bytes | memoryview,
+) -> Iterator[CapturedPacket]:
+    interface_cell: list[_Interface | None] = [None]
+    for timestamp, data in _read_pcapng_blocks(
+        _pcapng_data(buffer), interface_cell
+    ):
+        interface = interface_cell[0]
+        if interface is None:
+            yield CapturedPacket(timestamp, data, None, None)
+        else:
+            yield CapturedPacket(
+                timestamp,
+                data,
+                interface.interface_id,
+                _interface_name(interface),
+            )
+
+
+def _interface_name(interface: _Interface) -> str | None:
+    """Return an interface's ``if_name`` decoded as UTF-8, or ``None``.
+
+    :param interface: The interface an Enhanced Packet Block names.
+    :raises MalformedCaptureError: if the name is not valid UTF-8.
+    """
+    if interface.name is None:
+        return None
+    try:
+        return interface.name.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise MalformedCaptureError(
+            f"pcapng interface {interface.interface_id}'s if_name is not valid "
+            f"UTF-8: {interface.name.hex()}",
+            field="if_name",
+            offset=interface.name_offset + e.start,
+            expected="UTF-8",
+            actual=interface.name.hex(),
+        ) from e
