@@ -36,9 +36,12 @@ accessors read the common ones: :attr:`CDP.device_id`,
 :attr:`CDP.capability_names` (a 32-bit mask), and
 :attr:`CDP.addresses` and :attr:`CDP.management_addresses` (lists of
 :class:`CDPAddress`). Each reads the first TLV of its type and answers
-``None`` when there is none, or when its value is too short for a
-Capabilities mask or does not parse as an address list
-(:attr:`CDP.capability_names` answers ``()`` instead); none raises.
+``None`` when there is none. The text and mask accessors never raise,
+and answer ``None`` for a value too short for a Capabilities mask
+(:attr:`CDP.capability_names` answers ``()`` instead). The two address
+lists are walks: they raise :class:`~netprotocols.InvalidFieldError`
+for a value too short for its address count, or an address the count
+gives that runs past it.
 
 Where a CDP PDU ends
 --------------------
@@ -365,27 +368,48 @@ class CDPAddress:
         return None
 
 
-def _read_address(value: bytes, cursor: int) -> tuple[CDPAddress, int] | None:
-    """Read the address at ``cursor``, or ``None`` if it runs past.
+def _address_error(value: bytes, cursor: int, need: int) -> InvalidFieldError:
+    """Build the error for an address at ``cursor`` that runs past ``value``.
+
+    :param value: The Addresses or Management Address TLV's value.
+    :param cursor: Where in ``value`` the address starts.
+    :param need: How many bytes from ``cursor`` the address needs.
+    :returns: The error, ``field`` ``"value"`` and ``offset`` relative to
+        the TLV's value.
+    """
+    left = len(value) - cursor
+    return InvalidFieldError(
+        f"CDP address needs {need} bytes, {left} remain",
+        protocol=CDPTLV,
+        field="value",
+        offset=cursor,
+        expected=need,
+        actual=left,
+    )
+
+
+def _read_address(value: bytes, cursor: int) -> tuple[CDPAddress, int]:
+    """Read the address at ``cursor``.
 
     :param value: The Addresses or Management Address TLV's value.
     :param cursor: Where in ``value`` the address starts.
     :returns: The address, and the offset just past it.
+    :raises InvalidFieldError: if the address runs past ``value``.
     """
     size = len(value)
     if cursor + 2 > size:
-        return None
+        raise _address_error(value, cursor, 2)
     protocol_type, protocol_length = value[cursor], value[cursor + 1]
     protocol_end = cursor + 2 + protocol_length
     if protocol_end + 2 > size:
-        return None
+        raise _address_error(value, cursor, protocol_end + 2 - cursor)
     address_end = (
         protocol_end
         + 2
         + int.from_bytes(value[protocol_end : protocol_end + 2])
     )
     if address_end > size:
-        return None
+        raise _address_error(value, cursor, address_end - cursor)
     address = CDPAddress(
         protocol_type=protocol_type,
         protocol=value[cursor + 2 : protocol_end],
@@ -394,25 +418,33 @@ def _read_address(value: bytes, cursor: int) -> tuple[CDPAddress, int] | None:
     return address, address_end
 
 
-def _parse_addresses(value: bytes) -> tuple[CDPAddress, ...] | None:
+def _parse_addresses(value: bytes) -> tuple[CDPAddress, ...]:
     """Parse a 4-byte address count and that many addresses.
 
-    ``None`` when the count is cut short or an address runs past the
-    value. Bytes after the last address counted are ignored, as
-    packet-cdp.c ignores them. The count is 32 bits, but each address
-    takes at least 4 bytes, so the loop ends within ``len(value) / 4``
-    rounds whatever it says.
+    Bytes after the last address counted are ignored, as packet-cdp.c
+    ignores them. The count is 32 bits, but each address takes at least
+    4 bytes, so the loop ends within ``len(value) / 4`` rounds whatever
+    it says.
+
+    :param value: The Addresses or Management Address TLV's value.
+    :returns: The addresses the count gives, in wire order.
+    :raises InvalidFieldError: if ``value`` is shorter than the count,
+        or an address the count gives runs past it.
     """
     if len(value) < 4:
-        return None
+        raise InvalidFieldError(
+            f"CDP address count needs 4 bytes, {len(value)} remain",
+            protocol=CDPTLV,
+            field="value",
+            offset=0,
+            expected=4,
+            actual=len(value),
+        )
     count = int.from_bytes(value[:4])
     addresses: list[CDPAddress] = []
     cursor = 4
     while len(addresses) < count:
-        entry = _read_address(value, cursor)
-        if entry is None:
-            return None
-        address, cursor = entry
+        address, cursor = _read_address(value, cursor)
         addresses.append(address)
     return tuple(addresses)
 
@@ -622,10 +654,18 @@ class CDP(Protocol):
 
     @property
     def addresses(self) -> tuple[CDPAddress, ...] | None:
-        """Return the Addresses (type 2) TLV's addresses, or ``None``.
+        """Return the Addresses (type 2) TLV's addresses.
 
-        ``None`` when there is no such TLV, or its count or an address
-        runs past its value.
+        The first such TLV's value is a 4-byte count and that many
+        addresses; bytes after the last address counted are ignored.
+
+        :returns: The addresses, in wire order; ``None`` when there is no
+            such TLV.
+        :raises InvalidFieldError: if the value is shorter than the
+            count's 4 bytes, or an address the count gives runs past it
+            (``protocol`` :class:`CDPTLV`, ``field`` ``"value"``,
+            ``offset`` relative to the TLV's value; bounded, so it never
+            hangs or over-reads).
         """
         tlv = self.tlv(_ADDRESS)
         return None if tlv is None else _parse_addresses(tlv.value)
@@ -634,7 +674,11 @@ class CDP(Protocol):
     def management_addresses(self) -> tuple[CDPAddress, ...] | None:
         """Return the Management Address (type 22) TLV's addresses.
 
-        Laid out as :attr:`addresses` is, and ``None`` in the same cases.
+        Laid out as :attr:`addresses` is.
+
+        :returns: The addresses, in wire order; ``None`` when there is no
+            such TLV.
+        :raises InvalidFieldError: in the cases :attr:`addresses` raises.
         """
         tlv = self.tlv(_MANAGEMENT_ADDRESS)
         return None if tlv is None else _parse_addresses(tlv.value)

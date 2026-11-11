@@ -3324,10 +3324,59 @@ def cdp_nonzero_trailers(draw: st.DrawFn) -> bytes:
     return tlvs + bytes(draw(st.integers(0, 3)))
 
 
+def _reference_cdp_addresses(value: bytes) -> list[bytes] | int:
+    """Walk an Addresses TLV's value independently of netprotocols: the
+    wire form of each address its 4-byte count gives, or the offset in
+    the value of the count or the address that runs past it."""
+    if len(value) < 4:
+        return 0
+    count, cursor, found = int.from_bytes(value[:4]), 4, []
+    while len(found) < count:
+        if cursor + 2 > len(value):
+            return cursor
+        alen_at = cursor + 2 + value[cursor + 1]
+        if alen_at + 2 > len(value):
+            return cursor
+        end = alen_at + 2 + int.from_bytes(value[alen_at : alen_at + 2])
+        if end > len(value):
+            return cursor
+        found.append(value[cursor:end])
+        cursor = end
+    return found
+
+
+def _read_cdp_addresses(cdp: CDP, tlv_type: int, name: str) -> None:
+    """Read one of CDP's address lists: None with no TLV of its type,
+    else InvalidFieldError at the offset _reference_cdp_addresses gives,
+    or the addresses it gives."""
+    tlv = cdp.tlv(tlv_type)
+    try:
+        addresses = getattr(cdp, name)
+    except InvalidFieldError as error:
+        assert tlv is not None
+        assert (error.field, error.offset) == (
+            "value",
+            _reference_cdp_addresses(tlv.value),
+        )
+        event("CDP addresses: malformed")
+        return
+    if addresses is None:
+        assert tlv is None
+        event("CDP addresses: none")
+        return
+    assert tlv is not None
+    assert [bytes(a) for a in addresses] == _reference_cdp_addresses(tlv.value)
+    for address in addresses:
+        _ = (address.ip, address.protocol_type_name)
+    event("CDP addresses: parsed")
+
+
 class TestCDPProperties:
     @given(data=st.one_of(fuzz_input, cdp_bodies()))
     def test_accessors_never_raise(self, data: bytes) -> None:
-        """Whatever decodes answers every accessor, and round-trips."""
+        """Whatever decodes answers every accessor but the address
+        lists, and round-trips; the address lists raise
+        InvalidFieldError where the reference walk says so."""
         try:
             cdp = CDP.decode(data)
         except ProtocolError:
@@ -3345,10 +3394,11 @@ class TestCDPProperties:
         )
         for tlv in cdp.tlvs:
             _ = (tlv.type_name, tlv.length)
-        for addresses in (cdp.addresses, cdp.management_addresses):
-            event(f"addresses: {'none' if addresses is None else 'parsed'}")
-            for address in addresses or ():
-                _ = (address.ip, address.protocol_type_name, bytes(address))
+        for tlv_type, name in (
+            (2, "addresses"),
+            (0x16, "management_addresses"),
+        ):
+            _read_cdp_addresses(cdp, tlv_type, name)
         assert bytes(cdp) == data[: cdp.header_len]
         assert not any(data[cdp.header_len :])
         assert CDP.decode(bytes(cdp)) == cdp
