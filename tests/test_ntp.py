@@ -463,25 +463,77 @@ class TestAfterTheHeader:
         assert ntp.mac == NTPMAC(0x01040014, b"\xab" * 16)
 
     @pytest.mark.parametrize(
-        "length",
-        [12, 18, 0x1000],
+        ("length", "expected", "actual"),
+        [
+            (12, ">=16, a multiple of 4", 12),
+            (18, ">=16, a multiple of 4", 18),
+            (0x1000, 0x1000, 28),
+        ],
         ids=["below-16", "not-a-multiple-of-4", "past-the-body"],
     )
-    def test_a_length_rfc_7822_forbids_ends_the_walk(self, length):
-        """The walk stops at a Length below 16, not a multiple of 4, or
-        past the body, and what is left is the remainder."""
+    def test_a_length_rfc_7822_forbids_raises(self, length, expected, actual):
+        """The walk raises at a Length below 16, not a multiple of 4, or
+        past the body; the MAC and the remainder still answer, the
+        remainder starting where the walk raised."""
         bad = length.to_bytes(2, "big").rjust(4, b"\x01") + b"\x00" * 24
         good = field(0x0104, 12)
         ntp = NTP.decode(header() + good + bad)
-        assert [bytes(f) for f in ntp.extension_fields] == [good]
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = ntp.extension_fields
+        error = caught.value
+        assert (error.protocol, error.field, error.offset) == (NTP, "body", 16)
+        assert (error.expected, error.actual) == (expected, actual)
         assert (ntp.mac, ntp.remainder) == (None, bad)
 
-    def test_a_cut_field_is_a_remainder(self):
-        """A field cut by a snap length is kept, as the remainder."""
+    def test_a_cut_field_raises(self):
+        """A field cut by a snap length runs past the body: the walk
+        raises, and the cut field is the remainder."""
         cut = field(0x0204, 60)[:40]
         ntp = NTP.decode(header() + cut)
-        assert (ntp.extension_fields, ntp.mac) == ((), None)
-        assert ntp.remainder == cut
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = ntp.extension_fields
+        error = caught.value
+        assert (error.field, error.offset) == ("body", 0)
+        assert (error.expected, error.actual) == (64, 40)
+        assert (ntp.mac, ntp.remainder) == (None, cut)
+
+    @pytest.mark.parametrize("left", [1, 2, 3])
+    def test_too_few_bytes_for_a_field_header_raise(self, left):
+        """1-3 bytes after the last field are neither a field nor a
+        MAC."""
+        good = field(0x0104, 12)
+        ntp = NTP.decode(header() + good + b"\xff" * left)
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = ntp.extension_fields
+        error = caught.value
+        assert (error.field, error.offset) == ("body", 16)
+        assert (error.expected, error.actual) == (4, left)
+        assert (ntp.mac, ntp.remainder) == (None, b"\xff" * left)
+
+    def test_a_remainder_of_no_mac_length_after_a_field_raises(self):
+        """Bytes left after whole fields whose count is no MAC's length,
+        the RFC 1305 DES authenticator in a v4 message among them, are
+        read as a field, and raise."""
+        des = bytes(NTPMAC(9, b"\x22" * 8))
+        ntp = NTP.decode(header() + field(0x0104, 12) + des)
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = ntp.extension_fields
+        assert (caught.value.offset, caught.value.actual) == (16, 9)
+
+    def test_a_body_of_fields_and_nothing_else_does_not_raise(self):
+        """A walk that ends at the end of the body returns every field."""
+        fields = field(0x0104, 12) + field(0x0204, 28)
+        ntp = NTP.decode(header() + fields)
+        assert b"".join(map(bytes, ntp.extension_fields)) == fields
+        assert (ntp.mac, ntp.remainder) == (None, b"")
+
+    def test_an_empty_body_has_no_fields(self):
+        ntp = NTP.decode(header())
+        assert (ntp.extension_fields, ntp.mac, ntp.remainder) == (
+            (),
+            None,
+            b"",
+        )
 
     def test_ntpv3_has_no_extension_fields(self):
         """Below version 4 nothing walks as a field (RFC 7822 is v4)."""
@@ -489,6 +541,10 @@ class TestAfterTheHeader:
         ntp = NTP.decode(header(0x1B) + body)
         assert (ntp.version, ntp.extension_fields) == (3, ())
         assert (ntp.mac, ntp.remainder) == (None, body)
+        for first in (0x0B, 0x13):
+            below = NTP.decode(header(first) + b"\xff" * 3)
+            assert below.extension_fields == ()
+            assert below.remainder == b"\xff" * 3
 
     def test_ntpv3_des_authenticator(self):
         """RFC 1305 Appendix C: a Key ID and a 64-bit DES checksum.
@@ -499,6 +555,8 @@ class TestAfterTheHeader:
         assert NTP.decode(header(0x1B) + des).mac == NTPMAC(9, b"\x22" * 8)
         v4 = NTP.decode(header(0x23) + des)
         assert (v4.mac, v4.remainder) == (None, des)
+        with pytest.raises(InvalidFieldError):
+            _ = v4.extension_fields
 
     def test_ntpv3_macs(self):
         """NTPv3 reads 4, 20 and 24 bytes as a MAC too, as v4 does."""

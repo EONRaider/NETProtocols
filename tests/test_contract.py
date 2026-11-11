@@ -620,16 +620,20 @@ class TestDamagedPayload:
         self, raw_ntp_message, trailer, lax
     ):
         """NTP has no length field either: past its 48-byte header it
-        keeps everything, and bytes that are neither an extension field
-        nor a MAC are reported as a remainder, not raised."""
+        keeps everything, so bytes that are neither an extension field
+        nor a MAC decode and are reported as a remainder; the extension
+        field walk, reading them, raises at the first."""
         raw = raw_ntp_message + trailer
         packet = decode_frame(raw, start=NTP, lax=lax)
         assert [type(layer) for layer in packet] == [NTP]
         assert packet.stopped_by is None
         assert bytes(packet) == raw
         ntp = packet[NTP]
-        assert (ntp.extension_fields, ntp.mac) == ((), None)
+        assert ntp.mac is None
         assert ntp.remainder == trailer
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = ntp.extension_fields
+        assert (caught.value.field, caught.value.offset) == ("body", 0)
 
 
 class TestDecodeInputs:

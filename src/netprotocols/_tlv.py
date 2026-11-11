@@ -25,15 +25,37 @@ STUN attributes (RFC 8489 §14, RFC 5389 §15) are PIM's shape again, but
 each value is padded to a multiple of 4 bytes and the padding is not
 counted in its length. ``align`` covers that, and every other caller
 keeps the default of ``1``, which pads nothing.
+
+:func:`read_until_malformed` collects a walk's items up to the first
+that does not walk, for the lookups built on a walk, such as STUN's and
+RADIUS's, which degrade instead of raising.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 from netprotocols.utils.exceptions import InvalidFieldError
 
-__all__ = ["walk_kind_length_value"]
+__all__ = ["read_until_malformed", "walk_kind_length_value"]
+
+
+def read_until_malformed[T](items: Iterable[T]) -> tuple[tuple[T, ...], bool]:
+    """Collect ``items`` up to the first that does not walk.
+
+    :param items: A walk that raises
+        :class:`~netprotocols.utils.exceptions.InvalidFieldError` at an
+        item it cannot read, such as a generator over
+        :func:`walk_kind_length_value`.
+    :returns: The items read before the walk raised, or every item, and
+        whether the walk reached its end without raising.
+    """
+    found: list[T] = []
+    try:
+        found.extend(items)
+    except InvalidFieldError:
+        return tuple(found), False
+    return tuple(found), True
 
 
 def walk_kind_length_value(

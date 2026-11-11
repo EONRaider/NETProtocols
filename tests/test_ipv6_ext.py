@@ -344,18 +344,44 @@ class TestIPv6RoutingSegments:
         )
         assert routing.segments is None
 
-    def test_malformed_address_area_is_none(self):
-        # 4-byte reserved + 8 bytes: not a whole number of 16-byte
-        # addresses.
-        data = b"\x00\x00\x00\x00" + b"\xff" * 8
+    @pytest.mark.parametrize("routing_type", [0, 2])
+    @pytest.mark.parametrize("whole", [0, 1, 2])
+    def test_an_address_cut_short_raises(self, routing_type, whole):
+        """An odd hdr_ext_len leaves 8 bytes after the whole addresses,
+        half an address: the walk raises there, and the final
+        destination, a lookup, is None."""
+        data = bytes(4) + b"\x20\x01" * 8 * whole + b"\xff" * 8
         routing = IPv6Routing(
             next_header=6,
             hdr_ext_len=len(data) // 8,
-            routing_type=0,
+            routing_type=routing_type,
             segments_left=1,
             data=data,
         )
-        assert routing.segments is None
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = routing.segments
+        error = caught.value
+        assert (error.protocol, error.field) == (IPv6Routing, "data")
+        assert (error.offset, error.expected, error.actual) == (
+            4 + 16 * whole,
+            16,
+            8,
+        )
+        assert routing.final_destination("2001:db8::1") is None
+
+    @pytest.mark.parametrize("routing_type", [1, 3, 4, 5, 253])
+    def test_other_types_are_none_at_any_length(self, routing_type):
+        """A type without a segment list this accessor reads is None,
+        whether or not its data would walk as one."""
+        for blocks in (0, 1, 2, 3):
+            routing = IPv6Routing(
+                next_header=59,
+                hdr_ext_len=blocks,
+                routing_type=routing_type,
+                segments_left=0,
+                data=bytes(4 + 8 * blocks),
+            )
+            assert routing.segments is None
 
 
 class TestRegistryGating:
