@@ -285,10 +285,13 @@ contiguous with the delivered end, that pushed its own direction past
 ``max_flow_bytes``, or that confirmed the ACK-based gap before it
 (section 4.7) (``StreamData``, ``Gap``),
 the fragment that pushed its own datagram past ``max_flow_bytes`` or
-``max_fragments`` (``Evicted``), and the arriving piece of an
+``max_fragments``, or past ``max_total_bytes`` on its own, or whose own
+datagram is evicted as the oldest to make room under
+``max_total_bytes`` or ``max_flows`` (``Evicted``), and the arriving
+piece of an
 ``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
 ``Anomaly``. It is ``None`` for every event a flush produces: an
-expiry, the eviction of a flow to make room (``max_total_bytes``,
+expiry, the eviction of another flow to make room (``max_total_bytes``,
 ``max_flows``), ``advance`` and ``close``; the exception is the flush
 a SYN confirms (decision 12, section 4.4), which carries the SYN's
 ref. A

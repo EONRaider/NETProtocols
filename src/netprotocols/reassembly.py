@@ -93,10 +93,13 @@ arriving one.
 - A fragment that would end the reassembled datagram past 65,535 bytes
   (RFC 791 §3.1, RFC 8200 §4.5) is :attr:`AnomalyKind.OVERSIZE`. The
   length counts the header the rebuilt datagram takes, the first
-  fragment's once it has arrived. It discards an IPv4 datagram; an
-  IPv6 fragment is dropped. A datagram whose first fragment, arriving
-  last, makes it too long is discarded when it completes, with the
-  same anomaly.
+  fragment's once it has arrived; an IPv6 first fragment is judged
+  against the furthest byte already held too. It discards an IPv4
+  datagram; an IPv6 fragment is dropped alone, so a valid first
+  fragment can still complete the datagram. An IPv4 datagram whose
+  first fragment, arriving last, makes it too long, and any datagram
+  whose rebuilt header and payload exceed 65,535 bytes, is discarded
+  when it completes, with the same anomaly.
 - An IPv6 first fragment whose data does not hold the header chain
   through the upper-layer header (RFC 7112 §5) is
   :attr:`AnomalyKind.INCOMPLETE_HEADER_CHAIN`, and is dropped. A first
@@ -148,7 +151,7 @@ import heapq
 import ipaddress
 import typing
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 from netprotocols.checksum import internet_checksum
@@ -554,7 +557,10 @@ class Overlap(_Event):
     datagram is discarded, ``kept`` is the held version and ``spans``
     hold every fragment the datagram held and the arriving one;
     otherwise ``spans`` are those of ``kept_spans`` and
-    ``other_spans``.
+    ``other_spans``. Ranges count fragments' declared lengths: where the
+    snap length cut bytes of the range from both versions, ``kept``,
+    ``other`` and their spans hold only the bytes captured, from the
+    range's start.
 
     :param start: The range's first byte, as a payload offset.
     :param end: One past its last byte.
@@ -1608,9 +1614,13 @@ class FragmentReassembler:
             data = data[:length]
             source.end = start + length
         header = arrival.extra_header
-        if start and flow is not None and flow.header_extra is not None:
-            header = flow.header_extra
-        if header + start + length > _MAX_DATAGRAM:
+        reach = start + length
+        if flow is not None:
+            if start and flow.header_extra is not None:
+                header = flow.header_extra
+            elif not start and key.version == 6:
+                reach = max(reach, flow.reach)
+        if header + reach > _MAX_DATAGRAM:
             if key.version == 4:
                 return discard(AnomalyKind.OVERSIZE, start + length)
             report(AnomalyKind.OVERSIZE, start, start + length)
@@ -1775,11 +1785,14 @@ class FragmentReassembler:
                     if run[0] < source.end and start < run[1]
                 ]
                 low = max(start, min(run[0] for run in touched))
-                high = max(low, min(end, max(run[1] for run in touched)))
+                high = min(source.end, max(run[1] for run in touched))
+                captured = max(low, min(high, end))
                 discarded = self._overlap(
-                    flow, source, data, [], [], (low, high), False
+                    flow, source, data, [], [], (low, captured), False
                 )
-                return _Plan(first, first, [], discarded, True)
+                return _Plan(
+                    first, first, [], replace(discarded, end=high), True
+                )
             if verdict == "duplicate" or not data:
                 return _Plan(first, first, [], None, False)
             return _Plan(

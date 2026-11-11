@@ -802,6 +802,23 @@ class TestOverlaps:
         assert overlap.refs == (0, 1)
         assert reassembler.usage == Usage(0, 0)
 
+    def test_linux_discard_overlap_range_is_the_runs_declared_bytes(
+        self,
+    ) -> None:
+        """A fragment whose own capture ends before the run starts still
+        overlaps it by its declared length: the range is that overlap,
+        never empty, holding only bytes captured."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.LINUX_DISCARD)
+        feed(reassembler, v4(1, 32, b"a" * 16)[:20], ref=0)
+        cut = v4(1, 16, b"b" * 32)[: 20 + 8]
+        events = feed(reassembler, cut, ref=1)
+        (overlap,) = only(events, Overlap)
+        assert not overlap.resolved
+        assert (overlap.start, overlap.end) == (32, 48)
+        assert overlap.kept == overlap.other == b""
+        assert overlap.kept_spans == overlap.other_spans == ()
+        assert reassembler.usage == Usage(0, 0)
+
     def test_a_fragment_cut_to_nothing_inside_a_held_one(self) -> None:
         """No zero-width Retransmission: only the truncation is
         reported."""
@@ -940,25 +957,15 @@ class TestRules:
         assert kinds(events) == [AnomalyKind.OVERSIZE]
         assert reassembler.usage.flows == 1
 
-    @pytest.mark.parametrize("version", [4, 6])
-    def test_oversize_found_when_the_first_fragment_comes_last(
-        self, version: int
-    ) -> None:
-        """Until the first fragment arrives its header is unknown, so a
-        datagram it would push past 65,535 bytes is discarded when it
-        completes."""
+    def test_oversize_found_when_the_first_fragment_comes_last(self) -> None:
+        """Until the first fragment arrives its header is unknown, so an
+        IPv4 datagram it would push past 65,535 bytes is discarded when
+        it completes."""
         reassembler = FragmentReassembler()
-        if version == 4:
-            frames = [
-                v4(7, 8, b"y" * 65_496, more=False),
-                v4(7, 0, b"x" * 8, options=b"\x01" * 40),
-            ]
-        else:
-            hop_by_hop = bytes([44, 31, 1, 252]) + bytes(252)
-            frames = [
-                v6(7, 8, b"y" * 65_400, more=False),
-                v6(7, 0, udp_datagram(0), extensions=hop_by_hop, first=0),
-            ]
+        frames = [
+            v4(7, 8, b"y" * 65_496, more=False),
+            v4(7, 0, b"x" * 8, options=b"\x01" * 40),
+        ]
         events = feed_all(reassembler, frames)
         (anomaly,) = events
         assert isinstance(anomaly, Anomaly)
@@ -966,6 +973,37 @@ class TestRules:
         assert anomaly.completing_ref == 1
         assert anomaly.refs == (0, 1)
         assert reassembler.usage == Usage(0, 0)
+
+    @pytest.mark.parametrize("first_first", [True, False])
+    def test_oversize_ipv6_drops_only_the_offending_fragment(
+        self, first_first: bool
+    ) -> None:
+        """Decision 8: whichever of the two arrives first, only the
+        fragment that makes the IPv6 datagram too long is dropped. A
+        first fragment arriving after the far data is that fragment, and
+        a valid first fragment then completes the datagram."""
+        hop_by_hop = bytes([44, 31, 1, 252]) + bytes(252)
+        big = v6(7, 0, b"x" * 8, extensions=hop_by_hop, first=0)
+        valid = v6(7, 0, b"x" * 8)
+        last = v6(7, 8, b"y" * 65_520, more=False)
+        frames = [big, last, valid] if first_first else [last, big, valid]
+        reassembler = FragmentReassembler()
+        events = feed_all(reassembler, frames)
+        (anomaly,) = only(events, Anomaly)
+        assert anomaly.kind is AnomalyKind.OVERSIZE
+        assert anomaly.refs == (1,)
+        if first_first:
+            assert [type(event) for event in events] == [
+                Anomaly,
+                Retransmission,
+            ]
+            assert reassembler.usage.flows == 1
+        else:
+            (datagram,) = only(events, Datagram)
+            assert datagram.completing_ref == 2
+            assert datagram.header_ref == 2
+            assert len(datagram.data) == 40 + 65_528
+            assert reassembler.usage == Usage(0, 0)
 
     def test_the_largest_ipv4_datagram_is_not_oversize(self) -> None:
         reassembler = FragmentReassembler()
