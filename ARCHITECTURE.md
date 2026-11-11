@@ -480,43 +480,44 @@ message string — every existing `str(err)` and `match=` assertion
 holds unchanged.
 
 **Walks raise; lookups and display helpers degrade.** An accessor that
-walks a sequence of type-length-value items, each item's length
-locating the next, and returns the items as a tuple raises
-`InvalidFieldError` when the bytes do not walk: a length below the
-item header, a length past the end, or bytes left over too few for a
-header. `TCP.parsed_options`, `RADIUS.parsed_attributes`,
-`RADIUSAttribute.vendor_attributes`, `STUN.parsed_attributes` and
-`SCTPChunk.parameters` are such walks. A walk answers `None`, without
-raising, only where there is nothing in its format to walk:
-`vendor_attributes` for an attribute other than a Vendor-Specific and
-for a vendor whose sub-attributes are in another format, and
-`parameters` for a chunk other than an INIT or INIT ACK and for a value
-shorter than the 16 fixed bytes before the parameters, as SCTP's other
-INIT fields are `None` for a value too short to hold them. A lookup or
-a display helper degrades to `None` (or `"unknown (n)"`) and never
-raises: `STUN.attribute()`, which reads the attributes up to the first
-that does not fit, `RADIUSAttribute.value`, `RADIUSAttribute.vendor_id`
-and `vendor_name`, `SCTPChunk.state_cookie`, which is `None` wherever
-`parameters` raises, and the scalar fields of `SCTPChunk` (`tsn`,
-`initiate_tag`, `a_rwnd`, ...). These accessors sit outside the
-split:
-
-- `NTP.extension_fields` walks type-length-value fields and never
-  raises: its walk ends where what is left has a MAC's length, at a
-  Length RFC 7822 §3 does not allow, or at the end of the body.
-- `PIMHello.address_list` reads encoded addresses to the end of the
-  Address List option's value and raises `TruncatedHeaderError` for an
-  address that runs past it (and `InvalidFieldError` for a family or
-  encoding it cannot size).
-- `RADIUS`'s packet-level lookups (`user_name`, `nas_ip_address`,
-  `nas_port`, `framed_ip_address`) read through `parsed_attributes`
-  and raise as it does.
-- Lists whose entries a count or a fixed entry size gives:
-  `IGMP.group_records` raises `InvalidFieldError` for a report that
-  ends before its record count or a record that runs past the message,
-  while `CDP.addresses` and
-  `management_addresses`, `IPv6Routing.segments`, and
-  `SCTPChunk.gap_ack_blocks` and `duplicate_tsns` degrade to `None`.
+walks a sequence of items and returns them as a tuple raises
+`InvalidFieldError` when the bytes do not walk. For a walk of
+type-length-value items, each item's length locating the next, that is
+a length below the item header, a length past the end, or bytes left
+over too few for a header: `TCP.parsed_options`,
+`RADIUS.parsed_attributes`, `RADIUSAttribute.vendor_attributes`,
+`STUN.parsed_attributes`, `SCTPChunk.parameters` and
+`NTP.extension_fields`, whose walk also ends without raising where what
+is left has a MAC's length, are such walks. `PIMHello.address_list`
+walks encoded addresses to the end of its option, and raises
+`InvalidFieldError` for an address that runs past it, as for a family
+or encoding it cannot size. For a list whose entries a count or a
+fixed entry size gives, it is a count or an entry size that does not
+fit the bytes: `IGMP.group_records`, `CDP.addresses` and
+`management_addresses`, `IPv6Routing.segments` (half an address after
+the whole ones), and `SCTPChunk.gap_ack_blocks` and `duplicate_tsns`. A walk answers `None`, without raising, only where
+there is nothing in its format to walk: `vendor_attributes` for an
+attribute other than a Vendor-Specific and for a vendor whose
+sub-attributes are in another format, `parameters` for a chunk other
+than an INIT or INIT ACK and for a value shorter than the 16 fixed
+bytes before the parameters, `gap_ack_blocks` and `duplicate_tsns` for
+a chunk other than a SACK and for a value shorter than its 12 fixed
+bytes, as SCTP's other INIT and SACK fields are `None` for a value too
+short to hold them, `group_records` for an IGMP message other than a
+v3 Membership Report, the CDP lists for a PDU without their TLV,
+`address_list` for a Hello without the option, and `segments` for a
+routing type other than 0 and 2. `NTP.extension_fields` is `()` below
+version 4, which has no extension fields. A lookup or a display helper
+degrades to `None` (or `"unknown (n)"`) and never raises:
+`STUN.attribute()`, and `RADIUS`'s packet-level lookups (`user_name`,
+`nas_ip_address`, `nas_port`, `framed_ip_address`), which read the
+attributes up to the first that does not fit,
+`RADIUSAttribute.value`, `RADIUSAttribute.vendor_id` and
+`vendor_name`, `SCTPChunk.state_cookie`, which is `None` wherever
+`parameters` raises, `NTP.mac` and `NTP.remainder`, which answer where
+`extension_fields` raises, `IPv6Routing.final_destination()`, which is
+`None` wherever `segments` raises, and the scalar fields of `SCTPChunk`
+(`tsn`, `initiate_tag`, `a_rwnd`, ...).
 
 ## Walking a frame: the next_protocol() chain
 
