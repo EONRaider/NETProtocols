@@ -461,8 +461,10 @@ documented eviction, and an event.
 
 Each flow (a datagram in progress, or a TCP connection) is charged
 ``FLOW_OVERHEAD`` bytes, and each stored piece (a fragment, a held
-segment, a retained delivered run) is charged its data length plus
-``PIECE_OVERHEAD``. A fragment's declared range that is kept with no
+segment) is charged its data length plus ``PIECE_OVERHEAD``. A
+retained delivered run is charged ``PIECE_OVERHEAD``, the size its
+``bytearray`` has allocated, and ``_SPAN_OVERHEAD`` for each frame it
+names; cutting a run under the cap drops at least an eighth of it. A fragment's declared range that is kept with no
 captured byte in it (a fragment the snap length cut to its header,
 under a rule that decides overlaps on declared ranges, section 3.3) is
 charged ``PIECE_OVERHEAD`` and counts against ``max_fragments`` like a
@@ -526,8 +528,9 @@ fragments cost what it really costs.
      - Not discarded: the lowest hole is declared a ``Gap`` (reason
        ``CAP``), the held bytes after it are delivered as
        ``StreamData``, and this repeats until the flow is under the
-       cap. Retained delivered bytes, then recorded ``Gap(ACKED)``
-       ranges (section 4.7), are trimmed first. The flow
+       cap. The retained delivered bytes of both directions, then the
+       recorded ``Gap(ACKED)`` ranges of both (section 4.7), are
+       trimmed first. The flow
        stays open. Data already captured is never silently dropped.
    * - ``max_total_bytes``, ``max_flows``
      - Fragments: the oldest datagram by first-fragment time (the
@@ -1666,10 +1669,12 @@ tracking (section 4.5) is not required. Two limits apply to both:
   (1 s by default), and a later frame, an ACK at or past that ACK or
   data of the direction beyond the hole, confirms it. Data that fills
   the hole within the grace period cancels it. Each direction holds one
-  pending grace, the time it started and the ACK it holds: the
-  confirming frame declares the holes below that ACK only, and once
-  delivery passes it a new grace starts for the holes the highest ACK
-  still covers, so each hole waits out its own grace.
+  pending grace, the time it started and the ACK it holds, capped at
+  the highest offset the direction has received: the confirming frame
+  declares the holes below that point only, and once delivery passes
+  it a new grace starts for the holes the highest ACK, capped the same
+  way, still covers, so each hole waits out its own grace and an ACK
+  far ahead holds back none.
 
 The released run's ``completing_ref`` is the frame that confirmed the
 gap (section 1.4), since that frame made the bytes deliverable; the

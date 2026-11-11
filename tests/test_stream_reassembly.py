@@ -1337,6 +1337,9 @@ class TestDelivery:
         assert anomaly.direction is Direction.A_TO_B
         assert [(gap.start, gap.end) for gap in only(events, Gap)] == [(0, 4)]
         events = talk.a(20, b"far", ack=0, ts=13 * SECOND)
+        assert [type(event) for event in events] == [OutOfOrder]
+        assert talk.b(0, ack=100, ts=14 * SECOND - 1) == ()
+        events = talk.b(0, ack=100, ts=14 * SECOND)
         assert kinds(events) == []
         assert [(gap.start, gap.end) for gap in only(events, Gap)] == [(8, 20)]
         assert only(events, StreamData)[0].data == b"far"
@@ -2612,3 +2615,40 @@ class TestWithOtherParts:
         (end, expired) = talk.r.close()
         assert end.reason is EndReason.CLOSE
         assert expired.timeout is Timeout.IDLE
+
+
+class TestReviewRegressions:
+    def test_a_forged_ack_far_ahead_does_not_starve_the_grace(self) -> None:
+        talk = Talk()
+        talk.handshake()
+        talk.a(0, b"x" * 100, ack=0, ts=T0)
+        talk.a(200, b"y" * 100, ack=0, ts=T0)
+        talk.b(0, ack=10**6, ts=T0 + SECOND)
+        assert talk.b(0, ack=300, ts=T0 + SECOND + 999_999_999) == ()
+        events = talk.b(0, ack=300, ts=T0 + 2 * SECOND)
+        assert [(e.start, e.end) for e in only(events, Gap)] == [(100, 200)]
+        (beyond,) = only(events, Anomaly)
+        assert beyond.kind is AnomalyKind.ACK_BEYOND_DATA
+        assert (beyond.start, beyond.end) == (300, 10**6)
+
+    def test_retained_bytes_of_both_directions_go_before_acked_gaps(
+        self,
+    ) -> None:
+        cap = FLOW_OVERHEAD + 2 * PIECE_OVERHEAD + 6000
+        bounds = StreamBounds(
+            max_flow_bytes=cap, ack_gap_grace=1, retain_bytes=10_000
+        )
+        talk = Talk(bounds=bounds)
+        talk.syn()
+        talk.syn(1)
+        talk.b(0, b"r" * 2000, ack=0)
+        for hole in range(3):
+            talk.a(2 * hole + 1, b"x")
+        talk.b(2000, ack=6)
+        talk.b(2000, ack=6)
+        assert len(only(talk.events, Gap)) == 3
+        talk.a(100, b"y" * 2500)
+        assert talk.r.usage.bytes <= cap
+        (late,) = talk.a(0, b"L")
+        assert isinstance(late, LateData)
+        assert (late.offset, late.data) == (0, b"L")

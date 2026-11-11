@@ -195,7 +195,8 @@ timestamp causes; the caller feeds the reassembled datagram instead.
   :class:`Retransmission`, and bytes the direction cannot compare a
   ``Retransmission(verified=False)``.
 - **Acknowledged holes.** When the peer first acknowledges past the
-  lowest hole, a grace starts, held to that acknowledgement. Once
+  lowest hole, a grace starts, held to that acknowledgement capped at
+  the highest offset the direction received. Once
   ``ack_gap_grace`` has passed, a frame that acknowledges at or past it,
   or carries data of the direction past the delivered end, declares
   each hole below it a ``Gap(ACKED)``, up to the highest offset the
@@ -4475,29 +4476,34 @@ class StreamReassembler:
     def _rearm(self, found: _Dir) -> None:
         """Start the grace of a direction's lowest acknowledged hole.
 
-        A pending grace whose acknowledgement lies past the delivered
-        end stands; otherwise one starts at the capture clock, held to
-        the highest acknowledgement, when that lies past the delivered
-        end, and none is pending when it does not.
+        The grace is held to the highest acknowledgement, capped at the
+        highest offset the direction received. A pending grace stands
+        while that point lies past the delivered end, or while no point
+        further on is acknowledged and received; otherwise one starts at
+        the capture clock. None is pending when the highest
+        acknowledgement does not pass the delivered end.
 
         :param found: The direction.
         """
         ack = found.ack
         if ack is None or ack <= found.next:
             found.pending = None
-        elif found.pending is None or found.pending[1] <= found.next:
-            found.pending = (self._clock or 0, ack)
+            return
+        point = min(ack, found.reach)
+        pending = found.pending
+        if pending is None or found.next >= pending[1] < point:
+            found.pending = (self._clock or 0, point)
 
     def _confirm(
         self, conn: _Conn, found: _Dir, work: _Work, acked: int | None
     ) -> None:
         """Declare the holes the peer acknowledged once their grace passed.
 
-        The pending grace holds an acknowledgement; once
-        ``ack_gap_grace`` has passed since it started, a frame confirms
-        it: an acknowledgement at or past it, or data of the direction
-        past the delivered end. Each hole below that acknowledgement, up
-        to the highest offset the direction received, becomes a
+        The pending grace holds an acknowledgement, capped at the highest
+        offset the direction received; once ``ack_gap_grace`` has passed
+        since it started, a frame confirms it: an acknowledgement at or
+        past it, or data of the direction past the delivered end. Each
+        hole below that acknowledgement becomes a
         ``Gap(ACKED)`` and the held bytes after it are delivered, with
         the confirming frame's reference; a grace for the holes past it
         then starts.
@@ -4509,14 +4515,17 @@ class StreamReassembler:
             for data of the direction.
         """
         pending = found.pending
-        if pending is None or (acked is not None and acked < pending[1]):
+        if pending is None:
             return
         since, point = pending
+        limit = min(point, found.reach)
+        if acked is not None and acked < limit:
+            return
         if (self._clock or 0) < since + self._bounds.ack_gap_grace:
             return
         side = 0 if found is conn.a else 1
-        limit = min(point, found.reach)
-        if point > found.reach and not found.notes & _NOTE_BEYOND:
+        ack = typing.cast(int, found.ack)
+        if ack > found.reach and not found.notes & _NOTE_BEYOND:
             found.notes |= _NOTE_BEYOND
             segment = work.segment
             times = (segment.origin.timestamp, segment.origin.timestamp)
@@ -4525,7 +4534,7 @@ class StreamReassembler:
                     **_fields(conn.key, side, [], work.ref, times),
                     kind=AnomalyKind.ACK_BEYOND_DATA,
                     start=found.reach,
-                    end=point,
+                    end=ack,
                 )
             )
         while found.next < limit:
@@ -5060,33 +5069,35 @@ class StreamReassembler:
         found.runs = runs or None
         self._charge(conn, change)
 
-    def _shed(self, conn: _Conn, found: _Dir, excess: int) -> None:
-        """Free ``excess`` bytes of a direction's retained state.
+    def _shed(self, conn: _Conn, order: list[_Dir], cap: int) -> None:
+        """Bring a connection's charge toward ``cap`` with retained state.
 
-        Its oldest retained bytes go first, then its oldest ACKED gaps.
-        A run that is cut drops at least an eighth of its bytes and is
-        copied to a ``bytearray`` of its new size.
+        The retained bytes of each direction in ``order`` go first,
+        oldest first, then the recorded ACKED gaps of each, oldest
+        first. A run that is cut drops at least an eighth of its bytes
+        and is copied to a ``bytearray`` of its new size.
 
         :param conn: The connection.
-        :param found: The direction.
-        :param excess: The bytes to free.
+        :param order: Its directions, in the order they shed.
+        :param cap: The charge it must fit under.
         """
-        while excess > 0 and found.runs:
-            before = conn.charge
-            run = found.runs[0]
-            take = max(excess, len(run.data) >> 3)
-            low = run.end if take >= len(run.data) else run.start + take
-            self._trim(conn, found, low)
-            if found.runs and found.runs[0] is run:
-                charge = run.charge()
-                run.data = bytearray(run.data)
-                self._charge(conn, run.charge() - charge)
-            excess -= before - conn.charge
-        gaps = found.gaps or []
-        count = min(len(gaps), max(0, -(-excess // PIECE_OVERHEAD)))
-        del gaps[:count]
-        found.gaps = gaps or None
-        self._charge(conn, -count * PIECE_OVERHEAD)
+        for found in order:
+            while conn.charge > cap and found.runs:
+                run = found.runs[0]
+                take = max(conn.charge - cap, len(run.data) >> 3)
+                low = run.end if take >= len(run.data) else run.start + take
+                self._trim(conn, found, low)
+                if found.runs and found.runs[0] is run:
+                    charge = run.charge()
+                    run.data = bytearray(run.data)
+                    self._charge(conn, run.charge() - charge)
+        for found in order:
+            gaps = found.gaps or []
+            excess = max(0, conn.charge - cap)
+            count = min(len(gaps), -(-excess // PIECE_OVERHEAD))
+            del gaps[:count]
+            found.gaps = gaps or None
+            self._charge(conn, -count * PIECE_OVERHEAD)
 
     # -- bounds -----------------------------------------------------------
 
@@ -5123,9 +5134,10 @@ class StreamReassembler:
     def _squeeze(self, conn: _Conn, cap: int, work: _Work) -> None:
         """Bring a connection under ``cap`` with its own data.
 
-        Retained bytes go first, the segment's direction before the
-        other; then each direction's lowest hole is declared a
-        ``Gap(CAP)`` and the held bytes after it delivered.
+        Retained bytes go first, then recorded ACKED gaps, the segment's
+        direction before the other in each; then each direction's lowest
+        hole is declared a ``Gap(CAP)`` and the held bytes after it
+        delivered.
 
         :param conn: The connection.
         :param cap: The charge it must fit under.
@@ -5138,8 +5150,7 @@ class StreamReassembler:
                 conn.dirs(), key=lambda pair: pair[0] != side
             )
         ]
-        for found in order:
-            self._shed(conn, found, conn.charge - cap)
+        self._shed(conn, order, cap)
         for found in order:
             while conn.charge > cap and found.held:
                 start = found.held[0].start
@@ -5149,7 +5160,7 @@ class StreamReassembler:
                 )
                 found.next = start
                 self._deliver(conn, found, work.ref, work.own, True)
-                self._shed(conn, found, conn.charge - cap)
+                self._shed(conn, order, cap)
 
     def _evict_victim(self, bound: Bound, conn: _Conn, work: _Work) -> None:
         """Evict the connection a cap's eviction order picks.
