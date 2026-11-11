@@ -385,7 +385,10 @@ default; `last`, `bsd`, `linux`, `windows`, `solaris`, `discard`,
 `Overlap` event under every policy; an overlapping IPv6 fragment
 discards its datagram (RFC 5722). Every other rule a fragment breaks is
 an `Anomaly` event, never an exception. What the reassembler holds is
-bounded by `FragmentBounds`, measured on capture timestamps:
+bounded by `FragmentBounds`, measured on capture timestamps. Every
+`feed()` moves the capture clock, a frame without fragments included,
+and returns the `Expired` events that causes; call `advance(timestamp)`
+while a live capture is idle:
 
 | Bound | Default |
 |---|---|

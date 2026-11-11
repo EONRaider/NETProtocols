@@ -1402,14 +1402,19 @@ Hop Limit, and names the frame whose own fragment caused it as
 datagram, `advance()` and `close()` produce events with
 `completing_ref=None`. `feed()` returns its events at once, never
 queued: other datagrams' expiries, then their evictions, then the
-arriving fragment's own datagram's events.
+arriving fragment's own datagram's events. Every `feed()` moves the
+capture clock, whether or not its packet holds a fragment, so a frame
+that holds none returns the expiries its timestamp causes and nothing
+else; `advance()` does the same without a frame, for an idle capture.
 
 **Datagrams.** A `Datagram` holds the whole datagram with a header
 rebuilt from the fragment that supplied the payload's first byte
 (`header_ref`): for IPv4, Total Length, MF, Fragment Offset and the
 Header Checksum rewritten; for IPv6, the Per-Fragment headers with the
 Fragment header removed, the Next Header before it and Payload Length
-rewritten (RFC 791 §3.1, RFC 8200 §4.5). So `decode_frame(event.data,
+rewritten (RFC 791 §3.1, RFC 8200 §4.5). A datagram whose rebuilt
+header and payload would exceed 65,535 bytes is discarded with an
+`Anomaly` instead. So `decode_frame(event.data,
 start=IPv4)` (or `IPv6`) walks it with the ordinary decoders, and the
 decode contract holds for that header as for any other; it does not
 equal any captured header.
@@ -1428,8 +1433,11 @@ train under it reassembles as a new datagram.
 may hold, the datagrams held and the pieces per datagram, charging
 `FLOW_OVERHEAD` per datagram and `PIECE_OVERHEAD` per piece on top of
 the data; the two constants are measured CPython allocations, and
-`tests/test_reassembly_memory.py` holds them to it. To make room the
-datagram whose first fragment came first is evicted. Timeouts run on
+`tests/test_reassembly_memory.py` holds them to it. A datagram that
+alone would exceed `max_total_bytes` is discarded at once. To make
+room otherwise, the datagram whose first fragment came first is
+evicted, the arriving fragment's own datagram included, which then
+carries that fragment's ref. Timeouts run on
 capture timestamps only (`SECOND` is one second in nanoseconds), so a
 replay produces the same events; per-target timeouts come with
 `targets`. Flows live in insertion-ordered structures, so event order

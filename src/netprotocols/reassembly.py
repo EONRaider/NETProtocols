@@ -37,7 +37,13 @@ out of the frame, up to the end its IP header declares, clamped to the
 frame less :attr:`~netprotocols.packet.Packet.trailer`. Fragments are
 grouped by :class:`FragmentKey` (RFC 791 §2.3, RFC 8200 §4.5). A packet
 with no such header, an IPv6 atomic fragment (RFC 6946 §4) included,
-returns ``()``.
+returns only the expiries its timestamp causes.
+
+**Clock.** Every call to :meth:`FragmentReassembler.feed`, whether or
+not its packet holds a fragment, and every call to
+:meth:`FragmentReassembler.advance` moves the capture clock to its
+timestamp, unless that is 0 or lower than the clock, and returns the
+expiries that causes.
 
 **Events.** Every event is a frozen, slotted, keyword-only dataclass
 naming the frames that contributed to it as :class:`Span` values, and
@@ -73,8 +79,10 @@ arriving one.
 - A bad IPv4 header checksum is :attr:`AnomalyKind.BAD_CHECKSUM`; the
   fragment is used or dropped per :class:`ChecksumMode`. A fragment
   whose IP header declares a length of 0 is
-  :attr:`AnomalyKind.UNVERIFIED_CHECKSUM`, used under
-  :attr:`ChecksumMode.KEEP` only.
+  :attr:`AnomalyKind.UNVERIFIED_CHECKSUM`, and is used under
+  :attr:`ChecksumMode.KEEP` only: no checksum it carries can show it
+  came from the capture host's offload, so :attr:`ChecksumMode.AUTO`
+  drops it as :attr:`ChecksumMode.DROP` does.
 - A fragment with no data is :attr:`AnomalyKind.EMPTY_FRAGMENT`. It
   discards an IPv6 datagram, and an IPv4 datagram under
   ``linux-discard``; elsewhere only the fragment is dropped.
@@ -83,11 +91,17 @@ arriving one.
   is dropped; an IPv4 fragment's data is cut to a multiple of 8 and
   used, and a fragment left with no data discards its datagram.
 - A fragment that would end the reassembled datagram past 65,535 bytes
-  (RFC 791 §3.1, RFC 8200 §4.5) is :attr:`AnomalyKind.OVERSIZE`. It
-  discards an IPv4 datagram; an IPv6 fragment is dropped.
-- An IPv6 first fragment whose captured data does not hold the header
-  chain through the upper-layer header (RFC 7112 §5) is
-  :attr:`AnomalyKind.INCOMPLETE_HEADER_CHAIN`, and is dropped.
+  (RFC 791 §3.1, RFC 8200 §4.5) is :attr:`AnomalyKind.OVERSIZE`. The
+  length counts the header the rebuilt datagram takes, the first
+  fragment's once it has arrived. It discards an IPv4 datagram; an
+  IPv6 fragment is dropped. A datagram whose first fragment, arriving
+  last, makes it too long is discarded when it completes, with the
+  same anomaly.
+- An IPv6 first fragment whose data does not hold the header chain
+  through the upper-layer header (RFC 7112 §5) is
+  :attr:`AnomalyKind.INCOMPLETE_HEADER_CHAIN`, and is dropped. A first
+  fragment the snap length cut is not judged by this rule, since its
+  missing bytes may hold the chain.
 - A last fragment that disagrees with a known end, or data past one, is
   :attr:`AnomalyKind.INCONSISTENT_END`, and discards the datagram.
 - Reported, the fragment used: :attr:`AnomalyKind.TRUNCATED` (captured
@@ -110,17 +124,20 @@ kept for the reassembled datagram. Timeouts run on capture timestamps
 in nanoseconds (:data:`SECOND`), never on the wall clock: the capture
 clock is the highest timestamp fed, and a datagram expires when its
 deadline is at or before it. A datagram that
-outgrows ``max_flow_bytes`` or ``max_fragments`` is discarded; to make
-room under ``max_total_bytes`` or ``max_flows``, the datagram with the
-earliest first fragment is evicted. After every call,
+outgrows ``max_flow_bytes`` or ``max_fragments`` is discarded, and so
+is one that would alone exceed ``max_total_bytes``. To make room under
+``max_total_bytes`` or ``max_flows``, the datagram with the earliest
+first fragment is evicted, ties going to the one that started first;
+when that is the arriving fragment's own datagram, it is the one
+evicted, with the fragment's reference. After every call,
 :attr:`FragmentReassembler.usage` is within ``max_total_bytes`` and
 ``max_flows``.
 
 **Errors.** Hostile, malformed and inconsistent input produces events,
 never an exception. The methods raise :class:`TypeError` for an
-argument of the wrong type and :class:`ValueError` for a frame shorter
-than its packet; the constructors raise :class:`ValueError` for an
-invalid bound, network or policy.
+argument of the wrong type and :class:`ValueError` for a negative
+timestamp or a frame shorter than its packet; the constructors raise
+:class:`ValueError` for an invalid bound, network or policy.
 """
 
 from __future__ import annotations
@@ -146,6 +163,7 @@ from netprotocols.packet import Packet
 
 __all__ = [
     "FLOW_OVERHEAD",
+    "NO_TIMEOUT",
     "PIECE_OVERHEAD",
     "SECOND",
     "Anomaly",
@@ -407,31 +425,45 @@ class FragmentBounds:
                 raise ValueError(f"{name} must be None or a positive int")
 
 
+class _NoTimeout(enum.Enum):
+    """The type of :data:`NO_TIMEOUT`."""
+
+    #: No timeout.
+    NO_TIMEOUT = "no_timeout"
+
+
+#: A :class:`FragmentTarget` timeout that turns that timeout off for the
+#: target's hosts, whatever the bounds set.
+NO_TIMEOUT = _NoTimeout.NO_TIMEOUT
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FragmentTarget:
     """The fragment handling of the hosts in one ``targets`` network.
 
     :param policy: Their overlap policy; ``None`` means the
         reassembler's ``policy``.
-    :param age_timeout: Their age timeout in nanoseconds; ``None``
-        means the bounds' ``age_timeout``.
-    :param idle_timeout: Their idle timeout in nanoseconds; ``None``
-        means the bounds' ``idle_timeout``.
+    :param age_timeout: Their age timeout in nanoseconds,
+        :data:`NO_TIMEOUT` for none, or ``None`` for the bounds'
+        ``age_timeout``.
+    :param idle_timeout: Their idle timeout in nanoseconds,
+        :data:`NO_TIMEOUT` for none, or ``None`` for the bounds'
+        ``idle_timeout``.
     :raises ValueError: if ``policy`` is neither ``None`` nor an
-        :class:`OverlapPolicy`, or a timeout is neither ``None`` nor a
-        positive ``int``.
+        :class:`OverlapPolicy`, or a timeout is neither ``None``,
+        :data:`NO_TIMEOUT` nor a positive ``int``.
     """
 
     policy: OverlapPolicy | None = None
-    age_timeout: int | None = None
-    idle_timeout: int | None = None
+    age_timeout: int | _NoTimeout | None = None
+    idle_timeout: int | _NoTimeout | None = None
 
     def __post_init__(self) -> None:
         """Check the policy and the timeouts.
 
         :raises ValueError: if ``policy`` is neither ``None`` nor an
-            :class:`OverlapPolicy`, or a timeout is neither ``None`` nor
-            a positive ``int``.
+            :class:`OverlapPolicy`, or a timeout is neither ``None``,
+            :data:`NO_TIMEOUT` nor a positive ``int``.
         """
         if self.policy is not None and not isinstance(
             self.policy, OverlapPolicy
@@ -439,8 +471,10 @@ class FragmentTarget:
             raise ValueError(f"{self.policy!r} is not an OverlapPolicy")
         for name in ("age_timeout", "idle_timeout"):
             value = getattr(self, name)
-            if value is not None and not _positive(value):
-                raise ValueError(f"{name} must be None or a positive int")
+            if value not in (None, NO_TIMEOUT) and not _positive(value):
+                raise ValueError(
+                    f"{name} must be None, NO_TIMEOUT or a positive int"
+                )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -689,6 +723,7 @@ class _Flow:
         "end",
         "first_hop",
         "first_next",
+        "header_extra",
         "idle",
         "key",
         "last",
@@ -724,6 +759,7 @@ class _Flow:
         self.charge = FLOW_OVERHEAD
         self.first_hop = -1
         self.first_next = -1
+        self.header_extra: int | None = None
         self.deadline: tuple[int, Timeout] | None = None
 
     def due(self) -> tuple[int, Timeout] | None:
@@ -1022,6 +1058,40 @@ def _slice(
     )
 
 
+def _header_extra(source: _Source, key: FragmentKey) -> int:
+    """Return the header bytes a datagram's length limit counts.
+
+    That is the IPv4 header, or the IPv6 Per-Fragment headers past the
+    40-byte IPv6 header, of the fragment at offset 0.
+
+    :param source: The fragment at offset 0.
+    :param key: Its datagram's key.
+    """
+    if key.version == 4:
+        return len(source.header)
+    return len(source.header) - 41
+
+
+def _timeout(value: int | _NoTimeout) -> int | None:
+    """Return a target's timeout as the bounds hold one.
+
+    :param value: A positive ``int``, or :data:`NO_TIMEOUT`.
+    """
+    return None if isinstance(value, _NoTimeout) else value
+
+
+def _check_timestamp(value: object) -> None:
+    """Check that ``value`` is a capture timestamp.
+
+    :param value: The argument.
+    :raises TypeError: if it is not an ``int``, or is a ``bool``.
+    :raises ValueError: if it is negative.
+    """
+    _check_int(value, "timestamp")
+    if typing.cast(int, value) < 0:
+        raise ValueError(f"timestamp must not be negative, got {value}")
+
+
 def _check_int(value: object, name: str) -> None:
     """Check that ``value`` is an ``int`` and not a ``bool``.
 
@@ -1057,7 +1127,8 @@ class FragmentReassembler:
         accepts it from any source.
     :raises TypeError: if ``bounds`` is not a :class:`FragmentBounds`.
     :raises ValueError: if ``policy``, a ``targets`` value or
-        ``checksums`` is not a member of its type, or a network does not
+        ``checksums`` is not a member of its type, ``local`` is a
+        ``str`` rather than an iterable of them, or a network does not
         parse.
     """
 
@@ -1103,6 +1174,8 @@ class FragmentReassembler:
             (network,) = _networks((text,), "targets")
             self._targets.append((network, value))
         self._targets.sort(key=lambda entry: -entry[0].prefixlen)
+        if isinstance(local, str):
+            raise ValueError("local must be an iterable of networks, not a str")
         self._local = None if local is None else _networks(local, "local")
         self._flows: dict[FragmentKey, _Flow] = {}
         self._deadlines: list[tuple[int, int, FragmentKey]] = []
@@ -1127,10 +1200,11 @@ class FragmentReassembler:
     ) -> tuple[FragmentEvent, ...]:
         """Take one frame and return every event it caused.
 
-        A packet none of whose IP headers is a fragment returns ``()``
-        and changes nothing but the count of frames fed. A timestamp of
-        0, or one lower than the highest seen, never moves the capture
-        clock.
+        Every frame moves the capture clock to its timestamp, unless
+        that is 0 or lower than the highest seen, and returns the
+        expiries the clock causes. A packet none of whose IP headers is
+        a fragment returns those expiries only, and changes nothing
+        else but the count of frames fed.
 
         :param packet: The packet :func:`~netprotocols.decode_frame`
             decoded from ``frame``, a lax walk's included.
@@ -1141,14 +1215,14 @@ class FragmentReassembler:
         :raises TypeError: if ``packet`` is not a
             :class:`~netprotocols.packet.Packet`, ``frame`` is not
             bytes, or ``timestamp`` or ``ref`` is not an ``int``.
-        :raises ValueError: if ``frame`` is shorter than
-            ``packet.consumed + len(packet.trailer)``.
+        :raises ValueError: if ``timestamp`` is negative, or ``frame``
+            is shorter than ``packet.consumed + len(packet.trailer)``.
         """
         if not isinstance(packet, Packet):
             raise TypeError("packet must be a Packet")
         if not isinstance(frame, (bytes, bytearray, memoryview)):
             raise TypeError("frame must be bytes or a memoryview")
-        _check_int(timestamp, "timestamp")
+        _check_timestamp(timestamp)
         if ref is not None:
             _check_int(ref, "ref")
         if len(frame) < packet.consumed + len(packet.trailer):
@@ -1159,12 +1233,12 @@ class FragmentReassembler:
         if ref is None:
             ref = self._fed
         self._fed += 1
-        located = _locate(packet)
-        if located is None:
-            return ()
-        arrival = _slice(packet, frame, located, timestamp, ref)
         events: list[FragmentEvent] = []
         self._tick(timestamp, events)
+        located = _locate(packet)
+        if located is None:
+            return tuple(events)
+        arrival = _slice(packet, frame, located, timestamp, ref)
         own: list[FragmentEvent] = []
         terminal = self._take(arrival, own, events)
         own.sort(key=lambda event: getattr(event, "start", 0))
@@ -1179,8 +1253,9 @@ class FragmentReassembler:
         :param timestamp: The capture time, in nanoseconds; 0, or one
             lower than the clock, moves nothing.
         :raises TypeError: if ``timestamp`` is not an ``int``.
+        :raises ValueError: if ``timestamp`` is negative.
         """
-        _check_int(timestamp, "timestamp")
+        _check_timestamp(timestamp)
         events: list[FragmentEvent] = []
         self._tick(timestamp, events)
         return tuple(events)
@@ -1348,19 +1423,32 @@ class FragmentReassembler:
                 heapq.heappush(self._deadlines, (due[0], flow.seq, flow.key))
                 self._compact()
 
-    def _oldest(self) -> _Flow | None:
+    def _oldest(self) -> _Flow:
         """Return the held datagram whose first fragment came first.
 
-        Ties go to the one that started first; ``None`` when none is
+        Ties go to the one that started first. At least one datagram is
         held.
         """
-        while self._ages:
+        while True:
             _, seq, key = self._ages[0]
             flow = self._flows.get(key)
             if flow is not None and flow.seq == seq:
                 return flow
             heapq.heappop(self._ages)
-        return None
+
+    def _victim(self, flow: _Flow) -> _Flow:
+        """Return the datagram a cap evicts to make room for ``flow``'s data.
+
+        That is the datagram whose first fragment came first, ties going
+        to the one that started first, among those held and ``flow``
+        itself; at least one datagram is held, or ``flow`` is.
+
+        :param flow: The arriving fragment's datagram, held or not.
+        """
+        oldest = self._oldest()
+        if (flow.created, flow.seq) < (oldest.created, oldest.seq):
+            return flow
+        return oldest
 
     def _new_flow(self, arrival: _Arrival) -> _Flow:
         """Build the state of the datagram ``arrival`` starts.
@@ -1376,10 +1464,10 @@ class FragmentReassembler:
             if target.policy is not None:
                 policy = target.policy
             if target.age_timeout is not None:
-                age = target.age_timeout
+                age = _timeout(target.age_timeout)
                 slow = False
             if target.idle_timeout is not None:
-                idle = target.idle_timeout
+                idle = _timeout(target.idle_timeout)
         if arrival.key.version == 6:
             policy = OverlapPolicy.DISCARD
         self._seq += 1
@@ -1519,7 +1607,10 @@ class FragmentReassembler:
             length -= length % 8
             data = data[:length]
             source.end = start + length
-        if arrival.extra_header + start + length > _MAX_DATAGRAM:
+        header = arrival.extra_header
+        if start and flow is not None and flow.header_extra is not None:
+            header = flow.header_extra
+        if header + start + length > _MAX_DATAGRAM:
             if key.version == 4:
                 return discard(AnomalyKind.OVERSIZE, start + length)
             report(AnomalyKind.OVERSIZE, start, start + length)
@@ -1599,17 +1690,21 @@ class FragmentReassembler:
                 flow, Bound.MAX_FLOW_BYTES, source.ref, arriving
             )
         growth = charge if held is None else charge - flow.charge
+        if charge > self._bounds.max_total_bytes:
+            return self._evicted(
+                flow, Bound.MAX_TOTAL_BYTES, source.ref, arriving
+            )
         if held is None:
             while len(self._flows) >= self._bounds.max_flows:
-                oldest = typing.cast(_Flow, self._oldest())
-                events.append(self._evicted(oldest, Bound.MAX_FLOWS, None, []))
+                victim = self._victim(flow)
+                if victim is flow:
+                    return self._evicted(
+                        flow, Bound.MAX_FLOWS, source.ref, arriving
+                    )
+                events.append(self._evicted(victim, Bound.MAX_FLOWS, None, []))
         while self._total + growth > self._bounds.max_total_bytes:
-            victim = self._oldest()
+            victim = self._victim(flow)
             if victim is flow:
-                heapq.heappop(self._ages)
-                victim = self._oldest()
-                heapq.heappush(self._ages, (flow.created, flow.seq, flow.key))
-            if victim is None:
                 return self._evicted(
                     flow, Bound.MAX_TOTAL_BYTES, source.ref, arriving
                 )
@@ -1629,6 +1724,8 @@ class FragmentReassembler:
         self._total += growth
         flow.charge = charge
         flow.reach = max(flow.reach, source.end)
+        if flow.pieces and flow.pieces[0].start == 0:
+            flow.header_extra = _header_extra(flow.pieces[0].source, flow.key)
         if not arrival.more:
             flow.end = source.end
         flow.last = max(flow.last, source.timestamp)
@@ -1653,7 +1750,7 @@ class FragmentReassembler:
         last = first
         while last < len(pieces) and pieces[last].start < end:
             last += 1
-        overlapped = pieces[first:last]
+        overlapped = pieces[first:last] if data else []
         policy = flow.policy
         if policy is OverlapPolicy.LINUX_DISCARD:
             verdict = _linux_verdict(flow.runs, start, source.end)
@@ -1671,10 +1768,23 @@ class FragmentReassembler:
         else:
             verdict = "resolve"
         if not overlapped:
-            if verdict == "duplicate":
-                return _Plan(first, last, [], None, False)
-            new = [_Piece(start, data, source)] if data else []
-            return _Plan(first, last, new, None, False)
+            if verdict == "overlap":
+                touched = [
+                    run
+                    for run in flow.runs
+                    if run[0] < source.end and start < run[1]
+                ]
+                low = max(start, min(run[0] for run in touched))
+                high = max(low, min(end, max(run[1] for run in touched)))
+                discarded = self._overlap(
+                    flow, source, data, [], [], (low, high), False
+                )
+                return _Plan(first, first, [], discarded, True)
+            if verdict == "duplicate" or not data:
+                return _Plan(first, first, [], None, False)
+            return _Plan(
+                first, first, [_Piece(start, data, source)], None, False
+            )
         winners = [
             verdict == "resolve"
             and _arriving_wins(policy, piece.source, source)
@@ -1795,11 +1905,15 @@ class FragmentReassembler:
                 kept_spans.append(piece.source.span(a, b))
                 other_spans.append(source.span(a, b))
             cursor = b
+        if cursor < high:
+            both(cursor, high)
         if resolved:
             spans = list(set(kept_spans) | set(other_spans))
         else:
-            spans = [*flow.spans(), source.span(start, start + len(data))]
-        ordered, first, last = _event_times(spans)
+            spans = flow.spans()
+            if data:
+                spans.append(source.span(start, start + len(data)))
+        ordered, first, last = _event_times(spans, (flow.created, flow.last))
         return Overlap(
             flow=flow.key,
             direction=None,
@@ -1820,8 +1934,12 @@ class FragmentReassembler:
 
     def _complete(
         self, flow: _Flow, source: _Source, own: list[FragmentEvent]
-    ) -> Datagram:
+    ) -> Datagram | Anomaly:
         """Remove a datagram with no hole left and return its :class:`Datagram`.
+
+        A datagram whose rebuilt header and payload would exceed 65,535
+        bytes is discarded instead, and its
+        :attr:`AnomalyKind.OVERSIZE` returned.
 
         :param flow: The datagram.
         :param source: The fragment that filled its last hole.
@@ -1831,6 +1949,20 @@ class FragmentReassembler:
         self._remove(flow)
         payload = b"".join(piece.data for piece in flow.pieces)
         header_source = flow.pieces[0].source
+        extra = _header_extra(header_source, flow.key)
+        if extra + len(payload) > _MAX_DATAGRAM:
+            ordered, first, last = _event_times(flow.spans())
+            return Anomaly(
+                flow=flow.key,
+                direction=None,
+                spans=ordered,
+                completing_ref=source.ref,
+                first_timestamp=first,
+                last_timestamp=last,
+                kind=AnomalyKind.OVERSIZE,
+                start=_MAX_DATAGRAM - extra,
+                end=len(payload),
+            )
         header = bytearray(header_source.header)
         if flow.key.version == 4:
             header[2:4] = (len(header) + len(payload)).to_bytes(2, "big")

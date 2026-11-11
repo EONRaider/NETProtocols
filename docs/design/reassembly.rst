@@ -165,8 +165,10 @@ arguments, takes ``StreamBounds`` and returns ``StreamEvent``.
   other flows that storing its data requires (section 2.3), in
   eviction order, each flow's events together; then the events of its
   own flow in stream or datagram offset order. A frame the reassembler
-  does not apply to returns ``()``: for ``FragmentReassembler``, a
-  packet none of whose IP headers is a fragment; for
+  does not apply to still moves the capture clock, and returns only the
+  expiries its timestamp triggers (``()`` when there are none): for
+  ``FragmentReassembler``, a packet none of whose IP headers is a
+  fragment; for
   ``StreamReassembler``, a packet with no TCP layer, or whose TCP
   layer is inside an IP fragment (a first fragment's TCP header is
   decoded by the walk but its payload is partial; the caller feeds the
@@ -392,8 +394,8 @@ API:
 - :class:`TypeError` for an argument of the wrong type, such as a
   ``ref`` that is not an ``int``, or a ``frame`` that is not bytes;
 - :class:`ValueError` for a ``frame`` too short for its ``packet``
-  (section 1.1), and for invalid bounds, networks or policies at
-  construction.
+  (section 1.1), for a negative ``timestamp``, and for invalid bounds,
+  networks or policies at construction.
 
 None of them is a :class:`netprotocols.ProtocolError`, which names
 bytes a decoder rejected. A packet whose walk stopped early
@@ -2129,16 +2131,18 @@ streams already extracted.
 7.2 Crafted overlap cases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A generator, ``scripts/craft_reassembly_overlaps.py``, rewrites
-datagrams from the real captures into overlap cases and writes them as
-pcaps, each labelled **crafted** in MANIFEST with the generator and the
-source frame:
+The overlap cases that real stacks do not emit are built inside the
+tests, as crafted bytes labelled **crafted** there, never as committed
+pcaps:
 
 - the overlapping fragment pattern of Suricata's ``DefragSturgesNovak*``
   tests, once per offered IPv4 policy, with the expected reassembled
   bytes in a table in the test, one row per policy, taken from those
-  tests; for ``linux-discard``, the pattern and the expected
-  outcome come from a netns capture against the running kernel;
+  tests; for ``linux-discard``, the pattern and the expected outcome
+  come from a netns capture against the running kernel
+  (``tests/fixtures/reassembly/linux_overlaps.pcap``: script-built
+  fragment trains and the kernel's echo replies, labelled so in
+  MANIFEST);
 - the same pattern over IPv6, expecting the RFC 5722 discard, and then
   a clean train under the same key, expecting a new ``Datagram``;
 - identical duplicates (``Retransmission``, no ``Overlap``) for both
@@ -2218,17 +2222,18 @@ Hypothesis, under the existing profiles:
 Against independent references, never against dpkt, scapy or
 pypacker, which neither ``src/`` nor ``tests/`` imports:
 
-- tshark: the capture script records ``ip.reassembled_in``,
-  ``ipv6.reassembled.in``, ``ip.reassembled.data`` and
-  ``ipv6.reassembled.data`` for each fragment capture, and
-  ``-z follow,tcp,raw`` for each connection, into committed files
-  beside the captures, with the tshark version in MANIFEST. The tests
+- tshark: ``ip.reassembled_in``, ``ipv6.reassembled.in``,
+  ``ip.reassembled.data`` and ``ipv6.reassembled.data`` for each
+  fragment capture, and ``-z follow,tcp,raw`` for each connection, are
+  taken at capture time and recorded in the tests (the reassembled-in
+  frame, the length and the SHA-256 of the data) and in MANIFEST, with
+  the tshark version. The tests
   compare ``Datagram.data``'s payload and ``completing_ref`` with
   tshark's reassembled data and reassembled-in frame, and the
   concatenated ``StreamData`` with the followed stream, so CI needs no
-  tshark. On the crafted captures, ``ip.fragment.overlap.conflict``
-  (``ipv6.fragment.overlap.conflict`` for IPv6) must flag the frames
-  ``Overlap`` names where their bytes differ.
+  tshark. On the script-built capture of the kernel's trains,
+  ``ip.fragment.overlap.conflict`` must flag the trains in which
+  ``Overlap`` reports differing bytes.
 - ``scripts/extract_http_streams.py``, the stdlib-only extractor the
   HTTP and TLS tests already use: its ``NN.request`` and
   ``NN.response`` files must equal the module's streams for

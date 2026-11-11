@@ -43,6 +43,7 @@ from netprotocols.checksum import internet_checksum
 from netprotocols.pcap import read_pcap
 from netprotocols.reassembly import (
     FLOW_OVERHEAD,
+    NO_TIMEOUT,
     PIECE_OVERHEAD,
     SECOND,
     Anomaly,
@@ -329,7 +330,12 @@ class TestAPI:
 
     @pytest.mark.parametrize(
         "changes",
-        [{"policy": "first"}, {"age_timeout": -5}, {"idle_timeout": 0}],
+        [
+            {"policy": "first"},
+            {"age_timeout": -5},
+            {"idle_timeout": 0},
+            {"idle_timeout": "never"},
+        ],
     )
     def test_invalid_target(self, changes: dict[str, object]) -> None:
         with pytest.raises(ValueError):
@@ -346,6 +352,7 @@ class TestAPI:
             {"targets": {10: OverlapPolicy.BSD}},
             {"local": ["300.1.1.1"]},
             {"local": [None]},
+            {"local": "10.0.0.0/8"},
         ],
     )
     def test_constructor_rejects(self, kwargs: dict[str, object]) -> None:
@@ -372,6 +379,15 @@ class TestAPI:
             reassembler.feed(packet, frame, timestamp=1, ref="0")  # type: ignore[arg-type]
         with pytest.raises(TypeError):
             reassembler.advance(None)  # type: ignore[arg-type]
+        assert reassembler.usage == Usage(0, 0)
+
+    def test_negative_timestamps_are_rejected(self) -> None:
+        reassembler = FragmentReassembler()
+        frame = v4(1, 0, b"x" * 8)
+        with pytest.raises(ValueError, match="negative"):
+            reassembler.feed(packet_of(frame), frame, timestamp=-1)
+        with pytest.raises(ValueError, match="negative"):
+            reassembler.advance(-5)
         assert reassembler.usage == Usage(0, 0)
 
     def test_feed_rejects_a_frame_shorter_than_its_packet(self) -> None:
@@ -769,6 +785,32 @@ class TestOverlaps:
         assert [type(event) for event in events] == [Anomaly]
         assert events[0].kind is AnomalyKind.TRUNCATED  # type: ignore[union-attr]
 
+    def test_linux_discard_overlap_with_a_runs_uncaptured_bytes(self) -> None:
+        """A run counts its fragment's declared length, so a fragment
+        that overlaps only the bytes the snap length cut still discards
+        the datagram."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.LINUX_DISCARD)
+        truncated = v4(1, 0, b"a" * 48)[: 20 + 8]
+        assert kinds(feed(reassembler, truncated, ref=0)) == [
+            AnomalyKind.TRUNCATED
+        ]
+        (overlap,) = feed(reassembler, v4(1, 16, b"b" * 40), ref=1)
+        assert isinstance(overlap, Overlap)
+        assert not overlap.resolved
+        assert (overlap.start, overlap.end) == (16, 48)
+        assert overlap.kept == overlap.other == b"b" * 32
+        assert overlap.refs == (0, 1)
+        assert reassembler.usage == Usage(0, 0)
+
+    def test_a_fragment_cut_to_nothing_inside_a_held_one(self) -> None:
+        """No zero-width Retransmission: only the truncation is
+        reported."""
+        reassembler = FragmentReassembler()
+        feed(reassembler, v4(1, 0, b"a" * 48))
+        events = feed(reassembler, v4(1, 16, b"c" * 16)[:20])
+        assert kinds(events) == [AnomalyKind.TRUNCATED]
+        assert len(events) == 1
+
     def test_targets_choose_the_policy_by_longest_prefix(self) -> None:
         reassembler = FragmentReassembler(
             policy=OverlapPolicy.FIRST,
@@ -873,6 +915,55 @@ class TestRules:
         assert isinstance(anomaly, Anomaly)
         assert anomaly.kind is AnomalyKind.OVERSIZE
         assert (anomaly.start, anomaly.end) == (65_512, 65_520)
+        assert anomaly.refs == (0, 1)
+        assert reassembler.usage == Usage(0, 0)
+
+    def test_oversize_counts_the_first_fragments_ipv4_header(self) -> None:
+        """A later fragment with a short header is judged by the header
+        the rebuilt datagram takes, the first fragment's 60 bytes."""
+        options = b"\x01" * 40
+        reassembler = FragmentReassembler()
+        assert feed(reassembler, v4(7, 0, b"x" * 8, options=options)) == ()
+        events = feed(reassembler, v4(7, 8, b"y" * 65_504, more=False), ref=1)
+        (anomaly,) = events
+        assert isinstance(anomaly, Anomaly)
+        assert anomaly.kind is AnomalyKind.OVERSIZE
+        assert anomaly.refs == (0, 1)
+        assert reassembler.usage == Usage(0, 0)
+
+    def test_oversize_counts_the_first_fragments_ipv6_headers(self) -> None:
+        hop_by_hop = bytes([44, 31, 1, 252]) + bytes(252)
+        reassembler = FragmentReassembler()
+        first = v6(7, 0, udp_datagram(0), extensions=hop_by_hop, first=0)
+        assert feed(reassembler, first) == ()
+        events = feed(reassembler, v6(7, 8, b"y" * 65_520, more=False))
+        assert kinds(events) == [AnomalyKind.OVERSIZE]
+        assert reassembler.usage.flows == 1
+
+    @pytest.mark.parametrize("version", [4, 6])
+    def test_oversize_found_when_the_first_fragment_comes_last(
+        self, version: int
+    ) -> None:
+        """Until the first fragment arrives its header is unknown, so a
+        datagram it would push past 65,535 bytes is discarded when it
+        completes."""
+        reassembler = FragmentReassembler()
+        if version == 4:
+            frames = [
+                v4(7, 8, b"y" * 65_496, more=False),
+                v4(7, 0, b"x" * 8, options=b"\x01" * 40),
+            ]
+        else:
+            hop_by_hop = bytes([44, 31, 1, 252]) + bytes(252)
+            frames = [
+                v6(7, 8, b"y" * 65_400, more=False),
+                v6(7, 0, udp_datagram(0), extensions=hop_by_hop, first=0),
+            ]
+        events = feed_all(reassembler, frames)
+        (anomaly,) = events
+        assert isinstance(anomaly, Anomaly)
+        assert anomaly.kind is AnomalyKind.OVERSIZE
+        assert anomaly.completing_ref == 1
         assert anomaly.refs == (0, 1)
         assert reassembler.usage == Usage(0, 0)
 
@@ -1649,7 +1740,8 @@ class TestBounds:
             (evicted,) = events
             assert isinstance(evicted, Evicted)
             assert evicted.bound is Bound.MAX_FLOWS
-            assert evicted.flow.identification == 2  # type: ignore[union-attr]
+            assert evicted.flow.identification == 3  # type: ignore[union-attr]
+            assert evicted.completing_ref == 3
         else:
             assert events == []
 
@@ -1684,17 +1776,61 @@ class TestBounds:
             assert events == []
             assert reassembler.usage == Usage(3, 3 * one)
 
-    def test_growing_datagram_evicts_others_not_itself(self) -> None:
+    def test_the_oldest_goes_even_when_it_is_the_growing_one(self) -> None:
+        """Decision 3: the datagram whose first fragment came first is
+        evicted, the arriving fragment's own included, with its ref."""
         one = charge(8, 1)
-        reassembler = FragmentReassembler(
-            bounds=FragmentBounds(max_total_bytes=2 * one + 8 + PIECE_OVERHEAD)
-        )
+        bounds = FragmentBounds(max_total_bytes=2 * one + 8 + PIECE_OVERHEAD)
+        reassembler = FragmentReassembler(bounds=bounds)
+        feed(reassembler, v4(1, 0, b"x" * 8), ts=1, ref=0)
+        feed(reassembler, v4(2, 0, b"y" * 8), ts=2, ref=1)
+        (evicted,) = feed(reassembler, v4(1, 16, b"z" * 16), ts=3, ref=2)
+        assert isinstance(evicted, Evicted)
+        assert evicted.bound is Bound.MAX_TOTAL_BYTES
+        assert evicted.flow.identification == 1  # type: ignore[union-attr]
+        assert evicted.completing_ref == 2
+        assert evicted.refs == (0, 2)
+        assert reassembler.usage == Usage(1, one)
+
+    def test_a_growing_datagram_evicts_an_older_one(self) -> None:
+        one = charge(8, 1)
+        bounds = FragmentBounds(max_total_bytes=2 * one + 8 + PIECE_OVERHEAD)
+        reassembler = FragmentReassembler(bounds=bounds)
         feed(reassembler, v4(1, 0, b"x" * 8), ts=1)
         feed(reassembler, v4(2, 0, b"y" * 8), ts=2)
-        events = feed(reassembler, v4(1, 16, b"z" * 16), ts=3)
-        (evicted,) = events
-        assert evicted.flow.identification == 2  # type: ignore[union-attr]
+        (evicted,) = feed(reassembler, v4(2, 16, b"z" * 16), ts=3)
+        assert isinstance(evicted, Evicted)
+        assert evicted.flow.identification == 1  # type: ignore[union-attr]
+        assert evicted.completing_ref is None
         assert reassembler.usage.flows == 1
+
+    def test_a_new_datagram_older_than_every_held_one_is_evicted(self) -> None:
+        reassembler = FragmentReassembler(bounds=FragmentBounds(max_flows=2))
+        feed(reassembler, v4(1, 0, b"x" * 8), ts=10)
+        feed(reassembler, v4(2, 0, b"x" * 8), ts=11)
+        (evicted,) = feed(reassembler, v4(3, 0, b"x" * 8), ts=5, ref=7)
+        assert isinstance(evicted, Evicted)
+        assert evicted.bound is Bound.MAX_FLOWS
+        assert evicted.flow.identification == 3  # type: ignore[union-attr]
+        assert evicted.completing_ref == 7
+        assert reassembler.usage.flows == 2
+
+    def test_a_fragment_over_max_total_bytes_alone_flushes_nothing_else(
+        self,
+    ) -> None:
+        """A datagram that cannot fit under the byte cap on its own is
+        evicted at once, and the others stay."""
+        reassembler = FragmentReassembler(
+            bounds=FragmentBounds(max_total_bytes=5000)
+        )
+        feed(reassembler, v4(1, 0, b"x" * 8), ts=1)
+        feed(reassembler, v4(2, 0, b"x" * 8), ts=2)
+        (evicted,) = feed(reassembler, v4(3, 0, b"x" * 4000), ts=3, ref=2)
+        assert isinstance(evicted, Evicted)
+        assert evicted.bound is Bound.MAX_TOTAL_BYTES
+        assert evicted.flow.identification == 3  # type: ignore[union-attr]
+        assert evicted.completing_ref == 2
+        assert reassembler.usage.flows == 2
 
     def test_a_datagram_alone_over_max_total_bytes_is_evicted(self) -> None:
         reassembler = FragmentReassembler(
@@ -1780,6 +1916,46 @@ class TestBounds:
         assert expired.flow.dst == DST4
         (expired,) = reassembler.advance(61 * SECOND)
         assert expired.flow.dst == "198.51.100.1"
+
+    def test_no_timeout_turns_a_global_timeout_off_for_a_target(self) -> None:
+        reassembler = FragmentReassembler(
+            bounds=FragmentBounds(idle_timeout=10, age_timeout=100),
+            targets={
+                DST4: FragmentTarget(idle_timeout=NO_TIMEOUT),
+                "198.51.100.1": FragmentTarget(
+                    age_timeout=NO_TIMEOUT, idle_timeout=NO_TIMEOUT
+                ),
+            },
+        )
+        feed(reassembler, v4(1, 0, b"a" * 8), ts=1000)
+        feed(reassembler, v4(2, 0, b"a" * 8, dst="198.51.100.1"), ts=1000)
+        assert reassembler.advance(1099) == ()
+        (expired,) = reassembler.advance(1100)
+        assert expired.timeout is Timeout.AGE  # type: ignore[union-attr]
+        assert expired.flow.dst == DST4
+        assert reassembler.advance(10**15) == ()
+        assert reassembler.usage.flows == 1
+
+    def test_a_frame_that_is_no_fragment_still_expires(self) -> None:
+        """Every feed moves the clock: a frame the reassembler does not
+        apply to returns the expiries it causes and nothing else."""
+        reassembler = FragmentReassembler(
+            bounds=FragmentBounds(age_timeout=100)
+        )
+        feed(reassembler, v4(1, 0, b"a" * 8), ts=1000, ref=0)
+        whole = v4(2, 0, udp_datagram(8), more=False)
+        assert feed(reassembler, whole, ts=1099, ref=1) == ()
+        (expired,) = feed(reassembler, whole, ts=1100, ref=2)
+        assert isinstance(expired, Expired)
+        assert expired.completing_ref is None
+        assert expired.refs == (0,)
+        arp = b"\xff" * 6 + b"\x02" * 6 + b"\x08\x06" + b"\x00" * 28
+        feed(reassembler, v4(3, 0, b"a" * 8), ts=1200)
+        (expired,) = reassembler.feed(
+            decode_frame(arp, lax=True), arp, timestamp=1300
+        )
+        assert isinstance(expired, Expired)
+        assert reassembler.usage == Usage(0, 0)
 
     def test_expiry_in_deadline_order(self) -> None:
         reassembler = FragmentReassembler(bounds=FragmentBounds(age_timeout=10))
@@ -1877,6 +2053,87 @@ def fragmented(draw: st.DrawFn) -> tuple[int, bytes, list[tuple[int, int]]]:
 
 
 class TestProperties:
+    @given(
+        st.sampled_from([4, 6]),
+        st.integers(0, 40),
+        st.integers(65_300, 65_535),
+        st.integers(2, 6),
+        st.booleans(),
+        st.randoms(use_true_random=False),
+    )
+    def test_large_first_header_small_later_ones_never_raise(
+        self,
+        version: int,
+        extra_words: int,
+        total: int,
+        pieces: int,
+        first_last: bool,
+        rng: random.Random,
+    ) -> None:
+        """A first fragment with the largest header and later ones with
+        the smallest, the datagram near 65,535 bytes, in any order: no
+        exception, and a Datagram only when it fits, else OVERSIZE."""
+        if version == 4:
+            extra = 20 + extra_words * 1
+            extra -= extra % 4
+            options = b"\x01" * (extra - 20)
+            size = max(16, total - extra)
+            size -= size % 8
+            cuts = (
+                sorted(rng.sample(range(1, size // 8), pieces - 1))
+                if pieces > 1
+                else []
+            )
+            bounds = [0, *(cut * 8 for cut in cuts), size]
+            frames = [
+                v4(
+                    9,
+                    a,
+                    bytes(b - a),
+                    more=b != size,
+                    options=options if a == 0 else b"",
+                )
+                for a, b in itertools.pairwise(bounds)
+            ]
+        else:
+            extra = 8 * (extra_words + 1)
+            hop_by_hop = bytes([44, extra // 8 - 1]) + bytes(extra - 2)
+            size = max(16, total - extra + rng.randrange(0, 64))
+            size -= size % 8
+            cuts = (
+                sorted(rng.sample(range(1, size // 8), pieces - 1))
+                if pieces > 1
+                else []
+            )
+            bounds = [0, *(cut * 8 for cut in cuts), size]
+            frames = [
+                v6(
+                    9,
+                    a,
+                    bytes(b - a),
+                    more=b != size,
+                    extensions=hop_by_hop if a == 0 else b"",
+                    first=0 if a == 0 else 44,
+                )
+                for a, b in itertools.pairwise(bounds)
+            ]
+        if first_last:
+            frames = frames[1:] + frames[:1]
+        else:
+            rng.shuffle(frames)
+        reassembler = FragmentReassembler()
+        events = feed_all(reassembler, frames)
+        datagrams = only(events, Datagram)
+        fits = extra + size <= 65_535
+        if fits:
+            (datagram,) = datagrams
+            length = len(datagram.data) - (40 if version == 6 else 0)
+            assert length == extra + size
+        else:
+            assert not datagrams
+            assert AnomalyKind.OVERSIZE in kinds(events)
+        reassembler.close()
+
     @given(fragmented())
     def test_any_cut_reassembles_to_the_payload(
         self, case: tuple[int, bytes, list[tuple[int, int]]]
