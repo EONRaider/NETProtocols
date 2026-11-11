@@ -33,8 +33,8 @@ errors are the ones the same bytes give as a buffer, and an error's
 ``offset`` counts from the stream's position when reading started.
 The one difference is the message of :func:`read_pcapng`'s error for
 a stream that does not start with a Section Header Block: it gives the
-magic bytes read but not the stream's length, which would take reading
-the whole stream. A stream whose ``read`` returns ``None``, as a
+magic bytes read but not the stream's length, and no byte after them
+is read. A stream whose ``read`` returns ``None``, as a
 non-blocking one with no bytes ready does, raises :class:`TypeError`.
 ``CapturedFrame.data`` is plain ``bytes`` here too.
 
