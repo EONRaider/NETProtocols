@@ -74,7 +74,10 @@ judge overlap on the fragments' declared ranges, so a fragment the snap
 length cut still overlaps where its header says it does. Under IPv6 and
 ``discard`` an exact duplicate supplies the bytes the held fragment's
 capture lacks; under ``linux-discard`` a duplicate inside a run is
-dropped, as Linux drops it, and none of its bytes is stored.
+dropped, as Linux drops it, and none of its bytes is stored. Linux
+records a dropped last fragment's end but checks for completion only
+after a fragment it stores, so such a duplicate completes no datagram;
+a later fragment that fills a remaining hole does.
 
 **Rules.** Each fragment is checked against the rules below. Every
 discard is reported by an :class:`Anomaly`; a discarded datagram's
@@ -828,13 +831,19 @@ class _Stop(NamedTuple):
 
 
 class _Plan(NamedTuple):
-    """How an arriving fragment changes its datagram's pieces."""
+    """How an arriving fragment changes its datagram's pieces.
+
+    ``dropped`` marks a ``linux-discard`` duplicate, which Linux drops
+    before it checks whether the datagram is complete: its end, when it
+    is the last fragment, is recorded, but it completes nothing.
+    """
 
     first: int
     last: int
     pieces: list[_Piece]
     event: FragmentEvent | None
     discard: bool
+    dropped: bool = False
 
 
 def _event_times(
@@ -1924,7 +1933,8 @@ class FragmentReassembler:
         if not arrival.more:
             flow.end = source.end
         flow.last = max(flow.last, source.timestamp)
-        if flow.end is not None and flow.covered == flow.end:
+        complete = flow.end is not None and flow.covered == flow.end
+        if complete and not plan.dropped:
             return self._complete(flow, source, own)
         self._schedule(flow)
         return None
@@ -2105,7 +2115,7 @@ class FragmentReassembler:
             verdict == "duplicate"
             and flow.policy is OverlapPolicy.LINUX_DISCARD
         ):
-            return _Plan(first, last, overlapped, event, False)
+            return _Plan(first, last, overlapped, event, False, dropped=True)
         pieces = _merged(overlapped, winners, source, data)
         return _Plan(first, last, pieces, event, False)
 
@@ -2163,7 +2173,9 @@ class FragmentReassembler:
             verdict == "duplicate"
             and flow.policy is OverlapPolicy.LINUX_DISCARD
         )
-        if linux_duplicate or not data:
+        if linux_duplicate:
+            return _Plan(first, first, [], None, False, dropped=True)
+        if not data:
             return _Plan(first, first, [], None, False)
         piece = _Piece(source.start, data, source)
         return _Plan(first, first, [piece], None, False)
@@ -2196,6 +2208,11 @@ class FragmentReassembler:
         other_spans: list[Span] = []
 
         def both(a: int, b: int) -> None:
+            """Add the arriving bytes of ``[a, b)`` to both versions.
+
+            :param a: The first byte, as a payload offset.
+            :param b: One past the last.
+            """
             chunk = data[a - start : b - start]
             kept.extend(chunk)
             other.extend(chunk)

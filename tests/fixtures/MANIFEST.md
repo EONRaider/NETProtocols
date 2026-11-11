@@ -1437,7 +1437,7 @@ bytes of IP payload; their SHA-256 are recorded in
 `ipv6.reassembled.data`: frames 2 and 4, 2008 bytes each), so the
 tests need no tshark.
 
-`linux_overlaps.pcap` (43 frames) is **script-built fragments and the
+`linux_overlaps.pcap` (50 frames) is **script-built fragments and the
 kernel's answers**: the script's python3 program builds ICMP echo
 requests from 10.9.79.2 to 10.9.79.1, cuts each into IPv4 fragments
 (TTL 64, header checksums computed) and sends every fragment as a whole
@@ -1449,7 +1449,7 @@ Linux 6.18 (with commits 7969e5c40dfd, ade446403bfb and 0ff89efb5246)
 does, counting each outcome in the server netns's reassembly
 counters, and answered each datagram it reassembled with an echo reply
 built from the bytes it kept, when those bytes made a valid echo
-request. Five trains, 0.05 s between fragments and 0.5 s between
+request. Seven trains, 0.05 s between fragments and 0.5 s between
 trains, each fragment's offset and length in bytes:
 
 | Train | Frames | IP ID | Echo ID | Fragments | Kernel |
@@ -1459,8 +1459,10 @@ trains, each fragment's offset and length in bytes:
 | 3 | 31-34 | `0x7903` | `0x4f03` | 0+24, 24+24, then 8+16 whose last 8 bytes are `0xee`, then 48+16 (last) | the 8+16 fragment dropped as a duplicate inside the run 0-48, the held bytes kept, reply frame 35 |
 | 4 | 36-38 | `0x7904` | `0x4f04` | 0+24, 16+24 with the same bytes where they overlap, 40+24 (last) | discarded at 16+24, no reply |
 | 5 | 39-41 | `0x7905` | `0x4f05` | 0+24, 0+24 again, 24+24 (last) | the duplicate dropped, reply frame 42 |
+| 6 | 43-44 | `0x7906` | `0x4f06` | 0+16, then 8+8 (last), a duplicate inside the run 0-16 | the duplicate dropped, its end recorded but the datagram not completed: Linux checks for completion only after a fragment it inserts; no reply, and ReasmOKs unchanged |
+| 7 | 45-48 | `0x7907` | `0x4f07` | 0+16, 24+8, 24+8 again (last), then 16+8 | the duplicate last fragment dropped, its end recorded; 16+8 fills the hole and completes the datagram, reply frame 49 |
 
-Frames 30, 35 and 42 are the server's echo replies, outbound, their
+Frames 30, 35, 42 and 49 are the server's echo replies, outbound, their
 ICMP checksums computed by the kernel. Around each train the script
 read the server netns's `/proc/net/snmp` (`Ip:` ReasmReqds, ReasmOKs,
 ReasmFails) and `/proc/net/netstat` (`IpExt:` ReasmOverlaps), and wrote
@@ -1475,18 +1477,21 @@ it, is the record:
 | 3 | 4 | 1 | 0 | 0 |
 | 4 | 3 | 0 | 1 | 1 |
 | 5 | 3 | 1 | 0 | 0 |
+| 6 | 2 | 0 | 0 | 0 |
+| 7 | 4 | 1 | 0 | 0 |
 
 The committed `linux_overlaps.pcap` is from the run that recorded these
-counters, later the same day than `ipv4_udp_fragments.pcap`, which is
-from the script's first run; the fragments of the two runs of
-`linux_overlaps.pcap` are byte-identical, and only the IP ID and header
-checksum of the three replies differ. `tests/test_reassembly.py`
+counters and trains 6 and 7, later the same day than
+`ipv4_udp_fragments.pcap`, which is from the script's first run; the
+fragments of trains 1 to 5 are byte-identical in every run of
+`linux_overlaps.pcap`, and only the IP ID and header checksum of their
+three replies differ. `tests/test_reassembly.py`
 checks that `OverlapPolicy.LINUX_DISCARD` completes as many datagrams
 per train as ReasmOKs counted, discards on overlap as many as
-ReasmOverlaps counted (`KERNEL_COUNTERS`), and completes trains 2, 3
-and 5 with the bytes each reply echoes. tshark 4.2.2 reassembles every
+ReasmOverlaps counted (`KERNEL_COUNTERS`), and completes trains 2, 3,
+5 and 7 with the bytes each reply echoes. tshark 4.2.2 reassembles every
 train, flagging `ip.fragment.overlap.conflict` in trains 1, 2 and 3,
-and an overlap without a conflict in trains 4 and 5.
+and an overlap without a conflict in trains 4 to 7.
 
 ## Provenance note
 

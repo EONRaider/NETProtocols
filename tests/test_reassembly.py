@@ -756,6 +756,51 @@ class TestOverlaps:
         )
         assert [type(event) for event in events] == [Retransmission, Datagram]
 
+    def test_linux_discard_duplicate_last_fragment_completes_nothing(
+        self,
+    ) -> None:
+        """Linux records the end a duplicate last fragment declares but
+        drops it before checking for completion (ip_frag_queue), so the
+        datagram does not complete, and it stays held."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.LINUX_DISCARD)
+        assert feed(reassembler, v4(1, 0, b"a" * 16), ref=0) == ()
+        events = feed(reassembler, v4(1, 8, b"a" * 8, more=False), ref=1)
+        assert [type(event) for event in events] == [Retransmission]
+        assert reassembler.usage.flows == 1
+        (expired,) = reassembler.close()
+        assert isinstance(expired, Expired)
+        assert expired.missing == ()
+
+    def test_linux_discard_recorded_end_completes_on_a_later_fragment(
+        self,
+    ) -> None:
+        """The end a dropped duplicate declares stands: the fragment that
+        fills the last hole completes the datagram."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.LINUX_DISCARD)
+        frames = [
+            v4(2, 0, b"a" * 16),
+            v4(2, 24, b"c" * 8),
+            v4(2, 24, b"c" * 8, more=False),
+            v4(2, 16, b"b" * 8),
+        ]
+        events = feed_all(reassembler, frames)
+        assert [type(event) for event in events] == [Retransmission, Datagram]
+        (datagram,) = only(events, Datagram)
+        assert datagram.completing_ref == 3
+        assert payload(datagram) == b"a" * 16 + b"b" * 8 + b"c" * 8
+
+    def test_discard_duplicate_last_fragment_completes(self) -> None:
+        """Under discard, the RFC's rule, a duplicate is no bar to
+        completion."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.DISCARD)
+        frames = [
+            v4(1, 0, b"a" * 8),
+            v4(1, 8, b"b" * 8),
+            v4(1, 8, b"b" * 8, more=False),
+        ]
+        events = feed_all(reassembler, frames)
+        assert [type(event) for event in events] == [Retransmission, Datagram]
+
     def test_linux_discard_runs_follow_arrival_order(self) -> None:
         """Linux extends a run only for a fragment appended past the
         last one: a fragment inserted before it starts a run of its own,
@@ -1620,6 +1665,8 @@ KERNEL_COUNTERS = {
     0x7903: (1, 0),
     0x7904: (0, 1),
     0x7905: (1, 0),
+    0x7906: (0, 0),
+    0x7907: (1, 0),
 }
 
 
@@ -1721,7 +1768,7 @@ class TestRealCaptures:
             assert request.identifier is not None
             completed[request.identifier] = request.body
         assert completed == replies
-        assert set(replies) == {0x4F02, 0x4F03, 0x4F05}
+        assert set(replies) == {0x4F02, 0x4F03, 0x4F05, 0x4F07}
         overlaps = only(events, Overlap)
         assert [(o.flow.identification, o.resolved) for o in overlaps] == [  # type: ignore[union-attr]
             (0x7901, False),
@@ -1738,6 +1785,7 @@ class TestRealCaptures:
         assert {event.flow.identification for event in closed} == {
             0x7901,
             0x7904,
+            0x7906,
         }  # type: ignore[union-attr]
 
     @pytest.mark.parametrize("policy", list(OverlapPolicy))

@@ -41,9 +41,10 @@
 # Each capture is checked by scripts/check_fixtures.py, then by tshark,
 # which must report three datagrams reassembled in
 # ipv4_udp_fragments.pcap, and echo replies in linux_overlaps.pcap for
-# exactly the trains the kernel is expected to reassemble, 2, 3 and 5,
-# whose ReasmOKs must each rise by 1, while trains 1 and 4 leave
-# ReasmOKs unchanged and raise ReasmOverlaps.
+# exactly the trains the kernel is expected to reassemble, 2, 3, 5 and
+# 7, whose ReasmOKs must each rise by 1, while trains 1 and 4 leave
+# ReasmOKs unchanged and raise ReasmOverlaps, and train 6 leaves both
+# unchanged.
 # Any other outcome stops the script with an error, and whatever was
 # captured by then is left in the staging directory for inspection and
 # must not be folded in.
@@ -253,6 +254,15 @@ TRAINS = [
     train(echo(0x4F04, bytes(range(56))), 0x7904, [(0, 24), (16, 40), (40, 64)], 64),
     # 5, ID 0x7905: an exact duplicate of the first fragment.
     train(echo(0x4F05, bytes(range(40))), 0x7905, [(0, 24), (0, 24), (24, 48)], 48),
+    # 6, ID 0x7906: the whole datagram with MF set, then its second half
+    # as the last fragment, a duplicate inside the run.
+    train(echo(0x4F06, bytes(range(8))), 0x7906, [(0, 16)], 0)
+    + train(echo(0x4F06, bytes(range(8))), 0x7906, [(8, 16)], 16),
+    # 7, ID 0x7907: as 6 with a hole at 16-24, then the fragment that
+    # fills it.
+    train(echo(0x4F07, bytes(range(24))), 0x7907, [(0, 16), (24, 32)], 0)
+    + train(echo(0x4F07, bytes(range(24))), 0x7907, [(24, 32)], 32)
+    + train(echo(0x4F07, bytes(range(24))), 0x7907, [(16, 24)], 0),
 ]
 with socket.socket(socket.AF_PACKET, socket.SOCK_RAW) as sock:
     sock.bind((interface, 0))
@@ -272,7 +282,7 @@ print(ip["ReasmReqds"], ip["ReasmOKs"], ip["ReasmFails"], ext["ReasmOverlaps"])'
 }
 COUNTERS="$OUT/linux_overlaps.counters"
 printf 'train\tReasmReqds\tReasmOKs\tReasmFails\tReasmOverlaps\n' >"$COUNTERS"
-for train in 1 2 3 4 5; do
+for train in 1 2 3 4 5 6 7; do
     read -r reqds0 oks0 fails0 overlaps0 < <(reasm_counters)
     ip netns exec "$NSC" python3 -I -c "$SENDER" "$C" "$MAC_C" "$MAC_S" "$train"
     sleep 0.5
@@ -295,15 +305,15 @@ found=$(tshark -2 -r "$OUT/ipv4_udp_fragments.pcap" -T fields \
     fail "ipv4_udp_fragments.pcap: tshark reassembled $found datagrams, not 3."
 replies=$(tshark -r "$OUT/linux_overlaps.pcap" -Y 'icmp.type == 0' \
     -T fields -e icmp.ident 2>/dev/null | tr '\n' ' ')
-[[ $replies == "20226 20227 20229 " ]] ||
+[[ $replies == "20226 20227 20229 20231 " ]] ||
     fail "linux_overlaps.pcap: echo replies for identifiers '$replies'."
 echo "[*] Checking the kernel's reassembly counters..."
 cat "$COUNTERS"
 oks=$(awk 'NR > 1 {printf "%s ", $3}' "$COUNTERS")
-[[ $oks == "0 1 1 0 1 " ]] ||
-    fail "linux_overlaps.counters: ReasmOKs rose by '$oks', not 0 1 1 0 1."
+[[ $oks == "0 1 1 0 1 0 1 " ]] ||
+    fail "linux_overlaps.counters: ReasmOKs rose by '$oks', not 0 1 1 0 1 0 1."
 overlaps=$(awk 'NR > 1 {printf "%s ", ($5 > 0)}' "$COUNTERS")
-[[ $overlaps == "1 1 0 1 0 " ]] ||
+[[ $overlaps == "1 1 0 1 0 0 0 " ]] ||
     fail "linux_overlaps.counters: ReasmOverlaps rose for '$overlaps'."
 
 if [[ -n ${SUDO_USER:-} ]]; then

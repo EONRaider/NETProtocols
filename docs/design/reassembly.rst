@@ -899,7 +899,13 @@ same declared range as a held fragment and equal bytes wherever both
 were captured, and it supplies the bytes the held fragment's capture
 lacks. Under ``linux-discard`` a fragment inside one run is a duplicate
 whatever its range within the run, and it is dropped, as Linux drops
-it: the held bytes stand, and none of its bytes is stored.
+it: the held bytes stand, and none of its bytes is stored. Linux
+records the end a dropped last fragment declares (``ip_frag_queue``
+sets ``INET_FRAG_LAST_IN`` and the length before
+``inet_frag_queue_insert`` returns ``IPFRAG_DUP``) but checks for
+completion only after a fragment it inserts, so the duplicate completes
+nothing; a later fragment that fills a remaining hole completes the
+datagram.
 
 3.4 Named policies
 ~~~~~~~~~~~~~~~~~~
