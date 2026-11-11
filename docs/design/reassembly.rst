@@ -1974,7 +1974,7 @@ and stay as they are where it does not.
 ~~~~~~~~~~~~~~~~~~~
 
 Every line ``grep -n -i reassembl ARCHITECTURE.md`` finds at master
-``96eee3d``:
+``123741d``:
 
 .. list-table::
    :header-rows: 1
@@ -1983,32 +1983,32 @@ Every line ``grep -n -i reassembl ARCHITECTURE.md`` finds at master
    * - Line
      - Topic
      - Change
-   * - 785
+   * - 787
      - SCTP user messages
      - SCTP reassembly stays the caller's; only the comparison "as for
        HTTP over TCP" changes, to say that a TCP stream can be
        reassembled by ``netprotocols.reassembly`` and an SCTP message
        cannot.
-   * - 1015
+   * - 1017
      - TFTP transfer tracking
      - Tracking the transfer stays the caller's; "as reassembly is for
        ``HTTP`` and ``BGP``" becomes "as reassembling the stream is for
        ``HTTP`` and ``BGP``, unless ``netprotocols.reassembly`` does it".
-   * - 1196-1197
+   * - 1198-1199
      - BGP messages across segments
      - "the caller's, or ``netprotocols.reassembly``'s".
-   * - 1273-1274
+   * - 1275-1276
      - TLS ClientHello spanning segments
      - The SNI comes from reassembling the stream, "yourself or with
        ``netprotocols.reassembly``", and ``TLS.decode()`` on that.
-   * - 1314
+   * - 1316
      - TLS handshake messages across records
      - Unchanged: record-layer reassembly is out of scope (section 4.9).
-   * - 1339
+   * - 1341
      - HTTP
      - "Reassemble the connection, with ``netprotocols.reassembly`` or
        your own, and call ``HTTP.decode()`` on its bytes."
-   * - 1412-1413
+   * - 1414-1415
      - Checksums of a message reassembled from IPv6 fragments
      - Add that a ``Datagram``'s IPv6 header has a Payload Length that
        covers the reassembled datagram, so it serves as ``ip``.
@@ -2041,8 +2041,11 @@ configuration, not traffic), and a ``reassembly.py`` entry in "Layout map".
 - Docstrings that say the same: ``layer7/http.py`` lines 7-8,
   ``layer7/bgp.py`` 66, ``layer7/stun.py`` 130, ``layer7/tls.py`` 75,
   113, 116 and 601, and ``checksum.py`` 74-75 and 738-739.
-  ``layer7/tftp.py`` 76 and ``layer4/sctp.py`` 62 and 531 stay:
-  transfer tracking and SCTP reassembly are not the module's.
+  ``layer7/tftp.py`` 76 and ``layer4/sctp.py`` 62 and 537 stay:
+  transfer tracking and SCTP reassembly are not the module's; so do
+  ``layer7/bgp.py`` 68, which says what the decoder does without
+  reassembly, and ``layer7/tls.py`` 227, on handshake messages across
+  records (section 4.9).
 
 6.3 docs/CLAIMS.md
 ~~~~~~~~~~~~~~~~~~
