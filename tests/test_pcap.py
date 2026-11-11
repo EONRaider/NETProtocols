@@ -411,6 +411,13 @@ _LO_IF_NAME = 204
 _LO_IF_DESCRIPTION = 212
 _VETH_IF_NAME = 296
 
+#: lo's last option, if_os; the zero padding after its value, then
+#: opt_endofopt; and lo's options end, where the padding and
+#: opt_endofopt end.
+_LO_IF_OS = 244
+_LO_IF_OS_PADDING = 269
+_LO_OPTIONS_END = 276
+
 _LO_FRAMES = (0, 1, 4, 5)
 _VETH_FRAMES = (2, 3, 6, 7)
 
@@ -444,6 +451,11 @@ class TestReadPacketsAgainstTheRealCapture:
         assert data[_VETH_IF_NAME : _VETH_IF_NAME + 12] == (
             b"\x02\x00\x06\x00npifa0\0\0"
         )
+        assert _IDB_LO.stop - 4 == _LO_OPTIONS_END
+        assert data[_LO_IF_OS:_LO_OPTIONS_END] == (
+            b"\x0c\x00\x15\x00Linux 6.18.44-fc-v378" + b"\0" * 7
+        )
+        assert _LO_IF_OS_PADDING == _LO_IF_OS + 4 + 21
 
     def test_each_frame_names_its_interface(self):
         packets = list(read_packets(INTERFACES_PCAPNG))
@@ -486,6 +498,14 @@ class TestReadPacketsAgainstTheRealCapture:
         assert (interface_id, interface_name) == (0, "lo")
         assert type(data) is bytes
 
+    def test_a_memoryview_is_copied_when_iteration_starts(self):
+        # Edit, made between the call and the first next(): lo's if_name
+        # value "lo" becomes "LO" in the bytearray the memoryview is over.
+        mutable = bytearray(INTERFACES_PCAPNG)
+        packets = read_packets(memoryview(mutable))
+        mutable[_LO_IF_NAME + 4 : _LO_IF_NAME + 6] = b"LO"
+        assert next(packets).interface_name == "LO"
+
     def test_accepts_a_memoryview(self):
         assert list(read_packets(memoryview(INTERFACES_PCAPNG))) == list(
             read_packets(INTERFACES_PCAPNG)
@@ -518,7 +538,11 @@ class TestReadPacketsAgainstTheRealCapture:
 
 
 class TestReadPacketsIfNameOptions:
-    """Each input here is the real capture with one option edited."""
+    """Inputs are the real capture with its option bytes edited.
+
+    Each edit is labelled where it is made. The one exception, a
+    hand-built capture, says so in its name.
+    """
 
     def test_no_if_name_reads_none(self):
         # Edit: lo's if_name option code 2 becomes 1, opt_comment.
@@ -568,11 +592,70 @@ class TestReadPacketsIfNameOptions:
         assert [names[i] for i in _LO_FRAMES] == ["Loopback"] * 4
 
     def test_an_if_name_is_cut_at_the_end_of_the_options(self):
-        # Edit: lo's if_name length 2 becomes 0x400, past the block.
-        buffer = _edit_options(_LO_IF_NAME + 2, b"\x00\x04")
-        options_end = _IDB_LO.stop - 4
-        expected = INTERFACES_PCAPNG[_LO_IF_NAME + 4 : options_end].decode()
-        assert _names(buffer)[0] == expected
+        # Edits: lo's if_name becomes opt_comment (code 1); its if_os
+        # becomes an if_name of length 0x400, past the block; and the
+        # zero padding and opt_endofopt after the if_os value, up to
+        # the end of the options, become "!".
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        buffer = (
+            buffer[:_LO_IF_OS]
+            + b"\x02\x00\x00\x04"
+            + buffer[_LO_IF_OS + 4 : _LO_IF_OS_PADDING]
+            + b"!" * (_LO_OPTIONS_END - _LO_IF_OS_PADDING)
+            + buffer[_LO_OPTIONS_END:]
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [
+            "Linux 6.18.44-fc-v378!!!!!!!"
+        ] * 4
+
+    def test_an_if_name_ends_at_its_first_zero_byte(self):
+        # Edit: lo's if_name length 2 becomes 4, so its value is
+        # "lo" and the two zero padding bytes after it.
+        buffer = _edit_options(_LO_IF_NAME + 2, b"\x04\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["lo"] * 4
+
+    def test_bytes_after_an_if_names_zero_byte_are_ignored(self):
+        # Edits: lo's if_name length 2 becomes 4, and its last value
+        # byte, a zero padding byte, becomes ff, not UTF-8.
+        buffer = _edit_options(_LO_IF_NAME + 2, b"\x04\x00")
+        buffer = buffer[: _LO_IF_NAME + 7] + b"\xff" + buffer[_LO_IF_NAME + 8 :]
+        assert buffer[_LO_IF_NAME + 4 : _LO_IF_NAME + 8] == b"lo\x00\xff"
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["lo"] * 4
+
+    def test_an_if_name_of_only_zero_bytes_reads_none(self):
+        # Edit: lo's if_name value "lo" becomes two zero bytes.
+        buffer = _edit_options(_LO_IF_NAME + 4, b"\x00\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
+
+    def test_an_if_name_of_only_zero_bytes_is_passed_over(self):
+        # Edits: lo's if_name value "lo" becomes two zero bytes, and
+        # its if_description becomes if_name (code 2).
+        buffer = _edit_options(_LO_IF_NAME + 4, b"\x00\x00")
+        buffer = buffer[:_LO_IF_DESCRIPTION] + b"\x02\x00" + buffer[214:]
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["Loopback"] * 4
+
+    def test_an_if_name_whose_value_starts_at_the_options_end_reads_none(
+        self,
+    ):
+        # Edits: lo's if_name becomes opt_comment (code 1), and its
+        # opt_endofopt, the last 4 option bytes, becomes an if_name
+        # header of length 1, so the value would start at the end of
+        # the options.
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        buffer = (
+            buffer[: _LO_OPTIONS_END - 4]
+            + b"\x02\x00\x01\x00"
+            + buffer[_LO_OPTIONS_END:]
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
 
     def test_a_non_utf8_if_name_raises_at_the_first_frame_naming_it(self):
         # Edit: npifa0's if_name bytes "np" become ff fe, not UTF-8.

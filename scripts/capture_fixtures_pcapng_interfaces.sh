@@ -27,9 +27,13 @@
 # link type Ethernet and named lo and npifa0 in that order, and eight
 # Enhanced Packet Blocks whose interface IDs, IPv4 addresses, ICMP types
 # and sequence numbers are the ones above, each IPv4 header and ICMP
-# checksum verifying. The script stops if anything differs.
-# scripts/check_fixtures.py reads classic pcap only, so it does not
-# read this file.
+# checksum verifying. scripts/check_fixtures.py reads classic pcap
+# only, so it does not read this file.
+#
+# Every echo must be answered, and the capture must hold exactly the
+# blocks and frames above, or the script stops with an error. Whatever
+# was captured by then is left in tests/fixtures/staging for inspection
+# and must not be folded in.
 
 set -euo pipefail
 

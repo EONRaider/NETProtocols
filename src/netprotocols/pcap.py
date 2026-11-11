@@ -100,10 +100,11 @@ class CapturedPacket(NamedTuple):
         ``None`` for a frame from a pcapng Simple Packet Block, which
         records no interface, and for a classic-pcap record.
     :param interface_name: That Interface Description Block's
-        ``if_name`` option, decoded as UTF-8, or ``None`` when the
-        block has no ``if_name`` or an empty one. When the block holds
-        more than one non-empty ``if_name``, the first is used.
-        ``None`` whenever ``interface_id`` is ``None``.
+        ``if_name`` option, up to its first zero byte, decoded as
+        UTF-8, or ``None`` when the block has no ``if_name`` or an
+        empty one. When the block holds more than one non-empty
+        ``if_name``, the first is used. ``None`` whenever
+        ``interface_id`` is ``None``.
     """
 
     timestamp: int
@@ -251,8 +252,8 @@ class _Interface(NamedTuple):
     :param interface_id: The block's index within its section, the
         Interface ID an Enhanced Packet Block names it by.
     :param tsresol: The raw ``if_tsresol`` byte.
-    :param name: The first non-empty ``if_name`` value, undecoded, or
-        ``None``.
+    :param name: The first non-empty ``if_name`` value, up to its
+        first zero byte, undecoded, or ``None``.
     :param name_offset: The buffer offset of ``name``'s first byte, or
         of the block when ``name`` is ``None``.
     """
@@ -433,10 +434,11 @@ def _idb_interface(
     """Return what an Interface Description Block declares.
 
     The first ``if_tsresol`` and the first non-empty ``if_name`` are
-    read from the block's options list, each ignored when its length
-    is 0. The format default resolution is used when no ``if_tsresol``
-    is present (draft-ietf-opsawg-pcapng §4.2). An ``if_name`` value
-    is cut at the end of the options list.
+    read from the block's options list; an ``if_tsresol`` of length 0
+    is ignored. The format default resolution is used when no
+    ``if_tsresol`` is present (draft-ietf-opsawg-pcapng §4.2). An
+    ``if_name`` value is cut at the end of the options list and then
+    at its first zero byte; one with no bytes left is ignored.
     """
     # Block Type(4) + Block Total Length(4) + LinkType(2) + Reserved(2)
     # + SnapLen(4) = 16 bytes of fixed fields before any options.
@@ -453,9 +455,12 @@ def _idb_interface(
         value_start = cursor + 4
         if code == _OPT_IF_TSRESOL and length >= 1 and tsresol is None:
             tsresol = data[value_start]
-        elif code == _OPT_IF_NAME and length >= 1 and name is None:
-            name = data[value_start : min(value_start + length, options_end)]
-            name_offset = value_start
+        elif code == _OPT_IF_NAME and name is None:
+            value = data[value_start : min(value_start + length, options_end)]
+            value = value.split(b"\x00", 1)[0]
+            if value:
+                name = value
+                name_offset = value_start
         cursor = value_start + length + (-length % 4)
     return _Interface(
         interface_id=index,
@@ -626,7 +631,8 @@ def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
     The format is detected as :func:`read_captures` detects it, and the
     frames, timestamps and errors are the ones :func:`read_captures`
     gives, with one more error: a pcapng Enhanced Packet Block that
-    references an interface whose ``if_name`` is not valid UTF-8.
+    references an interface whose ``if_name``, up to its first zero
+    byte, is not valid UTF-8.
 
     :param buffer: The whole capture, starting at its magic number.
     :raises MalformedCaptureError: if the buffer is too short to hold a
@@ -634,7 +640,8 @@ def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
         the call itself; and during iteration, for every error
         :func:`read_pcap` or :func:`read_pcapng` raises, or if an
         Enhanced Packet Block references an Interface Description Block
-        whose ``if_name`` is not valid UTF-8.
+        whose ``if_name``, up to its first zero byte, is not valid
+        UTF-8.
     """
     if _is_pcapng(buffer):
         return _read_pcapng_packets(buffer)
@@ -644,6 +651,11 @@ def read_packets(buffer: bytes | memoryview) -> Iterator[CapturedPacket]:
 def _read_pcap_packets(
     buffer: bytes | memoryview,
 ) -> Iterator[CapturedPacket]:
+    """Read a classic pcap capture as :class:`CapturedPacket`.
+
+    :param buffer: The whole capture, starting at its magic number.
+    :raises MalformedCaptureError: as :func:`read_pcap` raises.
+    """
     for timestamp, data in read_pcap(buffer):
         yield CapturedPacket(timestamp, data, None, None)
 
@@ -651,6 +663,14 @@ def _read_pcap_packets(
 def _read_pcapng_packets(
     buffer: bytes | memoryview,
 ) -> Iterator[CapturedPacket]:
+    """Read a pcapng capture as :class:`CapturedPacket`.
+
+    :param buffer: The whole capture, starting at its first Section
+        Header Block.
+    :raises MalformedCaptureError: as :func:`read_pcapng` raises, or if
+        an Enhanced Packet Block references an Interface Description
+        Block whose ``if_name`` is not valid UTF-8.
+    """
     interface_cell: list[_Interface | None] = [None]
     for timestamp, data in _read_pcapng_blocks(
         _pcapng_data(buffer), interface_cell
