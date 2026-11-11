@@ -95,7 +95,7 @@ jobs:
         run: >-
           uv run --frozen pytest -o addopts="" -q
           tests/test_conftest.py tests/test_cdp.py tests/test_lldp.py
-          tests/test_sctp.py tests/test_stp.py
+          tests/test_pcap.py tests/test_sctp.py tests/test_stp.py
 
   # Scans the dev dependency group (the only third-party code CI itself
   # installs) for known vulnerabilities. --no-emit-project leaves out
