@@ -431,7 +431,7 @@ ProtocolError
 │   ├── InvalidMACAddressError
 │   ├── InvalidIPv4AddressError
 │   └── InvalidManufacturerCodeError
-├── MalformedCaptureError    buffer is not a well-formed pcap or pcapng capture
+├── MalformedCaptureError    buffer or stream is not a well-formed pcap or pcapng capture
 ├── MaxDepthExceededError    a frame's chain exceeded decode_frame's max_depth
 ├── UnknownTableError        registration or lookup named no such table
 ├── InvalidRegistryKeyError  key outside what its table's wire field can carry
@@ -457,7 +457,9 @@ except ProtocolError as e:
 `MalformedCaptureError` and the registry errors describe a capture
 file or a registration, not a protocol, and leave `protocol` unset.
 
-`offset` is relative to whatever buffer the error was found in. An
+`offset` is relative to whatever buffer the error was found in. A
+`MalformedCaptureError` from a capture read as a stream counts its
+`offset` from the stream's position when reading started. An
 error raised by `decode()` is relative to that call's `data` argument,
 whatever `field` names: OSPF's framing errors name `field="body"` (or
 `"auth_trailer"`), an LSA body's among them (a Router-LSA whose links
@@ -1608,7 +1610,10 @@ src/netprotocols/
 │                   across frames; imported as netprotocols.reassembly,
 │                   not re-exported by the package
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
-│                   pcap and pcapng readers, from bytes not filenames;
+│                   pcap and pcapng readers, from a buffer or a binary
+│                   stream, not a filename; a buffer is copied once,
+│                   a stream read one record or block at a time, both
+│                   through one parsing path over a window of bytes;
 │                   read_packets(): the same frames with the pcapng
 │                   interface each was captured on
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
