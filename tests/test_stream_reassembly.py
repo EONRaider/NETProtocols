@@ -2210,10 +2210,14 @@ class TestProperties:
         rng: object,
     ) -> None:
         isn, payload, pieces = drawn
-        differing = [
-            (start % len(payload), bytes(byte ^ 0xFF for byte in data))
-            for start, data in noise
-        ]
+        differing = []
+        for start, data in noise:
+            first = start % len(payload)
+            versions = bytes(
+                payload[index % len(payload)] ^ 0xFF
+                for index in range(first, first + len(data))
+            )
+            differing.append((first, versions))
         mixed = pieces + differing
         rng.shuffle(mixed)  # type: ignore[attr-defined]
         reassembler = StreamReassembler(policy=policy)
