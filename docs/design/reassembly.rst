@@ -136,6 +136,8 @@ event types:
             policy: OverlapPolicy = OverlapPolicy.FIRST,
             targets: Mapping[str, OverlapPolicy] | None = None,
             checksums: ChecksumMode = ChecksumMode.AUTO,
+            # Only if decision 16 is adopted:
+            local: Iterable[str] | None = None,
         ) -> None: ...
 
         def feed(
@@ -154,8 +156,11 @@ event types:
         @property
         def usage(self) -> Usage: ...
 
-``StreamReassembler`` has the same four methods, takes
-``StreamBounds`` and returns ``StreamEvent``.
+``StreamReassembler`` has the same four methods and the same
+arguments, takes ``StreamBounds`` and returns ``StreamEvent``.
+``StreamBounds`` holds the stream timeouts, among them
+``ack_gap_grace`` if decision 15 is adopted and ``rst_grace`` if
+decision 12's option (a) is (section 2.5).
 
 - ``feed`` takes one frame and returns, in a fixed order, every event
   that frame caused: first the expiries its timestamp triggers in
@@ -285,12 +290,14 @@ the fragment that pushed its own datagram past ``max_flow_bytes`` or
 ``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
 ``Anomaly``. It is ``None`` for every event a flush produces: an
 expiry, the eviction of a flow to make room (``max_total_bytes``,
-``max_flows``), ``advance`` and ``close``. A ``feed`` that triggers an
-expiry or eviction in another flow therefore returns that flow's
-events with ``None``, never with its own ref. A message decoded from a
-direction's runs (section 4.8) takes the ``completing_ref`` of the run
-that holds its last byte; when that is ``None``, no frame completed
-the message, and its frames are still the spans of its runs.
+``max_flows``), ``advance`` and ``close``; the exception is the flush
+a SYN confirms under decision 12 (b), which carries the SYN's ref. A
+``feed`` that triggers an expiry or eviction in another flow therefore
+returns that flow's events with ``None``, never with its own ref. A
+message decoded from a direction's runs (section 4.8) takes the
+``completing_ref`` of the run that holds its last byte; when that is
+``None``, no frame completed the message, and its frames are still the
+spans of its runs.
 
 The event types:
 
@@ -657,6 +664,11 @@ write them.
        (``IP_FRAG_TIME`` in
        `include/net/ip.h <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/net/ip.h>`__)
        and 60 for IPv6; see the decision below.
+   * - ``local`` (constructor argument)
+     - ``None``
+     - Only if decision 16 is adopted. The capture host's addresses,
+       from which the offload checksum pattern is accepted; ``None``
+       accepts it from any source (section 5.1).
 
 .. list-table:: ``StreamBounds`` defaults
    :header-rows: 1
@@ -716,6 +728,19 @@ write them.
    * - age timeout
      - none
      - See below.
+   * - ``ack_gap_grace``
+     - 1 s
+     - Only if decision 15 is adopted. How long a hole must stay open
+       after the first ACK past it before it is declared a gap
+       (section 4.7).
+   * - ``rst_grace``
+     - none proposed
+     - Only if decision 12's option (a) is adopted, which is not the
+       recommendation. How long ``StreamEnd(RST)`` is deferred
+       (section 4.4).
+   * - ``local`` (constructor argument)
+     - ``None``
+     - Only if decision 16 is adopted; as for fragments.
 
 The Suricata figures are the defaults in the
 `suricata.yaml.in <https://raw.githubusercontent.com/OISF/suricata/master/suricata.yaml.in>`__
@@ -1387,15 +1412,16 @@ Three terms hold under every option below:
     mid-stream (section 4.2), with offsets from 0 and
     ``Anomaly(MIDSTREAM)``, as after any expiry.
   - *A SYN while the end is pending* whose ISN differs from the
-    direction's is a reconnection on the same tuple, which NAT, load
-    tests and BGP restarts produce within seconds of an RST. It
-    confirms the RST at once: held data is flushed, ``StreamEnd(RST)``
-    is emitted for both directions with the SYN's frame as
-    ``completing_ref``, and the SYN starts a new connection under the
-    key, with offsets from 0 after its ISN and
+    direction's (for a direction picked up mid-stream, which has no
+    known ISN, any SYN counts as one with a new ISN) is a reconnection
+    on the same tuple, which NAT, load tests and BGP restarts produce
+    within seconds of an RST. It confirms the RST at once: held data is
+    flushed, ``StreamEnd(RST)`` is emitted for both directions with the
+    SYN's frame as ``completing_ref``, and the SYN starts a new
+    connection under the key, with offsets from 0 after its ISN and
     ``Anomaly(SYN_AFTER_RST)``. Without a pending RST, such a SYN after
-    data is still ignored with ``ISN_CHANGED`` (section 4.4). A SYN
-    with the old ISN is a retransmission and changes nothing.
+    data is still ignored with ``ISN_CHANGED`` (section 4.4). A SYN with
+    the old ISN is a retransmission and changes nothing.
 
 - *(c) End now*: contiguous data is delivered, held data is flushed as
   for ``close()`` (``Gap`` with reason ``FLUSH``), and
@@ -1767,7 +1793,10 @@ here. ``ChecksumMode`` would have:
   the sum without the TCP length, with an IPv4 Total Length of 0 under
   LSOv2; with IPv4 header checksum offload it leaves that checksum 0.
   A length-0 segment is used
-  only when its checksum matches one of these patterns. There is no
+  only when its checksum matches one of these patterns, computed for
+  Linux, FreeBSD and Windows checksum offload over the segment's
+  captured length, since its IP header gives none, and for Windows
+  LSO without any length, as that pattern has none. There is no
   per-sender state to flip. The IPv4 header checksum is judged the
   same way: Linux computes it itself, so only Windows' 0 is a pattern.
   Anyone can compute these sums, so against an attacker this option is
@@ -2266,9 +2295,11 @@ Follow-ups, filed when wanted: per-OS TCP overlap policies with
 reference vectors, ACK-gated delivery, PAWS, and ``bsd-right``.
 
 A decision of :ref:`reassembly-decisions` that adds a name
-(``linux-discard``, ``ChecksumMode.AUTO``, ``GapReason.ACKED``,
-``LateData``, ``RST_RECEIVED``, per-target fragment timeouts) ships,
-if accepted, in the issue of its step, with its tests.
+(``linux-discard``, ``ChecksumMode.AUTO``, ``local``,
+``GapReason.ACKED``, ``ack_gap_grace``, ``LateData``, and the anomaly
+kinds ``RST_RECEIVED``, ``SYN_AFTER_RST``, ``ACK_BEYOND_DATA`` and
+``CHECKSUM_OFFLOAD``, per-target fragment timeouts) ships, if
+accepted, in the issue of its step, with its tests.
 
 
 .. _reassembly-decisions:
