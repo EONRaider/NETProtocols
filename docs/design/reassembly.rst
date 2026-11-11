@@ -1974,7 +1974,7 @@ and stay as they are where it does not.
 ~~~~~~~~~~~~~~~~~~~
 
 Every line ``grep -n -i reassembl ARCHITECTURE.md`` finds at master
-``123741d``:
+``b729e0e``:
 
 .. list-table::
    :header-rows: 1
@@ -2025,7 +2025,7 @@ configuration, not traffic), and a ``reassembly.py`` entry in "Layout map".
 
 - README line 194 (BGP, "no reassembly"), 196 (TLS, "read from a
   reassembled stream"), 197 (HTTP, "from a buffer you reassembled")
-  and 343 ("Decoding HTTP": "which you reassemble"): each names
+  and 350 ("Decoding HTTP": "which you reassemble"): each names
   ``netprotocols.reassembly`` as one way to get the stream. A new
   section, "Reassembling fragments and streams", holds the loop of
   section 1.6 and the bounds table.
