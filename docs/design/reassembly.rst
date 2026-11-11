@@ -460,7 +460,11 @@ documented eviction, and an event.
 Each flow (a datagram in progress, or a TCP connection) is charged
 ``FLOW_OVERHEAD`` bytes, and each stored piece (a fragment, a held
 segment, a retained delivered run) is charged its data length plus
-``PIECE_OVERHEAD``. The two constants are module-level and are fixed
+``PIECE_OVERHEAD``. A fragment's declared range that is kept with no
+captured byte in it (a fragment the snap length cut to its header,
+under a rule that decides overlaps on declared ranges, section 3.3) is
+charged ``PIECE_OVERHEAD`` and counts against ``max_fragments`` like a
+piece. The two constants are module-level and are fixed
 in the fragment pull request by measuring CPython's actual allocation
 per flow and per piece with ``tracemalloc``; the test in section 7.4
 holds them to it. The figures below assume the expected order of
@@ -886,6 +890,14 @@ Policies resolve overlaps when a fragment arrives, against the held
 fragments it overlaps, so held state is always one non-overlapping
 version of each byte plus the spans that supplied it.
 
+The rules that discard on overlap (IPv6, ``discard`` and
+``linux-discard``) judge overlap on the fragments' declared ranges,
+the offset and length their headers give, not on the bytes a capture
+holds: a fragment the snap length cut still overlaps where its header
+says it does. An exact duplicate has the same declared range as a held
+fragment and equal bytes wherever both were captured; it supplies the
+bytes the held fragment's capture lacks.
+
 3.4 Named policies
 ~~~~~~~~~~~~~~~~~~
 
@@ -1110,7 +1122,11 @@ decision (below the table).
        discarded, per the decision below.
      -
    * - IPv6 first fragment that does not hold the whole header chain
-       through the upper-layer header.
+       through the upper-layer header: for TCP its whole header,
+       options included, as its Data Offset gives it (at least 20
+       bytes); 8 bytes for UDP and ICMPv6, as Linux checks; none for No
+       Next Header; 1 byte for any other. A first fragment the snap
+       length cut is not judged by this rule.
      - Discard the fragment, ``Anomaly(INCOMPLETE_HEADER_CHAIN)``.
      - RFC 8200 §4.5;
        `RFC 7112 §5 <https://www.rfc-editor.org/rfc/rfc7112.html#section-5>`__
@@ -2145,7 +2161,9 @@ pcaps:
   come from a netns capture against the running kernel
   (``tests/fixtures/reassembly/linux_overlaps.pcap``: script-built
   fragment trains and the kernel's echo replies, labelled so in
-  MANIFEST);
+  MANIFEST, with the netns's ``ReasmOKs`` and ``ReasmOverlaps``
+  counters across each train recorded there, since a reply needs a
+  valid echo request and its absence alone does not show a discard);
 - the same pattern over IPv6, expecting the RFC 5722 discard, and then
   a clean train under the same key, expecting a new ``Datagram``;
 - identical duplicates (``Retransmission``, no ``Overlap``) for both

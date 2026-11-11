@@ -69,7 +69,10 @@ every policy; bytes that overlap and agree produce a
 exact duplicate discards its datagram (RFC 5722 §4, as amended by
 erratum 3089), as do the ``discard`` and ``linux-discard`` policies for
 the IPv4 overlaps each one names; the key keeps no state afterwards, so
-a later fragment under it starts a new datagram.
+a later fragment under it starts a new datagram. These three rules
+judge overlap on the fragments' declared ranges, so a fragment the snap
+length cut still overlaps where its header says it does, and an exact
+duplicate supplies the bytes the held fragment's capture lacks.
 
 **Rules.** Each fragment is checked against the rules below. Every
 discard is reported by an :class:`Anomaly`; a discarded datagram's
@@ -101,8 +104,9 @@ arriving one.
   whose rebuilt header and payload exceed 65,535 bytes, is discarded
   when it completes, with the same anomaly.
 - An IPv6 first fragment whose data does not hold the header chain
-  through the upper-layer header (RFC 7112 §5) is
-  :attr:`AnomalyKind.INCOMPLETE_HEADER_CHAIN`, and is dropped. A first
+  through the upper-layer header (RFC 7112 §5), a TCP header with its
+  options included, is :attr:`AnomalyKind.INCOMPLETE_HEADER_CHAIN`,
+  and is dropped. A first
   fragment the snap length cut is not judged by this rule, since its
   missing bytes may hold the chain.
 - A last fragment that disagrees with a known end, or data past one, is
@@ -123,7 +127,9 @@ arriving one.
 **Bounds.** :class:`FragmentBounds` caps what is held and sets the
 timeouts. What is held is charged as :data:`FLOW_OVERHEAD` per datagram
 plus, per stored piece, :data:`PIECE_OVERHEAD`, its data and any header
-kept for the reassembled datagram. Timeouts run on capture timestamps
+kept for the reassembled datagram; a declared range a discarding rule
+keeps with no captured byte in it is charged :data:`PIECE_OVERHEAD` and
+counts against ``max_fragments`` as a piece. Timeouts run on capture timestamps
 in nanoseconds (:data:`SECOND`), never on the wall clock: the capture
 clock is the highest timestamp fed, and a datagram expires when its
 deadline is at or before it. A datagram that
@@ -558,9 +564,8 @@ class Overlap(_Event):
     hold every fragment the datagram held and the arriving one;
     otherwise ``spans`` are those of ``kept_spans`` and
     ``other_spans``. Ranges count fragments' declared lengths: where the
-    snap length cut bytes of the range from both versions, ``kept``,
-    ``other`` and their spans hold only the bytes captured, from the
-    range's start.
+    snap length cut the arriving fragment short of the range's end,
+    ``kept``, ``other`` and their spans stop where its capture does.
 
     :param start: The range's first byte, as a payload offset.
     :param end: One past its last byte.
@@ -722,6 +727,7 @@ class _Flow:
 
     __slots__ = (
         "age",
+        "bare",
         "charge",
         "covered",
         "created",
@@ -763,6 +769,7 @@ class _Flow:
         self.reach = 0
         self.covered = 0
         self.charge = FLOW_OVERHEAD
+        self.bare = 0
         self.first_hop = -1
         self.first_next = -1
         self.header_extra: int | None = None
@@ -923,8 +930,10 @@ def _chain_complete(next_header: int, data: bytes) -> bool:
     """Return whether ``data`` holds the IPv6 header chain it starts.
 
     The chain runs through the extension headers to the upper-layer
-    header, of which 20 bytes are needed for TCP, 8 for UDP and ICMPv6,
-    none for No Next Header and 1 for anything else (RFC 7112 §5).
+    header (RFC 7112 §5), which must be whole: for TCP the header and its
+    options, as many bytes as its Data Offset gives and at least 20; 8
+    bytes for UDP and ICMPv6, none for No Next Header and 1 for anything
+    else.
 
     :param next_header: The Fragment header's Next Header.
     :param data: The first fragment's data.
@@ -941,7 +950,10 @@ def _chain_complete(next_header: int, data: bytes) -> bool:
             length = (data[cursor + 1] + 1) * 8
         next_header = data[cursor]
         cursor += length
-    return cursor + _UPPER_HEADER_BYTES.get(next_header, 1) <= len(data)
+    needed = _UPPER_HEADER_BYTES.get(next_header, 1)
+    if next_header == 6 and cursor + 13 <= len(data):
+        needed = max(needed, (data[cursor + 12] >> 4) * 4)
+    return cursor + needed <= len(data)
 
 
 def _network(
@@ -1380,6 +1392,7 @@ class FragmentReassembler:
         bound: Bound,
         ref: int | None,
         arriving: list[Span],
+        end: int | None = None,
     ) -> Evicted:
         """Discard ``flow`` and return its :class:`Evicted` event.
 
@@ -1388,9 +1401,14 @@ class FragmentReassembler:
         :param ref: The ``completing_ref``.
         :param arriving: The spans the arriving fragment would have
             added, when its own datagram is the one discarded.
+        :param end: The payload's length the arriving fragment declares,
+            when it is the last fragment and its datagram is the one
+            discarded.
         """
         self._remove(flow)
         spans = flow.spans() + arriving
+        if end is None:
+            end = flow.end
         ordered, first, last = _event_times(spans, (flow.created, flow.last))
         return Evicted(
             flow=flow.key,
@@ -1401,7 +1419,7 @@ class FragmentReassembler:
             last_timestamp=last,
             bound=bound,
             held_bytes=flow.covered,
-            missing=_missing(spans, flow.end),
+            missing=_missing(spans, end),
         )
 
     def _remove(self, flow: _Flow) -> None:
@@ -1877,17 +1895,29 @@ class FragmentReassembler:
             + sum(map(_charge, plan.pieces))
         )
         count = len(flow.pieces) - len(replaced) + len(plan.pieces)
+        bare = 0
+        if flow.runs:
+            after = flow.pieces[: plan.first] + plan.pieces
+            bare = _bare_runs(flow.runs, after + flow.pieces[plan.last :])
+        charge += (bare - flow.bare) * PIECE_OVERHEAD
+        count += bare
         arriving = [
             source.span(piece.start, piece.end)
             for piece in plan.pieces
             if piece.source is source
         ]
+        last_end = None if arrival.more else source.end
         evicted = self._make_room(
-            flow, held is None, (count, charge), (source.ref, arriving), events
+            flow,
+            held is None,
+            (count, charge),
+            (source.ref, arriving, last_end),
+            events,
         )
         if evicted is not None:
             return evicted
         self._apply(flow, held is None, plan, replaced, charge)
+        flow.bare = bare
         flow.reach = max(flow.reach, source.end)
         if not arrival.more:
             flow.end = source.end
@@ -1902,7 +1932,7 @@ class FragmentReassembler:
         flow: _Flow,
         new: bool,
         size: tuple[int, int],
-        arrival: tuple[int, list[Span]],
+        arrival: tuple[int, list[Span], int | None],
         events: list[FragmentEvent],
     ) -> Evicted | None:
         """Enforce the caps before ``flow`` takes the arriving fragment.
@@ -1915,12 +1945,12 @@ class FragmentReassembler:
         :param new: Whether the fragment starts it.
         :param size: Its piece count and charge once the fragment is
             stored.
-        :param arrival: The fragment's reference and the spans it would
-            add.
+        :param arrival: The fragment's reference, the spans it would
+            add, and the payload's length when it is the last fragment.
         :param events: Where the other datagrams' events are appended.
         """
         count, charge = size
-        ref, arriving = arrival
+        ref, arriving, end = arrival
         bounds = self._bounds
         own_cap = None
         if count > bounds.max_fragments:
@@ -1930,17 +1960,19 @@ class FragmentReassembler:
         elif charge > bounds.max_total_bytes:
             own_cap = Bound.MAX_TOTAL_BYTES
         if own_cap is not None:
-            return self._evicted(flow, own_cap, ref, arriving)
+            return self._evicted(flow, own_cap, ref, arriving, end)
         growth = charge if new else charge - flow.charge
         while new and len(self._flows) >= bounds.max_flows:
             victim = self._victim(flow)
             if victim is flow:
-                return self._evicted(flow, Bound.MAX_FLOWS, ref, arriving)
+                return self._evicted(flow, Bound.MAX_FLOWS, ref, arriving, end)
             events.append(self._evicted(victim, Bound.MAX_FLOWS, None, []))
         while self._total + growth > bounds.max_total_bytes:
             victim = self._victim(flow)
             if victim is flow:
-                return self._evicted(flow, Bound.MAX_TOTAL_BYTES, ref, arriving)
+                return self._evicted(
+                    flow, Bound.MAX_TOTAL_BYTES, ref, arriving, end
+                )
             events.append(
                 self._evicted(victim, Bound.MAX_TOTAL_BYTES, None, [])
             )
@@ -2005,10 +2037,14 @@ class FragmentReassembler:
     ) -> str:
         """Return how the datagram's policy takes the arriving fragment.
 
-        ``"insert"`` for a ``linux-discard`` fragment that overlaps no
-        run, which is then added to the runs; ``"duplicate"`` for one
-        dropped as a duplicate; ``"overlap"`` for one that discards the
-        datagram; ``"resolve"`` for one the policy resolves.
+        Under ``linux-discard`` and ``discard`` (every IPv6 datagram's
+        rule) the decision is made on the fragments' declared ranges,
+        their runs: ``"insert"`` for a fragment that overlaps no run,
+        which is then added to the runs; ``"duplicate"`` for one inside
+        a single ``linux-discard`` run, or the same range as one
+        ``discard`` run with equal captured bytes; ``"overlap"`` for any
+        other, which discards the datagram. Under the other policies,
+        ``"resolve"``.
 
         :param flow: The datagram.
         :param source: The arriving fragment.
@@ -2021,16 +2057,16 @@ class FragmentReassembler:
             if verdict == "insert":
                 _linux_insert(flow.runs, start, source.end)
             return verdict
-        if flow.policy is not OverlapPolicy.DISCARD or not overlapped:
+        if flow.policy is not OverlapPolicy.DISCARD:
             return "resolve"
-        only = overlapped[0]
-        exact = (
-            len(overlapped) == 1
-            and only.start == only.source.start == start
-            and only.end == only.source.end == start + len(data)
-            and only.data == data
-        )
-        return "duplicate" if exact else "overlap"
+        touched = _touched(flow.runs, start, source.end)
+        if not touched:
+            bisect.insort(flow.runs, [start, source.end])
+            return "insert"
+        same = touched == [[start, source.end]]
+        if same and _differing(overlapped, source, data) is None:
+            return "duplicate"
+        return "overlap"
 
     def _plan(self, flow: _Flow, source: _Source, data: bytes) -> _Plan:
         """Resolve the arriving fragment against the pieces it overlaps.
@@ -2045,6 +2081,8 @@ class FragmentReassembler:
         if not data:
             overlapped = []
         verdict = self._verdict(flow, source, data, overlapped)
+        if verdict == "overlap":
+            return self._discarding(flow, source, data, first, overlapped)
         if not overlapped:
             return self._unopposed(flow, source, data, first, verdict)
         winners = [
@@ -2053,11 +2091,6 @@ class FragmentReassembler:
             for piece in overlapped
         ]
         bounds = (max(start, overlapped[0].start), min(end, overlapped[-1].end))
-        if verdict == "overlap":
-            discarded = self._overlap(
-                flow, source, data, overlapped, winners, bounds, False
-            )
-            return _Plan(first, last, [], discarded, True)
         differing = _differing(overlapped, source, data)
         event: Overlap | Retransmission
         if differing is not None:
@@ -2066,13 +2099,47 @@ class FragmentReassembler:
             )
         else:
             event = _retransmission(flow, source, overlapped, bounds)
-        if verdict == "duplicate":
+        if (
+            verdict == "duplicate"
+            and flow.policy is OverlapPolicy.LINUX_DISCARD
+        ):
             return _Plan(first, last, overlapped, event, False)
         pieces = _merged(overlapped, winners, source, data)
         return _Plan(first, last, pieces, event, False)
 
-    def _unopposed(
+    def _discarding(
         self,
+        flow: _Flow,
+        source: _Source,
+        data: bytes,
+        first: int,
+        overlapped: list[_Piece],
+    ) -> _Plan:
+        """Plan the discard of a datagram the arriving fragment overlaps.
+
+        The :class:`Overlap` covers the declared overlap of the fragment
+        with the runs it touches; its bytes stop where the fragment's
+        capture does.
+
+        :param flow: The datagram.
+        :param source: The arriving fragment.
+        :param data: Its data.
+        :param first: The index of the first piece it overlaps.
+        :param overlapped: The held pieces it overlaps, in order.
+        """
+        start = source.start
+        touched = _touched(flow.runs, start, source.end)
+        low = max(start, touched[0][0])
+        high = min(source.end, max(run[1] for run in touched))
+        captured = max(low, min(high, start + len(data)))
+        winners = [False] * len(overlapped)
+        discarded = self._overlap(
+            flow, source, data, overlapped, winners, (low, captured), False
+        )
+        return _Plan(first, first, [], replace(discarded, end=high), True)
+
+    @staticmethod
+    def _unopposed(
         flow: _Flow,
         source: _Source,
         data: bytes,
@@ -2081,8 +2148,8 @@ class FragmentReassembler:
     ) -> _Plan:
         """Plan a fragment that overlaps no held piece.
 
-        Under ``linux-discard`` it can still overlap a run's uncaptured
-        bytes, which discards the datagram.
+        A ``linux-discard`` duplicate is dropped; any other fragment's
+        captured bytes are stored.
 
         :param flow: The datagram.
         :param source: The arriving fragment.
@@ -2090,23 +2157,14 @@ class FragmentReassembler:
         :param first: The index its piece takes.
         :param verdict: What :meth:`_verdict` returned.
         """
-        start = source.start
-        if verdict == "overlap":
-            touched = [
-                run
-                for run in flow.runs
-                if run[0] < source.end and start < run[1]
-            ]
-            low = max(start, min(run[0] for run in touched))
-            high = min(source.end, max(run[1] for run in touched))
-            captured = max(low, min(high, start + len(data)))
-            discarded = self._overlap(
-                flow, source, data, [], [], (low, captured), False
-            )
-            return _Plan(first, first, [], replace(discarded, end=high), True)
-        if verdict == "duplicate" or not data:
+        linux_duplicate = (
+            verdict == "duplicate"
+            and flow.policy is OverlapPolicy.LINUX_DISCARD
+        )
+        if linux_duplicate or not data:
             return _Plan(first, first, [], None, False)
-        return _Plan(first, first, [_Piece(start, data, source)], None, False)
+        piece = _Piece(source.start, data, source)
+        return _Plan(first, first, [piece], None, False)
 
     @staticmethod
     def _overlap(
@@ -2363,6 +2421,34 @@ def _merged(
     return new
 
 
+def _touched(runs: list[list[int]], start: int, end: int) -> list[list[int]]:
+    """Return the runs that ``[start, end)`` overlaps, in order.
+
+    :param runs: The datagram's runs, as ``[start, end]`` pairs.
+    :param start: The fragment's first byte.
+    :param end: One past its last declared byte.
+    """
+    return [run for run in runs if run[0] < end and start < run[1]]
+
+
+def _bare_runs(runs: list[list[int]], pieces: list[_Piece]) -> int:
+    """Return how many runs hold no stored piece.
+
+    A piece lies inside the run of the fragment that supplied it, so a
+    run holds one when a piece starts inside it.
+
+    :param runs: The datagram's runs, as ``[start, end]`` pairs.
+    :param pieces: Its pieces, in order.
+    """
+    starts = [piece.start for piece in pieces]
+    bare = 0
+    for run_start, run_end in runs:
+        index = bisect.bisect_left(starts, run_start)
+        if index == len(starts) or starts[index] >= run_end:
+            bare += 1
+    return bare
+
+
 def _linux_verdict(runs: list[list[int]], start: int, end: int) -> str:
     """Classify a fragment against Linux's runs of held fragments.
 
@@ -2373,7 +2459,7 @@ def _linux_verdict(runs: list[list[int]], start: int, end: int) -> str:
     :param start: The fragment's first byte.
     :param end: One past its last.
     """
-    touched = [run for run in runs if run[0] < end and start < run[1]]
+    touched = _touched(runs, start, end)
     if not touched:
         return "insert"
     if len(touched) == 1 and touched[0][0] <= start and end <= touched[0][1]:

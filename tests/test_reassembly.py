@@ -564,7 +564,8 @@ class TestOverlaps:
         reassembler = FragmentReassembler(policy=policy)
         events = feed_all(reassembler, sturges_novak(4))
         (datagram,) = only(events, Datagram)
-        assert payload(datagram)[::8].decode() == STURGES_NOVAK_EXPECTED[policy]
+        expected = STURGES_NOVAK_EXPECTED[policy]
+        assert payload(datagram) == "".join(c * 8 for c in expected).encode()
         assert len(payload(datagram)) == 192
         assert datagram.completing_ref == 16
         assert tiles(datagram.spans, 192)
@@ -827,6 +828,97 @@ class TestOverlaps:
         events = feed(reassembler, v4(1, 16, b"c" * 16)[:20])
         assert kinds(events) == [AnomalyKind.TRUNCATED]
         assert len(events) == 1
+
+    @pytest.mark.parametrize(
+        "policy", [OverlapPolicy.LINUX_DISCARD, OverlapPolicy.DISCARD]
+    )
+    def test_runs_without_captured_bytes_are_charged_and_capped(
+        self, policy: OverlapPolicy
+    ) -> None:
+        """Fragments the snap length cut to their header still record
+        their declared range; each such run holding no piece is charged
+        as a piece and counts against max_fragments."""
+        reassembler = FragmentReassembler(
+            policy=policy, bounds=FragmentBounds(max_fragments=3)
+        )
+        for index, block in enumerate((60, 40, 20)):
+            events = feed(
+                reassembler, v4(1, block * 8, b"x" * 8)[:20], ref=index
+            )
+            assert kinds(events) == [AnomalyKind.TRUNCATED]
+            assert reassembler.usage == Usage(
+                1, FLOW_OVERHEAD + (index + 1) * PIECE_OVERHEAD
+            )
+        events = feed(reassembler, v4(1, 0, b"x" * 8)[:20], ref=3)
+        (evicted,) = only(events, Evicted)
+        assert evicted.bound is Bound.MAX_FRAGMENTS
+        assert evicted.completing_ref == 3
+        assert reassembler.usage == Usage(0, 0)
+
+    def test_a_flood_of_bare_runs_stays_bounded(self) -> None:
+        reassembler = FragmentReassembler(
+            policy=OverlapPolicy.LINUX_DISCARD,
+            bounds=FragmentBounds(max_fragments=1),
+        )
+        for index, block in enumerate(range(3000, 0, -1)):
+            feed(reassembler, v4(1, 16 * block, b"x" * 8)[:20], ref=index)
+            assert reassembler.usage.bytes <= FLOW_OVERHEAD + PIECE_OVERHEAD
+            assert all(
+                len(flow.runs) <= 1 for flow in reassembler._flows.values()
+            )
+
+    @pytest.mark.parametrize("version", [4, 6])
+    def test_discard_rule_overlap_uses_declared_ranges(
+        self, version: int
+    ) -> None:
+        """RFC 8200 §4.5: a first fragment declaring 24 bytes of which
+        the capture holds 8, then a last fragment at 8: their declared
+        ranges overlap, so the datagram is discarded."""
+        reassembler = FragmentReassembler(policy=OverlapPolicy.DISCARD)
+        if version == 4:
+            first = v4(1, 0, bytes(8) + b"q" * 16)[: 20 + 8]
+            last = v4(1, 8, b"z" * 16, more=False)
+        else:
+            first = v6(1, 0, bytes(8) + b"q" * 16)[: 48 + 8]
+            last = v6(1, 8, b"z" * 16, more=False)
+        assert kinds(feed(reassembler, first, ref=0)) == [AnomalyKind.TRUNCATED]
+        (overlap,) = feed(reassembler, last, ref=1)
+        assert isinstance(overlap, Overlap)
+        assert not overlap.resolved
+        assert (overlap.start, overlap.end) == (8, 24)
+        assert overlap.kept == overlap.other == b"z" * 16
+        assert overlap.refs == (0, 1)
+        assert reassembler.usage == Usage(0, 0)
+
+    @pytest.mark.parametrize("version", [4, 6])
+    def test_discard_rule_duplicate_fills_a_truncation_hole(
+        self, version: int
+    ) -> None:
+        """An exact duplicate of a truncated fragment, same declared
+        range and equal captured bytes, is a Retransmission and supplies
+        the bytes the first capture lacked."""
+        message = udp_datagram(40)
+        cut = cut4 if version == 4 else cut6
+        head = 20 if version == 4 else 48
+        first, last = cut(message, [(0, 24), (24, 48)])
+        events = feed_all(
+            FragmentReassembler(policy=OverlapPolicy.DISCARD),
+            [first[: head + 8], first, last],
+        )
+        assert [type(event) for event in events] == [
+            Anomaly,
+            Retransmission,
+            Datagram,
+        ]
+        assert (events[1].start, events[1].end) == (0, 8)  # type: ignore[union-attr]
+        assert payload(only(events, Datagram)[0]) == message
+
+    def test_discard_rule_duplicate_of_a_fragment_cut_to_nothing(self) -> None:
+        message = udp_datagram(40)
+        first, last = cut6(message, [(0, 24), (24, 48)])
+        events = feed_all(FragmentReassembler(), [first[:48], first, last])
+        assert [type(event) for event in events] == [Anomaly, Datagram]
+        assert payload(only(events, Datagram)[0]) == message
 
     def test_targets_choose_the_policy_by_longest_prefix(self) -> None:
         reassembler = FragmentReassembler(
@@ -1135,6 +1227,10 @@ class TestRules:
             (60, bytes([17, 0]) + bytes(6) + bytes(8), True),
             (51, bytes([17, 1]) + bytes(10) + bytes(8), True),
             (51, bytes([17, 3]) + bytes(10) + bytes(8), False),
+            (6, bytes(12) + bytes([0xF0]) + bytes(11), False),
+            (6, bytes(12) + bytes([0xF0]) + bytes(47), True),
+            (6, bytes(12) + bytes([0x60]) + bytes(11), True),
+            (6, bytes(12) + bytes([0x20]) + bytes(3), False),
             (60, bytes([60, 0]) + bytes(6), False),
             (44, bytes([17, 0]) + bytes(6) + bytes(8), True),
             (0, bytes([17]), False),
@@ -1514,6 +1610,19 @@ TSHARK_REASSEMBLED = {
 }
 
 
+#: The server netns's reassembly counters across each train of
+#: linux_overlaps.pcap, recorded by the capture script
+#: (linux_overlaps.counters, copied in MANIFEST.md): IP ID, then the rise
+#: of /proc/net/snmp ReasmOKs and of /proc/net/netstat ReasmOverlaps.
+KERNEL_COUNTERS = {
+    0x7901: (0, 1),
+    0x7902: (1, 1),
+    0x7903: (1, 0),
+    0x7904: (0, 1),
+    0x7905: (1, 0),
+}
+
+
 class TestRealCaptures:
     @pytest.mark.parametrize(
         "path", list(TSHARK_REASSEMBLED), ids=lambda path: path.name
@@ -1571,11 +1680,30 @@ class TestRealCaptures:
             payload=sent,  # type: ignore[arg-type]
         )
 
+    def test_linux_overlaps_match_the_kernel_counters(self) -> None:
+        """Per train, linux-discard completes as many datagrams as the
+        kernel's ReasmOKs counted, and discards on overlap as many as its
+        ReasmOverlaps counted."""
+        events, _ = run_capture(
+            REASSEMBLY / "linux_overlaps.pcap",
+            FragmentReassembler(policy=OverlapPolicy.LINUX_DISCARD),
+        )
+        for identification, (oks, overlaps) in KERNEL_COUNTERS.items():
+            own = [
+                event
+                for event in events
+                if event.flow.identification == identification  # type: ignore[union-attr]
+            ]
+            assert len(only(own, Datagram)) == oks
+            discarded = [o for o in only(own, Overlap) if not o.resolved]
+            assert len(discarded) == overlaps
+
     def test_linux_overlaps_match_the_kernel(self) -> None:
-        """The running kernel replied to exactly the trains it
-        reassembled, and its reply echoes the bytes it kept: under
+        """Each echo reply echoes the bytes the kernel kept: under
         linux-discard the reassembler completes the same datagrams with
-        the same bytes, and discards the rest."""
+        the same bytes. A train the kernel discarded draws no reply,
+        though silence alone does not show a discard (train 1's bytes
+        break its ICMP checksum); KERNEL_COUNTERS does."""
         path = REASSEMBLY / "linux_overlaps.pcap"
         replies: dict[int, bytes] = {}
         for captured in read_pcap(path.read_bytes()):
@@ -1668,6 +1796,18 @@ class TestFlushes:
         assert evicted.refs == (0, 1)
         assert evicted.held_bytes == 8
         assert evicted.missing == ((8, 16), (24, None))
+
+    def test_an_evicted_last_fragment_keeps_the_known_end(self) -> None:
+        """A last fragment whose own datagram it evicts still says where
+        the payload ends."""
+        reassembler = FragmentReassembler(
+            bounds=FragmentBounds(max_fragments=1)
+        )
+        feed(reassembler, v4(1, 0, b"a" * 8), ref=0)
+        (evicted,) = feed(reassembler, v4(1, 16, b"b" * 8, more=False), ref=1)
+        assert isinstance(evicted, Evicted)
+        assert evicted.missing == ((8, 16),)
+        assert evicted.refs == (0, 1)
 
     def test_close_reports_every_datagram_and_empties(self) -> None:
         reassembler = FragmentReassembler(
@@ -2090,6 +2230,42 @@ def fragmented(draw: st.DrawFn) -> tuple[int, bytes, list[tuple[int, int]]]:
     return version, message, order
 
 
+def encodable_cuts(
+    rng: random.Random, size: int, pieces: int, first_header: int
+) -> list[int]:
+    """Cut ``size`` bytes into at least ``pieces`` fragments every one of
+    which fits its header fields: the first fragment's data and its
+    ``first_header`` bytes of headers within 65,535, every later piece's
+    data within 65,527, and every offset within 8,191 units of 8."""
+    units = size // 8
+    first = rng.randrange(1, min(units, (65_535 - first_header) // 8 + 1))
+    rest = range(1, min(units, 8_192))
+    cuts = {first, *rng.sample(rest, min(len(rest), pieces - 2))}
+    cuts = {cut for cut in cuts if cut >= first}
+    if units > 4_096:
+        cuts.add(4_096)
+    return [0, *(cut * 8 for cut in sorted(cuts)), size]
+
+
+class TestEncodableCuts:
+    @given(
+        st.integers(8, 328),
+        st.integers(16, 65_600),
+        st.integers(2, 6),
+        st.randoms(use_true_random=False),
+    )
+    def test_every_fragment_fits_its_fields(
+        self, extra: int, size: int, pieces: int, rng: random.Random
+    ) -> None:
+        size -= size % 8
+        bounds = encodable_cuts(rng, size, pieces, extra + 8)
+        assert bounds[0] == 0 and bounds[-1] == size
+        assert len(bounds) >= 3
+        assert bounds[1] + extra + 8 <= 65_535
+        assert all(b - a <= 65_527 for a, b in itertools.pairwise(bounds))
+        assert all(cut <= 65_528 for cut in bounds[:-1])
+
+
 class TestProperties:
     @given(
         st.sampled_from([4, 6]),
@@ -2117,12 +2293,7 @@ class TestProperties:
             options = b"\x01" * (extra - 20)
             size = max(16, total - extra)
             size -= size % 8
-            cuts = (
-                sorted(rng.sample(range(1, size // 8), pieces - 1))
-                if pieces > 1
-                else []
-            )
-            bounds = [0, *(cut * 8 for cut in cuts), size]
+            bounds = encodable_cuts(rng, size, pieces, extra)
             frames = [
                 v4(
                     9,
@@ -2138,12 +2309,7 @@ class TestProperties:
             hop_by_hop = bytes([44, extra // 8 - 1]) + bytes(extra - 2)
             size = max(16, total - extra + rng.randrange(0, 64))
             size -= size % 8
-            cuts = (
-                sorted(rng.sample(range(1, size // 8), pieces - 1))
-                if pieces > 1
-                else []
-            )
-            bounds = [0, *(cut * 8 for cut in cuts), size]
+            bounds = encodable_cuts(rng, size, pieces, extra + 8)
             frames = [
                 v6(
                     9,
