@@ -1,11 +1,11 @@
-"""Reassembly of IPv4 and IPv6 fragments into whole datagrams.
+"""Reassembly of IP fragments into datagrams and TCP segments into streams.
 
-:class:`FragmentReassembler` takes each decoded
-:class:`~netprotocols.packet.Packet` together with the frame it was
-decoded from, its capture timestamp and a reference the caller picks
-(a frame index), and returns the events that frame caused. It is the
-library's only stateful decoder: :func:`~netprotocols.decode_frame` and
-every ``decode()`` stay per-frame, and this module is reached as
+:class:`FragmentReassembler` and :class:`StreamReassembler` each take
+a decoded :class:`~netprotocols.packet.Packet` together with the frame
+it was decoded from, its capture timestamp and a reference the caller
+picks (a frame index), and return the events that frame caused. They
+are the library's only stateful objects: :func:`~netprotocols.decode_frame`
+and every ``decode()`` stay per-frame, and this module is reached as
 ``netprotocols.reassembly`` only; ``import netprotocols`` does not
 import it.
 
@@ -39,22 +39,22 @@ grouped by :class:`FragmentKey` (RFC 791 §2.3, RFC 8200 §4.5). A packet
 with no such header, an IPv6 atomic fragment (RFC 6946 §4) included,
 returns only the expiries its timestamp causes.
 
-**Clock.** Every call to :meth:`FragmentReassembler.feed`, whether or
-not its packet holds a fragment, and every call to
-:meth:`FragmentReassembler.advance` moves the capture clock to its
-timestamp, unless that is 0 or lower than the clock, and returns the
-expiries that causes.
+**Clock.** Every call to a reassembler's ``feed``, whether or not its
+packet holds anything the reassembler takes, and every call to its
+``advance`` moves the capture clock to its timestamp, unless that is 0
+or lower than the clock, and returns the expiries that causes.
 
 **Events.** Every event is a frozen, slotted, keyword-only dataclass
 naming the frames that contributed to it as :class:`Span` values, and
-the frame whose own fragment caused it as ``completing_ref``.
-:data:`FragmentEvent` is the union of the event types this module
-returns. Each call to :meth:`FragmentReassembler.feed` returns, in
-order: the expiries the frame's timestamp triggers in other datagrams,
-in deadline order; the evictions of other datagrams that storing its
-data requires, oldest first; then the events of its own datagram, in
-the order of the datagram offset each concerns, ending with the
-:class:`Datagram`, :class:`Evicted` or discarding event that ends it.
+the frame whose own fragment or segment caused it as
+``completing_ref``. :data:`FragmentEvent` and :data:`StreamEvent` are
+the unions of the event types each reassembler returns. Each call to
+:meth:`FragmentReassembler.feed` returns, in order: the expiries the
+frame's timestamp triggers in other datagrams, in deadline order; the
+evictions of other datagrams that storing its data requires, oldest
+first; then the events of its own datagram, in the order of the
+datagram offset each concerns, ending with the :class:`Datagram`,
+:class:`Evicted` or discarding event that ends it.
 Events caused by an expiry, by the eviction of a datagram to make room
 for another, by :meth:`~FragmentReassembler.advance` or by
 :meth:`~FragmentReassembler.close` carry ``completing_ref=None``.
@@ -147,6 +147,122 @@ evicted, with the fragment's reference. After every call,
 :attr:`FragmentReassembler.usage` is within ``max_total_bytes`` and
 ``max_flows``.
 
+**TCP streams.** :class:`StreamReassembler` delivers each direction of
+each TCP connection as a byte stream:
+
+>>> from netprotocols.reassembly import StreamReassembler
+>>> syn = bytes.fromhex(
+...     "45000028" "00014000" "4006b6cb" "c0000201" "c0000202"
+...     "0fa00050" "000003e8" "00000000" "5002ffff" "18070000"
+... )
+>>> data = bytes.fromhex(
+...     "45000036" "00014000" "4006b6bd" "c0000201" "c0000202"
+...     "0fa00050" "000003e9" "00000000" "5010ffff" "6c310000"
+... ) + b"hello, streams"
+>>> streams = StreamReassembler()
+>>> streams.feed(decode_frame(syn, start=IPv4), syn, timestamp=1)
+()
+>>> (run,) = streams.feed(decode_frame(data, start=IPv4), data, timestamp=2)
+>>> run.offset, run.data, run.completing_ref
+(0, b'hello, streams', 1)
+
+A connection is keyed by :func:`~netprotocols.flow.flow_key` of the
+packet's first TCP layer and the IP header nearest before it, and has
+two :class:`Direction` values. Each direction numbers its bytes from 0:
+the byte after the SYN's sequence number, or, without a SYN, the first
+byte of the first segment with data or FIN, reported once as
+:attr:`AnomalyKind.MIDSTREAM`. Sequence numbers map to offsets by the
+serial-number rule (RFC 9293 §3.4, RFC 1982), so a stream crosses a
+wrap of the sequence space. A packet with no TCP layer, or whose first
+TCP layer is inside an IP fragment, returns only the expiries its
+timestamp causes; the caller feeds the reassembled datagram instead.
+
+- **Delivery.** Bytes contiguous with a direction's delivered end are
+  delivered at once as one :class:`StreamData` per call, ``spans``
+  tiling its ``data``; a segment past a hole is held, with
+  :class:`OutOfOrder`. Delivered bytes are final. A segment the snap
+  length cut delivers its captured bytes and a ``Gap(TRUNCATED)`` for
+  the rest. A direction ends with ``StreamEnd(FIN)`` when delivery
+  reaches the end its FIN fixed.
+- **Overlaps.** Bytes that overlap held bytes are resolved by the
+  receiver's :class:`OverlapPolicy`, ``first`` or ``last``, chosen
+  through ``targets`` as for fragments. Bytes that repeat delivered
+  ones are compared with the bytes the direction retains: from
+  ``retain_bytes`` below the peer's highest acknowledgement, capped at
+  the delivered end, or below the delivered end without one. A
+  difference is an :class:`Overlap` whose ``kept`` is the delivered
+  version, with ``contrary`` set under ``last``; equal bytes are a
+  :class:`Retransmission`, and bytes the direction cannot compare a
+  ``Retransmission(verified=False)``.
+- **Acknowledged holes.** When the peer acknowledges past a hole that
+  is still open ``ack_gap_grace`` after the first such
+  acknowledgement, a later acknowledgement past it, or data of the
+  direction past it, declares each acknowledged hole a
+  ``Gap(ACKED)``, up to the highest offset the direction received, and
+  delivers the bytes after it with that frame's reference. An
+  acknowledgement past that offset is :attr:`AnomalyKind.ACK_BEYOND_DATA`,
+  once per direction. Bytes that arrive later for an acknowledged gap
+  still retained are :class:`LateData`.
+- **RST.** An RST is :attr:`AnomalyKind.RST_RECEIVED` at once and makes
+  the connection's end pending until the closed timeout after it. Data
+  of either direction past what it had received when the RST came
+  cancels it, :attr:`AnomalyKind.DATA_AFTER_RST` once per direction,
+  and continues the stream at the same offsets. When the timeout
+  passes, at :meth:`~StreamReassembler.close`, or when a SYN with
+  another ISN comes, held data is flushed and each open direction ends
+  with ``StreamEnd(RST)``; that SYN starts a new connection,
+  :attr:`AnomalyKind.SYN_AFTER_RST`, and the flush carries its
+  reference. Data on an RST is :attr:`AnomalyKind.RST_WITH_DATA`, not
+  stream data.
+- **SYN.** Data on a SYN is delivered from offset 0,
+  :attr:`AnomalyKind.SYN_DATA`. A SYN that repeats the ISN is a
+  :class:`Retransmission`; one with another ISN replaces it while the
+  direction has delivered nothing, and is ignored otherwise, each
+  :attr:`AnomalyKind.ISN_CHANGED`. A SYN for a connection whose every
+  direction ended by FIN starts a new connection.
+- **Dropped, and reported.** A segment that is neither a SYN nor an RST
+  without ACK (:attr:`AnomalyKind.DATA_WITHOUT_ACK`); data before offset
+  0 (:attr:`AnomalyKind.BEFORE_STREAM_START`); data past a FIN's end
+  (:attr:`AnomalyKind.DATA_AFTER_FIN`); a FIN that disagrees with an
+  earlier one or ends before data received
+  (:attr:`AnomalyKind.INCONSISTENT_FIN`); and a segment whose checksum
+  :class:`ChecksumMode` rejects (:attr:`AnomalyKind.BAD_CHECKSUM`). A
+  segment whose IP header declares a length of 0 is
+  :attr:`AnomalyKind.UNVERIFIED_CHECKSUM`, and is used as a bad
+  checksum would be; one the snap length cut is used under every mode.
+- **Reported, and used.** :attr:`AnomalyKind.OUT_OF_WINDOW` (data past
+  the furthest right window edge the receiver advertised, once both
+  SYNs were seen), :attr:`AnomalyKind.URGENT` (URG, once per
+  direction; urgent bytes stay inline),
+  :attr:`AnomalyKind.HOP_LIMIT_CHANGED` (a hop limit other than the
+  direction's previous segment's), :attr:`AnomalyKind.SELF_CONNECTED`
+  and :attr:`AnomalyKind.TRUNCATED`.
+
+**Stream bounds.** :class:`StreamBounds` caps what is held. A
+connection is charged :data:`FLOW_OVERHEAD`, each of its directions
+:data:`PIECE_OVERHEAD`, each held chunk :data:`PIECE_OVERHEAD` and its
+data, each acknowledged gap retained :data:`PIECE_OVERHEAD`, and each
+retained run :data:`PIECE_OVERHEAD`, its data and the reserve a
+growing ``bytearray`` keeps, and a fixed charge per frame it names. A
+connection over ``max_flow_bytes`` first sheds retained bytes, oldest
+first, then has its lowest hole declared a ``Gap(CAP)`` and the held
+bytes after it delivered, until it fits; one whose fixed state alone
+does not fit is evicted. To make room under ``max_flows`` or
+``max_total_bytes``, the least recently active connection that has not
+carried data both ways is evicted, or else the least recently active
+one, its own frame's connection included. An evicted or expired
+connection is flushed: each hole a ``Gap(FLUSH)``, held bytes
+delivered, each open direction a :class:`StreamEnd`, then
+:class:`Evicted` or :class:`Expired`. Idle timeouts run from the
+latest frame, longer once data has gone both ways and shorter once
+every direction has ended by FIN.
+
+**Order of a stream's events.** Expiries and evictions of other
+connections come first, with ``completing_ref=None``; then the flush of
+a connection a SYN ended; then the segment's own direction's events
+and the other direction's, each in stream offset order; then its own
+connection's eviction, with its reference.
+
 **Errors.** Hostile, malformed and inconsistent input produces events,
 never an exception. The methods raise :class:`TypeError` for an
 argument of the wrong type and :class:`ValueError` for a negative
@@ -161,19 +277,22 @@ import enum
 import heapq
 import ipaddress
 import typing
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
+from netprotocols._base import Protocol, ipv4_to_bytes, ipv6_to_bytes
 from netprotocols.checksum import internet_checksum
-from netprotocols.flow import FlowKey
+from netprotocols.flow import FlowKey, flow_key
 from netprotocols.layer3.ip import IPv4, IPv6
 from netprotocols.layer3.ipv6_ext import (
     IPv6Fragment,
     IPv6Routing,
     _effective_destination,
 )
-from netprotocols.packet import Packet
+from netprotocols.layer4.tcp import TCP
+from netprotocols.packet import Packet, _enclosing_ip
 
 __all__ = [
     "FLOW_OVERHEAD",
@@ -186,6 +305,7 @@ __all__ = [
     "ChecksumMode",
     "Datagram",
     "Direction",
+    "EndReason",
     "Evicted",
     "Expired",
     "FragmentBounds",
@@ -193,10 +313,19 @@ __all__ = [
     "FragmentKey",
     "FragmentReassembler",
     "FragmentTarget",
+    "Gap",
+    "GapReason",
+    "LateData",
+    "OutOfOrder",
     "Overlap",
     "OverlapPolicy",
     "Retransmission",
     "Span",
+    "StreamBounds",
+    "StreamData",
+    "StreamEnd",
+    "StreamEvent",
+    "StreamReassembler",
     "Timeout",
     "Usage",
 ]
@@ -265,7 +394,7 @@ class OverlapPolicy(enum.Enum):
 
 
 class Direction(enum.Enum):
-    """The direction of an event relative to its flow key."""
+    """The direction of a TCP event relative to its flow key."""
 
     #: From ``addr_a``/``port_a`` to ``addr_b``/``port_b``.
     A_TO_B = "a_to_b"
@@ -276,11 +405,11 @@ class Direction(enum.Enum):
 class Bound(enum.Enum):
     """The cap whose limit an :class:`Evicted` event enforced."""
 
-    #: The charged bytes of one datagram.
+    #: The charged bytes of one datagram or TCP connection.
     MAX_FLOW_BYTES = "max_flow_bytes"
     #: The charged bytes of the reassembler.
     MAX_TOTAL_BYTES = "max_total_bytes"
-    #: The datagrams held at once.
+    #: The datagrams or connections held at once.
     MAX_FLOWS = "max_flows"
     #: The pieces one datagram holds.
     MAX_FRAGMENTS = "max_fragments"
@@ -289,14 +418,16 @@ class Bound(enum.Enum):
 class Timeout(enum.Enum):
     """The timeout an :class:`Expired` event enforced."""
 
-    #: Measured from the datagram's latest fragment.
+    #: Measured from the datagram's latest fragment, or the
+    #: connection's latest frame.
     IDLE = "idle"
-    #: Measured from the datagram's first-arriving fragment.
+    #: Measured from the datagram's first-arriving fragment, or the
+    #: connection's first frame.
     AGE = "age"
 
 
 class AnomalyKind(enum.Enum):
-    """A rule a fragment breaks, or an evasion pattern it matches."""
+    """A rule a fragment or segment breaks, or an evasion pattern it matches."""
 
     #: The fragment would end the datagram past 65,535 bytes.
     OVERSIZE = "oversize"
@@ -314,33 +445,109 @@ class AnomalyKind(enum.Enum):
     TCP_OFFSET_ONE = "tcp_offset_one"
     #: Captured bytes shorter than the declared length.
     TRUNCATED = "truncated"
-    #: An IPv4 header checksum that does not verify.
+    #: An IPv4 header or TCP checksum that does not verify.
     BAD_CHECKSUM = "bad_checksum"
     #: A bad checksum taken as one a NIC was left to fill.
     CHECKSUM_OFFLOAD = "checksum_offload"
-    #: A fragment whose IP header declares a length of 0.
+    #: A fragment or segment whose IP header declares a length of 0.
     UNVERIFIED_CHECKSUM = "unverified_checksum"
-    #: A TTL or Hop Limit other than the first-arriving fragment's.
+    #: A TTL or Hop Limit other than the datagram's first-arriving
+    #: fragment's, or the TCP direction's previous segment's.
     HOP_LIMIT_CHANGED = "hop_limit_changed"
     #: A Fragment Next Header other than the first-arriving fragment's.
     NEXT_HEADER_CHANGED = "next_header_changed"
     #: An IPv4 datagram completed more than 30 seconds after its first
     #: fragment, which a Linux target has discarded.
     SLOW_REASSEMBLY = "slow_reassembly"
+    #: A TCP direction whose first segment with data or FIN came without
+    #: a SYN, so its offset 0 is that segment's sequence number.
+    MIDSTREAM = "midstream"
+    #: TCP data before a direction's offset 0, which cannot be placed.
+    BEFORE_STREAM_START = "before_stream_start"
+    #: TCP data on a SYN.
+    SYN_DATA = "syn_data"
+    #: A SYN whose ISN differs from the direction's.
+    ISN_CHANGED = "isn_changed"
+    #: A TCP segment that is neither a SYN nor an RST, with ACK clear.
+    DATA_WITHOUT_ACK = "data_without_ack"
+    #: A FIN that disagrees with the end an earlier FIN fixed, or that
+    #: ends before data already received.
+    INCONSISTENT_FIN = "inconsistent_fin"
+    #: TCP data past the end a FIN fixed.
+    DATA_AFTER_FIN = "data_after_fin"
+    #: An RST carrying data, which is diagnostic text, not stream data.
+    RST_WITH_DATA = "rst_with_data"
+    #: An RST; the connection's end is pending.
+    RST_RECEIVED = "rst_received"
+    #: TCP data above what a direction held when an RST arrived.
+    DATA_AFTER_RST = "data_after_rst"
+    #: A SYN with a new ISN that ended a connection whose RST was pending.
+    SYN_AFTER_RST = "syn_after_rst"
+    #: A TCP connection from an endpoint to itself on the same port.
+    SELF_CONNECTED = "self_connected"
+    #: TCP data past the furthest right window edge its receiver
+    #: advertised.
+    OUT_OF_WINDOW = "out_of_window"
+    #: An acknowledgement past the highest offset its direction received.
+    ACK_BEYOND_DATA = "ack_beyond_data"
+    #: A TCP segment with URG set.
+    URGENT = "urgent"
+
+
+class EndReason(enum.Enum):
+    """Why a TCP direction ended, as a :class:`StreamEnd` reports it."""
+
+    #: Delivery reached the end the direction's FIN fixed.
+    FIN = "fin"
+    #: An RST was confirmed: its closed timeout passed with no data after
+    #: it, a SYN with a new ISN followed it, or
+    #: :meth:`StreamReassembler.close` came first.
+    RST = "rst"
+    #: The connection's idle timeout.
+    IDLE = "idle"
+    #: The connection's age timeout.
+    AGE = "age"
+    #: A bound evicted the connection.
+    EVICTED = "evicted"
+    #: :meth:`StreamReassembler.close`.
+    CLOSE = "close"
+
+
+class GapReason(enum.Enum):
+    """Why a TCP direction skipped bytes it never received."""
+
+    #: ``max_flow_bytes`` forced the lowest hole out.
+    CAP = "cap"
+    #: The capture cut the segment that declared them.
+    TRUNCATED = "truncated"
+    #: The connection was flushed by an expiry, an eviction, an RST or
+    #: :meth:`StreamReassembler.close`.
+    FLUSH = "flush"
+    #: The peer acknowledged past them, and the hole stayed open
+    #: ``ack_gap_grace`` after the first such acknowledgement.
+    ACKED = "acked"
 
 
 class ChecksumMode(enum.Enum):
-    """What a fragment with a bad IPv4 header checksum does."""
+    """What a fragment or segment with a bad checksum does.
 
-    #: The fragment is dropped.
+    A fragment's IPv4 header checksum is judged; a TCP segment's IPv4
+    header checksum and TCP checksum are.
+    """
+
+    #: The fragment or segment is dropped.
     DROP = "drop"
-    #: The fragment is used.
+    #: The fragment or segment is used.
     KEEP = "keep"
-    #: A checksum of 0, which Windows leaves for its NIC to fill, is
-    #: taken as offloaded and the fragment used, with
+    #: A bad checksum that is a value a stack leaves for its NIC to fill
+    #: is taken as offloaded, and the fragment or segment used, with
     #: :attr:`AnomalyKind.CHECKSUM_OFFLOAD`, from a source in ``local``
     #: (from any source when ``local`` is not given); any other bad
-    #: checksum is dropped.
+    #: checksum is dropped. For an IPv4 header the value is 0, which
+    #: Windows leaves. For TCP it is the folded pseudo-header sum,
+    #: uncomplemented, with the segment's length, as Linux, FreeBSD and
+    #: Windows checksum offload leave it, or without any length, as
+    #: Windows large send offload does.
     AUTO = "auto"
 
 
@@ -348,9 +555,9 @@ class Span(NamedTuple):
     """The bytes one frame supplied to an event.
 
     :param ref: The frame's reference, as passed to
-        :meth:`FragmentReassembler.feed`.
+        :meth:`FragmentReassembler.feed` or :meth:`StreamReassembler.feed`.
     :param start: The first byte the frame supplied, as an offset into
-        the reassembled payload.
+        the reassembled payload or the TCP direction's byte stream.
     :param end: One past the last byte, half-open.
     :param timestamp: The frame's capture time, in nanoseconds.
     :param hop_limit: The IPv4 TTL or IPv6 Hop Limit it arrived with.
@@ -366,7 +573,7 @@ class Span(NamedTuple):
 class Usage(NamedTuple):
     """What a reassembler holds, in the units its bounds charge.
 
-    :param flows: The datagrams in progress.
+    :param flows: The datagrams in progress, or the TCP connections.
     :param bytes: The bytes charged for them.
     """
 
@@ -492,24 +699,91 @@ class FragmentTarget:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class StreamBounds:
+    """The caps and timeouts of a :class:`StreamReassembler`.
+
+    :param max_flow_bytes: Charged bytes one TCP connection, both
+        directions, may hold.
+    :param max_total_bytes: Charged bytes across all connections.
+    :param max_flows: Connections held at once.
+    :param retain_bytes: Delivered bytes a direction keeps below its
+        peer's highest acknowledgement, or below its delivered end
+        without one, to compare retransmissions against.
+    :param idle_timeout_new: Nanoseconds from the latest frame of a
+        connection that has not carried data in both directions to its
+        expiry, or ``None`` for none.
+    :param idle_timeout_established: The same for a connection that has
+        carried data in both directions.
+    :param idle_timeout_closed: The same once every direction has ended
+        by FIN; also the time from an RST to its confirmation.
+    :param age_timeout: Nanoseconds from a connection's first frame to
+        its expiry, or ``None`` for none.
+    :param ack_gap_grace: Nanoseconds a hole must stay open after the
+        first acknowledgement past it before a later frame declares it
+        a :class:`Gap`.
+    :raises ValueError: if a cap or ``ack_gap_grace`` is not a positive
+        ``int``, or a timeout is neither ``None`` nor a positive
+        ``int``.
+    """
+
+    max_flow_bytes: int = 4 * 1024 * 1024
+    max_total_bytes: int = 128 * 1024 * 1024
+    max_flows: int = 65_536
+    retain_bytes: int = 64 * 1024
+    idle_timeout_new: int | None = 60 * SECOND
+    idle_timeout_established: int | None = 3_600 * SECOND
+    idle_timeout_closed: int | None = 120 * SECOND
+    age_timeout: int | None = None
+    ack_gap_grace: int = SECOND
+
+    def __post_init__(self) -> None:
+        """Check every cap and timeout.
+
+        :raises ValueError: if a cap or ``ack_gap_grace`` is not a
+            positive ``int``, or a timeout is neither ``None`` nor a
+            positive ``int``.
+        """
+        for name in (
+            "max_flow_bytes",
+            "max_total_bytes",
+            "max_flows",
+            "retain_bytes",
+            "ack_gap_grace",
+        ):
+            if not _positive(getattr(self, name)):
+                raise ValueError(f"{name} must be a positive int")
+        for name in (
+            "idle_timeout_new",
+            "idle_timeout_established",
+            "idle_timeout_closed",
+            "age_timeout",
+        ):
+            value = getattr(self, name)
+            if value is not None and not _positive(value):
+                raise ValueError(f"{name} must be None or a positive int")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _Event:
     """The fields every reassembly event has.
 
-    :param flow: The datagram's :class:`FragmentKey`, or a
-        :class:`~netprotocols.flow.FlowKey`.
-    :param direction: The direction relative to a flow key's
-        ``addr_a``; ``None`` for fragments.
+    :param flow: The datagram's :class:`FragmentKey`, or the TCP
+        connection's :class:`~netprotocols.flow.FlowKey`.
+    :param direction: The TCP direction relative to the flow key's
+        ``addr_a``; ``None`` for fragments and for an event about a
+        whole connection.
     :param spans: The contributing frames, sorted by ``start`` then
         ``ref``.
     :param completing_ref: The reference of the fed frame whose own
-        fragment caused the event; ``None`` when an expiry, the
-        eviction of a datagram to make room for another,
-        :meth:`FragmentReassembler.advance` or
-        :meth:`FragmentReassembler.close` caused it.
+        fragment or segment caused the event; ``None`` when an expiry,
+        the eviction of a datagram or connection to make room for
+        another, ``advance`` or ``close`` caused it.
     :param first_timestamp: The earliest ``timestamp`` among ``spans``;
-        with no spans, that of the datagram's first-arriving fragment.
+        with no spans, that of the datagram's first-arriving fragment
+        or the connection's first frame.
     :param last_timestamp: The latest ``timestamp`` among ``spans``;
-        with no spans, the latest of the datagram's fragments.
+        with no spans, the latest of the datagram's fragments or the
+        connection's frames.
     """
 
     flow: FragmentKey | FlowKey
@@ -556,7 +830,7 @@ class Datagram(_Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Overlap(_Event):
-    """Arriving bytes that overlap held bytes and differ from them.
+    """Arriving bytes that overlap held or delivered bytes and differ.
 
     Under a rule that discards on overlap (every IPv6 overlap but an
     exact duplicate, and the ``discard`` and ``linux-discard``
@@ -572,16 +846,23 @@ class Overlap(_Event):
     snap length cut the arriving fragment short of the range's end,
     ``kept``, ``other`` and their spans stop where its capture does.
 
+    For a TCP direction, bytes not yet delivered are resolved by the
+    receiver's policy; delivered bytes are final, so over them ``kept``
+    is always the delivered version.
+
     :param start: The range's first byte, as a payload offset.
     :param end: One past its last byte.
     :param policy: The :class:`OverlapPolicy` applied;
-        :attr:`OverlapPolicy.DISCARD` for IPv6.
+        :attr:`OverlapPolicy.DISCARD` for IPv6 fragments.
     :param kept: The range's bytes as kept.
     :param other: The range's other version.
     :param kept_spans: The frames that supplied ``kept``, tiling it.
     :param other_spans: The frames that supplied ``other``, tiling it.
-    :param resolved: ``False`` when the datagram was discarded.
-    :param contrary: Always ``False`` for fragments.
+    :param resolved: ``False`` when the datagram was discarded; always
+        ``True`` for TCP.
+    :param contrary: Whether delivered bytes differ that the policy
+        would have replaced had they not been delivered: always
+        ``False`` for fragments, and for TCP under ``last`` only.
     """
 
     start: int
@@ -597,12 +878,19 @@ class Overlap(_Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Retransmission(_Event):
-    """Arriving bytes that repeat held bytes exactly.
+    """Arriving bytes that repeat held or delivered bytes exactly.
 
-    :param start: The first repeated byte, as a payload offset.
+    For TCP, also bytes that repeat ones the direction received but
+    cannot compare: delivered bytes it no longer retains, bytes a gap
+    skipped other than an acknowledged one, and bytes the capture cut
+    from either version. A SYN that repeats its direction's ISN is one
+    over ``(0, 0)``.
+
+    :param start: The first repeated byte, as a payload or stream
+        offset.
     :param end: One past the last.
-    :param verified: Whether the bytes were compared; always ``True``
-        for fragments.
+    :param verified: Whether every repeated byte was compared; always
+        ``True`` for fragments.
     """
 
     start: int
@@ -612,13 +900,18 @@ class Retransmission(_Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Evicted(_Event):
-    """A datagram a bound discarded.
+    """A datagram a bound discarded, or a TCP connection it flushed.
+
+    A connection's flush comes first, as :class:`Gap`,
+    :class:`StreamData` and :class:`StreamEnd` events.
 
     :param bound: The cap enforced.
-    :param held_bytes: The data bytes the datagram held.
+    :param held_bytes: The data bytes the datagram held, or the
+        undelivered bytes the connection held.
     :param missing: The ranges of the payload no span covers, as
         ``(start, end)`` pairs; the last ``end`` is ``None`` when the
-        last fragment never arrived.
+        last fragment never arrived. Empty for a connection, whose
+        holes its :class:`Gap` events report.
     """
 
     bound: Bound
@@ -628,10 +921,13 @@ class Evicted(_Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Expired(_Event):
-    """A datagram a timeout, or :meth:`FragmentReassembler.close`, discarded.
+    """A datagram or TCP connection a timeout or ``close`` removed.
+
+    A connection's flush comes first, as for :class:`Evicted`.
 
     :param timeout: The timeout whose deadline came first.
-    :param held_bytes: The data bytes the datagram held.
+    :param held_bytes: The data bytes the datagram held, or the
+        undelivered bytes the connection held.
     :param missing: The ranges of the payload no span covers, as for
         :class:`Evicted`.
     """
@@ -643,10 +939,14 @@ class Expired(_Event):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Anomaly(_Event):
-    """A fragment that breaks a rule or matches an evasion pattern.
+    """A fragment or segment that breaks a rule or matches an evasion pattern.
+
+    A segment's offsets are those of its direction, or run from 0 while
+    the direction's offset 0 is unknown.
 
     :param kind: The rule.
-    :param start: The first byte concerned, as a payload offset.
+    :param start: The first byte concerned, as a payload or stream
+        offset.
     :param end: One past the last.
     """
 
@@ -655,9 +955,94 @@ class Anomaly(_Event):
     end: int
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamData(_Event):
+    """Bytes of a TCP direction that became contiguous with its delivered end.
+
+    ``spans`` tile ``data``, so ``offset + len(data)`` is the next
+    run's ``offset``, except across a :class:`Gap`.
+
+    :param offset: The stream offset of ``data[0]``.
+    :param data: The bytes.
+    """
+
+    offset: int
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamEnd(_Event):
+    """A TCP direction that ended; no :class:`StreamData` of it follows.
+
+    :param offset: The direction's final offset, one past its last
+        delivered or skipped byte.
+    :param reason: Why it ended.
+    """
+
+    offset: int
+    reason: EndReason
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OutOfOrder(_Event):
+    """A TCP segment held past a hole in its direction.
+
+    :param start: Its first byte, as a stream offset.
+    :param end: One past its last declared byte.
+    :param expected: The direction's next expected offset.
+    """
+
+    start: int
+    end: int
+    expected: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Gap(_Event):
+    """Bytes a TCP direction skipped without receiving them.
+
+    :param start: The first skipped byte, as a stream offset.
+    :param end: One past the last.
+    :param reason: Why they were skipped.
+    """
+
+    start: int
+    end: int
+    reason: GapReason
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LateData(_Event):
+    """Bytes that arrived for the range of a :class:`Gap` the peer acknowledged.
+
+    They lie outside the ordered :class:`StreamData` runs; ``spans``
+    tile ``data``.
+
+    :param offset: The stream offset of ``data[0]``.
+    :param data: The bytes.
+    """
+
+    offset: int
+    data: bytes
+
+
 #: Every event type :class:`FragmentReassembler` returns.
 FragmentEvent = (
     Datagram | Overlap | Retransmission | Evicted | Expired | Anomaly
+)
+
+#: Every event type :class:`StreamReassembler` returns.
+StreamEvent = (
+    StreamData
+    | StreamEnd
+    | OutOfOrder
+    | Gap
+    | LateData
+    | Overlap
+    | Retransmission
+    | Evicted
+    | Expired
+    | Anomaly
 )
 
 
@@ -1147,6 +1532,35 @@ def _check_int(value: object, name: str) -> None:
         raise TypeError(f"{name} must be an int, not {type(value).__name__}")
 
 
+def _check_feed(
+    packet: object, frame: object, timestamp: object, ref: object
+) -> None:
+    """Check the arguments of a ``feed`` call.
+
+    :param packet: The packet argument.
+    :param frame: The frame argument.
+    :param timestamp: The timestamp argument.
+    :param ref: The ref argument.
+    :raises TypeError: if ``packet`` is not a
+        :class:`~netprotocols.packet.Packet`, ``frame`` is not bytes, or
+        ``timestamp`` or ``ref`` is not an ``int``.
+    :raises ValueError: if ``timestamp`` is negative, or ``frame`` is
+        shorter than ``packet.consumed + len(packet.trailer)``.
+    """
+    if not isinstance(packet, Packet):
+        raise TypeError("packet must be a Packet")
+    if not isinstance(frame, (bytes, bytearray, memoryview)):
+        raise TypeError("frame must be bytes or a memoryview")
+    _check_timestamp(timestamp)
+    if ref is not None:
+        _check_int(ref, "ref")
+    if len(frame) < packet.consumed + len(packet.trailer):
+        raise ValueError(
+            f"frame holds {len(frame)} bytes, fewer than the packet's "
+            f"{packet.consumed + len(packet.trailer)}"
+        )
+
+
 class FragmentReassembler:
     """Reassemble IPv4 and IPv6 fragments into :class:`Datagram` events.
 
@@ -1261,18 +1675,7 @@ class FragmentReassembler:
         :raises ValueError: if ``timestamp`` is negative, or ``frame``
             is shorter than ``packet.consumed + len(packet.trailer)``.
         """
-        if not isinstance(packet, Packet):
-            raise TypeError("packet must be a Packet")
-        if not isinstance(frame, (bytes, bytearray, memoryview)):
-            raise TypeError("frame must be bytes or a memoryview")
-        _check_timestamp(timestamp)
-        if ref is not None:
-            _check_int(ref, "ref")
-        if len(frame) < packet.consumed + len(packet.trailer):
-            raise ValueError(
-                f"frame holds {len(frame)} bytes, fewer than the packet's "
-                f"{packet.consumed + len(packet.trailer)}"
-            )
+        _check_feed(packet, frame, timestamp, ref)
         if ref is None:
             ref = self._fed
         self._fed += 1
@@ -2501,3 +2904,2348 @@ def _linux_insert(runs: list[list[int]], start: int, end: int) -> None:
         runs[-1][1] = end
         return
     bisect.insort(runs, [start, end])
+
+
+#: TCP flag bits.
+_FIN = 0x01
+_SYN = 0x02
+_RST = 0x04
+_ACK = 0x10
+_URG = 0x20
+
+#: The size of the TCP sequence space, and half of it.
+_SEQ_SPACE = 1 << 32
+_SEQ_HALF = 1 << 31
+
+#: Bytes charged for each frame a retained run of delivered bytes names,
+#: beyond the run's :data:`PIECE_OVERHEAD` and data.
+_SPAN_OVERHEAD = 192
+
+#: Bits of a direction's ``notes``: the anomalies it reports once, and
+#: its state flags.
+_NOTE_MIDSTREAM = 1
+_NOTE_URGENT = 2
+_NOTE_AFTER_RST = 4
+_NOTE_BEYOND = 8
+_SENT = 16
+_ENDED = 32
+_SYNCED = 64
+
+#: The stream policies :class:`StreamReassembler` offers.
+_STREAM_POLICIES = (OverlapPolicy.FIRST, OverlapPolicy.LAST)
+
+
+def _serial(value: int, near: int) -> int:
+    """Return the integer congruent to ``value`` modulo 2**32 nearest ``near``.
+
+    That is the serial-number comparison of RFC 9293 §3.4 and RFC 1982.
+
+    :param value: A residue modulo 2**32.
+    :param near: The point the result is placed around.
+    """
+    return near + (value - near + _SEQ_HALF) % _SEQ_SPACE - _SEQ_HALF
+
+
+def _fold(data: bytes) -> int:
+    """Return the folded ones'-complement sum of ``data``, uncomplemented.
+
+    :param data: The bytes summed.
+    """
+    return ~internet_checksum(data) & 0xFFFF
+
+
+def _pseudo(source: bytes, destination: bytes, length: int) -> bytes:
+    """Return the TCP pseudo-header for ``length`` bytes of segment.
+
+    :param source: The packed source address.
+    :param destination: The packed destination address the checksum
+        uses.
+    :param length: The segment's length, header included.
+    """
+    if len(source) == 4:
+        tail = bytes([0, 6]) + (length & 0xFFFF).to_bytes(2, "big")
+    else:
+        tail = (length & 0xFFFFFFFF).to_bytes(4, "big") + bytes([0, 0, 0, 6])
+    return source + destination + tail
+
+
+def _window_scale(options: bytes) -> int | None:
+    """Return the shift of a Window Scale option, at most 14, if any.
+
+    :param options: A TCP header's options.
+    """
+    index = 0
+    while index < len(options):
+        kind = options[index]
+        if kind == 0:
+            break
+        if kind == 1:
+            index += 1
+            continue
+        if index + 1 >= len(options) or options[index + 1] < 2:
+            break
+        if kind == 3 and options[index + 1] == 3 and index + 2 < len(options):
+            return min(options[index + 2], 14)
+        index += options[index + 1]
+    return None
+
+
+class _Origin:
+    """The frame one segment came from."""
+
+    __slots__ = ("hop_limit", "ref", "timestamp")
+
+    def __init__(self, ref: int, timestamp: int, hop_limit: int) -> None:
+        self.ref = ref
+        self.timestamp = timestamp
+        self.hop_limit = hop_limit
+
+    def span(self, start: int, end: int) -> Span:
+        """Return this frame's :class:`Span` over ``[start, end)``.
+
+        :param start: The first byte, as a stream offset.
+        :param end: One past the last.
+        """
+        return Span(self.ref, start, end, self.timestamp, self.hop_limit)
+
+
+class _Chunk:
+    """Bytes one segment supplied, at a stream offset.
+
+    ``data`` is ``None`` for a declared range the capture cut.
+    """
+
+    __slots__ = ("data", "end", "origin", "start")
+
+    def __init__(
+        self, start: int, end: int, data: bytes | None, origin: _Origin
+    ) -> None:
+        self.start = start
+        self.end = end
+        self.data = data
+        self.origin = origin
+
+    def cut(self, start: int, end: int) -> _Chunk:
+        """Return the part of this chunk over ``[start, end)``.
+
+        :param start: The first byte, inside the chunk.
+        :param end: One past the last, inside the chunk.
+        """
+        if start == self.start and end == self.end:
+            return self
+        data = self.data
+        if data is not None:
+            data = data[start - self.start : end - self.start]
+        return _Chunk(start, end, data, self.origin)
+
+
+def _chunk_charge(chunk: _Chunk) -> int:
+    """Return the bytes charged for one held chunk.
+
+    :param chunk: The chunk.
+    """
+    return PIECE_OVERHEAD + (0 if chunk.data is None else len(chunk.data))
+
+
+class _Run:
+    """Contiguous delivered bytes a direction retains, and their frames."""
+
+    __slots__ = ("data", "origins", "start", "starts")
+
+    def __init__(self, start: int, data: bytes, origin: _Origin) -> None:
+        self.start = start
+        self.data = bytearray(data)
+        #: Where each frame's bytes begin; each runs to the next start.
+        self.starts = [start]
+        self.origins = [origin]
+
+    @property
+    def end(self) -> int:
+        """One past the run's last byte."""
+        return self.start + len(self.data)
+
+    def charge(self) -> int:
+        """Return the bytes charged for the run.
+
+        That is :data:`PIECE_OVERHEAD`, its data and the eighth of it
+        a growing ``bytearray`` may hold in reserve, and
+        ``_SPAN_OVERHEAD`` per frame it names.
+        """
+        size = len(self.data)
+        return (
+            PIECE_OVERHEAD
+            + size
+            + (size >> 3)
+            + _SPAN_OVERHEAD * len(self.starts)
+        )
+
+    def chunks(self, low: int, high: int) -> list[_Chunk]:
+        """Return the run's bytes over ``[low, high)``, one chunk per frame.
+
+        :param low: The first byte, at or after the run's start.
+        :param high: One past the last, at or before the run's end.
+        """
+        found: list[_Chunk] = []
+        index = max(0, bisect.bisect_right(self.starts, low) - 1)
+        while index < len(self.starts) and self.starts[index] < high:
+            begin = max(low, self.starts[index])
+            stop = high
+            if index + 1 < len(self.starts):
+                stop = min(high, self.starts[index + 1])
+            data = bytes(self.data[begin - self.start : stop - self.start])
+            found.append(_Chunk(begin, stop, data, self.origins[index]))
+            index += 1
+        return found
+
+    def trim(self, low: int) -> None:
+        """Drop the run's bytes before ``low``, inside the run.
+
+        :param low: The new first byte.
+        """
+        index = bisect.bisect_right(self.starts, low) - 1
+        del self.starts[:index]
+        del self.origins[:index]
+        self.starts[0] = low
+        self.data = self.data[low - self.start :]
+        self.start = low
+
+
+class _Dir:
+    """One direction of a TCP connection."""
+
+    __slots__ = (
+        "ack",
+        "base",
+        "edge",
+        "fin",
+        "gaps",
+        "held",
+        "hop",
+        "mark",
+        "next",
+        "notes",
+        "pending",
+        "reach",
+        "runs",
+        "scale",
+    )
+
+    def __init__(self) -> None:
+        #: The sequence number of offset 0.
+        self.base: int | None = None
+        #: The Window Scale shift of its SYN, if it had one.
+        self.scale: int | None = None
+        #: The delivered end: delivered or skipped bytes end here.
+        self.next = 0
+        #: One past the highest declared byte received.
+        self.reach = 0
+        #: Undelivered chunks past a hole, in order.
+        self.held: list[_Chunk] | None = None
+        #: Retained delivered bytes, in order.
+        self.runs: list[_Run] | None = None
+        #: ACKED gaps inside the retained window, as ``[start, end]``.
+        self.gaps: list[list[int]] | None = None
+        #: The peer's highest acknowledgement, as an offset.
+        self.ack: int | None = None
+        #: The capture clock when an acknowledgement first passed a hole.
+        self.pending: int | None = None
+        #: The furthest right window edge its receiver advertised.
+        self.edge: int | None = None
+        #: The end its FIN fixed, and the FIN's frame.
+        self.fin: tuple[int, _Origin] | None = None
+        #: What it had received when the latest RST arrived.
+        self.mark: int | None = None
+        #: The hop limit of its latest segment; -1 before one.
+        self.hop = -1
+        #: ``_NOTE_*``, ``_SENT``, ``_ENDED`` and ``_SYNCED`` bits.
+        self.notes = 0
+
+    @property
+    def started(self) -> bool:
+        """Whether offset 0 is known and the direction has not ended."""
+        return self.base is not None and not self.notes & _ENDED
+
+    def offset(self, seq: int) -> int:
+        """Return the stream offset of a sequence number.
+
+        The offset 0 is known.
+
+        :param seq: The sequence number.
+        """
+        base = typing.cast(int, self.base)
+        return _serial((seq - base) % _SEQ_SPACE, self.next)
+
+
+class _Conn:
+    """One TCP connection."""
+
+    __slots__ = (
+        "a",
+        "b",
+        "charge",
+        "created",
+        "full",
+        "key",
+        "last",
+        "rst",
+        "scheduled",
+        "seq",
+    )
+
+    def __init__(self, key: FlowKey, seq: int, timestamp: int) -> None:
+        self.key = key
+        self.seq = seq
+        self.created = timestamp
+        self.last = timestamp
+        self.a: _Dir | None = None
+        self.b: _Dir | None = None
+        self.charge = FLOW_OVERHEAD
+        #: Whether both directions have carried data.
+        self.full = False
+        #: The pending RST's frame, while its end is pending.
+        self.rst: _Origin | None = None
+        #: The time of the connection's entry in the deadline heap.
+        self.scheduled: int | None = None
+
+    def dirs(self) -> list[tuple[int, _Dir]]:
+        """Return the directions present, with their sides, ``A_TO_B`` first."""
+        return [
+            (side, found)
+            for side, found in ((0, self.a), (1, self.b))
+            if found is not None
+        ]
+
+    def finished(self) -> bool:
+        """Return whether every direction present has ended by FIN."""
+        present = self.dirs()
+        return bool(present) and all(
+            found.notes & _ENDED for _, found in present
+        )
+
+
+def _direction(side: int) -> Direction:
+    """Return the :class:`Direction` of a side.
+
+    :param side: 0 for ``A_TO_B``, 1 for ``B_TO_A``.
+    """
+    return Direction.A_TO_B if side == 0 else Direction.B_TO_A
+
+
+class _Segment(NamedTuple):
+    """One TCP segment sliced out of a fed frame."""
+
+    key: FlowKey
+    side: int
+    source: str
+    receiver: str
+    seq: int
+    ack: int
+    flags: int
+    window: int
+    scale: int | None
+    data: bytes
+    length: int
+    origin: _Origin
+    unknown: bool
+    ip_bad: bool
+    ip_zero: bool
+    tcp_bad: bool
+    pattern: bool
+
+
+def _fragmented(layers: tuple[Protocol, ...]) -> bool:
+    """Return whether any of ``layers`` is the header of an IP fragment.
+
+    That is an IPv4 header with MF set or a nonzero Fragment Offset, or
+    an IPv6 Fragment header with M set or a nonzero offset.
+
+    :param layers: Decoded headers.
+    """
+    for layer in layers:
+        if isinstance(layer, IPv4) and (
+            layer.flags & 1 or layer.fragment_offset
+        ):
+            return True
+        if isinstance(layer, IPv6Fragment) and (
+            layer.m_flag or layer.fragment_offset
+        ):
+            return True
+    return False
+
+
+def _find_tcp(
+    packet: Packet,
+) -> tuple[TCP, int, IPv4 | IPv6, int, IPv6Routing | None] | None:
+    """Find the packet's first TCP layer and the IP header nearest before it.
+
+    ``None`` when there is no TCP layer, no IP header before it, or an IP
+    fragment header before it.
+
+    :param packet: The decoded packet.
+    :returns: The TCP layer, its offset in the frame, the IP header, its
+        offset, and the IPv6 Routing header with segments left between
+        them, if any.
+    """
+    layers = packet.layers
+    offsets: list[int] = []
+    offset = 0
+    for index, layer in enumerate(layers):
+        offsets.append(offset)
+        if isinstance(layer, TCP):
+            ip, routing = _enclosing_ip(layers, index)
+            if ip is None or _fragmented(layers[:index]):
+                return None
+            at = max(i for i in range(index) if layers[i] is ip)
+            return layer, offset, ip, offsets[at], routing
+        offset += layer.header_len
+    return None
+
+
+def _checksums(
+    tcp: TCP,
+    segment: bytes,
+    source: str,
+    receiver: str,
+    complete: bool,
+) -> tuple[bool, bool]:
+    """Judge a TCP checksum.
+
+    :param tcp: The TCP header.
+    :param segment: The captured segment, header included.
+    :param source: The source address.
+    :param receiver: The destination address the checksum uses.
+    :param complete: Whether ``segment`` is all its IP header declares;
+        ``False`` for a segment the snap length cut, which is not judged.
+    :returns: Whether the checksum is bad, and whether it is one of the
+        sums a stack leaves for its NIC to fill: the pseudo-header's,
+        with the segment's length or without any.
+    """
+    pack = ipv6_to_bytes if ":" in source else ipv4_to_bytes
+    src = pack(source)
+    dst = pack(receiver)
+    pseudo = _pseudo(src, dst, len(segment))
+    pattern = tcp.checksum in (_fold(pseudo), _fold(_pseudo(src, dst, 0)))
+    if not complete:
+        return False, pattern
+    return internet_checksum(pseudo + segment) != 0, pattern
+
+
+def _slice_segment(
+    packet: Packet,
+    frame: bytes | bytearray | memoryview,
+    timestamp: int,
+    ref: int,
+) -> _Segment | None:
+    """Slice the packet's TCP segment out of its frame.
+
+    ``None`` when the packet holds no TCP segment a stream can take.
+
+    :param packet: The decoded packet.
+    :param frame: The frame.
+    :param timestamp: The frame's capture time.
+    :param ref: The frame's reference.
+    """
+    found = _find_tcp(packet)
+    if found is None:
+        return None
+    tcp, tcp_at, ip, ip_at, routing = found
+    receiver = _effective_destination(ip, routing)
+    key = typing.cast(FlowKey, flow_key(tcp, ip=ip, routing=routing))
+    side = 0 if (ip.src, tcp.src_port) == (key.addr_a, key.port_a) else 1
+    bound = len(frame) - len(packet.trailer)
+    data_at = tcp_at + tcp.header_len
+    ip_bad = ip_zero = False
+    if isinstance(ip, IPv4):
+        declared = ip.total_length
+        hop = ip.ttl
+        header = bytes(frame[ip_at : ip_at + ip.header_len])
+        ip_bad = internet_checksum(header) != 0
+        ip_zero = ip.checksum == 0
+    else:
+        declared = ip.payload_length and ip.payload_length + 40
+        hop = ip.hop_limit
+    stop = min(ip_at + declared, bound) if declared else bound
+    data = bytes(frame[data_at : max(data_at, stop)])
+    length = max(0, ip_at + declared - data_at) if declared else len(data)
+    complete = bool(declared) and len(data) == length
+    segment = bytes(frame[tcp_at:data_at]) + data
+    tcp_bad, pattern = _checksums(tcp, segment, ip.src, receiver, complete)
+    return _Segment(
+        key=key,
+        side=side,
+        source=ip.src,
+        receiver=receiver,
+        seq=tcp.seq,
+        ack=tcp.ack,
+        flags=tcp.flags,
+        window=tcp.window,
+        scale=_window_scale(tcp.options) if tcp.flags & _SYN else None,
+        data=data,
+        length=length,
+        origin=_Origin(ref, timestamp, hop),
+        unknown=not declared,
+        ip_bad=ip_bad,
+        ip_zero=ip_zero,
+        tcp_bad=tcp_bad,
+        pattern=pattern,
+    )
+
+
+def _uncovered(
+    low: int, high: int, covered: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return the ranges of ``[low, high)`` no range of ``covered`` holds.
+
+    :param low: The first byte.
+    :param high: One past the last.
+    :param covered: Ranges inside ``[low, high)``, as ``(start, end)``.
+    """
+    found: list[tuple[int, int]] = []
+    cursor = low
+    for start, end in sorted(covered):
+        if start > cursor:
+            found.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < high:
+        found.append((cursor, high))
+    return found
+
+
+def _hull(ranges: list[tuple[int, int]]) -> tuple[int, int]:
+    """Return the smallest range holding every range of ``ranges``.
+
+    :param ranges: At least one ``(start, end)`` range.
+    """
+    return min(start for start, _ in ranges), max(end for _, end in ranges)
+
+
+def _coalesced(chunks: list[_Chunk]) -> list[_Chunk]:
+    """Join adjacent chunks of one frame that are both data or both cut.
+
+    :param chunks: Chunks in order, none overlapping.
+    """
+    joined: list[_Chunk] = []
+    for chunk in chunks:
+        if joined:
+            prior = joined[-1]
+            if (
+                prior.origin is chunk.origin
+                and prior.end == chunk.start
+                and (prior.data is None) == (chunk.data is None)
+            ):
+                data = None
+                if prior.data is not None and chunk.data is not None:
+                    data = prior.data + chunk.data
+                joined[-1] = _Chunk(prior.start, chunk.end, data, prior.origin)
+                continue
+        joined.append(chunk)
+    return joined
+
+
+def _merged_chunks(
+    overlapped: list[_Chunk],
+    bounds: tuple[int, int],
+    arriving: _Chunk,
+    last: bool,
+) -> list[_Chunk]:
+    """Return the chunks that replace ``overlapped`` once a range is stored.
+
+    The arriving bytes fill every byte of ``bounds`` no held chunk holds,
+    and replace a held chunk's bytes where they win: always over a range
+    the capture cut, and under ``last`` over held bytes. A range the
+    capture cut never replaces held bytes.
+
+    :param overlapped: The held chunks ``bounds`` overlaps, in order.
+    :param bounds: The ``[low, high)`` stored.
+    :param arriving: The arriving chunk, holding ``bounds``.
+    :param last: Whether the policy is ``last``.
+    """
+    low, high = bounds
+    new: list[_Chunk] = []
+    cursor = low
+    for held in overlapped:
+        if held.start < low:
+            new.append(held.cut(held.start, low))
+        start, end = max(held.start, low), min(held.end, high)
+        if start > cursor:
+            new.append(arriving.cut(cursor, start))
+        wins = arriving.data is not None and (held.data is None or last)
+        new.append(arriving.cut(start, end) if wins else held.cut(start, end))
+        if held.end > high:
+            new.append(held.cut(high, held.end))
+        cursor = max(cursor, end)
+    if cursor < high:
+        new.append(arriving.cut(cursor, high))
+    return _coalesced(new)
+
+
+class _Found:
+    """What an arriving segment overlaps, gathered before it is stored."""
+
+    __slots__ = ("late", "opponents", "unverified", "winners")
+
+    def __init__(self) -> None:
+        #: Delivered or held bytes it overlaps with bytes of its own.
+        self.opponents: list[_Chunk] = []
+        #: Whether it replaces each of them.
+        self.winners: list[bool] = []
+        #: Repeated ranges whose bytes could not be compared.
+        self.unverified: list[tuple[int, int]] = []
+        #: Ranges of ACKED gaps it fills.
+        self.late: list[tuple[int, int]] = []
+
+
+class _Work:
+    """One fed segment and the events it produces."""
+
+    __slots__ = ("events", "own", "prefix", "segment", "start", "suffix")
+
+    def __init__(self, segment: _Segment, events: list[StreamEvent]) -> None:
+        self.segment = segment
+        #: Events of other connections, returned first.
+        self.events = events
+        #: Events of the connection a SYN ended, returned next.
+        self.prefix: list[StreamEvent] = []
+        #: The segment's own connection's events, sorted by offset.
+        self.own: list[StreamEvent] = []
+        #: Events of its own connection's eviction, returned last.
+        self.suffix: list[StreamEvent] = []
+        #: The stream offset of its first byte, once known.
+        self.start = 0
+
+    @property
+    def ref(self) -> int:
+        """The segment's frame reference."""
+        return self.segment.origin.ref
+
+
+def _sort_key(event: StreamEvent, mine: Direction) -> tuple[int, int]:
+    """Return where an event of a segment's own connection sorts.
+
+    Events of the segment's direction come first, those of the other
+    direction next, each in stream offset order.
+
+    :param event: The event.
+    :param mine: The segment's direction.
+    """
+    group = 0 if event.direction is mine else 1
+    if isinstance(event, (StreamData, StreamEnd, LateData)):
+        return group, event.offset
+    return group, getattr(event, "start", 0)
+
+
+class _Fields(typing.TypedDict):
+    """The fields every event has, for a stream event's constructor."""
+
+    flow: FragmentKey | FlowKey
+    direction: Direction | None
+    spans: tuple[Span, ...]
+    completing_ref: int | None
+    first_timestamp: int
+    last_timestamp: int
+
+
+def _fields(
+    key: FlowKey,
+    side: int | None,
+    spans: list[Span],
+    ref: int | None,
+    times: tuple[int, int],
+) -> _Fields:
+    """Return the fields every stream event has.
+
+    :param key: The connection's key.
+    :param side: The direction's side, or ``None`` for the connection.
+    :param spans: The contributing frames.
+    :param ref: The ``completing_ref``.
+    :param times: The two timestamps when ``spans`` is empty.
+    """
+    ordered, first, last = _event_times(spans, times)
+    return _Fields(
+        flow=key,
+        direction=None if side is None else _direction(side),
+        spans=ordered,
+        completing_ref=ref,
+        first_timestamp=first,
+        last_timestamp=last,
+    )
+
+
+def _differing_ranges(
+    opponents: list[_Chunk], start: int, data: bytes
+) -> list[tuple[int, int]]:
+    """Return, per opponent, the smallest range where the versions differ.
+
+    :param opponents: Held or delivered chunks, each inside the arriving
+        segment's captured bytes, in order.
+    :param start: The arriving segment's first byte.
+    :param data: Its captured bytes.
+    """
+    found: list[tuple[int, int]] = []
+    for chunk in opponents:
+        held = typing.cast(bytes, chunk.data)
+        arriving = data[chunk.start - start : chunk.end - start]
+        difference = _difference(held, arriving)
+        if difference is not None:
+            found.append(
+                (chunk.start + difference[0], chunk.start + difference[1])
+            )
+    return found
+
+
+def _versions(
+    opponents: list[_Chunk],
+    winners: list[bool],
+    arriving: _Chunk,
+    bounds: tuple[int, int],
+) -> tuple[bytes, bytes, list[Span], list[Span]]:
+    """Return the kept and other versions of a range, and their spans.
+
+    Where only the arriving segment holds a byte, both versions hold it.
+    The range ends inside the last opponent it overlaps.
+
+    :param opponents: The chunks the segment overlaps, in order.
+    :param winners: Whether it replaces each of them.
+    :param arriving: The segment's captured bytes, holding ``bounds``.
+    :param bounds: The ``[low, high)`` range.
+    """
+    low, high = bounds
+    kept = bytearray()
+    other = bytearray()
+    kept_spans: list[Span] = []
+    other_spans: list[Span] = []
+    cursor = low
+    for chunk, wins in zip(opponents, winners, strict=True):
+        start, end = max(low, chunk.start), min(high, chunk.end)
+        if start >= end:
+            continue
+        for part in ([(cursor, start)] if start > cursor else []) + [
+            (start, end)
+        ]:
+            mine = arriving.cut(*part)
+            theirs = mine if part[0] < start else chunk.cut(*part)
+            first, second = (mine, theirs) if wins else (theirs, mine)
+            kept.extend(typing.cast(bytes, first.data))
+            other.extend(typing.cast(bytes, second.data))
+            kept_spans.append(first.origin.span(*part))
+            other_spans.append(second.origin.span(*part))
+        cursor = end
+    return bytes(kept), bytes(other), kept_spans, other_spans
+
+
+def _stored(pieces: list[_Chunk], arriving: _Chunk, last: bool) -> list[_Chunk]:
+    """Return ``pieces`` once ``arriving`` is stored among them.
+
+    :param pieces: Chunks in order, none overlapping.
+    :param arriving: The chunk stored.
+    :param last: Whether the policy is ``last``.
+    """
+    first = 0
+    while first < len(pieces) and pieces[first].end <= arriving.start:
+        first += 1
+    stop = first
+    while stop < len(pieces) and pieces[stop].start < arriving.end:
+        stop += 1
+    merged = _merged_chunks(
+        pieces[first:stop], (arriving.start, arriving.end), arriving, last
+    )
+    return pieces[:first] + merged + pieces[stop:]
+
+
+def _held_bytes(conn: _Conn) -> int:
+    """Return the undelivered data bytes a connection holds.
+
+    :param conn: The connection.
+    """
+    return sum(
+        len(chunk.data)
+        for _, found in conn.dirs()
+        for chunk in found.held or ()
+        if chunk.data is not None
+    )
+
+
+class StreamReassembler:
+    """Reassemble TCP segments into the byte stream of each direction.
+
+    A reassembler is not thread-safe. Events are returned by the call
+    that causes them and never queued, so what it holds is exactly the
+    connections, their held segments and their retained bytes
+    (:attr:`usage`).
+
+    :param bounds: The caps and timeouts; ``None`` means
+        ``StreamBounds()``.
+    :param policy: The overlap policy of a receiver no ``targets``
+        network holds: :attr:`OverlapPolicy.FIRST` or
+        :attr:`OverlapPolicy.LAST`.
+    :param targets: Networks, written as :func:`ipaddress.ip_network`
+        accepts them, mapped to the policy of the hosts in them. The
+        longest prefix holding a direction's receiver applies.
+    :param checksums: What a bad IPv4 header or TCP checksum does.
+    :param local: The capture host's networks, from which
+        :attr:`ChecksumMode.AUTO` accepts the offload patterns; ``None``
+        accepts them from any source.
+    :raises TypeError: if ``bounds`` is not a :class:`StreamBounds`.
+    :raises ValueError: if ``policy`` or a ``targets`` value is not
+        ``first`` or ``last``, ``checksums`` is not a
+        :class:`ChecksumMode`, ``local`` is a ``str`` rather than an
+        iterable of them, or a network does not parse.
+    """
+
+    def __init__(
+        self,
+        *,
+        bounds: StreamBounds | None = None,
+        policy: OverlapPolicy = OverlapPolicy.FIRST,
+        targets: Mapping[str, OverlapPolicy] | None = None,
+        checksums: ChecksumMode = ChecksumMode.AUTO,
+        local: Iterable[str] | None = None,
+    ) -> None:
+        if bounds is None:
+            bounds = StreamBounds()
+        if not isinstance(bounds, StreamBounds):
+            raise TypeError("bounds must be a StreamBounds")
+        if not _stream_policy(policy):
+            raise ValueError(f"{policy!r} is not a stream OverlapPolicy")
+        if not isinstance(checksums, ChecksumMode):
+            raise ValueError(f"{checksums!r} is not a ChecksumMode")
+        self._bounds = bounds
+        self._policy = policy
+        self._checksums = checksums
+        self._targets: list[
+            tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, OverlapPolicy]
+        ] = []
+        for text, value in (targets or {}).items():
+            if not _stream_policy(value):
+                raise ValueError(
+                    f"targets[{text!r}]: {value!r} is not a stream "
+                    "OverlapPolicy"
+                )
+            self._targets.append((_network(text, "targets"), value))
+        self._targets.sort(key=lambda entry: -entry[0].prefixlen)
+        if isinstance(local, str):
+            raise ValueError("local must be an iterable of networks, not a str")
+        self._local = None if local is None else _networks(local, "local")
+        #: Connections not yet carrying data both ways, least recently
+        #: active first.
+        self._half: OrderedDict[FlowKey, _Conn] = OrderedDict()
+        #: Connections carrying data both ways, least recently active
+        #: first.
+        self._full: OrderedDict[FlowKey, _Conn] = OrderedDict()
+        self._deadlines: list[tuple[int, int, FlowKey]] = []
+        self._total = 0
+        self._clock: int | None = None
+        self._fed = 0
+        self._seq = 0
+
+    @property
+    def usage(self) -> Usage:
+        """The connections held and the bytes charged for them."""
+        return Usage(len(self._half) + len(self._full), self._total)
+
+    def feed(
+        self,
+        packet: Packet,
+        frame: bytes | memoryview,
+        *,
+        timestamp: int,
+        ref: int | None = None,
+    ) -> tuple[StreamEvent, ...]:
+        """Take one frame and return every event it caused.
+
+        Every frame moves the capture clock to its timestamp, unless
+        that is 0 or lower than the highest seen, and returns the
+        expiries the clock causes. A packet with no TCP layer, or whose
+        first TCP layer is inside an IP fragment, returns those
+        expiries only.
+
+        :param packet: The packet :func:`~netprotocols.decode_frame`
+            decoded from ``frame``, a lax walk's included.
+        :param frame: The frame.
+        :param timestamp: Its capture time, in nanoseconds.
+        :param ref: Its reference in events; ``None`` means the number
+            of frames fed before it.
+        :raises TypeError: if ``packet`` is not a
+            :class:`~netprotocols.packet.Packet`, ``frame`` is not
+            bytes, or ``timestamp`` or ``ref`` is not an ``int``.
+        :raises ValueError: if ``timestamp`` is negative, or ``frame``
+            is shorter than ``packet.consumed + len(packet.trailer)``.
+        """
+        _check_feed(packet, frame, timestamp, ref)
+        if ref is None:
+            ref = self._fed
+        self._fed += 1
+        events: list[StreamEvent] = []
+        self._tick(timestamp, events)
+        segment = _slice_segment(packet, frame, timestamp, ref)
+        if segment is None:
+            return tuple(events)
+        work = _Work(segment, events)
+        self._take(work)
+        mine = _direction(segment.side)
+        work.own.sort(key=lambda event: _sort_key(event, mine))
+        return tuple(events + work.prefix + work.own + work.suffix)
+
+    def advance(self, timestamp: int) -> tuple[StreamEvent, ...]:
+        """Move the capture clock to ``timestamp`` and return the expiries.
+
+        :param timestamp: The capture time, in nanoseconds; 0, or one
+            lower than the clock, moves nothing.
+        :raises TypeError: if ``timestamp`` is not an ``int``.
+        :raises ValueError: if ``timestamp`` is negative.
+        """
+        _check_timestamp(timestamp)
+        events: list[StreamEvent] = []
+        self._tick(timestamp, events)
+        return tuple(events)
+
+    def close(self) -> tuple[StreamEvent, ...]:
+        """Flush every connection and return the events.
+
+        Connections go in deadline order, then those with no deadline,
+        ties in the order they started. A connection whose RST is
+        pending ends with ``StreamEnd(RST)`` for each open direction;
+        any other is flushed, each open direction ends with
+        ``StreamEnd(CLOSE)``, and :class:`Expired` follows under the
+        timeout whose deadline comes first (:attr:`Timeout.IDLE` when it
+        has none). The reassembler is empty afterwards.
+        """
+        events: list[StreamEvent] = []
+        ordered = []
+        for conn in [*self._half.values(), *self._full.values()]:
+            due = self._due(conn)
+            order = (due is None, due[0] if due else 0, conn.seq)
+            ordered.append((order, conn, due))
+        ordered.sort(key=lambda entry: entry[0])
+        for _, conn, due in ordered:
+            if conn.rst is not None:
+                self._flush(conn, EndReason.RST, None, events)
+                continue
+            timeout = Timeout.IDLE if due is None else due[1]
+            self._expired(conn, typing.cast(Timeout, timeout), events, True)
+        self._deadlines.clear()
+        return tuple(events)
+
+    # -- lookup, accounting and time ----------------------------------
+
+    def _find(self, key: FlowKey) -> _Conn | None:
+        """Return the connection held under ``key``, if any.
+
+        :param key: The flow key.
+        """
+        return self._half.get(key) or self._full.get(key)
+
+    def _charge(self, conn: _Conn, delta: int) -> None:
+        """Add ``delta`` bytes to a connection's charge and the total.
+
+        :param conn: The connection.
+        :param delta: The change.
+        """
+        conn.charge += delta
+        self._total += delta
+
+    def _side(self, conn: _Conn, side: int) -> _Dir:
+        """Return a direction of a connection, creating it when absent.
+
+        A direction is charged :data:`PIECE_OVERHEAD`, as state with no
+        captured bytes.
+
+        :param conn: The connection.
+        :param side: 0 for ``A_TO_B``, 1 for ``B_TO_A``.
+        """
+        found = conn.a if side == 0 else conn.b
+        if found is None:
+            found = _Dir()
+            if side == 0:
+                conn.a = found
+            else:
+                conn.b = found
+            self._charge(conn, PIECE_OVERHEAD)
+        return found
+
+    def _target(self, receiver: str) -> OverlapPolicy:
+        """Return the policy of the longest prefix holding ``receiver``.
+
+        :param receiver: The receiver's address.
+        """
+        if self._targets:
+            address = ipaddress.ip_address(receiver)
+            for network, policy in self._targets:
+                if address in network:
+                    return policy
+        return self._policy
+
+    def _policy_of(self, conn: _Conn, side: int) -> OverlapPolicy:
+        """Return the policy of a direction's receiver.
+
+        :param conn: The connection.
+        :param side: The direction's side.
+        """
+        key = conn.key
+        return self._target(key.addr_b if side == 0 else key.addr_a)
+
+    def _is_local(self, address: str) -> bool:
+        """Return whether ``address`` may carry the offload patterns.
+
+        :param address: A segment's source address.
+        """
+        if self._local is None:
+            return True
+        parsed = ipaddress.ip_address(address)
+        return any(parsed in network for network in self._local)
+
+    def _touch(self, conn: _Conn, timestamp: int) -> None:
+        """Record activity on a connection.
+
+        :param conn: The connection.
+        :param timestamp: The frame's capture time.
+        """
+        conn.last = max(conn.last, timestamp)
+        (self._full if conn.full else self._half).move_to_end(conn.key)
+
+    def _due(self, conn: _Conn) -> tuple[int, Timeout | EndReason] | None:
+        """Return a connection's earliest deadline and what it enforces.
+
+        :param conn: The connection.
+        """
+        bounds = self._bounds
+        found: list[tuple[int, int, Timeout | EndReason]] = []
+        if bounds.age_timeout is not None:
+            found.append((conn.created + bounds.age_timeout, 0, Timeout.AGE))
+        if conn.rst is not None:
+            if bounds.idle_timeout_closed is not None:
+                deadline = conn.rst.timestamp + bounds.idle_timeout_closed
+                found.append((deadline, 1, EndReason.RST))
+        else:
+            idle = bounds.idle_timeout_new
+            if conn.finished():
+                idle = bounds.idle_timeout_closed
+            elif conn.full:
+                idle = bounds.idle_timeout_established
+            if idle is not None:
+                found.append((conn.last + idle, 2, Timeout.IDLE))
+        if not found:
+            return None
+        deadline, _, kind = min(found, key=lambda entry: entry[:2])
+        return deadline, kind
+
+    def _schedule(self, conn: _Conn) -> None:
+        """Put a connection's deadline in the heap when it came earlier.
+
+        A later deadline is found when the earlier entry is popped.
+
+        :param conn: The connection.
+        """
+        due = self._due(conn)
+        if due is not None and (
+            conn.scheduled is None or due[0] < conn.scheduled
+        ):
+            conn.scheduled = due[0]
+            heapq.heappush(self._deadlines, (due[0], conn.seq, conn.key))
+            self._compact()
+
+    def _compact(self) -> None:
+        """Rebuild the deadline heap once most entries are stale."""
+        if len(self._deadlines) > 2 * (len(self._half) + len(self._full)) + 64:
+            self._deadlines = [
+                (conn.scheduled, conn.seq, conn.key)
+                for conn in [*self._half.values(), *self._full.values()]
+                if conn.scheduled is not None
+            ]
+            heapq.heapify(self._deadlines)
+
+    def _tick(self, timestamp: int, events: list[StreamEvent]) -> None:
+        """Move the clock and expire every connection due by it.
+
+        :param timestamp: A capture time.
+        :param events: Where the expiries are appended.
+        """
+        if timestamp and (self._clock is None or timestamp > self._clock):
+            self._clock = timestamp
+        clock = self._clock
+        if clock is None:
+            return
+        while self._deadlines and self._deadlines[0][0] <= clock:
+            deadline, seq, key = heapq.heappop(self._deadlines)
+            conn = self._find(key)
+            if conn is None or conn.seq != seq or conn.scheduled != deadline:
+                continue
+            conn.scheduled = None
+            due = self._due(conn)
+            if due is None:
+                continue
+            if due[0] != deadline:
+                conn.scheduled = due[0]
+                heapq.heappush(self._deadlines, (due[0], conn.seq, conn.key))
+            elif isinstance(due[1], EndReason):
+                self._flush(conn, EndReason.RST, None, events)
+            else:
+                self._expired(conn, due[1], events, False)
+
+    def _expired(
+        self,
+        conn: _Conn,
+        timeout: Timeout,
+        events: list[StreamEvent],
+        closing: bool,
+    ) -> None:
+        """Flush a connection a timeout or :meth:`close` ends.
+
+        :param conn: The connection.
+        :param timeout: The timeout reported by :class:`Expired`.
+        :param events: Where the events are appended.
+        :param closing: Whether :meth:`close` ends it.
+        """
+        held = _held_bytes(conn)
+        reason = EndReason.CLOSE
+        if not closing:
+            reason = EndReason.AGE if timeout is Timeout.AGE else EndReason.IDLE
+        self._flush(conn, reason, None, events)
+        events.append(
+            Expired(
+                **_fields(conn.key, None, [], None, (conn.created, conn.last)),
+                timeout=timeout,
+                held_bytes=held,
+                missing=(),
+            )
+        )
+
+    def _remove(self, conn: _Conn) -> None:
+        """Drop a connection from the reassembler.
+
+        :param conn: The connection.
+        """
+        del (self._full if conn.full else self._half)[conn.key]
+        self._total -= conn.charge
+        self._compact()
+
+    def _open(self, work: _Work) -> _Conn:
+        """Start the connection a segment's key names.
+
+        :param work: The segment.
+        """
+        segment = work.segment
+        key = segment.key
+        self._seq += 1
+        conn = _Conn(key, self._seq, segment.origin.timestamp)
+        self._half[key] = conn
+        self._total += conn.charge
+        if key.addr_a == key.addr_b and key.port_a == key.port_b:
+            self._anomaly(work, AnomalyKind.SELF_CONNECTED, (0, 0))
+        return conn
+
+    # -- events ---------------------------------------------------------
+
+    def _anomaly(
+        self, work: _Work, kind: AnomalyKind, bounds: tuple[int, int]
+    ) -> None:
+        """Append an :class:`Anomaly` about the arriving segment.
+
+        :param work: The segment.
+        :param kind: The rule.
+        :param bounds: The ``[start, end)`` it concerns.
+        """
+        segment = work.segment
+        span = segment.origin.span(work.start, work.start + len(segment.data))
+        times = (segment.origin.timestamp, segment.origin.timestamp)
+        work.own.append(
+            Anomaly(
+                **_fields(segment.key, segment.side, [span], work.ref, times),
+                kind=kind,
+                start=bounds[0],
+                end=bounds[1],
+            )
+        )
+
+    def _once(
+        self,
+        found: _Dir,
+        note: int,
+        work: _Work,
+        kind: AnomalyKind,
+        bounds: tuple[int, int],
+    ) -> None:
+        """Append an :class:`Anomaly` a direction reports once.
+
+        :param found: The segment's direction.
+        :param note: The bit that records it.
+        :param work: The segment.
+        :param kind: The rule.
+        :param bounds: The ``[start, end)`` it concerns.
+        """
+        if not found.notes & note:
+            found.notes |= note
+            self._anomaly(work, kind, bounds)
+
+    def _extent(self, conn: _Conn | None, work: _Work) -> tuple[int, int]:
+        """Return the stream range a segment's data declares.
+
+        The offsets are 0 to its length while its direction's offset 0
+        is unknown. The start is recorded in ``work``.
+
+        :param conn: The segment's connection, if held.
+        :param work: The segment.
+        """
+        segment = work.segment
+        start = 0
+        if conn is not None:
+            found = conn.a if segment.side == 0 else conn.b
+            if found is not None and found.base is not None:
+                seq = segment.seq + (1 if segment.flags & _SYN else 0)
+                start = found.offset(seq)
+        work.start = start
+        return start, start + segment.length
+
+    # -- the segment's rules --------------------------------------------
+
+    def _take(self, work: _Work) -> None:
+        """Apply the rules to one segment and store what it supplies.
+
+        :param work: The segment.
+        """
+        segment = work.segment
+        conn = self._find(segment.key)
+        if not self._usable(conn, work):
+            return
+        if segment.flags & _RST:
+            self._reset(conn, work)
+            return
+        if not segment.flags & (_ACK | _SYN):
+            bounds = self._extent(conn, work)
+            self._anomaly(work, AnomalyKind.DATA_WITHOUT_ACK, bounds)
+            return
+        if segment.flags & _SYN:
+            conn = self._synchronize(conn, work)
+            if conn is None:
+                return
+        elif conn is None:
+            conn = self._open(work)
+        self._segment(conn, work)
+        self._enforce(conn, work)
+
+    def _usable(self, conn: _Conn | None, work: _Work) -> bool:
+        """Apply :class:`ChecksumMode` and return whether the segment is used.
+
+        :param conn: The segment's connection, if held.
+        :param work: The segment.
+        """
+        segment = work.segment
+        bounds = self._extent(conn, work)
+        used = True
+        if segment.unknown:
+            self._anomaly(work, AnomalyKind.UNVERIFIED_CHECKSUM, bounds)
+            used = self._accept(work, segment.pattern, bounds)
+        if segment.ip_bad:
+            self._anomaly(work, AnomalyKind.BAD_CHECKSUM, bounds)
+            used = self._accept(work, segment.ip_zero, bounds) and used
+        if segment.tcp_bad:
+            self._anomaly(work, AnomalyKind.BAD_CHECKSUM, bounds)
+            used = self._accept(work, segment.pattern, bounds) and used
+        return used
+
+    def _accept(
+        self, work: _Work, pattern: bool, bounds: tuple[int, int]
+    ) -> bool:
+        """Return whether a checksum that did not verify is used anyway.
+
+        :param work: The segment.
+        :param pattern: Whether the checksum is an offload pattern.
+        :param bounds: The segment's stream range.
+        """
+        if self._checksums is ChecksumMode.KEEP:
+            return True
+        if (
+            self._checksums is ChecksumMode.AUTO
+            and pattern
+            and self._is_local(work.segment.source)
+        ):
+            self._anomaly(work, AnomalyKind.CHECKSUM_OFFLOAD, bounds)
+            return True
+        return False
+
+    def _reset(self, conn: _Conn | None, work: _Work) -> None:
+        """Take an RST: report it and make the connection's end pending.
+
+        :param conn: The segment's connection, if held.
+        :param work: The segment.
+        """
+        segment = work.segment
+        bounds = self._extent(conn, work)
+        if conn is not None:
+            self._touch(conn, segment.origin.timestamp)
+            self._hop(self._side(conn, segment.side), work, bounds)
+        if segment.length:
+            self._anomaly(work, AnomalyKind.RST_WITH_DATA, bounds)
+        self._anomaly(work, AnomalyKind.RST_RECEIVED, (bounds[0], bounds[0]))
+        if conn is None:
+            return
+        if conn.rst is None:
+            conn.rst = segment.origin
+            for side in (0, 1):
+                found = self._side(conn, side)
+                found.mark = found.reach
+                found.notes &= ~_NOTE_AFTER_RST
+        self._enforce(conn, work)
+
+    def _synchronize(self, conn: _Conn | None, work: _Work) -> _Conn | None:
+        """Take a SYN; return its connection, or ``None`` when it is ignored.
+
+        :param conn: The segment's connection, if held.
+        :param work: The segment.
+        """
+        segment = work.segment
+        if conn is not None and conn.finished():
+            self._remove(conn)
+            conn = None
+        if conn is not None and conn.rst is not None:
+            found = conn.a if segment.side == 0 else conn.b
+            if found is None or not self._same_isn(found, segment):
+                self._flush(conn, EndReason.RST, work.ref, work.prefix)
+                conn = self._open(work)
+                self._set_isn(self._side(conn, segment.side), work)
+                bounds = self._extent(conn, work)
+                self._anomaly(work, AnomalyKind.SYN_AFTER_RST, bounds)
+                return conn
+        if conn is None:
+            conn = self._open(work)
+            self._set_isn(self._side(conn, segment.side), work)
+            return conn
+        found = self._side(conn, segment.side)
+        if self._same_isn(found, segment):
+            self._repeated_syn(conn, work)
+        elif found.base is None:
+            self._set_isn(found, work)
+        elif found.next == 0 and not found.notes & _ENDED:
+            self._anomaly(work, AnomalyKind.ISN_CHANGED, (0, 0))
+            self._rebase(conn, found, work)
+        else:
+            bounds = self._extent(conn, work)
+            self._anomaly(work, AnomalyKind.ISN_CHANGED, bounds)
+            return None
+        return conn
+
+    @staticmethod
+    def _same_isn(found: _Dir, segment: _Segment) -> bool:
+        """Return whether a SYN repeats its direction's ISN.
+
+        :param found: The direction.
+        :param segment: The SYN.
+        """
+        return bool(found.notes & _SYNCED) and found.base == (
+            (segment.seq + 1) % _SEQ_SPACE
+        )
+
+    def _repeated_syn(self, conn: _Conn, work: _Work) -> None:
+        """Report a SYN that repeats its direction's ISN.
+
+        :param conn: The connection.
+        :param work: The SYN.
+        """
+        segment = work.segment
+        span = segment.origin.span(0, 0)
+        times = (segment.origin.timestamp, segment.origin.timestamp)
+        work.own.append(
+            Retransmission(
+                **_fields(conn.key, segment.side, [span], work.ref, times),
+                start=0,
+                end=0,
+                verified=True,
+            )
+        )
+
+    def _set_isn(self, found: _Dir, work: _Work) -> None:
+        """Set a direction's offset 0 from the SYN being taken.
+
+        :param found: The direction.
+        :param work: The SYN.
+        """
+        segment = work.segment
+        found.base = (segment.seq + 1) % _SEQ_SPACE
+        found.scale = segment.scale
+        found.notes |= _SYNCED
+        if segment.length:
+            work.start = 0
+            self._anomaly(work, AnomalyKind.SYN_DATA, (0, segment.length))
+
+    def _rebase(self, conn: _Conn, found: _Dir, work: _Work) -> None:
+        """Replace a direction's ISN before it delivered anything.
+
+        Held chunks, and the offsets the direction recorded, move with
+        offset 0; whatever lands before it is dropped and reported.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param work: The SYN with the new ISN.
+        """
+        segment = work.segment
+        old = typing.cast(int, found.base)
+        found.base = (segment.seq + 1) % _SEQ_SPACE
+        found.scale = segment.scale
+        delta = _serial((old - found.base) % _SEQ_SPACE, 0)
+        kept: list[_Chunk] = []
+        dropped: list[tuple[int, int]] = []
+        change = 0
+        for chunk in found.held or ():
+            start, end = chunk.start + delta, chunk.end + delta
+            change -= _chunk_charge(chunk)
+            if start < 0:
+                dropped.append((start, min(end, 0)))
+            if end > 0:
+                moved = _Chunk(start, end, chunk.data, chunk.origin)
+                moved = moved.cut(max(start, 0), end)
+                kept.append(moved)
+                change += _chunk_charge(moved)
+        found.held = kept or None
+        self._charge(conn, change)
+        found.reach = max(0, found.reach + delta)
+        if found.fin is not None:
+            end = found.fin[0] + delta
+            found.fin = (end, found.fin[1]) if end >= 0 else None
+        found.ack = _shifted(found.ack, delta)
+        found.edge = _shifted(found.edge, delta)
+        found.mark = _shifted(found.mark, delta)
+        if dropped:
+            self._anomaly(work, AnomalyKind.BEFORE_STREAM_START, _hull(dropped))
+
+    def _hop(self, found: _Dir, work: _Work, bounds: tuple[int, int]) -> None:
+        """Report a hop limit other than the direction's previous segment's.
+
+        :param found: The direction.
+        :param work: The segment.
+        :param bounds: Its stream range.
+        """
+        hop = work.segment.origin.hop_limit
+        if 0 <= found.hop != hop:
+            self._anomaly(work, AnomalyKind.HOP_LIMIT_CHANGED, bounds)
+        found.hop = hop
+
+    def _segment(self, conn: _Conn, work: _Work) -> None:
+        """Take an accepted segment that is not an RST.
+
+        :param conn: Its connection.
+        :param work: The segment.
+        """
+        segment = work.segment
+        found = self._side(conn, segment.side)
+        self._touch(conn, segment.origin.timestamp)
+        bounds = self._extent(conn, work)
+        self._hop(found, work, bounds)
+        if segment.flags & _URG:
+            self._once(found, _NOTE_URGENT, work, AnomalyKind.URGENT, bounds)
+        if found.base is None and (segment.length or segment.flags & _FIN):
+            found.base = segment.seq
+            bounds = self._extent(conn, work)
+            self._once(
+                found, _NOTE_MIDSTREAM, work, AnomalyKind.MIDSTREAM, bounds
+            )
+        peer = conn.b if segment.side == 0 else conn.a
+        acked = None
+        if peer is not None and segment.flags & _ACK:
+            acked = self._acknowledge(conn, peer, found, work)
+        if found.base is not None:
+            self._carry(conn, found, work)
+        if peer is not None and acked is not None and acked > peer.next:
+            self._confirm(conn, peer, work)
+        if not conn.full and all(
+            side is not None and side.notes & _SENT for side in (conn.a, conn.b)
+        ):
+            del self._half[conn.key]
+            self._full[conn.key] = conn
+            conn.full = True
+
+    def _carry(self, conn: _Conn, found: _Dir, work: _Work) -> None:
+        """Take a segment's data and FIN into its direction, and deliver.
+
+        :param conn: The connection.
+        :param found: The segment's direction.
+        :param work: The segment.
+        """
+        segment = work.segment
+        start, end = self._extent(conn, work)
+        if segment.length:
+            self._data(conn, found, (start, end), work)
+        if segment.flags & _FIN:
+            self._fin(found, end, work)
+        self._deliver(conn, found, work.ref, work.own, True)
+        self._retain_window(conn, found)
+        if segment.length and end > found.next:
+            self._confirm(conn, found, work)
+
+    def _fin(self, found: _Dir, end: int, work: _Work) -> None:
+        """Fix a direction's end at a FIN, or report it inconsistent.
+
+        :param found: The segment's direction.
+        :param end: The end the FIN declares.
+        :param work: The segment.
+        """
+        if found.fin is None and end >= found.reach:
+            found.fin = (end, work.segment.origin)
+        elif found.fin is None or found.fin[0] != end:
+            self._anomaly(work, AnomalyKind.INCONSISTENT_FIN, (end, end))
+
+    def _data(
+        self, conn: _Conn, found: _Dir, bounds: tuple[int, int], work: _Work
+    ) -> None:
+        """Apply the data rules to a segment and place its bytes.
+
+        :param conn: The connection.
+        :param found: The segment's direction.
+        :param bounds: The stream range its data declares.
+        :param work: The segment.
+        """
+        start, end = bounds
+        data = work.segment.data
+        if start < 0:
+            self._anomaly(work, AnomalyKind.BEFORE_STREAM_START, bounds)
+            return
+        if start + len(data) < end:
+            captured = (start + len(data), end)
+            self._anomaly(work, AnomalyKind.TRUNCATED, captured)
+        if found.fin is not None and end > found.fin[0]:
+            limit = found.fin[0]
+            self._anomaly(
+                work, AnomalyKind.DATA_AFTER_FIN, (max(start, limit), end)
+            )
+            end = limit
+            data = data[: max(0, end - start)]
+            if start >= end:
+                return
+        if found.edge is not None and end > found.edge:
+            self._anomaly(
+                work, AnomalyKind.OUT_OF_WINDOW, (max(start, found.edge), end)
+            )
+        if found.mark is not None and end > found.mark:
+            self._once(
+                found,
+                _NOTE_AFTER_RST,
+                work,
+                AnomalyKind.DATA_AFTER_RST,
+                (max(start, found.mark), end),
+            )
+            conn.rst = None
+        found.reach = max(found.reach, end)
+        found.notes |= _SENT
+        self._place(conn, found, (start, end), data, work)
+
+    # -- acknowledgements -------------------------------------------------
+
+    def _acknowledge(
+        self, conn: _Conn, peer: _Dir, sender: _Dir, work: _Work
+    ) -> int | None:
+        """Take a segment's acknowledgement of the other direction.
+
+        Return the acknowledged offset, or ``None`` when the other
+        direction's offset 0 is unknown or the acknowledgement falls
+        before it.
+
+        :param conn: The connection.
+        :param peer: The direction acknowledged.
+        :param sender: The segment's direction.
+        :param work: The segment.
+        """
+        segment = work.segment
+        if peer.base is None:
+            return None
+        acked = peer.offset(segment.ack)
+        if peer.fin is not None and acked == peer.fin[0] + 1:
+            acked -= 1
+        if acked < 0:
+            return None
+        if peer.ack is None or acked > peer.ack:
+            peer.ack = acked
+        if peer.notes & sender.notes & _SYNCED:
+            shift = 0
+            if not segment.flags & _SYN and None not in (
+                sender.scale,
+                peer.scale,
+            ):
+                shift = typing.cast(int, sender.scale)
+            edge = acked + (segment.window << shift)
+            if peer.edge is None or edge > peer.edge:
+                peer.edge = edge
+        if peer.ack > peer.next:
+            if peer.pending is None:
+                peer.pending = self._clock or 0
+        else:
+            peer.pending = None
+        self._retain_window(conn, peer)
+        return acked
+
+    def _confirm(self, conn: _Conn, found: _Dir, work: _Work) -> None:
+        """Declare the holes the peer acknowledged once their grace passed.
+
+        Each acknowledged hole, up to the highest offset the direction
+        received, becomes a ``Gap(ACKED)`` and the held bytes after it
+        are delivered, with the confirming frame's reference.
+
+        :param conn: The connection.
+        :param found: The direction whose holes are acknowledged.
+        :param work: The confirming segment.
+        """
+        ack = found.ack
+        if found.pending is None or ack is None or ack <= found.next:
+            return
+        if (self._clock or 0) < found.pending + self._bounds.ack_gap_grace:
+            return
+        side = 0 if found is conn.a else 1
+        limit = min(ack, found.reach)
+        if ack > found.reach and not found.notes & _NOTE_BEYOND:
+            found.notes |= _NOTE_BEYOND
+            segment = work.segment
+            times = (segment.origin.timestamp, segment.origin.timestamp)
+            work.own.append(
+                Anomaly(
+                    **_fields(conn.key, side, [], work.ref, times),
+                    kind=AnomalyKind.ACK_BEYOND_DATA,
+                    start=found.reach,
+                    end=ack,
+                )
+            )
+        while found.next < limit:
+            end = limit if not found.held else min(limit, found.held[0].start)
+            bounds = (found.next, end)
+            self._gap(conn, found, bounds, GapReason.ACKED, work.ref, work.own)
+            found.next = end
+            self._deliver(conn, found, work.ref, work.own, True)
+        if ack <= found.next:
+            found.pending = None
+        self._retain_window(conn, found)
+
+    def _gap(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        bounds: tuple[int, int],
+        reason: GapReason,
+        ref: int | None,
+        out: list[StreamEvent],
+    ) -> None:
+        """Append a :class:`Gap`.
+
+        A ``Gap(ACKED)`` is also recorded among the retained bytes, so
+        bytes arriving for it later are :class:`LateData`.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param bounds: The ``[start, end)`` skipped.
+        :param reason: Why.
+        :param ref: The ``completing_ref``.
+        :param out: Where the event is appended.
+        """
+        side = 0 if found is conn.a else 1
+        out.append(
+            Gap(
+                **_fields(conn.key, side, [], ref, (conn.created, conn.last)),
+                start=bounds[0],
+                end=bounds[1],
+                reason=reason,
+            )
+        )
+        if reason is GapReason.ACKED:
+            if found.gaps is None:
+                found.gaps = []
+            found.gaps.append(list(bounds))
+            self._charge(conn, PIECE_OVERHEAD)
+
+    # -- placing bytes --------------------------------------------------
+
+    def _place(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        bounds: tuple[int, int],
+        data: bytes,
+        work: _Work,
+    ) -> None:
+        """Compare a segment's bytes with what its direction holds; store them.
+
+        :param conn: The connection.
+        :param found: The segment's direction.
+        :param bounds: The ``[start, end)`` its data declares.
+        :param data: Its captured bytes, from ``start``.
+        :param work: The segment.
+        """
+        start, end = bounds
+        expected = found.next
+        policy = self._policy_of(conn, work.segment.side)
+        gathered = _Found()
+        if start < expected:
+            behind = (start, min(end, expected))
+            self._behind(found, behind, (start, data), gathered)
+        stored = False
+        if end > expected:
+            ahead = (max(start, expected), end)
+            self._gather_ahead(found, ahead, (start, data), policy, gathered)
+            stored = self._ahead(conn, found, ahead, (start, data), work)
+        self._report(conn, (start, data), policy, gathered, expected, work)
+        self._late(conn, found, (start, data), gathered.late, work)
+        if stored and start > expected:
+            segment = work.segment
+            span = segment.origin.span(start, start + len(data))
+            times = (segment.origin.timestamp, segment.origin.timestamp)
+            work.own.append(
+                OutOfOrder(
+                    **_fields(conn.key, segment.side, [span], work.ref, times),
+                    start=start,
+                    end=end,
+                    expected=expected,
+                )
+            )
+
+    def _gather_ahead(
+        self,
+        found: _Dir,
+        bounds: tuple[int, int],
+        arriving: tuple[int, bytes],
+        policy: OverlapPolicy,
+        gathered: _Found,
+    ) -> None:
+        """Gather what a segment's bytes past the delivered end overlap.
+
+        :param found: The segment's direction.
+        :param bounds: The ``[low, high)`` it declares past the
+            delivered end.
+        :param arriving: Its first byte and captured bytes.
+        :param policy: The receiver's policy.
+        :param gathered: Where the overlaps are recorded.
+        """
+        low, high = bounds
+        start, data = arriving
+        captured = max(low, min(high, start + len(data)))
+        held = found.held or []
+        first, stop = _overlapping(held, low, high)
+        for chunk in held[first:stop]:
+            begin, end = max(chunk.start, low), min(chunk.end, captured)
+            if begin < end and chunk.data is None:
+                gathered.unverified.append((begin, end))
+            elif begin < end:
+                gathered.opponents.append(chunk.cut(begin, end))
+                gathered.winners.append(policy is OverlapPolicy.LAST)
+            begin, end = max(chunk.start, captured), min(chunk.end, high)
+            if begin < end:
+                gathered.unverified.append((begin, end))
+
+    def _ahead(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        bounds: tuple[int, int],
+        arriving: tuple[int, bytes],
+        work: _Work,
+    ) -> bool:
+        """Store a segment's bytes past the delivered end.
+
+        Return whether anything of it was stored.
+
+        :param conn: The connection.
+        :param found: The segment's direction.
+        :param bounds: The ``[low, high)`` it declares past the
+            delivered end.
+        :param arriving: Its first byte and captured bytes.
+        :param work: The segment.
+        """
+        low, high = bounds
+        start, data = arriving
+        origin = work.segment.origin
+        policy = self._policy_of(conn, work.segment.side)
+        last = policy is OverlapPolicy.LAST
+        captured = max(low, min(high, start + len(data)))
+        held = found.held or []
+        first, stop = _overlapping(held, low, high)
+        before = held[first:stop]
+        pieces = before
+        if captured > low:
+            chunk = data[low - start : captured - start]
+            pieces = _stored(pieces, _Chunk(low, captured, chunk, origin), last)
+        if high > captured:
+            pieces = _stored(pieces, _Chunk(captured, high, None, origin), last)
+        held[first:stop] = pieces
+        found.held = held or None
+        change = sum(map(_chunk_charge, pieces)) - sum(
+            map(_chunk_charge, before)
+        )
+        self._charge(conn, change)
+        return any(chunk.origin is origin for chunk in pieces)
+
+    def _behind(
+        self,
+        found: _Dir,
+        bounds: tuple[int, int],
+        arriving: tuple[int, bytes],
+        gathered: _Found,
+    ) -> None:
+        """Gather what a segment's bytes before the delivered end repeat.
+
+        Retained bytes it overlaps are compared, ACKED gaps it fills are
+        late, and every other declared byte is an unverified repeat.
+
+        :param found: The segment's direction.
+        :param bounds: The ``[low, high)`` it declares before the
+            delivered end.
+        :param arriving: Its first byte and captured bytes.
+        :param gathered: Where the overlaps are recorded.
+        """
+        low, high = bounds
+        start, data = arriving
+        captured = min(high, start + len(data))
+        covered: list[tuple[int, int]] = []
+        for run in found.runs or ():
+            begin, end = max(low, run.start), min(captured, run.end)
+            if begin < end:
+                for chunk in run.chunks(begin, end):
+                    gathered.opponents.append(chunk)
+                    gathered.winners.append(False)
+                    covered.append((chunk.start, chunk.end))
+        for gap in found.gaps or ():
+            begin, end = max(low, gap[0]), min(captured, gap[1])
+            if begin < end:
+                gathered.late.append((begin, end))
+                covered.append((begin, end))
+        gathered.unverified.extend(_uncovered(low, high, covered))
+
+    def _report(
+        self,
+        conn: _Conn,
+        arriving: tuple[int, bytes],
+        policy: OverlapPolicy,
+        gathered: _Found,
+        expected: int,
+        work: _Work,
+    ) -> None:
+        """Report what a segment's bytes overlapped.
+
+        Bytes that differ from a held or delivered version make one
+        :class:`Overlap`; otherwise the repeated bytes make one
+        :class:`Retransmission`, verified when every one of them was
+        compared. Repeated bytes that could not be compared alongside an
+        :class:`Overlap` make a ``Retransmission(verified=False)``.
+
+        :param conn: The connection.
+        :param arriving: The segment's first byte and captured bytes.
+        :param policy: The receiver's policy.
+        :param gathered: What it overlapped.
+        :param expected: The delivered end before it arrived.
+        :param work: The segment.
+        """
+        start, data = arriving
+        origin = work.segment.origin
+        pairs = sorted(
+            zip(gathered.opponents, gathered.winners, strict=True),
+            key=lambda pair: pair[0].start,
+        )
+        opponents = [chunk for chunk, _ in pairs]
+        winners = [wins for _, wins in pairs]
+        differing = _differing_ranges(opponents, start, data)
+        unverified = gathered.unverified
+        if differing:
+            bounds = _hull(differing)
+            whole = _Chunk(start, start + len(data), data, origin)
+            kept, other, kept_spans, other_spans = _versions(
+                opponents, winners, whole, bounds
+            )
+            spans = sorted(set(kept_spans) | set(other_spans))
+            work.own.append(
+                Overlap(
+                    **_fields(
+                        conn.key, work.segment.side, spans, work.ref, (0, 0)
+                    ),
+                    start=bounds[0],
+                    end=bounds[1],
+                    policy=policy,
+                    kept=kept,
+                    other=other,
+                    kept_spans=tuple(kept_spans),
+                    other_spans=tuple(other_spans),
+                    resolved=True,
+                    contrary=policy is OverlapPolicy.LAST
+                    and differing[0][0] < expected,
+                )
+            )
+            if unverified:
+                self._repeat(conn, [], _hull(unverified), False, work)
+            return
+        ranges = [(chunk.start, chunk.end) for chunk in opponents] + unverified
+        if ranges:
+            self._repeat(conn, opponents, _hull(ranges), not unverified, work)
+
+    def _repeat(
+        self,
+        conn: _Conn,
+        opponents: list[_Chunk],
+        bounds: tuple[int, int],
+        verified: bool,
+        work: _Work,
+    ) -> None:
+        """Append the :class:`Retransmission` of a segment.
+
+        :param conn: The connection.
+        :param opponents: The chunks whose bytes it repeated.
+        :param bounds: The ``[start, end)`` repeated.
+        :param verified: Whether every repeated byte was compared.
+        :param work: The segment.
+        """
+        low, high = bounds
+        spans = [
+            chunk.origin.span(max(low, chunk.start), min(high, chunk.end))
+            for chunk in opponents
+        ]
+        spans.append(work.segment.origin.span(low, high))
+        work.own.append(
+            Retransmission(
+                **_fields(conn.key, work.segment.side, spans, work.ref, (0, 0)),
+                start=low,
+                end=high,
+                verified=verified,
+            )
+        )
+
+    def _late(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        arriving: tuple[int, bytes],
+        late: list[tuple[int, int]],
+        work: _Work,
+    ) -> None:
+        """Deliver a segment's bytes for ACKED gaps as :class:`LateData`.
+
+        The bytes join the retained ones, so a later repeat of them is
+        compared.
+
+        :param conn: The connection.
+        :param found: The segment's direction.
+        :param arriving: Its first byte and captured bytes.
+        :param late: The ranges of ACKED gaps it fills.
+        :param work: The segment.
+        """
+        start, data = arriving
+        origin = work.segment.origin
+        for low, high in late:
+            piece = data[low - start : high - start]
+            work.own.append(
+                LateData(
+                    **_fields(
+                        conn.key,
+                        work.segment.side,
+                        [origin.span(low, high)],
+                        work.ref,
+                        (0, 0),
+                    ),
+                    offset=low,
+                    data=piece,
+                )
+            )
+            remaining: list[list[int]] = []
+            for gap in found.gaps or ():
+                if gap[0] < low:
+                    remaining.append([gap[0], min(gap[1], low)])
+                if gap[1] > high:
+                    remaining.append([max(gap[0], high), gap[1]])
+            count = len(found.gaps or ())
+            self._charge(conn, (len(remaining) - count) * PIECE_OVERHEAD)
+            found.gaps = remaining or None
+            self._retain(conn, found, low, piece, origin)
+
+    # -- delivering bytes -------------------------------------------------
+
+    def _deliver(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        ref: int | None,
+        out: list[StreamEvent],
+        retain: bool,
+    ) -> None:
+        """Deliver the held chunks contiguous with a direction's delivered end.
+
+        Contiguous bytes make one :class:`StreamData`; a range the
+        capture cut makes a ``Gap(TRUNCATED)``. When delivery reaches the
+        end a FIN fixed, the direction ends.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param ref: The ``completing_ref`` of the events.
+        :param out: Where the events are appended.
+        :param retain: Whether the delivered bytes are retained.
+        """
+        held = found.held or []
+        count = 0
+        while count < len(held) and held[count].start == found.next:
+            found.next = held[count].end
+            count += 1
+        taken = held[:count]
+        del held[:count]
+        found.held = held or None
+        self._charge(conn, -sum(map(_chunk_charge, taken)))
+        side = 0 if found is conn.a else 1
+        index = 0
+        while index < len(taken):
+            stop = index
+            cut = taken[index].data is None
+            while stop < len(taken) and (taken[stop].data is None) == cut:
+                stop += 1
+            group = taken[index:stop]
+            if cut:
+                bounds = (group[0].start, group[-1].end)
+                self._gap(conn, found, bounds, GapReason.TRUNCATED, ref, out)
+            else:
+                self._emit(conn, side, group, ref, out)
+                for chunk in group if retain else ():
+                    data = typing.cast(bytes, chunk.data)
+                    self._retain(conn, found, chunk.start, data, chunk.origin)
+            index = stop
+        if found.ack is None or found.ack <= found.next:
+            found.pending = None
+        self._end_fin(conn, found, ref, out)
+
+    def _emit(
+        self,
+        conn: _Conn,
+        side: int,
+        chunks: list[_Chunk],
+        ref: int | None,
+        out: list[StreamEvent],
+    ) -> None:
+        """Append the :class:`StreamData` of contiguous chunks.
+
+        :param conn: The connection.
+        :param side: The direction's side.
+        :param chunks: The chunks, in order, every one holding bytes.
+        :param ref: The ``completing_ref``.
+        :param out: Where the event is appended.
+        """
+        spans = [chunk.origin.span(chunk.start, chunk.end) for chunk in chunks]
+        out.append(
+            StreamData(
+                **_fields(conn.key, side, spans, ref, (0, 0)),
+                offset=chunks[0].start,
+                data=b"".join(
+                    typing.cast(bytes, chunk.data) for chunk in chunks
+                ),
+            )
+        )
+
+    def _end_fin(
+        self,
+        conn: _Conn,
+        found: _Dir,
+        ref: int | None,
+        out: list[StreamEvent],
+    ) -> None:
+        """End a direction whose delivery reached the end its FIN fixed.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param ref: The ``completing_ref``.
+        :param out: Where the :class:`StreamEnd` is appended.
+        """
+        fin = found.fin
+        if fin is None or found.next < fin[0] or found.notes & _ENDED:
+            return
+        found.notes |= _ENDED
+        side = 0 if found is conn.a else 1
+        out.append(
+            StreamEnd(
+                **_fields(
+                    conn.key, side, [fin[1].span(fin[0], fin[0])], ref, (0, 0)
+                ),
+                offset=fin[0],
+                reason=EndReason.FIN,
+            )
+        )
+
+    # -- retained bytes ---------------------------------------------------
+
+    def _retain(
+        self, conn: _Conn, found: _Dir, start: int, data: bytes, origin: _Origin
+    ) -> None:
+        """Add delivered bytes to a direction's retained runs.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param start: The bytes' first offset.
+        :param data: The bytes.
+        :param origin: The frame that supplied them.
+        """
+        runs = found.runs
+        if runs is None:
+            runs = found.runs = []
+        index = bisect.bisect_right(runs, start, key=_run_start)
+        before = 0
+        if index and runs[index - 1].end == start:
+            run = runs[index - 1]
+            before = run.charge()
+            run.data += data
+            run.starts.append(start)
+            run.origins.append(origin)
+        else:
+            run = _Run(start, data, origin)
+            runs.insert(index, run)
+            index += 1
+        if index < len(runs) and runs[index].start == run.end:
+            after = runs.pop(index)
+            before += after.charge()
+            run.data += after.data
+            run.starts += after.starts
+            run.origins += after.origins
+        self._charge(conn, run.charge() - before)
+
+    def _retain_window(self, conn: _Conn, found: _Dir) -> None:
+        """Trim a direction's retained bytes to its window.
+
+        The window runs ``retain_bytes`` below the peer's highest
+        acknowledgement, capped at the delivered end, or below the
+        delivered end without one.
+
+        :param conn: The connection.
+        :param found: The direction.
+        """
+        anchor = found.next if found.ack is None else min(found.ack, found.next)
+        self._trim(conn, found, anchor - self._bounds.retain_bytes)
+
+    def _trim(self, conn: _Conn, found: _Dir, low: int) -> None:
+        """Drop a direction's retained bytes and ACKED gaps before ``low``.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param low: The first offset kept.
+        """
+        change = 0
+        runs = found.runs or []
+        count = 0
+        while count < len(runs) and runs[count].end <= low:
+            change -= runs[count].charge()
+            count += 1
+        del runs[:count]
+        if runs and runs[0].start < low:
+            change -= runs[0].charge()
+            runs[0].trim(low)
+            change += runs[0].charge()
+        found.runs = runs or None
+        kept: list[list[int]] = []
+        for gap in found.gaps or ():
+            if gap[1] <= low:
+                change -= PIECE_OVERHEAD
+            else:
+                gap[0] = max(gap[0], low)
+                kept.append(gap)
+        found.gaps = kept or None
+        self._charge(conn, change)
+
+    def _shed(self, conn: _Conn, found: _Dir, excess: int) -> None:
+        """Drop a direction's oldest retained bytes until ``excess`` is freed.
+
+        :param conn: The connection.
+        :param found: The direction.
+        :param excess: The bytes to free.
+        """
+        while excess > 0 and (found.runs or found.gaps):
+            before = conn.charge
+            low = found.next
+            if found.runs:
+                run = found.runs[0]
+                low = run.end
+                if len(run.data) > excess:
+                    low = run.start + excess
+            self._trim(conn, found, low)
+            excess -= before - conn.charge
+
+    # -- bounds -----------------------------------------------------------
+
+    def _enforce(self, conn: _Conn, work: _Work) -> None:
+        """Enforce the caps once a segment is stored, and schedule its expiry.
+
+        The connection first sheds its retained bytes, then forces its
+        lowest holes out as ``Gap(CAP)``, until it fits under
+        ``max_flow_bytes`` and ``max_total_bytes``; a connection that
+        cannot is evicted. Then the least recently active connection
+        not yet carrying data both ways, or else the least recently
+        active one, is evicted until ``max_flows`` and
+        ``max_total_bytes`` hold.
+
+        :param conn: The segment's connection.
+        :param work: The segment.
+        """
+        bounds = self._bounds
+        cap = min(bounds.max_flow_bytes, bounds.max_total_bytes)
+        if conn.charge > cap:
+            self._squeeze(conn, cap, work)
+        if conn.charge > cap:
+            bound = Bound.MAX_TOTAL_BYTES
+            if conn.charge > bounds.max_flow_bytes:
+                bound = Bound.MAX_FLOW_BYTES
+            self._evict(conn, bound, work.ref, work.suffix)
+        while len(self._half) + len(self._full) > bounds.max_flows:
+            self._evict_victim(Bound.MAX_FLOWS, conn, work)
+        while self._total > bounds.max_total_bytes:
+            self._evict_victim(Bound.MAX_TOTAL_BYTES, conn, work)
+        if self._find(conn.key) is conn:
+            self._schedule(conn)
+
+    def _squeeze(self, conn: _Conn, cap: int, work: _Work) -> None:
+        """Bring a connection under ``cap`` with its own data.
+
+        Retained bytes go first, the segment's direction before the
+        other; then each direction's lowest hole is declared a
+        ``Gap(CAP)`` and the held bytes after it delivered.
+
+        :param conn: The connection.
+        :param cap: The charge it must fit under.
+        :param work: The segment.
+        """
+        side = work.segment.side
+        order = [
+            found
+            for _, found in sorted(
+                conn.dirs(), key=lambda pair: pair[0] != side
+            )
+        ]
+        for found in order:
+            self._shed(conn, found, conn.charge - cap)
+        for found in order:
+            while conn.charge > cap and found.held:
+                start = found.held[0].start
+                bounds = (found.next, start)
+                self._gap(
+                    conn, found, bounds, GapReason.CAP, work.ref, work.own
+                )
+                found.next = start
+                self._deliver(conn, found, work.ref, work.own, True)
+                self._shed(conn, found, conn.charge - cap)
+
+    def _evict_victim(self, bound: Bound, conn: _Conn, work: _Work) -> None:
+        """Evict the connection a cap's eviction order picks.
+
+        :param bound: The cap enforced.
+        :param conn: The segment's connection, which carries its
+            reference when it is the one evicted.
+        :param work: The segment.
+        """
+        victim = next(iter((self._half or self._full).values()))
+        if victim is conn:
+            self._evict(conn, bound, work.ref, work.suffix)
+        else:
+            self._evict(victim, bound, None, work.events)
+
+    def _evict(
+        self,
+        conn: _Conn,
+        bound: Bound,
+        ref: int | None,
+        out: list[StreamEvent],
+    ) -> None:
+        """Flush a connection a bound evicts, ending with :class:`Evicted`.
+
+        :param conn: The connection.
+        :param bound: The cap enforced.
+        :param ref: The ``completing_ref`` of its events.
+        :param out: Where they are appended.
+        """
+        held = _held_bytes(conn)
+        self._flush(conn, EndReason.EVICTED, ref, out)
+        out.append(
+            Evicted(
+                **_fields(conn.key, None, [], ref, (conn.created, conn.last)),
+                bound=bound,
+                held_bytes=held,
+                missing=(),
+            )
+        )
+
+    def _flush(
+        self,
+        conn: _Conn,
+        reason: EndReason,
+        ref: int | None,
+        out: list[StreamEvent],
+    ) -> None:
+        """Deliver everything a connection holds, end it, and remove it.
+
+        Each hole becomes a ``Gap(FLUSH)``, up to the end a FIN fixed
+        when there is one, and the held bytes are delivered; a direction
+        whose FIN is then reached ends with ``StreamEnd(FIN)``, and every
+        other open direction with ``StreamEnd(reason)``.
+
+        :param conn: The connection.
+        :param reason: Why it ends.
+        :param ref: The ``completing_ref`` of its events.
+        :param out: Where they are appended.
+        """
+        for side, found in conn.dirs():
+            while found.held:
+                start = found.held[0].start
+                if start > found.next:
+                    bounds = (found.next, start)
+                    self._gap(conn, found, bounds, GapReason.FLUSH, ref, out)
+                    found.next = start
+                self._deliver(conn, found, ref, out, False)
+            if found.fin is not None and found.fin[0] > found.next:
+                bounds = (found.next, found.fin[0])
+                self._gap(conn, found, bounds, GapReason.FLUSH, ref, out)
+                found.next = found.fin[0]
+                self._end_fin(conn, found, ref, out)
+            if found.started:
+                found.notes |= _ENDED
+                out.append(
+                    StreamEnd(
+                        **_fields(
+                            conn.key, side, [], ref, (conn.created, conn.last)
+                        ),
+                        offset=found.next,
+                        reason=reason,
+                    )
+                )
+        self._remove(conn)
+
+
+def _run_start(run: _Run) -> int:
+    """Return where a retained run starts.
+
+    :param run: The run.
+    """
+    return run.start
+
+
+def _chunk_start(chunk: _Chunk) -> int:
+    """Return where a held chunk starts.
+
+    :param chunk: The chunk.
+    """
+    return chunk.start
+
+
+def _overlapping(held: list[_Chunk], low: int, high: int) -> tuple[int, int]:
+    """Return where the held chunks ``[low, high)`` overlaps are.
+
+    :param held: A direction's held chunks, in order.
+    :param low: The first byte.
+    :param high: One past the last.
+    :returns: The index of the first chunk overlapped and one past the
+        last; with no overlap, the index a chunk at ``low`` takes, twice.
+    """
+    first = bisect.bisect_right(held, low, key=_chunk_start) - 1
+    if first < 0 or held[first].end <= low:
+        first += 1
+    stop = first
+    while stop < len(held) and held[stop].start < high:
+        stop += 1
+    return first, stop
+
+
+def _shifted(value: int | None, delta: int) -> int | None:
+    """Return an offset moved by ``delta``, or ``None`` before offset 0.
+
+    :param value: The offset, or ``None``.
+    :param delta: The move.
+    """
+    if value is None or value + delta < 0:
+        return None
+    return value + delta
+
+
+def _stream_policy(value: object) -> bool:
+    """Return whether ``value`` is a policy :class:`StreamReassembler` offers.
+
+    :param value: The policy argument.
+    """
+    return isinstance(value, OverlapPolicy) and value in _STREAM_POLICIES
