@@ -124,7 +124,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, NoReturn, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
 from netprotocols.utils.exceptions import (
@@ -368,17 +368,17 @@ class CDPAddress:
         return None
 
 
-def _address_error(value: bytes, cursor: int, need: int) -> InvalidFieldError:
-    """Build the error for an address at ``cursor`` that runs past ``value``.
+def _raise_address_error(value: bytes, cursor: int, need: int) -> NoReturn:
+    """Raise the error for an address at ``cursor`` that runs past ``value``.
 
     :param value: The Addresses or Management Address TLV's value.
     :param cursor: Where in ``value`` the address starts.
     :param need: How many bytes from ``cursor`` the address needs.
-    :returns: The error, ``field`` ``"value"`` and ``offset`` relative to
-        the TLV's value.
+    :raises InvalidFieldError: always, with ``field`` ``"value"`` and
+        ``offset`` relative to the TLV's value.
     """
     left = len(value) - cursor
-    return InvalidFieldError(
+    raise InvalidFieldError(
         f"CDP address needs {need} bytes, {left} remain",
         protocol=CDPTLV,
         field="value",
@@ -398,18 +398,18 @@ def _read_address(value: bytes, cursor: int) -> tuple[CDPAddress, int]:
     """
     size = len(value)
     if cursor + 2 > size:
-        raise _address_error(value, cursor, 2)
+        _raise_address_error(value, cursor, 2)
     protocol_type, protocol_length = value[cursor], value[cursor + 1]
     protocol_end = cursor + 2 + protocol_length
     if protocol_end + 2 > size:
-        raise _address_error(value, cursor, protocol_end + 2 - cursor)
+        _raise_address_error(value, cursor, protocol_end + 2 - cursor)
     address_end = (
         protocol_end
         + 2
         + int.from_bytes(value[protocol_end : protocol_end + 2])
     )
     if address_end > size:
-        raise _address_error(value, cursor, address_end - cursor)
+        _raise_address_error(value, cursor, address_end - cursor)
     address = CDPAddress(
         protocol_type=protocol_type,
         protocol=value[cursor + 2 : protocol_end],
