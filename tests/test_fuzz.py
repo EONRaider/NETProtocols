@@ -2132,18 +2132,60 @@ def _ntp_decode(data: bytes) -> NTP | str:
         return str(error.field)
 
 
+def _reference_ntp_walk(
+    body: bytes, version: int
+) -> tuple[tuple[int, bytes], ...] | int:
+    """Walk an NTP body's extension fields independently of
+    netprotocols: the ``(type, value)`` pairs of a walk that ends at the
+    end of the body or where what is left has an NTPv4 MAC's length (4,
+    20 or 24 bytes), or the offset in the body of the first field that
+    does not walk. ``()`` below version 4, which has no fields."""
+    if version != 4:
+        return ()
+    offset, pairs = 0, []
+    while offset < len(body) and len(body) - offset not in (4, 20, 24):
+        if len(body) - offset < 4:
+            return offset
+        length = int.from_bytes(body[offset + 2 : offset + 4])
+        if length < 16 or length % 4 or offset + length > len(body):
+            return offset
+        pairs.append(
+            (
+                int.from_bytes(body[offset : offset + 2]),
+                body[offset + 4 : offset + length],
+            )
+        )
+        offset += length
+    return tuple(pairs)
+
+
 def _assert_ntp_body_tiles(ntp: NTP) -> None:
-    """The extension fields, the MAC and the remainder tile the body,
-    and every field the walk accepted keeps RFC 7822's Length rules."""
-    fields, mac = ntp.extension_fields, ntp.mac
+    """The extension fields raise InvalidFieldError at the offset
+    _reference_ntp_walk gives, where the remainder starts and with no
+    MAC; or they are the fields it gives, and they, the MAC and the
+    remainder tile the body, every field keeping RFC 7822's Length
+    rules. The MAC and the remainder never raise."""
+    expected = _reference_ntp_walk(ntp.body, ntp.version)
+    mac, remainder = ntp.mac, ntp.remainder
+    try:
+        fields = ntp.extension_fields
+    except InvalidFieldError as error:
+        assert isinstance(expected, int)
+        assert (error.field, error.offset) == ("body", expected)
+        assert mac is None
+        assert remainder == ntp.body[expected:]
+        event("NTP extension fields: malformed")
+        return
+    assert tuple((f.type, f.value) for f in fields) == expected
     tiled = b"".join(bytes(field) for field in fields)
-    tiled += (bytes(mac) if mac is not None else b"") + ntp.remainder
+    tiled += (bytes(mac) if mac is not None else b"") + remainder
     assert tiled == ntp.body
-    assert mac is None or not ntp.remainder
-    assert ntp.version == 4 or not fields
+    assert mac is None or not remainder
+    assert ntp.version != 4 or not remainder
     for field in fields:
         assert len(bytes(field)) >= 16 and len(bytes(field)) % 4 == 0
         assert field.type_name
+    event(f"NTP extension fields: {len(fields)}")
 
 
 class TestNTPAccessorSafety:
@@ -2152,8 +2194,9 @@ class TestNTPAccessorSafety:
         """decode() raises only on the 48-byte header, for the first
         reason that applies (a version outside 1-4, then mode 6 or 7,
         at any length, then too short), and keeps every byte after it;
-        the accessors never raise, and the extension fields, the MAC
-        and the remainder tile the body exactly."""
+        every other accessor never raises, and the extension fields
+        raise where the body does not walk, or with the MAC and the
+        remainder tile it exactly."""
         ntp = _ntp_decode(data)
         if not isinstance(ntp, NTP):
             assert ntp == _ntp_rejection(data)
@@ -2165,7 +2208,6 @@ class TestNTPAccessorSafety:
         for name in _NTP_ACCESSORS:
             getattr(ntp, name)
         mac = ntp.mac
-        event(f"NTP extension fields: {len(ntp.extension_fields)}")
         event(f"NTP MAC: {None if mac is None else len(bytes(mac))}")
         event(f"NTP remainder: {bool(ntp.remainder)}")
 

@@ -80,8 +80,7 @@ the UDP datagram, whose length ends the buffer in a
 :func:`~netprotocols.decode_frame` walk. So, like RIP, an NTP message
 keeps the whole buffer after
 its header as :attr:`NTP.body`, verbatim, ``bytes(NTP.decode(x)) == x``
-holds for every buffer decode accepts, and the accessors split the body
-without raising:
+holds for every buffer decode accepts, and the accessors split the body:
 
 - :attr:`NTP.extension_fields`, NTPv4 only (RFC 7822): each a 16-bit
   Field Type, a 16-bit Length that counts the 4-byte header and is a
@@ -103,6 +102,12 @@ without raising:
   is verified: that needs the key.
 - :attr:`NTP.remainder`: anything else, which neither walks as
   extension fields nor has a MAC's length.
+
+:attr:`NTP.extension_fields` is a walk: in an NTPv4 message whose body
+leaves a remainder, it raises
+:class:`~netprotocols.InvalidFieldError` at the first byte that is
+neither an extension field nor a MAC. :attr:`NTP.mac` and
+:attr:`NTP.remainder` never raise.
 
 The rule has the blind spot RIP's has, where no UDP length bounds the
 buffer: decoded on its own, a plain 48-byte message followed by a
@@ -239,7 +244,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from struct import Struct
-from typing import ClassVar, Self
+from typing import ClassVar, NoReturn, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, hex_str
 from netprotocols.utils.exceptions import (
@@ -627,6 +632,49 @@ def _split_body(
     return tuple(fields), NTPMAC(key_id, body[offset + 4 :]), len(body)
 
 
+def _raise_field_error(owner: type, body: bytes, offset: int) -> NoReturn:
+    """Raise the error for the extension field at ``offset`` in ``body``.
+
+    :param owner: The class to attach to the error.
+    :param body: The NTPv4 message's body.
+    :param offset: Where in ``body`` the field the walk cannot read
+        starts.
+    :raises InvalidFieldError: if fewer than 4 bytes remain at
+        ``offset`` for the field header, if the Length is below 16 or
+        not a multiple of 4, or if the Length runs past ``body``.
+    """
+    left = len(body) - offset
+    if left < _FIELD_HEADER.size:
+        raise InvalidFieldError(
+            f"NTP extension field header needs {_FIELD_HEADER.size} "
+            f"bytes, {left} remain",
+            protocol=owner,
+            field="body",
+            offset=offset,
+            expected=_FIELD_HEADER.size,
+            actual=left,
+        )
+    _, length = _FIELD_HEADER.unpack_from(body, offset)
+    if length < _MIN_FIELD_LEN or length % 4:
+        raise InvalidFieldError(
+            f"NTP extension field Length must be a multiple of 4 and at "
+            f"least {_MIN_FIELD_LEN}, got {length}",
+            protocol=owner,
+            field="body",
+            offset=offset,
+            expected=f">={_MIN_FIELD_LEN}, a multiple of 4",
+            actual=length,
+        )
+    raise InvalidFieldError(
+        f"NTP extension field declares {length} bytes, {left} remain",
+        protocol=owner,
+        field="body",
+        offset=offset,
+        expected=length,
+        actual=left,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class NTP(Protocol):
     """An NTP time message: the header (RFC 5905 §7.3) and what follows.
@@ -924,11 +972,22 @@ class NTP(Protocol):
     def extension_fields(self) -> tuple[NTPExtensionField, ...]:
         """Parse the NTPv4 extension fields (RFC 7822), in wire order.
 
-        The walk stops at what is left when it has a MAC's length, at a
-        Length RFC 7822 §3 does not allow, or at the end of the body.
-        Always empty below version 4. Never raises.
+        The walk ends at the end of the body, or where what is left has
+        a MAC's length (see :attr:`mac`).
+
+        :returns: The extension fields; empty for a body of no field,
+            and always empty below version 4, which has none.
+        :raises InvalidFieldError: if, in an NTPv4 message, the walk
+            meets a field it cannot read before the body or a MAC
+            ends: 1-3 bytes left for a field header, a Length RFC 7822
+            §3 does not allow (below 16 or not a multiple of 4), or a
+            Length past the body (``field`` ``"body"``, ``offset``
+            relative to :attr:`body`, where :attr:`remainder` starts).
         """
-        return _split_body(self.body, self.version)[0]
+        fields, mac, end = _split_body(self.body, self.version)
+        if self.version == 4 and mac is None and end < len(self.body):
+            _raise_field_error(type(self), self.body, end)
+        return fields
 
     @property
     def mac(self) -> NTPMAC | None:
@@ -947,6 +1006,8 @@ class NTP(Protocol):
         """Return what follows the extension fields, short of a MAC.
 
         Empty when the body is extension fields and a MAC, or nothing.
+        In an NTPv4 message it starts where :attr:`extension_fields`
+        raises. Never raises.
         """
         return self.body[_split_body(self.body, self.version)[2] :]
 
