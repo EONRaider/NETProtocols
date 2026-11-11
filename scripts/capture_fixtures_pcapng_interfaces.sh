@@ -31,7 +31,8 @@
 # only, so it does not read this file.
 #
 # Every echo must be answered, and the capture must hold exactly the
-# blocks and frames above, or the script stops with an error. Whatever
+# sections, interfaces and frames above, with no Simple Packet Block,
+# or the script stops with an error. Whatever
 # was captured by then is left in tests/fixtures/staging for inspection
 # and must not be folded in.
 

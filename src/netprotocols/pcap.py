@@ -669,7 +669,8 @@ def _read_pcapng_packets(
         Header Block.
     :raises MalformedCaptureError: as :func:`read_pcapng` raises, or if
         an Enhanced Packet Block references an Interface Description
-        Block whose ``if_name`` is not valid UTF-8.
+        Block whose ``if_name``, up to its first zero byte, is not valid
+        UTF-8.
     """
     interface_cell: list[_Interface | None] = [None]
     for timestamp, data in _read_pcapng_blocks(

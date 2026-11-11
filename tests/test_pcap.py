@@ -10,9 +10,11 @@ tcpdump/Wireshark default (microseconds, or classic pcap). This file
 hand-builds pcapng byte sequences instead — a flagged exception to
 tests/fixtures/MANIFEST.md's real-capture rule, as small Python
 builders, so every byte is readable in the source. The
-``read_packets`` tests read the real two-interface capture, and derive
-their malformed and edge-case inputs from it by editing its option
-bytes only, each edit labelled where it is made.
+``read_packets`` tests read the real two-interface capture and derive
+their other inputs from it: the ``if_name`` edge cases edit its option
+bytes only, the memoryview tests edit its bytes in a bytearray, and the
+section-reset tests reorder its blocks or append hand-built ones, each
+edit labelled where it is made.
 """
 
 from __future__ import annotations
@@ -505,6 +507,23 @@ class TestReadPacketsAgainstTheRealCapture:
         packets = read_packets(memoryview(mutable))
         mutable[_LO_IF_NAME + 4 : _LO_IF_NAME + 6] = b"LO"
         assert next(packets).interface_name == "LO"
+
+    def test_a_memoryview_is_not_reread_after_iteration_starts(self):
+        # Edit, made after the first next(): npifa0's if_name value
+        # becomes "NPIFA0" in the bytearray the memoryview is over.
+        mutable = bytearray(INTERFACES_PCAPNG)
+        packets = read_packets(memoryview(mutable))
+        assert next(packets).interface_name == "lo"
+        mutable[_VETH_IF_NAME + 4 : _VETH_IF_NAME + 10] = b"NPIFA0"
+        assert [p.interface_name for p in packets] == [
+            "lo",
+            "npifa0",
+            "npifa0",
+            "lo",
+            "lo",
+            "npifa0",
+            "npifa0",
+        ]
 
     def test_accepts_a_memoryview(self):
         assert list(read_packets(memoryview(INTERFACES_PCAPNG))) == list(
