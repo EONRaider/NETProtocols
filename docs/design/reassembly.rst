@@ -165,8 +165,10 @@ arguments, takes ``StreamBounds`` and returns ``StreamEvent``.
   other flows that storing its data requires (section 2.3), in
   eviction order, each flow's events together; then the events of its
   own flow in stream or datagram offset order. A frame the reassembler
-  does not apply to returns ``()``: for ``FragmentReassembler``, a
-  packet none of whose IP headers is a fragment; for
+  does not apply to still moves the capture clock, and returns only the
+  expiries its timestamp triggers (``()`` when there are none): for
+  ``FragmentReassembler``, a packet none of whose IP headers is a
+  fragment; for
   ``StreamReassembler``, a packet with no TCP layer, or whose TCP
   layer is inside an IP fragment (a first fragment's TCP header is
   decoded by the walk but its payload is partial; the caller feeds the
@@ -283,10 +285,13 @@ contiguous with the delivered end, that pushed its own direction past
 ``max_flow_bytes``, or that confirmed the ACK-based gap before it
 (section 4.7) (``StreamData``, ``Gap``),
 the fragment that pushed its own datagram past ``max_flow_bytes`` or
-``max_fragments`` (``Evicted``), and the arriving piece of an
+``max_fragments``, or past ``max_total_bytes`` on its own, or whose own
+datagram is evicted as the oldest to make room under
+``max_total_bytes`` or ``max_flows`` (``Evicted``), and the arriving
+piece of an
 ``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
 ``Anomaly``. It is ``None`` for every event a flush produces: an
-expiry, the eviction of a flow to make room (``max_total_bytes``,
+expiry, the eviction of another flow to make room (``max_total_bytes``,
 ``max_flows``), ``advance`` and ``close``; the exception is the flush
 a SYN confirms (decision 12, section 4.4), which carries the SYN's
 ref. A
@@ -392,8 +397,8 @@ API:
 - :class:`TypeError` for an argument of the wrong type, such as a
   ``ref`` that is not an ``int``, or a ``frame`` that is not bytes;
 - :class:`ValueError` for a ``frame`` too short for its ``packet``
-  (section 1.1), and for invalid bounds, networks or policies at
-  construction.
+  (section 1.1), for a negative ``timestamp``, and for invalid bounds,
+  networks or policies at construction.
 
 None of them is a :class:`netprotocols.ProtocolError`, which names
 bytes a decoder rejected. A packet whose walk stopped early
@@ -455,7 +460,11 @@ documented eviction, and an event.
 Each flow (a datagram in progress, or a TCP connection) is charged
 ``FLOW_OVERHEAD`` bytes, and each stored piece (a fragment, a held
 segment, a retained delivered run) is charged its data length plus
-``PIECE_OVERHEAD``. The two constants are module-level and are fixed
+``PIECE_OVERHEAD``. A fragment's declared range that is kept with no
+captured byte in it (a fragment the snap length cut to its header,
+under a rule that decides overlaps on declared ranges, section 3.3) is
+charged ``PIECE_OVERHEAD`` and counts against ``max_fragments`` like a
+piece. The two constants are module-level and are fixed
 in the fragment pull request by measuring CPython's actual allocation
 per flow and per piece with ``tracemalloc``; the test in section 7.4
 holds them to it. The figures below assume the expected order of
@@ -881,6 +890,23 @@ Policies resolve overlaps when a fragment arrives, against the held
 fragments it overlaps, so held state is always one non-overlapping
 version of each byte plus the spans that supplied it.
 
+The rules that discard on overlap (IPv6, ``discard`` and
+``linux-discard``) judge overlap on the fragments' declared ranges,
+the offset and length their headers give, not on the bytes a capture
+holds: a fragment the snap length cut still overlaps where its header
+says it does. Under IPv6 and ``discard``, an exact duplicate has the
+same declared range as a held fragment and equal bytes wherever both
+were captured, and it supplies the bytes the held fragment's capture
+lacks. Under ``linux-discard`` a fragment inside one run is a duplicate
+whatever its range within the run, and it is dropped, as Linux drops
+it: the held bytes stand, and none of its bytes is stored. Linux
+records the end a dropped last fragment declares (``ip_frag_queue``
+sets ``INET_FRAG_LAST_IN`` and the length before
+``inet_frag_queue_insert`` returns ``IPFRAG_DUP``) but checks for
+completion only after a fragment it inserts, so the duplicate completes
+nothing; a later fragment that fills a remaining hole completes the
+datagram.
+
 3.4 Named policies
 ~~~~~~~~~~~~~~~~~~
 
@@ -1105,7 +1131,11 @@ decision (below the table).
        discarded, per the decision below.
      -
    * - IPv6 first fragment that does not hold the whole header chain
-       through the upper-layer header.
+       through the upper-layer header: for TCP its whole header,
+       options included, as its Data Offset gives it (at least 20
+       bytes); 8 bytes for UDP and ICMPv6, as Linux checks; none for No
+       Next Header; 1 byte for any other. A first fragment the snap
+       length cut is not judged by this rule.
      - Discard the fragment, ``Anomaly(INCOMPLETE_HEADER_CHAIN)``.
      - RFC 8200 §4.5;
        `RFC 7112 §5 <https://www.rfc-editor.org/rfc/rfc7112.html#section-5>`__
@@ -2129,16 +2159,20 @@ streams already extracted.
 7.2 Crafted overlap cases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A generator, ``scripts/craft_reassembly_overlaps.py``, rewrites
-datagrams from the real captures into overlap cases and writes them as
-pcaps, each labelled **crafted** in MANIFEST with the generator and the
-source frame:
+The overlap cases that real stacks do not emit are built inside the
+tests, as crafted bytes labelled **crafted** there, never as committed
+pcaps:
 
 - the overlapping fragment pattern of Suricata's ``DefragSturgesNovak*``
   tests, once per offered IPv4 policy, with the expected reassembled
   bytes in a table in the test, one row per policy, taken from those
-  tests; for ``linux-discard``, the pattern and the expected
-  outcome come from a netns capture against the running kernel;
+  tests; for ``linux-discard``, the pattern and the expected outcome
+  come from a netns capture against the running kernel
+  (``tests/fixtures/reassembly/linux_overlaps.pcap``: script-built
+  fragment trains and the kernel's echo replies, labelled so in
+  MANIFEST, with the netns's ``ReasmOKs`` and ``ReasmOverlaps``
+  counters across each train recorded there, since a reply needs a
+  valid echo request and its absence alone does not show a discard);
 - the same pattern over IPv6, expecting the RFC 5722 discard, and then
   a clean train under the same key, expecting a new ``Datagram``;
 - identical duplicates (``Retransmission``, no ``Overlap``) for both
@@ -2218,17 +2252,18 @@ Hypothesis, under the existing profiles:
 Against independent references, never against dpkt, scapy or
 pypacker, which neither ``src/`` nor ``tests/`` imports:
 
-- tshark: the capture script records ``ip.reassembled_in``,
-  ``ipv6.reassembled.in``, ``ip.reassembled.data`` and
-  ``ipv6.reassembled.data`` for each fragment capture, and
-  ``-z follow,tcp,raw`` for each connection, into committed files
-  beside the captures, with the tshark version in MANIFEST. The tests
+- tshark: ``ip.reassembled_in``, ``ipv6.reassembled.in``,
+  ``ip.reassembled.data`` and ``ipv6.reassembled.data`` for each
+  fragment capture, and ``-z follow,tcp,raw`` for each connection, are
+  taken at capture time and recorded in the tests (the reassembled-in
+  frame, the length and the SHA-256 of the data) and in MANIFEST, with
+  the tshark version. The tests
   compare ``Datagram.data``'s payload and ``completing_ref`` with
   tshark's reassembled data and reassembled-in frame, and the
   concatenated ``StreamData`` with the followed stream, so CI needs no
-  tshark. On the crafted captures, ``ip.fragment.overlap.conflict``
-  (``ipv6.fragment.overlap.conflict`` for IPv6) must flag the frames
-  ``Overlap`` names where their bytes differ.
+  tshark. On the script-built capture of the kernel's trains,
+  ``ip.fragment.overlap.conflict`` must flag the trains in which
+  ``Overlap`` reports differing bytes.
 - ``scripts/extract_http_streams.py``, the stdlib-only extractor the
   HTTP and TLS tests already use: its ``NN.request`` and
   ``NN.response`` files must equal the module's streams for

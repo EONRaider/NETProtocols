@@ -1560,8 +1560,9 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
 
-15 stdlib modules imported (`__future__` and the type-checking-only
-`_typeshed` aside); `socket` used for exactly two
+17 stdlib modules imported (`__future__` and the type-checking-only
+`_typeshed` aside; `netprotocols.reassembly` adds `bisect` and
+`heapq`); `socket` used for exactly two
 `inet_pton`/`inet_ntop` calls (`_base.py:244-249`) and no socket ever
 created; no `ctypes`, `subprocess`, `fcntl`, `threading` or file access
 anywhere in `src/`.
@@ -2049,6 +2050,13 @@ section to begin with.
   winner, run on a Core 2 Duo, or comparing CPython 3.6 against
   CPython 2.7. Being the exception is itself a differentiator, and #86
   exists to make it possible.
+- ❌ **"Reassembles exactly as <operating system> does"** — the
+  `OverlapPolicy` values of `netprotocols.reassembly` follow Snort
+  frag3's mapping of stacks measured before 2005, and `linux-discard`
+  follows the Linux commits its design note cites (7969e5c40dfd,
+  ade446403bfb, 0ff89efb5246), not every kernel since. What the module
+  guarantees is the `Overlap` event for every overlap whose bytes
+  differ, under every policy, not the emulation.
 
 ---
 
