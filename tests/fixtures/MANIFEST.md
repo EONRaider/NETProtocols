@@ -1367,6 +1367,38 @@ and decoding that. `tests/test_tls.py` walks the split segments strict
 and lax, reassembles every connection with
 `scripts/extract_http_streams.py` and reads each client's SNI.
 
+## Two-interface pcapng capture (`tests/fixtures/pcapng/`)
+
+Outside the corpus on purpose: every corpus glob, `check_fixtures`
+and the counts above read `*.pcap` only, so none of them include this
+pcapng file. `interfaces.pcapng` (8 frames, 1636 bytes) was captured
+on 2026-11-11 by `scripts/capture_fixtures_pcapng_interfaces.sh`,
+which runs, inside the netns `npifcapa`,
+
+    dumpcap -q -i lo -f icmp -i npifa0 -f icmp -w interfaces.pcapng
+
+with dumpcap from Wireshark 4.2.2 (Ubuntu package 4.2.2-1.1build3),
+iproute2 6.1.0 and iputils ping 20240117, on Linux 6.18.44. `npifa0`
+(10.9.72.1/30, MAC `02:00:0a:09:48:01`) is one end of a veth pair
+whose other end, `npifb0` (10.9.72.2/30, `02:00:0a:09:48:02`), is in
+the netns `npifcapb`; the two have permanent neighbor entries for each
+other and IPv6 off, so no ARP, NDP or MLD frame is sent, and checksum
+offload is off on both ends. `npifcapa` pinged 127.0.0.1, 10.9.72.2,
+127.0.0.1 and 10.9.72.2, one echo each, so the file holds one
+Section Header Block, two Interface Description Blocks, interface 0
+`if_name` `lo` (with `if_description` `Loopback`) and interface 1
+`if_name` `npifa0`, both link type Ethernet and `if_tsresol` 9
+(nanoseconds), eight Enhanced Packet Blocks and two Interface
+Statistics Blocks. Frames 0-1 and 4-5 are interface 0's ICMPv4 echo
+request and reply between 127.0.0.1 and itself, frames 2-3 and 6-7
+interface 1's between 10.9.72.1 and 10.9.72.2, each with ICMP sequence
+number 1. The script checks every block, interface ID, address, ICMP
+type and sequence number, and verifies each IPv4 header and ICMP
+checksum, with the standard library; `check_fixtures`, which reads
+classic pcap only, does not read it. `tests/test_pcap.py` reads it
+with `read_packets` and derives its `if_name` edge cases from it by
+editing Interface Description Block option bytes only.
+
 ## Provenance note
 
 This corpus exposed a real defect on arrival: non-first IPv4 fragments

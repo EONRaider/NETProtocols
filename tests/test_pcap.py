@@ -2,13 +2,19 @@
 
 Classic-pcap coverage reuses the real fixture corpus (tests/fixtures/),
 matching this repository's real-capture-only ethos for that directory.
-pcapng coverage cannot: the corpus holds no pcapng captures, and the
-exotic ``if_tsresol`` cases in particular (nanosecond and non-default
-resolutions) essentially never occur in real traffic, which is
-overwhelmingly the tcpdump/Wireshark default (microseconds, or classic
-pcap). This file hand-builds pcapng byte sequences instead — a
-flagged exception to tests/fixtures/MANIFEST.md's real-capture rule, as
-small Python builders, so every byte is readable in the source.
+pcapng coverage mostly cannot: the corpus holds one pcapng capture,
+tests/fixtures/pcapng/interfaces.pcapng, and the exotic ``if_tsresol``
+cases in particular (nanosecond and non-default resolutions)
+essentially never occur in real traffic, which is overwhelmingly the
+tcpdump/Wireshark default (microseconds, or classic pcap). This file
+hand-builds pcapng byte sequences instead — a flagged exception to
+tests/fixtures/MANIFEST.md's real-capture rule, as small Python
+builders, so every byte is readable in the source. The
+``read_packets`` tests read the real two-interface capture and derive
+their other inputs from it: the ``if_name`` edge cases edit its option
+bytes only, the memoryview tests edit its bytes in a bytearray, and the
+section-reset tests reorder its blocks or append hand-built ones, each
+edit labelled where it is made.
 """
 
 from __future__ import annotations
@@ -20,8 +26,10 @@ import pytest
 from conftest import FIXTURES
 from netprotocols import (
     CapturedFrame,
+    CapturedPacket,
     MalformedCaptureError,
     read_captures,
+    read_packets,
     read_pcap,
     read_pcapng,
 )
@@ -275,6 +283,26 @@ class TestReadPcapng:
         (frame,) = list(read_pcapng(buffer))
         assert frame.timestamp == 42  # nanosecond resolution applied
 
+    def test_the_first_if_tsresol_wins(self):
+        # Two if_tsresol options: nanoseconds, then seconds.
+        opts = (
+            struct.pack("<HH", 9, 1)
+            + bytes([9])
+            + b"\x00\x00\x00"
+            + struct.pack("<HH", 9, 1)
+            + bytes([0])
+            + b"\x00\x00\x00"
+            + struct.pack("<HH", 0, 0)
+        )
+        body = struct.pack("<HHI", 1, 0, 65535) + opts
+        buffer = (
+            shb()
+            + _block("<", struct.pack("<I", 1), body)
+            + epb(0, 42, b"\x01")
+        )
+        (frame,) = list(read_pcapng(buffer))
+        assert frame.timestamp == 42
+
 
 class TestReadPcapngMalformedInput:
     def test_missing_section_header_block_raises(self):
@@ -361,3 +389,360 @@ class TestReadPcapngMalformedInput:
         buffer = shb() + idb() + struct.pack("<III", 3, 12, 12)
         with pytest.raises(MalformedCaptureError):
             list(read_pcapng(buffer))
+
+
+# -- read_packets --
+#
+# tests/fixtures/pcapng/interfaces.pcapng (see its MANIFEST entry):
+# one section, interface 0 "lo" and interface 1 "npifa0", eight
+# Enhanced Packet Blocks with interface IDs 0, 0, 1, 1, 0, 0, 1, 1.
+
+INTERFACES_PCAPNG = (FIXTURES / "pcapng" / "interfaces.pcapng").read_bytes()
+
+#: Block offsets in INTERFACES_PCAPNG: the Section Header Block, the two
+#: Interface Description Blocks, the eight Enhanced Packet Blocks, and
+#: the two Interface Statistics Blocks after them.
+_SHB = slice(0, 188)
+_IDB_LO = slice(188, 280)
+_IDB_VETH = slice(280, 364)
+_EPBS = slice(364, 1420)
+
+#: The first options of each Interface Description Block: lo's
+#: if_name ("lo") then if_description ("Loopback"), npifa0's if_name.
+_LO_IF_NAME = 204
+_LO_IF_DESCRIPTION = 212
+_VETH_IF_NAME = 296
+
+#: lo's last option, if_os; the zero padding after its value, then
+#: opt_endofopt; and lo's options end, where the padding and
+#: opt_endofopt end.
+_LO_IF_OS = 244
+_LO_IF_OS_PADDING = 269
+_LO_OPTIONS_END = 276
+
+_LO_FRAMES = (0, 1, 4, 5)
+_VETH_FRAMES = (2, 3, 6, 7)
+
+
+def _edit_options(offset: int, new: bytes) -> bytes:
+    """INTERFACES_PCAPNG with the option bytes at ``offset`` replaced.
+
+    Only Interface Description Block option bytes are edited; every
+    block length stays as captured.
+    """
+    assert _IDB_LO.start + 16 <= offset < _IDB_VETH.stop - 4
+    return (
+        INTERFACES_PCAPNG[:offset]
+        + new
+        + INTERFACES_PCAPNG[offset + len(new) :]
+    )
+
+
+def _names(buffer: bytes) -> list[str | None]:
+    return [packet.interface_name for packet in read_packets(buffer)]
+
+
+class TestReadPacketsAgainstTheRealCapture:
+    def test_the_capture_holds_the_option_bytes_these_tests_edit(self):
+        data = INTERFACES_PCAPNG
+        assert data[_LO_IF_NAME : _LO_IF_NAME + 8] == b"\x02\x00\x02\x00lo\0\0"
+        assert (
+            data[_LO_IF_DESCRIPTION : _LO_IF_DESCRIPTION + 12]
+            == b"\x03\x00\x08\x00Loopback"
+        )
+        assert data[_VETH_IF_NAME : _VETH_IF_NAME + 12] == (
+            b"\x02\x00\x06\x00npifa0\0\0"
+        )
+        assert _IDB_LO.stop - 4 == _LO_OPTIONS_END
+        assert data[_LO_IF_OS:_LO_OPTIONS_END] == (
+            b"\x0c\x00\x15\x00Linux 6.18.44-fc-v378" + b"\0" * 7
+        )
+        assert _LO_IF_OS_PADDING == _LO_IF_OS + 4 + 21
+
+    def test_each_frame_names_its_interface(self):
+        packets = list(read_packets(INTERFACES_PCAPNG))
+        assert [p.interface_id for p in packets] == [0, 0, 1, 1, 0, 0, 1, 1]
+        assert [p.interface_name for p in packets] == [
+            "lo",
+            "lo",
+            "npifa0",
+            "npifa0",
+            "lo",
+            "lo",
+            "npifa0",
+            "npifa0",
+        ]
+
+    def test_the_names_match_the_traffic_each_interface_carried(self):
+        # Ethernet, then an option-free IPv4 header: source and
+        # destination at frame bytes 26-29 and 30-33.
+        loopback = bytes([127, 0, 0, 1])
+        veth = {bytes([10, 9, 72, 1]), bytes([10, 9, 72, 2])}
+        for packet in read_packets(INTERFACES_PCAPNG):
+            addresses = {packet.data[26:30], packet.data[30:34]}
+            if packet.interface_name == "lo":
+                assert addresses == {loopback}
+            else:
+                assert packet.interface_name == "npifa0"
+                assert addresses == veth
+
+    def test_timestamps_and_data_are_read_pcapngs(self):
+        packets = list(read_packets(INTERFACES_PCAPNG))
+        frames = list(read_pcapng(INTERFACES_PCAPNG))
+        assert [(p.timestamp, p.data) for p in packets] == frames
+        assert list(read_captures(INTERFACES_PCAPNG)) == frames
+
+    def test_yields_captured_packets(self):
+        packet = next(read_packets(INTERFACES_PCAPNG))
+        assert type(packet) is CapturedPacket
+        timestamp, data, interface_id, interface_name = packet
+        assert timestamp > 1_700_000_000_000_000_000
+        assert (interface_id, interface_name) == (0, "lo")
+        assert type(data) is bytes
+
+    def test_a_memoryview_is_copied_when_iteration_starts(self):
+        # Edit, made between the call and the first next(): lo's if_name
+        # value "lo" becomes "LO" in the bytearray the memoryview is over.
+        mutable = bytearray(INTERFACES_PCAPNG)
+        packets = read_packets(memoryview(mutable))
+        mutable[_LO_IF_NAME + 4 : _LO_IF_NAME + 6] = b"LO"
+        assert next(packets).interface_name == "LO"
+
+    def test_a_memoryview_is_not_reread_after_iteration_starts(self):
+        # Edit, made after the first next(): npifa0's if_name value
+        # becomes "NPIFA0" in the bytearray the memoryview is over.
+        mutable = bytearray(INTERFACES_PCAPNG)
+        packets = read_packets(memoryview(mutable))
+        assert next(packets).interface_name == "lo"
+        mutable[_VETH_IF_NAME + 4 : _VETH_IF_NAME + 10] = b"NPIFA0"
+        assert [p.interface_name for p in packets] == [
+            "lo",
+            "npifa0",
+            "npifa0",
+            "lo",
+            "lo",
+            "npifa0",
+            "npifa0",
+        ]
+
+    def test_accepts_a_memoryview(self):
+        assert list(read_packets(memoryview(INTERFACES_PCAPNG))) == list(
+            read_packets(INTERFACES_PCAPNG)
+        )
+
+    def test_interfaces_reset_at_each_section_header_block(self):
+        # A second section, built from the capture's own blocks: its
+        # Section Header Block, then its two Interface Description
+        # Blocks in the other order, then its eight Enhanced Packet
+        # Blocks. In that section interface 0 is npifa0.
+        data = INTERFACES_PCAPNG
+        second = data[_SHB] + data[_IDB_VETH] + data[_IDB_LO] + data[_EPBS]
+        packets = list(read_packets(data + second))
+        assert len(packets) == 16
+        assert [p.interface_id for p in packets[8:]] == [0, 0, 1, 1] * 2
+        assert [p.interface_name for p in packets[8:]] == [
+            "npifa0",
+            "npifa0",
+            "lo",
+            "lo",
+        ] * 2
+
+    def test_reset_section_without_if_name_reads_none(self):
+        # A second section whose only Interface Description Block is
+        # the hand-built one, with no if_name: the first section's
+        # names are not carried into it.
+        buffer = INTERFACES_PCAPNG + shb() + idb() + epb(0, 1, b"\x01")
+        assert next(read_packets(buffer)).interface_name == "lo"
+        assert list(read_packets(buffer))[-1][2:] == (0, None)
+
+
+class TestReadPacketsIfNameOptions:
+    """Inputs are the real capture with its option bytes edited.
+
+    Each edit is labelled where it is made. The one exception, a
+    hand-built capture, says so in its name.
+    """
+
+    def test_no_if_name_reads_none(self):
+        # Edit: lo's if_name option code 2 becomes 1, opt_comment.
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
+
+    def test_a_hand_built_idb_without_if_name_reads_none(self):
+        buffer = shb() + idb() + epb(0, 1000, b"\xaa")
+        assert list(read_packets(buffer)) == [
+            CapturedPacket(1_000_000, b"\xaa", 0, None)
+        ]
+
+    def test_the_first_if_name_wins(self):
+        # Edit: lo's if_description ("Loopback") option code 3 becomes
+        # 2, so lo has if_name "lo" then if_name "Loopback".
+        buffer = _edit_options(_LO_IF_DESCRIPTION, b"\x02\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["lo"] * 4
+
+    def test_a_later_if_name_is_read_when_the_first_is_gone(self):
+        # Edits: lo's if_name becomes opt_comment (code 1) and its
+        # if_description becomes if_name (code 2).
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        buffer = buffer[:_LO_IF_DESCRIPTION] + b"\x02\x00" + buffer[214:]
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["Loopback"] * 4
+
+    def test_an_empty_if_name_reads_none(self):
+        # Edit: lo's 8-byte if_name option ("lo", padded) becomes an
+        # empty if_name and an empty opt_comment.
+        buffer = _edit_options(
+            _LO_IF_NAME, b"\x02\x00\x00\x00" + b"\x01\x00\x00\x00"
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
+
+    def test_an_empty_if_name_is_passed_over_for_a_later_one(self):
+        # Edits: as above, and lo's if_description becomes if_name.
+        buffer = _edit_options(
+            _LO_IF_NAME,
+            b"\x02\x00\x00\x00" + b"\x01\x00\x00\x00" + b"\x02\x00",
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["Loopback"] * 4
+
+    def test_an_if_name_is_cut_at_the_end_of_the_options(self):
+        # Edits: lo's if_name becomes opt_comment (code 1); its if_os
+        # becomes an if_name of length 0x400, past the block; and the
+        # zero padding and opt_endofopt after the if_os value, up to
+        # the end of the options, become "!".
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        buffer = (
+            buffer[:_LO_IF_OS]
+            + b"\x02\x00\x00\x04"
+            + buffer[_LO_IF_OS + 4 : _LO_IF_OS_PADDING]
+            + b"!" * (_LO_OPTIONS_END - _LO_IF_OS_PADDING)
+            + buffer[_LO_OPTIONS_END:]
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [
+            "Linux 6.18.44-fc-v378!!!!!!!"
+        ] * 4
+
+    def test_an_if_name_ends_at_its_first_zero_byte(self):
+        # Edit: lo's if_name length 2 becomes 4, so its value is
+        # "lo" and the two zero padding bytes after it.
+        buffer = _edit_options(_LO_IF_NAME + 2, b"\x04\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["lo"] * 4
+
+    def test_bytes_after_an_if_names_zero_byte_are_ignored(self):
+        # Edits: lo's if_name length 2 becomes 4, and its last value
+        # byte, a zero padding byte, becomes ff, not UTF-8.
+        buffer = _edit_options(_LO_IF_NAME + 2, b"\x04\x00")
+        buffer = buffer[: _LO_IF_NAME + 7] + b"\xff" + buffer[_LO_IF_NAME + 8 :]
+        assert buffer[_LO_IF_NAME + 4 : _LO_IF_NAME + 8] == b"lo\x00\xff"
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["lo"] * 4
+
+    def test_an_if_name_of_only_zero_bytes_reads_none(self):
+        # Edit: lo's if_name value "lo" becomes two zero bytes.
+        buffer = _edit_options(_LO_IF_NAME + 4, b"\x00\x00")
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
+
+    def test_an_if_name_of_only_zero_bytes_is_passed_over(self):
+        # Edits: lo's if_name value "lo" becomes two zero bytes, and
+        # its if_description becomes if_name (code 2).
+        buffer = _edit_options(_LO_IF_NAME + 4, b"\x00\x00")
+        buffer = buffer[:_LO_IF_DESCRIPTION] + b"\x02\x00" + buffer[214:]
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == ["Loopback"] * 4
+
+    def test_an_if_name_whose_value_starts_at_the_options_end_reads_none(
+        self,
+    ):
+        # Edits: lo's if_name becomes opt_comment (code 1), and its
+        # opt_endofopt, the last 4 option bytes, becomes an if_name
+        # header of length 1, so the value would start at the end of
+        # the options.
+        buffer = _edit_options(_LO_IF_NAME, b"\x01\x00")
+        buffer = (
+            buffer[: _LO_OPTIONS_END - 4]
+            + b"\x02\x00\x01\x00"
+            + buffer[_LO_OPTIONS_END:]
+        )
+        names = _names(buffer)
+        assert [names[i] for i in _LO_FRAMES] == [None] * 4
+        assert [names[i] for i in _VETH_FRAMES] == ["npifa0"] * 4
+
+    def test_a_non_utf8_if_name_raises_at_the_first_frame_naming_it(self):
+        # Edit: npifa0's if_name bytes "np" become ff fe, not UTF-8.
+        buffer = _edit_options(_VETH_IF_NAME + 4, b"\xff\xfe")
+        packets = read_packets(buffer)
+        assert [next(packets).interface_name for _ in range(2)] == [
+            "lo",
+            "lo",
+        ]
+        with pytest.raises(MalformedCaptureError) as excinfo:
+            next(packets)
+        assert excinfo.value.field == "if_name"
+        assert excinfo.value.offset == _VETH_IF_NAME + 4
+        assert excinfo.value.actual == "fffe69666130"
+
+    def test_a_non_utf8_if_name_offset_points_at_the_bad_byte(self):
+        # Edit: the second byte of lo's if_name, "o", becomes ff.
+        buffer = _edit_options(_LO_IF_NAME + 5, b"\xff")
+        with pytest.raises(MalformedCaptureError) as excinfo:
+            list(read_packets(buffer))
+        assert excinfo.value.offset == _LO_IF_NAME + 5
+
+    def test_a_non_utf8_if_name_leaves_read_pcapng_unchanged(self):
+        buffer = _edit_options(_VETH_IF_NAME + 4, b"\xff\xfe")
+        assert list(read_pcapng(buffer)) == list(read_pcapng(INTERFACES_PCAPNG))
+        assert list(read_captures(buffer)) == list(
+            read_captures(INTERFACES_PCAPNG)
+        )
+
+
+class TestReadPacketsWithoutAnInterface:
+    def test_classic_pcap_gives_none_for_both(self):
+        path = sorted(FIXTURES.glob("*.pcap"))[0]
+        data = path.read_bytes()
+        packets = list(read_packets(data))
+        assert packets
+        assert all(p[2:] == (None, None) for p in packets)
+        assert [p[:2] for p in packets] == list(read_pcap(data))
+
+    def test_simple_packet_block_gives_none_for_both(self):
+        buffer = shb() + idb() + spb(3, b"\xde\xad\xbe")
+        assert list(read_packets(buffer)) == [
+            CapturedPacket(0, b"\xde\xad\xbe", None, None)
+        ]
+
+    def test_simple_packet_block_after_an_enhanced_one(self):
+        buffer = shb() + idb() + epb(0, 1, b"\x01") + spb(1, b"\x02")
+        assert [p[2:] for p in read_packets(buffer)] == [
+            (0, None),
+            (None, None),
+        ]
+
+
+class TestReadPacketsMalformedInput:
+    def test_too_short_for_any_magic_raises_on_the_call(self):
+        with pytest.raises(MalformedCaptureError):
+            read_packets(b"\x01")
+
+    def test_unrecognized_magic_raises_on_the_call(self):
+        with pytest.raises(MalformedCaptureError):
+            read_packets(b"\xff\xff\xff\xff" + b"\x00" * 20)
+
+    def test_pcapng_errors_come_during_iteration(self):
+        packets = read_packets(shb() + epb(0, 1, b"\x01"))  # no IDB
+        with pytest.raises(MalformedCaptureError):
+            next(packets)
+
+    def test_classic_pcap_errors_come_during_iteration(self):
+        packets = read_packets(b"\xa1\xb2\xc3\xd4" + b"\x00" * 10)
+        with pytest.raises(MalformedCaptureError):
+            next(packets)
