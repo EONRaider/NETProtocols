@@ -954,6 +954,27 @@ class TestIPv6RoutingFinalDestinationSafety:
         assert final is None or isinstance(IPv6Address(final), IPv6Address)
 
     @given(header=_routing_headers)
+    def test_segments_walk_or_raise(self, header: IPv6Routing) -> None:
+        """The segment list is None for a type other than 0 and 2; for
+        those it raises InvalidFieldError at the half address an odd
+        hdr_ext_len leaves, and is otherwise every 16 bytes after the
+        reserved field."""
+        if header.routing_type not in (0, 2):
+            assert header.segments is None
+            event("IPv6Routing segments: none")
+            return
+        if header.hdr_ext_len % 2:
+            with pytest.raises(InvalidFieldError) as caught:
+                _ = header.segments
+            assert caught.value.offset == len(header.data) - 8
+            event("IPv6Routing segments: malformed")
+            return
+        segments = header.segments
+        assert segments is not None
+        assert b"".join(a.packed for a in segments) == header.data[4:]
+        event("IPv6Routing segments: parsed")
+
+    @given(header=_routing_headers)
     def test_memoryview_decode_agrees(self, header: IPv6Routing) -> None:
         raw = bytes(header)
         view = IPv6Routing.decode(memoryview(raw))
