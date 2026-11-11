@@ -790,17 +790,17 @@ class TestAddresses:
         assert [a.ip for a in addresses] == ["10.9.30.1"]
 
     @pytest.mark.parametrize(
-        "value",
+        ("value", "offset", "expected", "actual"),
         [
-            b"",
-            b"\x00\x00\x00",
-            b"\x00\x00\x00\x01",
-            b"\x00\x00\x00\x01\x01",
-            b"\x00\x00\x00\x01\x01\x01",
-            b"\x00\x00\x00\x01\x01\x01\xcc",
-            b"\x00\x00\x00\x01\x01\x01\xcc\x00",
-            b"\x00\x00\x00\x01\x01\x01\xcc\x00\x04\x0a\x09\x1e",
-            LLDPD_ADDRESSES[:3] + b"\x02" + LLDPD_ADDRESSES[4:],
+            (b"", 0, 4, 0),
+            (b"\x00\x00\x00", 0, 4, 3),
+            (b"\x00\x00\x00\x01", 4, 2, 0),
+            (b"\x00\x00\x00\x01\x01", 4, 2, 1),
+            (b"\x00\x00\x00\x01\x01\x01", 4, 5, 2),
+            (b"\x00\x00\x00\x01\x01\x01\xcc", 4, 5, 3),
+            (b"\x00\x00\x00\x01\x01\x01\xcc\x00", 4, 5, 4),
+            (b"\x00\x00\x00\x01\x01\x01\xcc\x00\x04\x0a\x09\x1e", 4, 9, 8),
+            (LLDPD_ADDRESSES[:3] + b"\x02" + LLDPD_ADDRESSES[4:], 13, 2, 0),
         ],
         ids=[
             "empty",
@@ -814,14 +814,51 @@ class TestAddresses:
             "count-2",
         ],
     )
-    def test_a_malformed_value_is_none(self, value):
-        """Answer None for a count or an address cut short."""
-        assert self.addresses(value) is None
+    @pytest.mark.parametrize("tlv_type", [2, 0x16])
+    def test_a_malformed_value_raises(
+        self, value, offset, expected, actual, tlv_type
+    ):
+        """Raise for a count or an address cut short, at the offset in
+        the TLV's value where the count or the address starts."""
+        with pytest.raises(InvalidFieldError) as excinfo:
+            self.addresses(value, tlv_type)
+        error = excinfo.value
+        assert (error.protocol, error.field) == (CDPTLV, "value")
+        assert (error.offset, error.expected, error.actual) == (
+            offset,
+            expected,
+            actual,
+        )
 
-    def test_a_count_past_the_entries_is_none(self):
-        """Each entry takes at least 4 bytes, so a huge count ends."""
+    def test_a_count_past_the_entries_raises(self):
+        """Each entry takes at least 4 bytes, so a huge count ends, at
+        the first address past the value."""
         value = b"\xff\xff\xff\xff" + b"\x01\x00\x00\x00" * 3
-        assert self.addresses(value) is None
+        with pytest.raises(InvalidFieldError) as excinfo:
+            self.addresses(value)
+        assert (excinfo.value.offset, excinfo.value.actual) == (16, 0)
+
+    def test_the_captured_address_cut_anywhere_raises(self):
+        """lldpd's Addresses TLV, cut at every length short of its
+        address, raises; whole, it parses."""
+        cdp = CDP.decode(pdu_of(CDPV1))
+        captured = cdp.tlv(2)
+        assert captured is not None
+        for cut in range(len(captured.value)):
+            tlvs = tuple(
+                CDPTLV(2, t.value[:cut]) if t.type == 2 else t for t in cdp.tlvs
+            )
+            with pytest.raises(InvalidFieldError):
+                _ = replace(cdp, tlvs=tlvs).addresses
+        assert [a.ip for a in cdp.addresses] == ["10.9.30.1"]
+
+    def test_a_pdu_without_the_tlvs_reads_none(self):
+        """No TLV of the type is nothing to walk: None, whatever else
+        the PDU holds."""
+        cdp = CDP.decode(pdu_of(CDPV1))
+        assert cdp.management_addresses is None
+        tlvs = tuple(t for t in cdp.tlvs if t.type != 2)
+        assert replace(cdp, tlvs=tlvs).addresses is None
 
 
 class _SliceCountingBytes(bytes):
@@ -898,7 +935,8 @@ class TestDecodeCost:
         )
         cdp = CDP(2, 180, 0, (CDPTLV(2, value),))
         _SliceCountingBytes.read = 0
-        assert cdp.addresses is None
+        with pytest.raises(InvalidFieldError):
+            _ = cdp.addresses
         assert 0 < _SliceCountingBytes.read <= 2 * len(value)
 
     def test_many_addresses_parse(self):

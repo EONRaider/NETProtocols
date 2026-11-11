@@ -579,9 +579,14 @@ class PIMHello:
     def address_list(self) -> tuple[PIMEncodedUnicast, ...] | None:
         """Read Address List (option 24): the sender's secondary addresses.
 
-        :raises ProtocolError: if an address does not decode or the
-            last one runs past the option; the error's ``offset`` is
-            relative to the option's value.
+        :returns: The Encoded-Unicast addresses that fill the option's
+            value, in wire order; ``None`` for a Hello without the
+            option.
+        :raises InvalidFieldError: if an address has a family or
+            encoding other than native IPv4 or IPv6, or runs past the
+            option's value (``field`` ``"body"``, ``offset`` relative to
+            the option's value; bounded, so it never hangs or
+            over-reads).
         """
         value = self._value(_ADDRESS_LIST, None)
         if value is None:
@@ -589,7 +594,17 @@ class PIMHello:
         addresses = []
         cursor = 0
         while cursor < len(value):
-            address, cursor = _read_unicast(value, cursor)
+            try:
+                address, cursor = _read_unicast(value, cursor)
+            except TruncatedHeaderError as error:
+                raise InvalidFieldError(
+                    str(error),
+                    protocol=PIM,
+                    field="body",
+                    offset=error.offset,
+                    expected=error.expected,
+                    actual=error.actual,
+                ) from None
             addresses.append(address)
         return tuple(addresses)
 

@@ -443,21 +443,35 @@ class IPv6Routing(Protocol):
         returns for types 0 and 2, and is followed by TLVs;
         :meth:`final_destination` reads its Segment List[0].
 
-        ``None`` for every other routing type and for data whose
-        length is not ``4 + 16 * N`` bytes for some ``N`` (degrades,
-        never raises).
+        :returns: The addresses, in wire order; ``()`` for data of the
+            reserved field alone; ``None`` for every other routing type,
+            which has no segment list this accessor reads.
+        :raises InvalidFieldError: if, for type ``0`` or ``2``, the data
+            after the reserved field is not a whole number of 16-byte
+            addresses, an odd :attr:`hdr_ext_len` (``field`` ``"data"``,
+            ``offset`` relative to :attr:`data`, where the address cut
+            short starts).
         """
         if self.routing_type not in (
             _ROUTING_TYPE_RH0,
             _ROUTING_TYPE_MOBILE_IPV6,
         ):
             return None
-        addresses = self.data[4:]
-        if len(self.data) < 4 or len(addresses) % 16:
-            return None
+        addresses = self.data[_FIXED_LEN:]
+        left = len(addresses) % _ADDRESS_LEN
+        if left:
+            raise InvalidFieldError(
+                f"IPv6Routing segment needs {_ADDRESS_LEN} bytes, "
+                f"{left} remain",
+                protocol=type(self),
+                field="data",
+                offset=len(self.data) - left,
+                expected=_ADDRESS_LEN,
+                actual=left,
+            )
         return tuple(
-            IPv6Address(bytes_to_ipv6(addresses[i : i + 16]))
-            for i in range(0, len(addresses), 16)
+            IPv6Address(bytes_to_ipv6(addresses[i : i + _ADDRESS_LEN]))
+            for i in range(0, len(addresses), _ADDRESS_LEN)
         )
 
     def final_destination(self, dst: str) -> str | None:
@@ -492,10 +506,14 @@ class IPv6Routing(Protocol):
         :param dst: The enclosing :class:`~netprotocols.IPv6` header's
             Destination Address. Only type 3 reads it.
         """
-        if self.routing_type == _ROUTING_TYPE_RH0:
-            return _last_address(self.segments)
-        if self.routing_type == _ROUTING_TYPE_MOBILE_IPV6:
-            return _last_address(self.segments, only=True)
+        if self.routing_type in (_ROUTING_TYPE_RH0, _ROUTING_TYPE_MOBILE_IPV6):
+            try:
+                segments = self.segments
+            except InvalidFieldError:
+                return None
+            return _last_address(
+                segments, only=self.routing_type == _ROUTING_TYPE_MOBILE_IPV6
+            )
         if self.routing_type == _ROUTING_TYPE_RPL:
             return self._rpl_final_destination(dst)
         if self.routing_type == _ROUTING_TYPE_SRH:

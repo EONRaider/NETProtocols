@@ -857,8 +857,7 @@ class TestAttributes:
         with pytest.raises(InvalidFieldError) as caught:
             _ = radius.parsed_attributes
         assert (caught.value.field, caught.value.offset) == ("attributes", 0)
-        with pytest.raises(InvalidFieldError):
-            _ = radius.user_name
+        assert radius.user_name is None
 
     def test_an_attribute_past_the_packet_raises_on_demand(self):
         """An attribute whose Length runs past the packet's raises."""
@@ -867,6 +866,46 @@ class TestAttributes:
         with pytest.raises(InvalidFieldError) as caught:
             _ = radius.parsed_attributes
         assert (caught.value.field, caught.value.offset) == ("attributes", 6)
+
+    @pytest.mark.parametrize(
+        "broken",
+        [b"\x01\x00", b"\x01\x10np193", b"\x01"],
+        ids=["length-below-2", "past-the-packet", "lone-type-byte"],
+    )
+    def test_the_lookups_read_up_to_a_broken_attribute(self, broken):
+        """A captured Access-Request with a broken attribute after its
+        own: parsed_attributes raises, and each lookup reads the
+        attributes before the broken one, degrading to None for one
+        found only after it, as STUN.attribute() does."""
+        captured = radius_of(PAP_ACCEPT)
+        raw = bytes(captured) + broken
+        radius = RADIUS.decode(with_length(raw, len(raw)))
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = radius.parsed_attributes
+        assert caught.value.offset == len(captured.attributes)
+        assert radius.user_name == "np193-user"
+        assert radius.nas_ip_address == IPv4Address("10.9.193.2")
+        assert radius.nas_port == 7
+        assert radius.framed_ip_address is None
+        after = bytes(build(broken + bytes(RADIUSAttribute(1, b"np193"))))
+        hidden = RADIUS.decode(after)
+        with pytest.raises(InvalidFieldError):
+            _ = hidden.parsed_attributes
+        assert hidden.user_name is None
+
+    def test_a_lookup_before_a_broken_attribute_reads_it(self):
+        """Every lookup's attribute in front of a broken one is read."""
+        parts = [
+            RADIUSAttribute(1, b"np193"),
+            RADIUSAttribute(4, bytes([192, 0, 2, 1])),
+            RADIUSAttribute(5, (9).to_bytes(4, "big")),
+            RADIUSAttribute(8, bytes([192, 0, 2, 9])),
+        ]
+        radius = build(b"".join(map(bytes, parts)) + b"\x01\x00")
+        assert radius.user_name == "np193"
+        assert radius.nas_ip_address == IPv4Address("192.0.2.1")
+        assert radius.nas_port == 9
+        assert radius.framed_ip_address == IPv4Address("192.0.2.9")
 
     def test_a_lone_type_byte_raises_on_demand(self):
         """A Type with no Length byte after it is cut short."""

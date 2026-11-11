@@ -1177,29 +1177,86 @@ class TestSack:
                 "a_rwnd": (8, 4660),
                 "num_gap_ack_blocks": (10, 2),
                 "num_duplicate_tsns": (12, 2),
-                "gap_ack_blocks": (20, ((2, 3), (0xFFFE, 0xFFFF))),
-                "duplicate_tsns": (28, (19, 21)),
             },
         )
 
+    def test_the_lists_at_every_cut(self):
+        """Each list is None short of the 12 fixed bytes, raises at the
+        first entry cut short until the value holds every entry its
+        counts declare, and is whole from there."""
+        value = sack_value([(2, 3), (0xFFFE, 0xFFFF)], [19, 21])
+        lists = {
+            "gap_ack_blocks": (20, ((2, 3), (0xFFFE, 0xFFFF))),
+            "duplicate_tsns": (28, (19, 21)),
+        }
+        for cut in range(len(value) + 1):
+            chunk_ = SCTPChunk(3, 0, value[:cut])
+            for name, (need, expected) in lists.items():
+                if cut < 12:
+                    assert getattr(chunk_, name) is None, (name, cut)
+                elif cut < need:
+                    with pytest.raises(InvalidFieldError) as caught:
+                        getattr(chunk_, name)
+                    error = caught.value
+                    at = cut - (cut - 12) % 4
+                    assert (error.protocol, error.field) == (
+                        SCTPChunk,
+                        "value",
+                    )
+                    assert (error.offset, error.expected, error.actual) == (
+                        at,
+                        4,
+                        cut - at,
+                    ), (name, cut)
+                else:
+                    assert getattr(chunk_, name) == expected, (name, cut)
+
     def test_more_blocks_declared_than_the_value_holds(self):
-        """A count the value cannot hold reads None, never the blocks
-        that fit, and neither do the duplicates after them."""
+        """A count the value cannot hold raises, never answering the
+        blocks that fit, and so do the duplicates after them."""
         sack = SCTPChunk(3, 0, sack_value([(2, 3), (5, 5)], num_gaps=3))
         assert sack.num_gap_ack_blocks == 3
-        assert sack.gap_ack_blocks is None
-        assert sack.duplicate_tsns is None
+        for name in ("gap_ack_blocks", "duplicate_tsns"):
+            with pytest.raises(InvalidFieldError) as caught:
+                getattr(sack, name)
+            assert (caught.value.offset, caught.value.actual) == (20, 0)
         assert sack.cumulative_tsn_ack == 12
 
     def test_more_duplicates_declared_than_the_value_holds(self):
         sack = SCTPChunk(3, 0, sack_value([(2, 3)], [19, 20], num_dups=5))
         assert sack.gap_ack_blocks == ((2, 3),)
-        assert sack.duplicate_tsns is None
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = sack.duplicate_tsns
+        assert caught.value.offset == 24
 
-    def test_the_largest_counts_read_none_at_once(self):
+    def test_the_largest_counts_raise_at_once(self):
         sack = SCTPChunk(3, 0, sack_value(num_gaps=0xFFFF, num_dups=0xFFFF))
-        assert sack.gap_ack_blocks is None
-        assert sack.duplicate_tsns is None
+        for name in ("gap_ack_blocks", "duplicate_tsns"):
+            with pytest.raises(InvalidFieldError) as caught:
+                getattr(sack, name)
+            assert caught.value.offset == 12
+
+    @pytest.mark.parametrize("index", [5, 7], ids=["s2c", "c2s"])
+    @pytest.mark.parametrize(("gaps", "dups"), [(1, 0), (0, 1)])
+    def test_a_captured_sack_whose_count_overstates_raises(
+        self, index, gaps, dups
+    ):
+        """A captured SACK, with one block or one duplicate TSN declared
+        and none carried: the list counted raises at the end of the
+        fixed fields, and a list counted zero is empty."""
+        captured = only_chunk(index)
+        assert captured.type == 3 and len(captured.value) == 12
+        assert captured.gap_ack_blocks == captured.duplicate_tsns == ()
+        value = captured.value[:8] + struct.pack("!HH", gaps, dups)
+        sack = SCTPChunk(3, captured.flags, value)
+        with pytest.raises(InvalidFieldError) as caught:
+            _ = sack.duplicate_tsns
+        assert (caught.value.offset, caught.value.actual) == (12, 0)
+        if gaps:
+            with pytest.raises(InvalidFieldError):
+                _ = sack.gap_ack_blocks
+        else:
+            assert sack.gap_ack_blocks == ()
 
     def test_bytes_after_the_declared_lists_are_ignored(self):
         sack = SCTPChunk(3, 0, sack_value([(1, 1)], [9]) + bytes(7))

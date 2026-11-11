@@ -980,6 +980,36 @@ old hand-rolled benchmark loop never exercised).
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
 
+Per-capture figures can be re-measured with the same command
+restricted to those captures with `--fixture`, once per capture or
+group, for example `--fixture ospf.pcap --fixture bgp.pcap`. The
+same-work subset can be re-measured with
+`uv run --group bench python scripts/benchmark.py --compare --same-depth --repetitions 30 --trials 9`.
+Before timing, `--same-depth` decodes each frame with netprotocols and
+dpkt and keeps it only if both accept it and their layer chains are
+equal after a fixed fold. netprotocols' `VLAN`, `MPLS`, `SNAP`,
+`IPv6Fragment` and `IPv6HopByHopOptions` layers, which dpkt decodes
+as attributes of the object before them, are dropped from its chain.
+dpkt's `Echo`, `TimeExceed`, `Unreach` and `str` objects, which
+netprotocols keeps as fields of its ICMP and VRRP layers, and dpkt's
+raw payloads are dropped from dpkt's. The two libraries' names for
+IPv4, IPv6, ICMP and ICMPv6 are then mapped to one name each. The
+packet a `TimeExceed` or `Unreach` quotes is not dropped, so a frame
+on which dpkt decodes it is left out, as is a frame on which the two
+reach different protocols, such as netprotocols' `LLC` against dpkt's
+`IPX`. The tables are `NETPROTOCOLS_FOLDED`, `DPKT_FOLDED` and
+`COMMON_NAMES` in `scripts/benchmark.py`. The selection is made
+against dpkt alone: scapy is timed on the same frames, but what it
+decodes of them is not checked. On the 509-frame corpus the command
+keeps 324 frames and prints the count. The subset leans toward the
+routing captures and toward frames that end at layer 3 or 4: the two
+OSPF captures give 106 of the 324 (54 + 52), TFTP 27, the two VRRP
+captures 27 between them (18 + 9), STP, SCTP and PIM 44 between them
+(16 + 15 + 13), and 20 other captures the remaining 120
+(106 + 27 + 27 + 44 + 120 = 324).
+`--json` records the captures, the `--same-depth` flag and the selected
+and total frame counts.
+
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 99,814 against dpkt's 106,497, **~6% slower**, inside the band.*
 
@@ -1268,6 +1298,12 @@ dpkt:         Ethernet -> IP   -> UDP -> <300 raw bytes>
 ```
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --depth`.
+`--depth` counts a frame as "the same layer" whenever netprotocols'
+layer count does not exceed dpkt's, raw payloads not counted, so the
+306 frames it puts there on the 509-frame corpus include the frames
+on which dpkt decodes further. `benchmark.py --compare --same-depth`
+(see 1.2) selects its workload by a different rule, folded protocol
+chains rather than layer counts.
 
 This is the control on every throughput figure in 1.1-1.3, not a
 footnote to them: a decoder that stops earlier has less to do, so
@@ -1636,12 +1672,13 @@ Hypothesis fuzzing asserts that decoding never raises outside
 `ProtocolError`, that chain walks terminate, that layers recompose,
 that nine TLV/name accessors never hang, that `HTTP`'s, `VRRP`'s,
 `VRRPv6`'s, `RIP`'s, `OSPF`'s, `MPLS`'s, `LLDP`'s, `LLC`'s, `SNAP`'s,
-`STP`'s, `CDP`'s, `TFTP`'s, `NTP`'s, `NTPControl`'s, `HSRP`'s,
-`HSRPAdvertise`'s and `HSRPv2`'s accessors never raise at all, that
-`SCTP`'s and `PIM`'s raise only `ProtocolError`, that `RADIUS`'s,
-`STUN`'s and `TLS`'s raise only `InvalidFieldError` (and `TLS`'s
+`STP`'s, `TFTP`'s, `NTPControl`'s, `HSRP`'s, `HSRPAdvertise`'s and
+`HSRPv2`'s accessors never raise at all, that `SCTP`'s and `PIM`'s
+raise only `ProtocolError`, that `RADIUS`'s, `STUN`'s, `TLS`'s,
+`CDP`'s and `NTP`'s raise only `InvalidFieldError` (and `TLS`'s
 ClientHello parsers `TruncatedHeaderError`) from the walk or parser of
-their body and otherwise never raise, and that `bytes(decode(x)) == x`
+their body (for `CDP` its address lists, for `NTP` its extension
+fields) and otherwise never raise, and that `bytes(decode(x)) == x`
 is
 Hypothesis-generated for **all 45** protocols, up from 4. `tests/strategies.py` holds one
 reusable strategy per protocol;
@@ -1901,7 +1938,7 @@ except ProtocolError as e:
     # <class 'netprotocols.layer3.ip.IPv4'> ihl 0 14 >=5 0
 ```
 
-`protocol` is set at every one of the 263 sites in `src/` that raise a
+`protocol` is set at every one of the 271 sites in `src/` that raise a
 decode or validation error but `random_mac`'s (`utils/mac.py`), which
 belongs to no protocol (verified by an AST sweep, not just by eye);
 `validate_mac_addr` and `validate_ipv4_addr` forward the `protocol=`
@@ -1913,7 +1950,7 @@ that builds `InvalidFieldError`,
 `MaxDepthExceededError`, directly or through the `_malformed` helpers of
 `layer7/bgp.py` and `layer7/tls.py` and `walk.py`'s `_too_deep`; every
 direct constructor call among them passes `protocol=`, except
-`random_mac`'s. The claim covers only those. `src/` holds 296 `raise`
+`random_mac`'s. The claim covers only those. `src/` holds 304 `raise`
 statements in all, and the other 33 fall outside it: `pcap.py`'s 18
 `MalformedCaptureError` raises, which describe the capture file rather
 than a protocol and set no `protocol`; the three registry errors in
@@ -1925,7 +1962,7 @@ and caught within the module; six stdlib raises (`ValueError` in
 `registry.py`, `OSError` in `_base.py`, `KeyError` in `packet.py`); and
 three bare re-raises (two in `walk.py`, one in `layer3/pim.py`).
 Reproduce the count from the repository root with `python3`; it prints
-`263 of 296`:
+`271 of 304`:
 
 ```python
 import ast, pathlib
@@ -1943,7 +1980,8 @@ print(sum(n.exc is not None and name(n.exc) in NAMES for n in raises),
 
 The same rule gives 60 at `534f889`, 203 at `824893d`, 206 at
 `343427b`, 228 at `f12daf0`, 230 at `2705353`, 259 of 292 at
-`9da02d7`, 262 of 295 at `7dda273` and 263 of 296 at `95693af`.
+`9da02d7`, 262 of 295 at `7dda273`, 263 of 296 at `95693af` and 271
+of 304 at `f4b2856`.
 
 `field`
 and `offset`/`frame_offset` are set wherever there's a byte position or
