@@ -312,11 +312,12 @@ with open("traffic.pcap", "rb") as file:
 A file, an `io.BytesIO`, a pipe or any other object with a
 `read(size)` method is read forward from its current position, one
 record or block at a time and never seeked, so memory use follows the
-largest record or block, not the size of the capture; the 4-byte magic number is read on
-the call, the rest as you iterate. `bytes`, `bytearray` and
-`memoryview` (an `mmap` included) are copied once when iteration
-starts. Both give the same frames, and the same errors, offsets
-included.
+largest record or block, not the size of the capture; the 4-byte
+magic number is read on the call, the rest as you iterate. `bytes`,
+`bytearray` and `memoryview` (an `mmap` included) are copied once when
+iteration starts. A stream read from position 0 gives the frames and
+errors, offsets included, that its bytes give as a buffer; from a later
+position, offsets count from where reading started.
 
 Each `CapturedFrame` is `(timestamp, data)` — `timestamp` normalized to
 nanoseconds since the Unix epoch regardless of the source format's own

@@ -11,8 +11,9 @@ the pcapng interface a frame was captured on.
 Each reader takes the capture as a buffer or as a binary stream.
 
 A buffer is any object with the buffer protocol: ``bytes``,
-``bytearray``, ``memoryview``, or a ``memoryview`` over an
-:class:`mmap.mmap`. The reader copies it once (``bytes(buffer)``) and
+``bytearray``, ``memoryview``, or an :class:`mmap.mmap`, bare or under
+a ``memoryview``. A bare ``mmap`` is read whole, from its first byte,
+whatever its position. The reader copies it once (``bytes(buffer)``) and
 slices every frame from that copy, so ``CapturedFrame.data`` is always
 plain ``bytes``, whatever the buffer's type. The copy is taken when
 iteration starts, not on the call: a ``memoryview`` over a
@@ -30,6 +31,11 @@ bytes, so a length field that declares more bytes than the stream
 holds allocates no more than the stream gives. Frames, timestamps and
 errors are the ones the same bytes give as a buffer, and an error's
 ``offset`` counts from the stream's position when reading started.
+The one difference is the message of :func:`read_pcapng`'s error for
+a stream that does not start with a Section Header Block: it gives the
+magic bytes read but not the stream's length, which would take reading
+the whole stream. A stream whose ``read`` returns ``None``, as a
+non-blocking one with no bytes ready does, raises :class:`TypeError`.
 ``CapturedFrame.data`` is plain ``bytes`` here too.
 
 ``read_captures`` and ``read_packets`` check the magic number on the
@@ -151,21 +157,41 @@ def _read(stream: _Readable, size: int) -> bytes:
     """Read ``size`` bytes from a stream, or every byte left if fewer.
 
     Each ``read`` call asks for at most :data:`_READ_CHUNK` bytes, and
-    reading stops at the first call that returns ``b""``.
+    reading stops at the first call that returns ``b""``. A stream
+    whose ``read`` returns more bytes than asked for gives them all, so
+    the result can be longer than ``size``.
 
     :param stream: The stream to read from.
     :param size: How many bytes to read.
+    :raises TypeError: if ``read`` returns ``None``, as a non-blocking
+        stream does when no bytes are ready.
     """
-    data = stream.read(min(size, _READ_CHUNK))
+    data = _read_once(stream, min(size, _READ_CHUNK))
     if len(data) == size:
         return data if type(data) is bytes else bytes(data)
     parts = [data]
     got = len(data)
     while data and got < size:
-        data = stream.read(min(size - got, _READ_CHUNK))
+        data = _read_once(stream, min(size - got, _READ_CHUNK))
         parts.append(data)
         got += len(data)
     return b"".join(parts)
+
+
+def _read_once(stream: _Readable, size: int) -> bytes:
+    """Return what one ``read(size)`` call on a stream returns.
+
+    :param stream: The stream to read from.
+    :param size: The ``size`` to pass to ``read``.
+    :raises TypeError: if ``read`` returns ``None``.
+    """
+    data = stream.read(size)
+    if data is None:
+        raise TypeError(
+            "the capture stream's read() returned None: a non-blocking "
+            "stream with no bytes ready cannot be read"
+        )
+    return data
 
 
 class _Window:
@@ -201,15 +227,6 @@ class _Window:
         self.base += cursor
         kept = data[cursor:]
         return kept + _read(stream, size - len(kept)), 0
-
-    def remaining(self) -> int:
-        """Read the rest of the capture and return how many bytes it held."""
-        stream = self._stream
-        count = 0
-        if stream is not None:
-            while chunk := stream.read(_READ_CHUNK):
-                count += len(chunk)
-        return count
 
 
 #: The window of every buffer: the buffer holds the whole capture.
@@ -282,8 +299,8 @@ def _read_pcap(
     :raises MalformedCaptureError: as :func:`read_pcap` raises.
     """
     data, window = _open(buffer, head)
-    if len(data) < _PCAP_GLOBAL_HEADER_SIZE:
-        data, _ = window.fill(data, 0, _PCAP_GLOBAL_HEADER_SIZE)
+    if len(data) < 4:
+        data, _ = window.fill(data, 0, 4)
     if len(data) < 4:
         raise MalformedCaptureError(
             f"buffer holds {len(data)} bytes, too short for a pcap "
@@ -306,6 +323,8 @@ def _read_pcap(
             expected="a1b2c3d4/a1b23c4d in either byte order",
             actual=magic.hex(),
         )
+    if len(data) < _PCAP_GLOBAL_HEADER_SIZE:
+        data, _ = window.fill(data, 0, _PCAP_GLOBAL_HEADER_SIZE)
     if len(data) < _PCAP_GLOBAL_HEADER_SIZE:
         raise MalformedCaptureError(
             f"classic pcap global header needs {_PCAP_GLOBAL_HEADER_SIZE} "
@@ -456,9 +475,9 @@ def _pcapng_data(
 ) -> tuple[bytes, _Window]:
     """Return a pcapng capture's first window, checked to start with an SHB.
 
-    For a buffer, the window is a copy of the whole capture. When the
-    capture does not start with a Section Header Block, the rest of a
-    stream is read to count its bytes for the error message.
+    For a buffer, the window is a copy of the whole capture. For a
+    stream, the window is the bytes read so far, and no more than the
+    first 4 bytes are read to check it.
 
     :param buffer: The whole capture, starting at its first Section
         Header Block: a buffer or a stream.
@@ -470,12 +489,14 @@ def _pcapng_data(
     if len(data) < 4:
         data, _ = window.fill(data, 0, 4)
     if len(data) < 4 or data[:4] != _SHB_TYPE:
-        size = len(data) + window.remaining()
+        if len(data) < 4 or window is _BUFFER_WINDOW:
+            held = f"buffer holds {len(data)} bytes"
+            held += f", magic {data[:4].hex()}" if len(data) >= 4 else ""
+        else:
+            held = f"magic {data[:4].hex()}"
         raise MalformedCaptureError(
             "not a pcapng capture: does not start with a Section Header "
-            f"Block (buffer holds {size} bytes"
-            + (f", magic {data[:4].hex()}" if len(data) >= 4 else "")
-            + ")",
+            f"Block ({held})",
             field="block type",
             offset=0,
             expected=_SHB_TYPE.hex(),

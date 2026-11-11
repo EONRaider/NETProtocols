@@ -451,7 +451,9 @@ except ProtocolError as e:
 `MalformedCaptureError` and the registry errors describe a capture
 file or a registration, not a protocol, and leave `protocol` unset.
 
-`offset` is relative to whatever buffer the error was found in. An
+`offset` is relative to whatever buffer the error was found in. A
+`MalformedCaptureError` from a capture read as a stream counts its
+`offset` from the stream's position when reading started. An
 error raised by `decode()` is relative to that call's `data` argument,
 whatever `field` names: OSPF's framing errors name `field="body"` (or
 `"auth_trailer"`), an LSA body's among them (a Router-LSA whose links

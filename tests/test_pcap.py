@@ -864,11 +864,36 @@ def _outcome(reader: Callable[[Capture], object], source: Capture) -> tuple:
     return items, None
 
 
+#: The input kinds read as streams, not buffers.
+STREAM_KINDS = {"BytesIO", "read-only stream", "short-read stream"}
+
+
+def _stream_outcome(expected: tuple) -> tuple:
+    """A buffer's outcome as a stream of the same bytes gives it.
+
+    The one difference: a stream that holds a magic number but no
+    Section Header Block raises with a message that gives the magic
+    bytes and not the stream's length.
+    """
+    if expected[1] is None or expected[3] != "block type":
+        return expected
+    items, stage, message, field, offset, wanted, actual = expected
+    if len(actual) == 8:
+        message = (
+            "not a pcapng capture: does not start with a Section Header "
+            f"Block (magic {actual})"
+        )
+    return items, stage, message, field, offset, wanted, actual
+
+
 def _assert_every_kind_agrees(data: bytes) -> None:
     for name, reader in READERS.items():
         expected = _outcome(reader, data)
         for kind, build in CAPTURE_KINDS.items():
-            assert _outcome(reader, build(data)) == expected, (name, kind)
+            wanted = (
+                _stream_outcome(expected) if kind in STREAM_KINDS else expected
+            )
+            assert _outcome(reader, build(data)) == wanted, (name, kind)
 
 
 def _crafted_sections() -> bytes:
@@ -1103,6 +1128,49 @@ class _BytearrayStream:
         return bytearray(self._stream.read(size))
 
 
+class _EndlessZeros:
+    """A stream of zero bytes that never ends."""
+
+    def __init__(self) -> None:
+        self.consumed = 0
+
+    def read(self, size: int, /) -> bytes:
+        self.consumed += size
+        return bytes(size)
+
+
+class _NonBlocking:
+    """A stream whose ``read`` returns ``None``, as a non-blocking
+    stream with no bytes ready does."""
+
+    def read(self, size: int, /) -> None:
+        return None
+
+
+def _frame_ends(data: bytes) -> list[int]:
+    """The offset just past each frame's record or block, read with
+    ``struct``: every classic-pcap record, or every pcapng Enhanced and
+    Simple Packet Block."""
+    ends = []
+    if data[:4] != b"\x0a\x0d\x0d\x0a":
+        cursor = 24
+        while cursor < len(data):
+            (incl_len,) = struct.unpack_from("<I", data, cursor + 8)
+            cursor += 16 + incl_len
+            ends.append(cursor)
+        return ends
+    cursor = 0
+    fmt = "<"
+    while cursor < len(data):
+        if data[cursor : cursor + 4] == b"\x0a\x0d\x0d\x0a":
+            fmt = "<" if data[cursor + 8] == 0x4D else ">"
+        block_type, length = struct.unpack_from(f"{fmt}II", data, cursor)
+        cursor += length
+        if block_type in (3, 6):
+            ends.append(cursor)
+    return ends
+
+
 class TestReadingAStream:
     def test_read_pcap_and_read_pcapng_read_nothing_on_the_call(self):
         for reader, data in (
@@ -1211,15 +1279,61 @@ class TestReadingAStream:
             list(read_captures(file))
         assert allocated.peak < 2 * _READ_CHUNK
 
-    def test_a_long_stream_that_is_not_pcapng_is_counted(self):
-        # Crafted: 3 MiB of zeros, longer than one read.
-        data = bytes(3 * _READ_CHUNK)
+    def test_a_stream_that_is_not_pcapng_raises_after_its_magic(self):
+        stream = _EndlessZeros()
         with pytest.raises(MalformedCaptureError) as excinfo:
-            list(read_pcapng(ReadOnlyStream(data)))
+            next(read_pcapng(stream))
         assert str(excinfo.value) == (
             "not a pcapng capture: does not start with a Section Header "
-            f"Block (buffer holds {len(data)} bytes, magic 00000000)"
+            "Block (magic 00000000)"
         )
+        assert (excinfo.value.field, excinfo.value.actual) == (
+            "block type",
+            "00000000",
+        )
+        assert stream.consumed == 4
+
+    def test_read_pcap_checks_the_magic_number_before_reading_on(self):
+        stream = _EndlessZeros()
+        with pytest.raises(MalformedCaptureError) as excinfo:
+            next(read_pcap(stream))
+        assert excinfo.value.field == "magic"
+        assert stream.consumed == 4
+
+    @pytest.mark.parametrize("reader", list(READERS.values()))
+    def test_a_read_that_returns_none_raises_type_error(self, reader):
+        with pytest.raises(TypeError, match="returned None"):
+            list(reader(_NonBlocking()))
+
+    @pytest.mark.parametrize(
+        ("reader", "data"),
+        [
+            (reader, data)
+            for data, readers in (
+                (ARP_EXCHANGE_PCAP, ("read_pcap",)),
+                (INTERFACES_PCAPNG, ("read_pcapng",)),
+                (_crafted_sections(), ("read_pcapng",)),
+            )
+            for reader in (*readers, "read_captures", "read_packets")
+        ],
+        ids=lambda value: value if isinstance(value, str) else len(value),
+    )
+    def test_each_frame_reads_to_the_end_of_its_record_or_block(
+        self, reader, data
+    ):
+        ends = _frame_ends(data)
+        stream = ReadOnlyStream(data)
+        frames = READERS[reader](stream)
+        if reader in ("read_pcap", "read_pcapng"):
+            assert stream.consumed == 0
+        else:
+            assert stream.consumed == 4
+        for end in ends:
+            next(frames)
+            assert stream.consumed == end
+        with pytest.raises(StopIteration):
+            next(frames)
+        assert stream.consumed == len(data)
 
     def test_an_mmap_is_read_as_a_buffer(self, tmp_path):
         path = tmp_path / "capture.pcapng"
