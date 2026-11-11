@@ -71,11 +71,12 @@ Payload Length of 0, an IPv4 Total Length shorter than its header, or
 an end before the layer's required bytes (IGMP's 4-byte header,
 ICMPv4's 8-byte header, GRE's whole header) leaves the input
 unbounded, as it is without ``ip``. ``ip``'s length must cover the
-whole message: for a message reassembled from IPv6 fragments, that is
-a header whose Payload Length covers the reassembled datagram, or no
-``ip``. :meth:`~netprotocols.Packet.with_checksums` also leaves the
-input unbounded behind an IPv6 Fragment header with its M flag set or
-a nonzero Fragment Offset (RFC 8200 §4.5).
+whole message: for a message reassembled from IPv6 fragments, that is a
+header whose Payload Length covers the reassembled datagram, as a
+:class:`~netprotocols.reassembly.Datagram`'s does, or no ``ip``.
+:meth:`~netprotocols.Packet.with_checksums` also leaves the input
+unbounded behind an IPv6 Fragment header with its M flag set or a
+nonzero Fragment Offset (RFC 8200 §4.5).
 :meth:`~netprotocols.Packet.with_checksums` applies the same bound
 with the same helper, from the nearest IP header before the layer and
 counting the headers between.
@@ -736,7 +737,8 @@ def compute(
         :meth:`~netprotocols.Packet.with_checksums` counts them
         exactly. ``ip``'s length must cover the whole message, so a
         message reassembled from IPv6 fragments takes a header whose
-        Payload Length covers the reassembled datagram, or no ``ip``;
+        Payload Length covers the reassembled datagram, as a
+        :class:`~netprotocols.reassembly.Datagram`'s does, or no ``ip``;
         :meth:`~netprotocols.Packet.with_checksums` also leaves the
         input unbounded behind an IPv6 Fragment header in the packet
         with its M flag set or a nonzero Fragment Offset.

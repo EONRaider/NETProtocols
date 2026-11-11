@@ -71,8 +71,9 @@ Records and segments
 --------------------
 TCP delivers TLS as a byte stream, cut wherever it likes, and records
 are its only framing, as BGP's messages are (see
-:mod:`netprotocols.layer7.bgp`). Within one segment the decoder does
-what it can without reassembly:
+:mod:`netprotocols.layer7.bgp`); :mod:`netprotocols.reassembly` puts
+the stream back together. Within one segment the decoder does what it
+can without reassembly:
 
 - A segment holding *N* complete records decodes as *N* :class:`TLS`
   layers. :meth:`TLS.decode` notes whether the bytes after its record
@@ -111,8 +112,9 @@ A strict walk of the first segment raises
 stops), and of the second :class:`~netprotocols.InvalidFieldError`.
 There is no lenient mode of :meth:`TLS.decode` that reads a partial
 hello: to get the SNI of such a client for certain, reassemble the
-client's byte stream and call :meth:`TLS.decode` on it, as
-``tests/test_tls.py`` does with ``scripts/extract_http_streams.py``.
+client's byte stream, yourself or with :mod:`netprotocols.reassembly`,
+and call :meth:`TLS.decode` on it, as ``tests/test_tls.py`` does with
+``scripts/extract_http_streams.py``.
 Without reassembly, :func:`peek_server_name`, a separate function and
 opt-in, walks the ClientHello in the first segment as far as its bytes
 go and answers whether the name was *found*, is *absent*, or was *not
@@ -598,8 +600,9 @@ class TLSServerNamePeek:
     :attr:`TLS.server_name` is ``None`` for its first record. To look
     past whole records, :meth:`TLS.decode` the first and peek
     ``data[tls.header_len:]``. *Not reached* is not "no SNI": the name
-    may be in the bytes the next segment carries. Reassemble the stream
-    and call :meth:`TLS.decode` on it to know. Under Encrypted Client
+    may be in the bytes the next segment carries. Reassemble the
+    stream, with :mod:`netprotocols.reassembly` or your own, and call
+    :meth:`TLS.decode` on it to know. Under Encrypted Client
     Hello (ECH) a *found* name is the outer ClientHello's, the
     client-facing server's ``public_name``, as for
     :attr:`TLS.server_name`.

@@ -48,7 +48,9 @@ headers. Of particular interest are:
 
 What `HTTP` cannot see, by design, is not a vulnerability in it: it
 decodes one message from bytes the caller reassembled, so TCP
-reassembly and segment-overlap tricks are the caller's; a response's
+reassembly and segment-overlap tricks are outside its scope, which ends
+at the bytes it is given (they are in `netprotocols.reassembly`'s,
+below); a response's
 framing depends on the `request_method` and `closed` the caller passes;
 and it never pairs a request with its response, so desyncs that need
 both — an early response, or `Expect: 100-continue` — are out of reach
@@ -56,14 +58,30 @@ until request/response pairing exists.
 
 `BGP` is port-dispatched and decodes the messages one TCP segment
 holds; reassembling the stream, and the segment-overlap tricks that
-come with it, are the caller's in the same way.
+come with it, are outside its scope in the same way.
 
 `TLS` is port-dispatched the same way and decodes the records one
 segment holds; a ClientHello that spans segments is read only from a
-stream the caller reassembled. It decrypts and verifies nothing: the
+stream the caller reassembled, with `netprotocols.reassembly` or
+otherwise, and the reassembly is outside `TLS`'s scope. It decrypts
+and verifies nothing: the
 SNI it reports is what the client sent in the clear (under Encrypted
 Client Hello, the outer ClientHello's public name), which identifies
 nothing on its own.
+
+`netprotocols.reassembly` is where IP fragment and TCP stream
+reassembly, and their overlap tricks, are in scope. Of interest there:
+state held beyond the documented bounds (`FragmentBounds`,
+`StreamBounds`); an inconsistent overlap, bytes of one range that
+differ between two fragments or segments, resolved without an
+`Overlap` event (a TCP retransmission older than the retained bytes,
+reported as `Retransmission(verified=False)`, is the documented
+exception); an event missing a contributing or completing frame; an
+exception other than the documented `TypeError` and `ValueError`; and
+output that depends on anything but the input and its timestamps. What
+a passive observer cannot know, whether the target accepted a segment
+or an RST, is reported as events, not resolved; a choice the design
+note documents (`docs/design/reassembly.rst`) is not a vulnerability.
 
 `MPLS` names the packet under its label stack by convention, since
 nothing in the stack names it: an Explicit NULL bottom label, or else
