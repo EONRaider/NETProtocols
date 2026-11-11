@@ -294,11 +294,17 @@ class SCTPChunk:
     §2.1) chunks out of :attr:`value`. Each one is ``None`` for a
     chunk of a type that has no such field, and for a value too short
     to hold it, so a field before the cut still reads from a value cut
-    short. Each one but :attr:`parameters` never raises;
-    :attr:`parameters` raises when the parameters after the fixed
-    fields do not walk. Fields shared by several types (``tsn``,
-    ``stream_id``, ``ppid``, ``user_data``, ``a_rwnd``) read each
-    type's own layout.
+    short: for :attr:`parameters` that is a value shorter than the 16
+    fixed INIT bytes, and for :attr:`gap_ack_blocks` and
+    :attr:`duplicate_tsns` one shorter than the 12 fixed SACK bytes.
+    Three raise ``InvalidFieldError``: :attr:`parameters` when the
+    parameters after the fixed fields do not walk,
+    :attr:`gap_ack_blocks` when the value ends before every block
+    :attr:`num_gap_ack_blocks` declares, and :attr:`duplicate_tsns`
+    when it ends before every block and duplicate TSN the two counts
+    declare. Every other one never raises. Fields shared by several
+    types (``tsn``, ``stream_id``, ``ppid``, ``user_data``,
+    ``a_rwnd``) read each type's own layout.
     """
 
     type: int
@@ -698,22 +704,29 @@ class SCTPChunk:
         Each is a pair of offsets from :attr:`cumulative_tsn_ack`: the
         block acknowledges the TSNs from ``cumulative_tsn_ack + start``
         to ``cumulative_tsn_ack + end``, both included. There are
-        :attr:`num_gap_ack_blocks` of them. ``None`` for other chunk
-        types, and for a value too short for the 12 fixed bytes and every
-        block the count declares, never a partial list (degrades, never
-        raises). Bytes after the declared blocks and duplicate TSNs are
-        ignored.
+        :attr:`num_gap_ack_blocks` of them. Bytes after the declared
+        blocks and duplicate TSNs are ignored.
+
+        :returns: The blocks, in wire order; ``None`` for other chunk
+            types and for a value shorter than the 12 fixed bytes, as
+            the other SACK fields are ``None`` for a value too short to
+            hold them.
+        :raises InvalidFieldError: if the value ends before every block
+            :attr:`num_gap_ack_blocks` declares (``field`` ``"value"``,
+            ``offset`` relative to :attr:`value`, where the first block
+            cut short starts; bounded, so it never over-reads).
         """
-        count = self.num_gap_ack_blocks
-        if count is None or len(self.value) < _SACK_FIXED_LEN + 4 * count:
+        counts = self._sack_counts()
+        if counts is None:
             return None
-        value = self.value
+        blocks = counts[0]
+        value = self._sack_entries(blocks)
         return tuple(
             (
                 int.from_bytes(value[at : at + 2]),
                 int.from_bytes(value[at + 2 : at + 4]),
             )
-            for at in range(_SACK_FIXED_LEN, _SACK_FIXED_LEN + 4 * count, 4)
+            for at in range(_SACK_FIXED_LEN, _SACK_FIXED_LEN + 4 * blocks, 4)
         )
 
     @property
@@ -721,21 +734,63 @@ class SCTPChunk:
         """The Duplicate TSNs of a SACK chunk, in wire order.
 
         There are :attr:`num_duplicate_tsns` of them, after the Gap Ack
-        Blocks. ``None`` for other chunk types, and for a value too short
-        for the 12 fixed bytes, every declared block and every declared
-        duplicate TSN, never a partial list (degrades, never raises).
+        Blocks.
+
+        :returns: The TSNs, in wire order; ``None`` for other chunk
+            types and for a value shorter than the 12 fixed bytes.
+        :raises InvalidFieldError: if the value ends before every block
+            and every duplicate TSN the counts declare (``field``
+            ``"value"``, ``offset`` relative to :attr:`value`, where the
+            first entry cut short starts; bounded, so it never
+            over-reads).
         """
-        blocks, count = self.num_gap_ack_blocks, self.num_duplicate_tsns
-        if blocks is None or count is None:
+        counts = self._sack_counts()
+        if counts is None:
             return None
+        blocks, count = counts
+        value = self._sack_entries(blocks + count)
         start = _SACK_FIXED_LEN + 4 * blocks
-        if len(self.value) < start + 4 * count:
-            return None
-        value = self.value
         return tuple(
             int.from_bytes(value[at : at + 4])
             for at in range(start, start + 4 * count, 4)
         )
+
+    def _sack_counts(self) -> tuple[int, int] | None:
+        """Return a SACK's two counts, or ``None``.
+
+        ``None`` for other chunk types and for a value shorter than the
+        12 fixed bytes.
+        """
+        if self.type != _SACK or len(self.value) < _SACK_FIXED_LEN:
+            return None
+        return (
+            int.from_bytes(self.value[8:10]),
+            int.from_bytes(self.value[10:12]),
+        )
+
+    def _sack_entries(self, entries: int) -> bytes:
+        """Return the value once it holds ``entries`` 4-byte entries.
+
+        :param entries: How many 4-byte entries follow the 12 fixed
+            bytes.
+        :returns: :attr:`value`.
+        :raises InvalidFieldError: if the value ends before the last
+            entry does.
+        """
+        value = self.value
+        if len(value) < _SACK_FIXED_LEN + 4 * entries:
+            at = len(value) - (len(value) - _SACK_FIXED_LEN) % 4
+            raise InvalidFieldError(
+                f"SCTP SACK declares {entries} entries after its fixed "
+                f"fields; the entry at {at} needs 4 bytes, "
+                f"{len(value) - at} remain",
+                protocol=SCTPChunk,
+                field="value",
+                offset=at,
+                expected=4,
+                actual=len(value) - at,
+            )
+        return value
 
 
 def _raise_parameter_error(raw: bytes, offset: int) -> NoReturn:

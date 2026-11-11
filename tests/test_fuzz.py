@@ -954,6 +954,27 @@ class TestIPv6RoutingFinalDestinationSafety:
         assert final is None or isinstance(IPv6Address(final), IPv6Address)
 
     @given(header=_routing_headers)
+    def test_segments_walk_or_raise(self, header: IPv6Routing) -> None:
+        """The segment list is None for a type other than 0 and 2; for
+        those it raises InvalidFieldError at the half address an odd
+        hdr_ext_len leaves, and is otherwise every 16 bytes after the
+        reserved field."""
+        if header.routing_type not in (0, 2):
+            assert header.segments is None
+            event("IPv6Routing segments: none")
+            return
+        if header.hdr_ext_len % 2:
+            with pytest.raises(InvalidFieldError) as caught:
+                _ = header.segments
+            assert caught.value.offset == len(header.data) - 8
+            event("IPv6Routing segments: malformed")
+            return
+        segments = header.segments
+        assert segments is not None
+        assert b"".join(a.packed for a in segments) == header.data[4:]
+        event("IPv6Routing segments: parsed")
+
+    @given(header=_routing_headers)
     def test_memoryview_decode_agrees(self, header: IPv6Routing) -> None:
         raw = bytes(header)
         view = IPv6Routing.decode(memoryview(raw))
@@ -1223,6 +1244,27 @@ def _sctp_init_chunks(draw: st.DrawFn) -> SCTPChunk:
     )
 
 
+@st.composite
+def _sctp_sack_chunks(draw: st.DrawFn) -> SCTPChunk:
+    """A SACK: 8 drawn bytes, counts of 0-4 blocks and 0-4 duplicate
+    TSNs (or any 16-bit count), and as many drawn 4-byte entries as the
+    counts declare, or 0-8; then a cut, or a 1-3-byte tail, now and
+    then."""
+    blocks = draw(st.one_of(st.integers(0, 4), st.integers(0, 0xFFFF)))
+    dups = draw(st.one_of(st.integers(0, 4), st.integers(0, 0xFFFF)))
+    entries = draw(st.one_of(st.just(blocks + dups), st.integers(0, 8)))
+    entries = min(entries, 16)
+    raw = draw(st.binary(min_size=8, max_size=8))
+    raw += blocks.to_bytes(2) + dups.to_bytes(2)
+    raw += draw(st.binary(min_size=4 * entries, max_size=4 * entries))
+    damage = draw(st.sampled_from(["none", "none", "cut", "tail"]))
+    if damage == "cut":
+        raw = raw[: draw(st.integers(0, len(raw)))]
+    elif damage == "tail":
+        raw += draw(st.binary(min_size=1, max_size=3))
+    return SCTPChunk(3, draw(st.integers(0, 255)), raw)
+
+
 class TestSCTPChunkAccessorSafety:
     @given(
         data=st.one_of(
@@ -1278,16 +1320,30 @@ class TestSCTPChunkAccessorSafety:
     def test_typed_accessors_answer_and_parameters_tile_or_raise(
         self, chunk: SCTPChunk
     ) -> None:
-        """Every typed accessor but parameters answers a value or None
-        for any value of the five chunk types they read. The parameters
-        either tile the value after the 16 fixed bytes exactly, each but
-        the last padded to 4 bytes and the last with its padding or
-        without it, or raise InvalidFieldError, where the reference walk
-        says so."""
+        """Every typed accessor but parameters and the SACK lists
+        answers a value or None for any value of the five chunk types
+        they read. The parameters either tile the value after the 16
+        fixed bytes exactly, each but the last padded to 4 bytes and the
+        last with its padding or without it, or raise InvalidFieldError,
+        where the reference walk says so; so do the SACK lists, each of
+        exactly as many entries as its count declares."""
         _read_every_sctp_chunk_accessor(chunk)
-        blocks = chunk.gap_ack_blocks
-        if blocks is not None:
-            assert len(blocks) == chunk.num_gap_ack_blocks
+        with contextlib.suppress(InvalidFieldError):
+            blocks = chunk.gap_ack_blocks
+            if blocks is not None:
+                assert len(blocks) == chunk.num_gap_ack_blocks
+        with contextlib.suppress(InvalidFieldError):
+            tsns = chunk.duplicate_tsns
+            if tsns is not None:
+                assert len(tsns) == chunk.num_duplicate_tsns
+
+    @given(chunk=_sctp_sack_chunks())
+    def test_sack_lists_walk_or_raise(self, chunk: SCTPChunk) -> None:
+        """A SACK's Gap Ack Blocks and Duplicate TSNs are the entries
+        their counts declare, or raise InvalidFieldError at the first
+        entry cut short, where the reference walk says so; None only
+        for a value short of the 12 fixed bytes."""
+        _read_every_sctp_chunk_accessor(chunk)
 
     @given(header=sctp_headers())
     def test_zero_padding_after_a_packet_is_left_undecoded(
@@ -1322,8 +1378,8 @@ class TestSCTPChunkAccessorSafety:
         assert list(sctp.parsed_chunks) == chunks
 
 
-#: Every typed SCTPChunk accessor but parameters, each of which must
-#: answer a value or None on any chunk.
+#: Every typed SCTPChunk accessor but parameters and the SACK lists,
+#: each of which must answer a value or None on any chunk.
 _SCTP_CHUNK_ACCESSORS = (
     "immediate",
     "unordered",
@@ -1345,19 +1401,69 @@ _SCTP_CHUNK_ACCESSORS = (
     "cumulative_tsn_ack",
     "num_gap_ack_blocks",
     "num_duplicate_tsns",
-    "gap_ack_blocks",
-    "duplicate_tsns",
 )
+
+#: SCTPChunk's count-given lists, which _read_sctp_sack_lists reads.
+_SCTP_SACK_LISTS = ("gap_ack_blocks", "duplicate_tsns")
 
 
 def _read_every_sctp_chunk_accessor(chunk: SCTPChunk) -> None:
     """Read every typed accessor, check the parameters against
-    _reference_parameter_walk, and decode the user data through the
-    default, empty ``sctp.ppid`` table."""
+    _reference_parameter_walk and the SACK lists against
+    _reference_sack_walk, and decode the user data through the default,
+    empty ``sctp.ppid`` table."""
     for name in _SCTP_CHUNK_ACCESSORS:
         getattr(chunk, name)
     _read_sctp_parameters(chunk)
+    _read_sctp_sack_lists(chunk)
     assert chunk.decode_user_data() is None
+
+
+def _reference_sack_walk(
+    chunk: SCTPChunk, entries: int
+) -> tuple[bytes, ...] | int | None:
+    """Read ``entries`` 4-byte entries after a SACK's 12 fixed bytes,
+    independently of netprotocols: ``None`` for another chunk type or a
+    value shorter than the 12 fixed bytes, the offset in the value of
+    the first entry cut short, and the entries otherwise."""
+    if chunk.type != 3 or len(chunk.value) < 12:
+        return None
+    found = []
+    for at in range(12, 12 + 4 * entries, 4):
+        if at + 4 > len(chunk.value):
+            return at
+        found.append(chunk.value[at : at + 4])
+    return tuple(found)
+
+
+def _read_sctp_sack_lists(chunk: SCTPChunk) -> None:
+    """Read a chunk's Gap Ack Blocks and Duplicate TSNs: each raises
+    InvalidFieldError at the offset _reference_sack_walk gives for the
+    entries its counts declare, is None, or is those entries."""
+    blocks = chunk.num_gap_ack_blocks or 0
+    dups = chunk.num_duplicate_tsns or 0
+    for name, entries, skip in (
+        ("gap_ack_blocks", blocks, 0),
+        ("duplicate_tsns", blocks + dups, blocks),
+    ):
+        expected = _reference_sack_walk(chunk, entries)
+        try:
+            found = getattr(chunk, name)
+        except InvalidFieldError as error:
+            assert isinstance(expected, int)
+            assert (error.field, error.offset) == ("value", expected)
+            event(f"SCTP {name}: malformed")
+            continue
+        if found is None:
+            assert expected is None
+            continue
+        assert isinstance(expected, tuple)
+        if name == "gap_ack_blocks":
+            wire = [start.to_bytes(2) + end.to_bytes(2) for start, end in found]
+        else:
+            wire = [tsn.to_bytes(4) for tsn in found]
+        assert tuple(wire) == expected[skip:]
+        event(f"SCTP {name}: {min(len(found), 2)}")
 
 
 def _reference_parameter_walk(
@@ -1425,7 +1531,7 @@ def _read_sctp_parameters(chunk: SCTPChunk) -> None:
 
 
 def test_the_sctp_accessor_lists_name_every_property() -> None:
-    """_SCTP_CHUNK_ACCESSORS and parameters, which
+    """_SCTP_CHUNK_ACCESSORS, _SCTP_SACK_LISTS and parameters, which
     _read_sctp_parameters reads, and test_sctp.py's ACCESSOR_TYPES,
     cover every SCTPChunk property beyond the display helpers the walk
     property reads itself."""
@@ -1435,7 +1541,11 @@ def test_the_sctp_accessor_lists_name_every_property() -> None:
         if isinstance(attr, property)
     }
     display = {"length", "type_name", "flags_str", "unrecognized_action"}
-    assert properties - display == {*_SCTP_CHUNK_ACCESSORS, "parameters"}
+    assert properties - display == {
+        *_SCTP_CHUNK_ACCESSORS,
+        *_SCTP_SACK_LISTS,
+        "parameters",
+    }
     assert properties - display == set(ACCESSOR_TYPES)
 
 
@@ -1803,23 +1913,49 @@ def _radius_seeded(draw: st.DrawFn) -> bytes:
     return bytes(raw[:cut]) + tail
 
 
+def _reference_radius_prefix(radius: RADIUS) -> list[RADIUSAttribute]:
+    """Walk a RADIUS packet's attributes independently of netprotocols,
+    up to the first whose Type has no Length after it, or whose Length
+    is below 2 or runs past the attributes."""
+    raw, offset, found = radius.attributes, 0, []
+    while offset + 2 <= len(raw):
+        length = raw[offset + 1]
+        if length < 2 or offset + length > len(raw):
+            break
+        found.append(
+            RADIUSAttribute(raw[offset], raw[offset + 2 : offset + length])
+        )
+        offset += length
+    return found
+
+
 def _read_every_radius_attribute(radius: RADIUS) -> None:
     """Walk the attributes and read every value and display accessor:
     the walk either tiles the attributes exactly or raises
     InvalidFieldError, and nothing else raises; so does each
-    Vendor-Specific's sub-attribute walk (see _read_vendor_attributes)."""
+    Vendor-Specific's sub-attribute walk (see _read_vendor_attributes).
+    The packet-level lookups never raise, and answer the first value of
+    their type among the attributes before the first broken one."""
+    prefix = _reference_radius_prefix(radius)
+    for kind, name in (
+        (1, "user_name"),
+        (4, "nas_ip_address"),
+        (5, "nas_port"),
+        (8, "framed_ip_address"),
+    ):
+        first = next((a.value for a in prefix if a.type == kind), None)
+        assert getattr(radius, name) == first, name
     try:
         attributes = radius.parsed_attributes
     except InvalidFieldError:
         event("RADIUS attributes: malformed")
         return
+    assert list(attributes) == prefix
     assert b"".join(map(bytes, attributes)) == radius.attributes
     for found in attributes:
         assert found.type_name
         _ = found.value
         _read_vendor_attributes(found)
-    _ = (radius.user_name, radius.nas_ip_address)
-    _ = (radius.nas_port, radius.framed_ip_address)
     event(f"RADIUS attributes: {len(attributes)}")
     vendor_specific = any(found.type == 26 for found in attributes)
     event(f"RADIUS Vendor-Specific reached: {vendor_specific}")
@@ -2132,18 +2268,60 @@ def _ntp_decode(data: bytes) -> NTP | str:
         return str(error.field)
 
 
+def _reference_ntp_walk(
+    body: bytes, version: int
+) -> tuple[tuple[int, bytes], ...] | int:
+    """Walk an NTP body's extension fields independently of
+    netprotocols: the ``(type, value)`` pairs of a walk that ends at the
+    end of the body or where what is left has an NTPv4 MAC's length (4,
+    20 or 24 bytes), or the offset in the body of the first field that
+    does not walk. ``()`` below version 4, which has no fields."""
+    if version != 4:
+        return ()
+    offset, pairs = 0, []
+    while offset < len(body) and len(body) - offset not in (4, 20, 24):
+        if len(body) - offset < 4:
+            return offset
+        length = int.from_bytes(body[offset + 2 : offset + 4])
+        if length < 16 or length % 4 or offset + length > len(body):
+            return offset
+        pairs.append(
+            (
+                int.from_bytes(body[offset : offset + 2]),
+                body[offset + 4 : offset + length],
+            )
+        )
+        offset += length
+    return tuple(pairs)
+
+
 def _assert_ntp_body_tiles(ntp: NTP) -> None:
-    """The extension fields, the MAC and the remainder tile the body,
-    and every field the walk accepted keeps RFC 7822's Length rules."""
-    fields, mac = ntp.extension_fields, ntp.mac
+    """The extension fields raise InvalidFieldError at the offset
+    _reference_ntp_walk gives, where the remainder starts and with no
+    MAC; or they are the fields it gives, and they, the MAC and the
+    remainder tile the body, every field keeping RFC 7822's Length
+    rules. The MAC and the remainder never raise."""
+    expected = _reference_ntp_walk(ntp.body, ntp.version)
+    mac, remainder = ntp.mac, ntp.remainder
+    try:
+        fields = ntp.extension_fields
+    except InvalidFieldError as error:
+        assert isinstance(expected, int)
+        assert (error.field, error.offset) == ("body", expected)
+        assert mac is None
+        assert remainder == ntp.body[expected:]
+        event("NTP extension fields: malformed")
+        return
+    assert tuple((f.type, f.value) for f in fields) == expected
     tiled = b"".join(bytes(field) for field in fields)
-    tiled += (bytes(mac) if mac is not None else b"") + ntp.remainder
+    tiled += (bytes(mac) if mac is not None else b"") + remainder
     assert tiled == ntp.body
-    assert mac is None or not ntp.remainder
-    assert ntp.version == 4 or not fields
+    assert mac is None or not remainder
+    assert ntp.version != 4 or not remainder
     for field in fields:
         assert len(bytes(field)) >= 16 and len(bytes(field)) % 4 == 0
         assert field.type_name
+    event(f"NTP extension fields: {len(fields)}")
 
 
 class TestNTPAccessorSafety:
@@ -2152,8 +2330,9 @@ class TestNTPAccessorSafety:
         """decode() raises only on the 48-byte header, for the first
         reason that applies (a version outside 1-4, then mode 6 or 7,
         at any length, then too short), and keeps every byte after it;
-        the accessors never raise, and the extension fields, the MAC
-        and the remainder tile the body exactly."""
+        every other accessor never raises, and the extension fields
+        raise where the body does not walk, or with the MAC and the
+        remainder tile it exactly."""
         ntp = _ntp_decode(data)
         if not isinstance(ntp, NTP):
             assert ntp == _ntp_rejection(data)
@@ -2165,7 +2344,6 @@ class TestNTPAccessorSafety:
         for name in _NTP_ACCESSORS:
             getattr(ntp, name)
         mac = ntp.mac
-        event(f"NTP extension fields: {len(ntp.extension_fields)}")
         event(f"NTP MAC: {None if mac is None else len(bytes(mac))}")
         event(f"NTP remainder: {bool(ntp.remainder)}")
 
@@ -3256,10 +3434,59 @@ def cdp_nonzero_trailers(draw: st.DrawFn) -> bytes:
     return tlvs + bytes(draw(st.integers(0, 3)))
 
 
+def _reference_cdp_addresses(value: bytes) -> list[bytes] | int:
+    """Walk an Addresses TLV's value independently of netprotocols: the
+    wire form of each address its 4-byte count gives, or the offset in
+    the value of the count or the address that runs past it."""
+    if len(value) < 4:
+        return 0
+    count, cursor, found = int.from_bytes(value[:4]), 4, []
+    while len(found) < count:
+        if cursor + 2 > len(value):
+            return cursor
+        alen_at = cursor + 2 + value[cursor + 1]
+        if alen_at + 2 > len(value):
+            return cursor
+        end = alen_at + 2 + int.from_bytes(value[alen_at : alen_at + 2])
+        if end > len(value):
+            return cursor
+        found.append(value[cursor:end])
+        cursor = end
+    return found
+
+
+def _read_cdp_addresses(cdp: CDP, tlv_type: int, name: str) -> None:
+    """Read one of CDP's address lists: None with no TLV of its type,
+    else InvalidFieldError at the offset _reference_cdp_addresses gives,
+    or the addresses it gives."""
+    tlv = cdp.tlv(tlv_type)
+    try:
+        addresses = getattr(cdp, name)
+    except InvalidFieldError as error:
+        assert tlv is not None
+        assert (error.field, error.offset) == (
+            "value",
+            _reference_cdp_addresses(tlv.value),
+        )
+        event("CDP addresses: malformed")
+        return
+    if addresses is None:
+        assert tlv is None
+        event("CDP addresses: none")
+        return
+    assert tlv is not None
+    assert [bytes(a) for a in addresses] == _reference_cdp_addresses(tlv.value)
+    for address in addresses:
+        _ = (address.ip, address.protocol_type_name)
+    event("CDP addresses: parsed")
+
+
 class TestCDPProperties:
     @given(data=st.one_of(fuzz_input, cdp_bodies()))
     def test_accessors_never_raise(self, data: bytes) -> None:
-        """Whatever decodes answers every accessor, and round-trips."""
+        """Whatever decodes answers every accessor but the address
+        lists, and round-trips; the address lists raise
+        InvalidFieldError where the reference walk says so."""
         try:
             cdp = CDP.decode(data)
         except ProtocolError:
@@ -3277,10 +3504,11 @@ class TestCDPProperties:
         )
         for tlv in cdp.tlvs:
             _ = (tlv.type_name, tlv.length)
-        for addresses in (cdp.addresses, cdp.management_addresses):
-            event(f"addresses: {'none' if addresses is None else 'parsed'}")
-            for address in addresses or ():
-                _ = (address.ip, address.protocol_type_name, bytes(address))
+        for tlv_type, name in (
+            (2, "addresses"),
+            (0x16, "management_addresses"),
+        ):
+            _read_cdp_addresses(cdp, tlv_type, name)
         assert bytes(cdp) == data[: cdp.header_len]
         assert not any(data[cdp.header_len :])
         assert CDP.decode(bytes(cdp)) == cdp
@@ -3643,7 +3871,8 @@ _pim_like = st.tuples(
 
 
 def _read_pim_message(pim: PIM) -> None:
-    """Read every accessor of a PIM message's typed form."""
+    """Read every accessor of a PIM message's typed form: the Address
+    List raises nothing but InvalidFieldError."""
     message = pim.message
     if isinstance(message, PIMHello):
         for option in message.options:
@@ -3653,10 +3882,14 @@ def _read_pim_message(pim: PIM) -> None:
             "lan_prune_delay",
             "dr_priority",
             "generation_id",
-            "address_list",
         ):
             with contextlib.suppress(InvalidFieldError, ProtocolError):
                 getattr(message, name)
+        try:
+            _ = message.address_list
+        except ProtocolError as error:
+            assert type(error) is InvalidFieldError
+            event("PIM Address List: malformed")
     elif isinstance(message, PIMJoinPrune):
         for group in message.groups:
             _ = group.group.bidirectional, group.group.admin_scope

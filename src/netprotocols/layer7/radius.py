@@ -60,10 +60,14 @@ FCS reading ``12 04 be ef``, decodes with a Reply-Message of
 The attributes are not validated on decode. An attribute whose Length
 is below 2 or runs past the packet raises
 :class:`~netprotocols.InvalidFieldError` from
-:attr:`RADIUS.parsed_attributes` and the accessors built on it, never
-from :meth:`RADIUS.decode`, so the header of a packet with a broken
-attribute list still decodes, as :class:`~netprotocols.TCP` does for
-its options.
+:attr:`RADIUS.parsed_attributes`, never from :meth:`RADIUS.decode`, so
+the header of a packet with a broken attribute list still decodes, as
+:class:`~netprotocols.TCP` does for its options. The packet-level
+lookups (:attr:`RADIUS.user_name`, :attr:`RADIUS.nas_ip_address`,
+:attr:`RADIUS.nas_port`, :attr:`RADIUS.framed_ip_address`) read the
+attributes up to the first that does not walk, and are ``None`` for an
+attribute not found before it, as :meth:`~netprotocols.STUN.attribute`
+is.
 
 Attributes
 ----------
@@ -145,14 +149,14 @@ servers use for authentication and accounting.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 from struct import Struct
 from typing import ClassVar, Self, cast
 
 from netprotocols._base import Protocol, bytes_to_ipv4
-from netprotocols._tlv import walk_kind_length_value
+from netprotocols._tlv import read_until_malformed, walk_kind_length_value
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -693,71 +697,71 @@ class RADIUS(Protocol):
             relative to the first attribute; bounded, so it never hangs
             or over-reads).
         """
-        return tuple(
-            RADIUSAttribute(kind, data)
-            for kind, data in walk_kind_length_value(
-                self.attributes,
-                lone_byte_kinds=frozenset(),
-                terminator_kind=None,
-                min_option_length=None,
-                length_includes_header=True,
-                protocol=type(self),
-                field="attributes",
-            )
-        )
+        return tuple(self._walk())
+
+    def _walk(self) -> Iterator[RADIUSAttribute]:
+        for kind, data in walk_kind_length_value(
+            self.attributes,
+            lone_byte_kinds=frozenset(),
+            terminator_kind=None,
+            min_option_length=None,
+            length_includes_header=True,
+            protocol=type(self),
+            field="attributes",
+        ):
+            yield RADIUSAttribute(kind, data)
 
     def _first_value(self, kind: int) -> _Value:
         """Return the :attr:`RADIUSAttribute.value` of the first ``kind``.
 
-        ``None`` if no attribute has type ``kind``.
+        The attributes are read up to the first that does not walk
+        (where :attr:`parsed_attributes` raises); never raises.
 
         :param kind: The attribute type to look for.
-        :raises InvalidFieldError: if the attributes are malformed (see
-            :attr:`parsed_attributes`).
+        :returns: The value, or ``None`` if no attribute read has type
+            ``kind``.
         """
-        for attribute in self.parsed_attributes:
+        for attribute in read_until_malformed(self._walk())[0]:
             if attribute.type == kind:
                 return attribute.value
         return None
 
     @property
     def user_name(self) -> str | None:
-        """The first User-Name (1), as text; ``None`` if there is none.
+        """The first User-Name (1), as text.
 
-        :raises InvalidFieldError: if the attributes are malformed (see
-            :attr:`parsed_attributes`).
+        ``None`` if there is none before the first attribute that does
+        not walk (degrades, never raises).
         """
         value = self._first_value(_USER_NAME)
         return value if isinstance(value, str) else None
 
     @property
     def nas_ip_address(self) -> IPv4Address | None:
-        """The first NAS-IP-Address (4); ``None`` if absent or not 4 bytes.
+        """The first NAS-IP-Address (4).
 
-        :raises InvalidFieldError: if the attributes are malformed (see
-            :attr:`parsed_attributes`).
+        ``None`` if there is none before the first attribute that does
+        not walk, or its value is not 4 bytes (degrades, never raises).
         """
         value = self._first_value(_NAS_IP_ADDRESS)
         return value if isinstance(value, IPv4Address) else None
 
     @property
     def nas_port(self) -> int | None:
-        """The first NAS-Port (5); ``None`` if absent or not 4 bytes.
+        """The first NAS-Port (5).
 
-        :raises InvalidFieldError: if the attributes are malformed (see
-            :attr:`parsed_attributes`).
+        ``None`` if there is none before the first attribute that does
+        not walk, or its value is not 4 bytes (degrades, never raises).
         """
         value = self._first_value(_NAS_PORT)
         return value if isinstance(value, int) else None
 
     @property
     def framed_ip_address(self) -> IPv4Address | None:
-        """The first Framed-IP-Address (8), or ``None``.
+        """The first Framed-IP-Address (8).
 
-        ``None`` if there is none, or if its value is not 4 bytes.
-
-        :raises InvalidFieldError: if the attributes are malformed (see
-            :attr:`parsed_attributes`).
+        ``None`` if there is none before the first attribute that does
+        not walk, or its value is not 4 bytes (degrades, never raises).
         """
         value = self._first_value(_FRAMED_IP_ADDRESS)
         return value if isinstance(value, IPv4Address) else None
