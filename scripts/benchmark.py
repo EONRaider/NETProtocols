@@ -196,10 +196,12 @@ def _comparison_caveats(same_protocols: bool = False) -> list[str]:
         ]
     else:
         depth = [
-            "   - They do not parse to the same depth. On the DNS-over-TCP",
-            "     frames dpkt stops at TCP and leaves the payload as raw",
-            "     bytes, where netprotocols continues into DNSOverTCP and",
-            "     DNS. Where the depths differ, netprotocols is doing more.",
+            "   - They do not parse to the same depth, and the difference",
+            "     runs both ways. In the full corpus, dpkt stops at TCP on",
+            "     the DNS-over-TCP frames, where netprotocols continues into",
+            "     DNSOverTCP and DNS; dpkt decodes the packet an ICMP",
+            "     time-exceeded message quotes, which netprotocols keeps as",
+            "     bytes in its ICMPv4 layer's body field.",
         ]
     return [
         "",

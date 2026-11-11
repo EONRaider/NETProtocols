@@ -255,7 +255,9 @@ class TestDepthReport:
     def test_counts_deeper_and_same_by_raw_layer_count(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        table = {
+        table: dict[
+            bytes, tuple[list[str] | Exception, list[str] | Exception]
+        ] = {
             b"equal": (["Ethernet", "IPv4"], ["Ethernet", "IP"]),
             b"deeper": (
                 ["Ethernet", "IPv4", "UDP", "DHCP"],
@@ -296,6 +298,26 @@ class TestDepthReport:
         assert benchmark.depth_report([b"frame"])[-1] == (
             "  dpkt not installed - skipped"
         )
+
+
+class TestComparisonCaveats:
+    def test_the_full_corpus_caveat_states_depth_differs_both_ways(
+        self,
+    ) -> None:
+        text = " ".join(
+            line.strip() for line in benchmark._comparison_caveats()
+        )
+        assert "the difference runs both ways" in text
+        assert "In the full corpus, dpkt stops at TCP" in text
+        assert "dpkt decodes the packet an ICMP time-exceeded" in text
+        assert "netprotocols is doing more" not in text
+
+    def test_the_same_depth_caveat_names_the_folded_layers(self) -> None:
+        text = " ".join(
+            line.strip() for line in benchmark._comparison_caveats(True)
+        )
+        assert "decode the same protocols in each frame" in text
+        assert "the difference runs both ways" not in text
 
 
 class TestMain:

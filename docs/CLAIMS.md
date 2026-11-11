@@ -1003,9 +1003,10 @@ against dpkt alone: scapy is timed on the same frames, but what it
 decodes of them is not checked. On the 509-frame corpus the command
 keeps 324 frames and prints the count. The subset leans toward the
 routing captures and toward frames that end at layer 3 or 4: the two
-OSPF captures give 106 of the 324, TFTP and the two VRRP captures 27
-each, STP, SCTP and PIM 44 between them, and 20 other captures the
-remaining 120.
+OSPF captures give 106 of the 324 (54 + 52), TFTP 27, the two VRRP
+captures 27 between them (18 + 9), STP, SCTP and PIM 44 between them
+(16 + 15 + 13), and 20 other captures the remaining 120
+(106 + 27 + 27 + 44 + 120 = 324).
 `--json` records the captures, the `--same-depth` flag and the selected
 and total frame counts.
 
