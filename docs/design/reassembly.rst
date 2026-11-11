@@ -279,11 +279,11 @@ segment caused the event in its own flow: the fragment that filled a
 datagram's last hole (``Datagram``), the segment that made a run
 contiguous with the delivered end, that pushed its own direction past
 ``max_flow_bytes``, or, if the ACK-based gap of section 4.7 is
-adopted, whose acknowledgement declared the gap before it
-(``StreamData``, ``Gap``), the fragment that pushed its own datagram
-past ``max_flow_bytes`` or ``max_fragments`` (``Evicted``), and the
-arriving piece of an ``Overlap``, ``Retransmission``, ``OutOfOrder``
-or ``Anomaly``. It is ``None`` for every event a flush produces: an
+adopted, that confirmed the gap before it (``StreamData``, ``Gap``),
+the fragment that pushed its own datagram past ``max_flow_bytes`` or
+``max_fragments`` (``Evicted``), and the arriving piece of an
+``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
+``Anomaly``. It is ``None`` for every event a flush produces: an
 expiry, the eviction of a flow to make room (``max_total_bytes``,
 ``max_flows``), ``advance`` and ``close``. A ``feed`` that triggers an
 expiry or eviction in another flow therefore returns that flow's
@@ -340,6 +340,11 @@ The event types:
        the capture truncated them, the flow is being flushed, or (if
        adopted, section 4.7) the peer acknowledged past them.
      - ``start``, ``end``, ``reason`` (``GapReason``).
+   * - ``LateData``
+     - If the ACK-based gap of section 4.7 is adopted: bytes arrive
+       for the range of a gap already declared on an acknowledgement.
+     - ``offset`` (stream offset of ``data[0]``), ``data``; its
+       ``spans`` tile ``data``, and it is outside the ordered runs.
    * - ``Evicted``
      - A bound removed state (section 2.3).
      - ``bound`` (``Bound``), ``held_bytes``, ``missing`` (the holes
@@ -354,7 +359,8 @@ The event types:
      - ``kind`` (``AnomalyKind``), ``start``, ``end``.
 
 ``FragmentEvent`` and ``StreamEvent`` are the unions of the types each
-reassembler can return, so a ``match`` over them type-checks as
+reassembler can return (``StreamEvent`` includes ``LateData`` if
+section 4.7's gap is adopted), so a ``match`` over them type-checks as
 exhaustive under ``mypy --strict`` with ``typing.assert_never``.
 ``OverlapPolicy``, ``Direction``, ``EndReason``, ``GapReason``,
 ``Bound``, ``Timeout``, ``AnomalyKind`` and ``ChecksumMode`` are
@@ -415,8 +421,9 @@ any other packet, with the completing frame's ref:
             handle((event,))
             if isinstance(event, Datagram):
                 start = IPv4 if event.version == 4 else IPv6
-                whole = decode_frame(event.data, start=start, lax=True)
-                handle(streams.feed(whole, event.data, timestamp=ts, ref=index))
+                data = event.data
+                whole = decode_frame(data, start=start, lax=True)
+                handle(streams.feed(whole, data, timestamp=ts, ref=index))
         handle(streams.feed(packet, frame, timestamp=ts, ref=index))
     handle(fragments.close() + streams.close())
 
@@ -920,30 +927,47 @@ already held as a duplicate, without comparing its bytes, and keeps
 the datagram; only a partial overlap still discards it. In both cases
 Linux keeps no state for the key afterwards. A kernel version does not
 say which rule a host has, since both commits were backported to the
-stable series. The ``ip_fragment.c`` of each stable tag shows:
+stable series. The ``ip_fragment.c`` (and, for the third column,
+``reassembly.c``) of each stable tag shows:
 
 .. list-table::
    :header-rows: 1
-   :widths: 22 39 39
+   :widths: 16 28 28 28
 
    * - Series
      - Overlap discards (7969e5c40dfd) from
      - Contained fragment kept (ade446403bfb) from
+     - Empty fragment discards the queue (0ff89efb5246, 2475f59c618e)
+       from
    * - Mainline
      - 4.19
+     - 4.20
      - 4.20
    * - 4.19
      - 4.19
      - 4.19.14
+     - 4.19.37
    * - 4.14
      - 4.14.71
      - 4.14.92
+     - 4.14.114
    * - 4.9
      - 4.9.134
      - 4.9.149
+     - 4.9.172
    * - 4.4
      - 4.4.174
      - 4.4.174
+     - never (4.4.302, the last, drops only the fragment)
+
+The third column is decision 8's empty-fragment rule: commit
+`0ff89efb5246 <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0ff89efb524631ac9901b81446b453c29711c376>`__
+for IPv4 and
+`2475f59c618e <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2475f59c618ea58e9f72ae5ded2db392ee47810d>`__
+for IPv6, both 2018, with the same stable tags for both files. Before
+them, both versions drop only the empty fragment (``goto err``), so a
+kernel with both overlap commits, 4.19.14 to 4.19.36 or 4.14.92 to
+4.14.113 for example, still keeps the datagram.
 
 The ``discard`` policy, the IPv6 path applied to IPv4, discards on
 every overlap but an exact duplicate. It matches neither Linux rule
@@ -1102,8 +1126,9 @@ discard.** Receivers differ:
   oversize or a misaligned one; the datagram can still complete.
 - Current Linux (`net/ipv6/reassembly.c`_, `net/ipv4/ip_fragment.c`_)
   kills the whole queue for an IPv6 oversize or misaligned fragment,
-  for an empty fragment of either version (since 4.20; 4.18 and 4.19
-  drop only the empty IPv4 fragment), and for an IPv4 datagram whose
+  for an empty fragment of either version (since the two commits in
+  the third column of section 3.4's table; earlier kernels drop only
+  the empty fragment), and for an IPv4 datagram whose
   reassembled length exceeds 65,535. For a misaligned IPv4 fragment
   it truncates the data to a multiple of 8 (``end &= ~7``) and keeps
   the fragment, discarding the queue only if nothing is left.
@@ -1130,7 +1155,11 @@ following RFC 8200's text, and *datagram* for EMPTY_FRAGMENT, which
 the RFC does not cover. For IPv4, *truncate and keep* for MISALIGNED,
 the only receiver behaviour cited here, and *datagram* for OVERSIZE,
 whatever the policy; for EMPTY_FRAGMENT, *by policy*: *datagram* under
-``linux-discard``, *fragment* elsewhere. *Trade-off:* no choice
+``linux-discard``, *fragment* elsewhere. ``linux-discard`` thereby
+models kernels with all three commits of section 3.4's table; on a
+kernel with the overlap commits but not the empty-fragment one, it
+discards a datagram the target keeps after an empty fragment, which
+the ``EMPTY_FRAGMENT`` anomaly reports. *Trade-off:* no choice
 matches every target, so the guarantee is the ``Anomaly``: each case
 is reported whatever was discarded. Following the RFC for IPv6 means
 disagreeing with Linux there.
@@ -1211,8 +1240,10 @@ direction by construction and is reported as
 
 A key's connection ends when both directions have ended or it expires;
 a SYN for a key whose connection has ended, or whose directions are
-closed, starts a new connection under the same key, as does data
-after a ``StreamEnd(RST)`` (section 4.4). A caller therefore treats a
+closed, starts a new connection under the same key. What an RST does,
+including what a SYN or data after it does and where the offsets of
+any new connection start, is decision 12 (section 4.4). A caller
+therefore treats a
 ``StreamEnd`` as the end of that connection's runs: later
 ``StreamData`` under the same ``flow`` belongs to a new connection.
 
@@ -1336,12 +1367,36 @@ Three terms hold under every option below:
   (c). Held and out-of-order data stay held during the grace period.
 - *(b) Continue*: the RST never ends the connection on its own. It is
   reported at once as ``Anomaly(RST_RECEIVED)``, with the RST's frame
-  as ``completing_ref``. Data after the RST, in order or not,
-  continues the same connection, with the same offsets and one
-  ``Anomaly(DATA_AFTER_RST)`` per direction. ``StreamEnd(RST)`` is
-  emitted when the RST is confirmed: the closed timeout (section 2.5)
-  passes with no data after the RST in either direction, or ``close()``
-  is called; held data is then flushed as on expiry.
+  as ``completing_ref``, and the connection has a pending end:
+
+  - *Clock.* The pending end's deadline is the RST's timestamp plus the
+    closed timeout (section 2.5), on the capture clock of section 2.4.
+    Retransmissions across the RST and segments without new data do
+    not move it.
+  - *Data after the RST* cancels the pending end: the RST is taken as
+    rejected, ``Anomaly(DATA_AFTER_RST)`` is emitted once per
+    direction, the data continues the same connection at the same
+    offsets, in order or not, and the connection returns to the
+    established idle timeout. It can later end by FIN, by timeout, or
+    by another RST, which starts a new pending end.
+  - *Confirmation.* When the deadline passes with no data after the
+    RST, or at ``close()``, held data is flushed as on expiry and
+    ``StreamEnd(RST)`` follows for both directions, with
+    ``completing_ref=None``. The connection is then removed: a later
+    segment under the key starts a new connection picked up
+    mid-stream (section 4.2), with offsets from 0 and
+    ``Anomaly(MIDSTREAM)``, as after any expiry.
+  - *A SYN while the end is pending* whose ISN differs from the
+    direction's is a reconnection on the same tuple, which NAT, load
+    tests and BGP restarts produce within seconds of an RST. It
+    confirms the RST at once: held data is flushed, ``StreamEnd(RST)``
+    is emitted for both directions with the SYN's frame as
+    ``completing_ref``, and the SYN starts a new connection under the
+    key, with offsets from 0 after its ISN and
+    ``Anomaly(SYN_AFTER_RST)``. Without a pending RST, such a SYN after
+    data is still ignored with ``ISN_CHANGED`` (section 4.4). A SYN
+    with the old ISN is a retransmission and changes nothing.
+
 - *(c) End now*: contiguous data is delivered, held data is flushed as
   for ``close()`` (``Gap`` with reason ``FLUSH``), and
   ``StreamEnd(RST)`` follows at once. The connection is kept, holding
@@ -1351,17 +1406,28 @@ Three terms hold under every option below:
   direction's ``StreamEnd.offset`` rather than restarting at 0, so a
   caller can join the two by offset.
 
-*Recommendation:* (b). It is the only option an RST the target
-rejected cannot use to cut a stream: the bytes after it stay in the
-same connection at the same offsets, so a message that spans the RST
-decodes whole, and the ``RST_RECEIVED`` anomaly still tells the caller
-at once. *Trade-off:* a caller learns that the connection ended only
-at the closed timeout (120 s of capture time) or at ``close()``, so a
-close-delimited HTTP body that ends in an RST is decoded that much
-later, and the state stays held that long. The reverse case is an
-insertion: if the target did accept the RST, data sent after it was
-refused there, yet is delivered here, marked by
-``Anomaly(DATA_AFTER_RST)``. Option (a) bounds the delay to
+*Recommendation:* (b). It is the only option where an RST alone,
+rejected by the target, cannot cut a stream: the bytes after it stay
+in the same connection at the same offsets, so a message that spans
+the RST decodes whole, and the ``RST_RECEIVED`` anomaly still tells
+the caller at once. *Trade-off:* a caller learns that the connection
+ended only at the closed timeout (120 s of capture time after the
+RST), at a new SYN, or at ``close()``, so a close-delimited HTTP body
+that ends in an RST is decoded that much later, and the state stays
+held that long. The SYN rule reopens the evasion for an attacker who
+forges two packets: an RST and then a SYN with a new ISN, both with a
+TTL too low to reach the target, end the stream for the caller while
+the target's connection goes on. Each is reported (``RST_RECEIVED``,
+``SYN_AFTER_RST``), and the real data that follows lands outside the
+new connection's sequence space, as out-of-window or before-start data
+with its anomalies. The alternative, keeping the old connection
+alongside the new one and placing each segment in whichever sequence
+space it fits, closes that route but needs two connections per key and
+a connection identity on every event; it is not proposed. Ignoring the
+SYN instead would lose every real reconnection within the closed
+timeout. The reverse case is an insertion: if the target did accept
+the RST, data sent after it was refused there, yet is delivered here,
+marked by ``Anomaly(DATA_AFTER_RST)``. Option (a) bounds the delay to
 ``rst_grace``, but an attacker who waits longer than it gets (c)'s
 outcome. Under (c), and under (a) past the grace period, a rejected
 RST gives the caller a ``StreamEnd`` it acts on: section 4.8 sets
@@ -1437,9 +1503,11 @@ sender can retransmit that far back.
   (segment acceptance in RFC 9293 §3.10.7.4 trims what lies before
   RCV.NXT), so a differing repeat below the acknowledgement cannot
   change what the target holds; repeats above it are bounded by the
-  window and always verified. Retention follows the bytes in flight,
-  usually far less than the window. It needs the other direction in
-  the capture; a one-sided capture falls back to 64 KiB.
+  window and always verified. The anchor is capped at the delivered
+  end, so an acknowledgement beyond it, forged or not, retains no
+  less than the plain 64 KiB case. Retention follows the bytes in
+  flight, usually far less than the window. It needs the other
+  direction in the capture; a one-sided capture falls back to 64 KiB.
 - *Report unverified repeats as overlaps*: an ``Overlap`` with
   ``kept`` empty for every repeat older than the retained window. No
   exception remains, but every ordinary retransmission that far back
@@ -1453,10 +1521,12 @@ repeats more than 64 KiB below what the receiver has acknowledged,
 which cannot change the target's bytes. *Trade-off:* the retained
 amount varies with the acknowledgements seen, so memory per flow is
 less predictable than a fixed 64 KiB; a lost or spoofed ACK moves the
-anchor; and a one-sided capture keeps the plain 64 KiB exception, in
-which a differing retransmission further back on a scaled connection
-is an insertion the caller sees only as an unverified
-retransmission.
+anchor, though never past the delivered end; under cap pressure
+retained bytes are trimmed first (section 2.3), which shrinks the
+window and widens the exception for that flow; and a one-sided capture
+keeps the plain 64 KiB exception, in which a differing retransmission
+further back on a scaled connection is an insertion the caller sees
+only as an unverified retransmission.
 
 **Decision needed: when to deliver.** Delivering on contiguity (the
 issue's "as they become available") delivers before a later, differing
@@ -1509,9 +1579,8 @@ routinely.
   the held data after it is delivered. Bytes that arrive later for the
   gap's range repeat nothing, so they are not a ``Retransmission``:
   they are reported as ``Anomaly(LATE_DATA)`` with their range, and
-  their content is lost to the caller. That breaks the rule of section
-  2.3 that captured data is never silently dropped, though the loss is
-  reported.
+  their content is lost to the caller: captured data is dropped,
+  though reported.
 - *Gap on ACK, late bytes delivered*: as above, but bytes that arrive
   for a declared gap's range are delivered in a ``LateData`` event
   (``offset``, ``data``, ``spans``), outside the ordered runs, so no
@@ -1522,19 +1591,41 @@ In both gap options the acknowledgement is mapped to stream offsets by
 the serial-number rule of section 4.3 from the direction's offset 0,
 which the SYN or mid-stream pickup (section 4.2) sets, so the rule
 needs neither SYN, only that both directions are captured; window
-tracking (section 4.5) is not required. The released run's
-``completing_ref`` is the ACK's frame (section 1.4), since that frame
-made the bytes deliverable; the alternative is ``None``, as for a
-flush, which leaves such a run with no completing frame.
+tracking (section 4.5) is not required. Two limits apply to both:
 
-*Recommendation:* gap on ACK, late bytes delivered, with the ACK's
-frame as ``completing_ref``. It turns a stall of up to an hour into a
-reported gap on exactly the lossy, often mid-stream captures where it
-happens, and keeps every captured byte. *Trade-off:* one more event
-type, which a caller that ignores it treats as a loss; and an ACK the
+- *Cap.* A gap never extends past the highest offset the direction has
+  received, delivered or held. An acknowledgement beyond it is capped
+  there and reported once as ``Anomaly(ACK_BEYOND_DATA)``, so a forged
+  ACK far ahead cannot push the delivered end past data still to
+  come.
+- *Confirmation.* An ACK can be captured before the data it
+  acknowledges: merged multi-interface captures and multi-queue
+  capture reorder frames (section 2.4). A hole is therefore declared a
+  gap only when it is still open ``ack_gap_grace`` of capture time
+  after the first ACK past it (proposed: 1 s), and a later frame, an
+  ACK at or past the same point or data of the direction beyond the
+  hole, confirms it. Data that fills the hole within the grace period
+  cancels it.
+
+The released run's ``completing_ref`` is the frame that confirmed the
+gap (section 1.4), since that frame made the bytes deliverable; the
+alternative is ``None``, as for a flush, which leaves such a run with
+no completing frame.
+
+*Recommendation:* gap on ACK, late bytes delivered, with the cap, the
+confirmation, and the confirming frame as ``completing_ref``. It turns
+a stall of up to an hour into a reported gap on exactly the lossy,
+often mid-stream captures where it happens, and keeps every captured
+byte. *Trade-off:* one more event type, which a caller that ignores it
+treats as a loss. The grace period delays delivery past a real loss by
+``ack_gap_grace``; a reordering longer than that still yields a
+spurious ``Gap`` and ``LateData`` in a benign capture; a shorter grace
+period makes that likelier, a longer one delays more. An ACK the
 receiver never sent (spoofed, or from an attacker on the path) makes
-the observer skip bytes the receiver may still accept: an evasion,
-reported as the ``Gap`` and, when the bytes arrive, as ``LateData``.
+the observer skip bytes the receiver may still accept, up to the
+highest offset seen: an evasion, reported as the ``Gap`` and, when the
+bytes arrive, as ``LateData``. The confirmation does not stop it, since
+an attacker can send the second ACK too.
 
 ``URG`` and the urgent pointer are ignored: urgent bytes stay inline,
 as most stacks deliver them and as
@@ -1580,12 +1671,12 @@ while the buffer ends inside a message:
 
 To attach a message to frames, the caller keeps the buffer's stream
 offset: the message occupies
-``[offset, offset + message.header_len)``, the spans of the runs that overlap that range
-are its frames, and its completing frame is the ``completing_ref`` of
-the run that holds its last byte (section 1.4), or none when that is
-``None``. A desynchronized buffer (a ``Gap`` inside a message, or a
-decoder error other than truncation) is the caller's to resynchronize,
-as a protocol decoder's framing rules are.
+``[offset, offset + message.header_len)``, the spans of the runs that
+overlap that range are its frames, and its completing frame is the
+``completing_ref`` of the run that holds its last byte (section 1.4),
+or none when that is ``None``. A desynchronized buffer (a ``Gap``
+inside a message, or a decoder error other than truncation) is the
+caller's to resynchronize, as a protocol decoder's framing rules are.
 
 4.9 Out of scope
 ~~~~~~~~~~~~~~~~
@@ -1660,28 +1751,53 @@ here. ``ChecksumMode`` would have:
   that host's stack happened to checksum in software, and the rest of
   that direction is dropped, an evasion.
 - ``AUTO`` by pattern: each bad TCP checksum is judged on its own. One
-  that equals the folded pseudo-header sum Linux leaves in the field
-  for the NIC to complete (``th->check = ~tcp_v4_check(len, saddr,
-  daddr, 0)`` in
-  `include/net/tcp.h <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/net/tcp.h>`__,
-  and the IPv6 equivalent) is taken as an unfilled offload and used,
+  that equals the folded pseudo-header sum a stack leaves in the field
+  for the NIC to complete is taken as an unfilled offload and used,
   with ``Anomaly(CHECKSUM_OFFLOAD)``; any other bad checksum is
-  dropped. A length-0 segment is used only when its checksum matches
-  that pattern computed over its captured length. There is no
-  per-sender state to flip. The IPv4 header checksum, which the kernel
-  computes itself, is always checked.
+  dropped. Linux writes
+  ``th->check = ~tcp_v4_check(len, saddr, daddr, 0)``
+  (`include/net/tcp.h <https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/net/tcp.h>`__,
+  and the IPv6 equivalent); FreeBSD writes the same sum with
+  ``in_pseudo()``
+  (`tcp_output.c <https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/netinet/tcp_output.c>`__);
+  Windows writes it for
+  `checksum offload <https://learn.microsoft.com/en-us/windows-hardware/drivers/network/offloading-checksum-tasks>`__
+  and, for
+  `large send offload <https://learn.microsoft.com/en-us/windows-hardware/drivers/network/offloading-the-segmentation-of-large-tcp-packets>`__,
+  the sum without the TCP length, with an IPv4 Total Length of 0 under
+  LSOv2; with IPv4 header checksum offload it leaves that checksum 0.
+  A length-0 segment is used
+  only when its checksum matches one of these patterns. There is no
+  per-sender state to flip. The IPv4 header checksum is judged the
+  same way: Linux computes it itself, so only Windows' 0 is a pattern.
+  Anyone can compute these sums, so against an attacker this option is
+  as open as ``KEEP``: a forged segment carrying the pattern is used,
+  and its ``CHECKSUM_OFFLOAD`` anomaly looks like every legitimate
+  offloaded segment's. What it filters is accidental corruption.
+- ``AUTO`` from local senders: as by pattern, but the pattern is
+  accepted only where offload can legitimately appear, on frames the
+  capture host sent. The caller declares the host's addresses
+  (``local=``, networks as ``targets`` takes them), and a pattern from
+  any other source is a bad checksum, dropped. A weaker variant with no
+  argument accepts the pattern only on frames longer than the link
+  MTU, which only TSO and GSO produce; it misses offloaded segments of
+  ordinary size and needs the MTU, which a capture does not record.
 
 Each mode emits ``Anomaly(BAD_CHECKSUM)`` for every bad checksum.
-*Recommendation:* ``AUTO`` by pattern. It keeps the outgoing direction
-of a Linux host's offloaded capture, which ``DROP`` loses; drops other
-bad checksums, which ``KEEP`` uses; and has neither the forged-first
-nor the one-good-checksum failure of the history rule. *Trade-off:*
-the pattern is computable, so an attacker can forge a segment that
-matches it and that every receiver drops: an insertion, reported on
-each such piece by ``CHECKSUM_OFFLOAD``. Only Linux's pattern is
-established here; another sender's offloaded segments are dropped as
-under ``DROP`` until its pattern is added, and a caller reading such a
-capture passes ``KEEP``.
+*Recommendation:* ``AUTO`` from local senders, with ``local`` naming
+the capture host's addresses, and, when the caller gives no ``local``,
+``AUTO`` by pattern. A capture taken on the host it analyses, RootWire's
+case, keeps its outgoing direction, which ``DROP`` loses, and a
+forged pattern from any other address is dropped; a caller that knows
+nothing about the capture still keeps offloaded directions. *Trade-off:*
+without ``local``, the default is as open to forged segments as
+``KEEP`` and filters only accidental corruption, so a caller reading
+hostile traffic passes ``local`` or chooses ``DROP``; with ``local``,
+a forged segment that spoofs a local source address still carries the
+pattern through; an offloaded host whose addresses the caller does not
+declare loses its outgoing direction as under ``DROP``; and a sender
+whose offload leaves some other value is dropped until its pattern is
+added.
 Transport checksums of fragmented datagrams are not checked by the
 fragment reassembler: they cover the whole datagram, which the caller
 verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
@@ -1755,9 +1871,10 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
        the RST is an ``Anomaly(RST_RECEIVED)``, the connection is not
        ended, and data after it continues the same stream with
        ``Anomaly(DATA_AFTER_RST)``; the ``StreamEnd(RST)`` waits for
-       the closed timeout. Under the other options a rejected RST
-       still ends the stream for the caller, reported but not
-       prevented.
+       the closed timeout or a SYN with a new ISN. A forged RST
+       followed by a forged SYN still ends the stream, reported as
+       ``SYN_AFTER_RST``. Under the other options a rejected RST alone
+       ends the stream for the caller, reported but not prevented.
    * - FIN games: data after FIN, second FIN
      - ``Anomaly(DATA_AFTER_FIN)``, ``Anomaly(INCONSISTENT_FIN)``.
    * - Data without ACK
@@ -2207,9 +2324,10 @@ Decisions needed
      - Not implemented.
    * - 12
      - What an RST does (4.4)
-     - Continue the connection: ``Anomaly(RST_RECEIVED)`` at once,
-       ``StreamEnd(RST)`` only after the closed timeout with no data
-       after the RST.
+     - Continue the connection: ``Anomaly(RST_RECEIVED)`` at once;
+       ``StreamEnd(RST)`` at the closed timeout after the RST with no
+       data after it, or at once on a SYN with a new ISN; data after
+       the RST cancels it.
    * - 13
      - When to deliver TCP data (4.6)
      - On contiguity, with ``Overlap.contrary``; ACK-gating later.
@@ -2220,12 +2338,14 @@ Decisions needed
        the documented exception to "always reported".
    * - 15
      - Gap when the peer acknowledges past a hole (4.7)
-     - Yes, ``Gap(reason=ACKED)``, late bytes delivered as
-       ``LateData``, the ACK's frame as ``completing_ref``.
+     - Yes, ``Gap(reason=ACKED)``, capped at the highest offset
+       received and confirmed after a 1 s grace; late bytes delivered
+       as ``LateData``; the confirming frame as ``completing_ref``.
    * - 16
      - Bad checksums (5.1)
-     - ``ChecksumMode.AUTO``, judging each bad TCP checksum by Linux's
-       offload pattern.
+     - ``ChecksumMode.AUTO``: the offload pattern accepted only from the
+       caller's ``local`` addresses, or from any source when ``local``
+       is not given.
    * - 17
      - Re-export from ``netprotocols`` (6.4)
      - No; ``netprotocols.reassembly`` only.
