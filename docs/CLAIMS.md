@@ -980,6 +980,18 @@ old hand-rolled benchmark loop never exercised).
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --compare --repetitions 30 --trials 9`.
 
+Per-capture figures, such as the routing captures', LLDP's, the Tier 4
+captures' and TLS's above, are reproduced with the same command
+restricted to those captures with `--fixture`, once per capture or
+group, for example `--fixture ospf.pcap --fixture bgp.pcap`. The
+same-work subset, the frames netprotocols and dpkt decode to the same
+depth as 1.6 counts layers, is reproduced by adding `--same-depth`,
+which selects the frames against dpkt before timing and prints how
+many it kept; scapy is timed on those frames too, but the selection
+does not check its depth.
+`--json` records the captures, the `--same-depth` flag and the selected
+and total frame counts.
+
 *Re-measured for 2.3.0 (2026-10-23, another machine; see above):
 99,814 against dpkt's 106,497, **~6% slower**, inside the band.*
 
@@ -1268,6 +1280,10 @@ dpkt:         Ethernet -> IP   -> UDP -> <300 raw bytes>
 ```
 
 Reproduce: `uv run --group bench python scripts/benchmark.py --depth`.
+The frames it counts as decoded to the same depth, where netprotocols'
+layer count equals dpkt's, are the workload of
+`benchmark.py --compare --same-depth` (see 1.2); "the same layer" in
+`--depth`'s output also counts the frames dpkt decodes further.
 
 This is the control on every throughput figure in 1.1-1.3, not a
 footnote to them: a decoder that stops earlier has less to do, so

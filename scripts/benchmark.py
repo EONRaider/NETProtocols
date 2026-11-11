@@ -3,6 +3,9 @@
 
     uv run --group bench python scripts/benchmark.py
     uv run --group bench python scripts/benchmark.py --compare
+    uv run --group bench python scripts/benchmark.py --compare \
+        --fixture ospf.pcap --fixture bgp.pcap
+    uv run --group bench python scripts/benchmark.py --same-depth
 
 The workload is every frame in ``tests/fixtures/`` walked from
 ``Ethernet`` to the end of its chain — the corpus exercises DNS, DHCP,
@@ -13,6 +16,15 @@ a change that "speeds things up" by decoding less shows up.
 Comparison mode (``--compare``) times `dpkt` and `scapy` on the same
 frames, and prints exactly what each library was asked to do. Both are
 dev-only extras: the package itself has zero runtime dependencies.
+
+``--fixture NAME``, repeatable, restricts the workload to the frames of
+the named captures in ``tests/fixtures/``, each named by its file name
+with or without ``.pcap``. ``--same-depth`` restricts it further to the
+frames netprotocols and dpkt decode to the same depth, as ``--depth``
+counts layers; it implies ``--compare``, and the selection pass is not
+timed. The selection is made against dpkt alone: scapy is timed on the
+same frames, but whether it decodes them to that depth is not checked.
+``--json`` records the selection beside the figures.
 
 Absolute frames/sec is a property of the machine as much as the code;
 quote it with the machine named. ``scripts/benchmark_ab.py`` compares
@@ -36,7 +48,7 @@ FIXTURES = REPOSITORY / "tests" / "fixtures"
 sys.path.insert(0, str(REPOSITORY / "src"))
 sys.path.insert(0, str(REPOSITORY / "scripts"))
 
-from _pcap import corpus_frames  # noqa: E402
+from _pcap import read_pcap  # noqa: E402
 
 from netprotocols import ProtocolError, decode_frame  # noqa: E402
 
@@ -165,6 +177,41 @@ def _comparison_caveats() -> list[str]:
     ]
 
 
+def capture_name(name: str) -> str:
+    """Return a capture's file name, adding ``.pcap`` if it is missing.
+
+    :param name: A capture file name, with or without ``.pcap``.
+    :return: The file name ending in ``.pcap``.
+    """
+    return name if name.endswith(".pcap") else f"{name}.pcap"
+
+
+def select_frames(
+    corpus: dict[str, list[bytes]], names: list[str]
+) -> list[bytes]:
+    """Return the frames of the named captures, in corpus order.
+
+    :param corpus: Each capture's frames, keyed by its file name.
+    :param names: Capture file names, each with or without ``.pcap``;
+        an empty list selects every capture.
+    :return: The frames of the selected captures.
+    :raises ValueError: if a name matches no capture in ``corpus``.
+    """
+    wanted = {capture_name(name) for name in names}
+    unknown = sorted(wanted - corpus.keys())
+    if unknown:
+        raise ValueError(
+            f"unknown fixture {', '.join(unknown)}; "
+            f"choose from: {', '.join(sorted(corpus))}"
+        )
+    return [
+        frame
+        for name in sorted(corpus)
+        if not wanted or name in wanted
+        for frame in corpus[name]
+    ]
+
+
 def _netprotocols_chain(frame: bytes) -> list[str]:
     return [type(layer).__name__ for layer in decode_frame(frame).layers]
 
@@ -184,6 +231,63 @@ def _dpkt_chain(frame: bytes) -> list[str]:
         layer = payload
 
 
+def depth_gap(
+    frame: bytes,
+    ours: Callable[[bytes], list[str]],
+    theirs: Callable[[bytes], list[str]],
+) -> tuple[list[str], list[str], int] | None:
+    """Compare the layer chains two decoders give for one frame.
+
+    Opaque payloads, the names ``theirs`` writes as ``<...>``, are not
+    counted as layers.
+
+    :param frame: The frame to decode.
+    :param ours: Returns netprotocols' layer names for a frame.
+    :param theirs: Returns the other library's layer names for a frame.
+    :return: Both chains and the number of layers ``ours`` decodes
+        beyond ``theirs``, negative where ``theirs`` decodes more; or
+        ``None`` if either decoder rejects the frame.
+    :raises ImportError: if ``theirs`` cannot import its library.
+    """
+    try:
+        our_chain = ours(frame)
+    except ProtocolError:
+        return None
+    try:
+        their_chain = theirs(frame)
+    except ImportError:
+        raise
+    except Exception:  # a parse failure is itself a result
+        return None
+    opaque = [name for name in their_chain if name.startswith("<")]
+    return (
+        our_chain,
+        their_chain,
+        len(our_chain) - (len(their_chain) - len(opaque)),
+    )
+
+
+def same_depth_frames(
+    frames: list[bytes],
+    ours: Callable[[bytes], list[str]],
+    theirs: Callable[[bytes], list[str]],
+) -> list[bytes]:
+    """Return the frames both decoders decode to the same depth.
+
+    :param frames: The frames to select from.
+    :param ours: Returns netprotocols' layer names for a frame.
+    :param theirs: Returns the other library's layer names for a frame.
+    :return: The frames, in order, whose depth gap is zero.
+    :raises ImportError: if ``theirs`` cannot import its library.
+    """
+    selected = []
+    for frame in frames:
+        measured = depth_gap(frame, ours, theirs)
+        if measured is not None and measured[2] == 0:
+            selected.append(frame)
+    return selected
+
+
 def depth_report(frames: list[bytes]) -> list[str]:
     """Report where each library stops decoding, frame by frame.
 
@@ -194,17 +298,13 @@ def depth_report(frames: list[bytes]) -> list[str]:
     deeper, same, example = 0, 0, ""
     for frame in frames:
         try:
-            ours = _netprotocols_chain(frame)
-        except ProtocolError:
-            continue
-        try:
-            theirs = _dpkt_chain(frame)
+            measured = depth_gap(frame, _netprotocols_chain, _dpkt_chain)
         except ImportError:
             return [*lines, "  dpkt not installed - skipped"]
-        except Exception:  # a parse failure is itself a result
+        if measured is None:
             continue
-        opaque = [name for name in theirs if name.startswith("<")]
-        if len(ours) > len(theirs) - len(opaque):
+        ours, theirs, gap = measured
+        if gap > 0:
             deeper += 1
             if not example:
                 example = (
@@ -220,7 +320,7 @@ def depth_report(frames: list[bytes]) -> list[str]:
     return lines
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repetitions", type=int, default=40)
     parser.add_argument("--trials", type=int, default=5)
@@ -232,12 +332,48 @@ def main() -> int:
         action="store_true",
         help="report where each library stops decoding",
     )
+    parser.add_argument(
+        "--fixture",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="time only this capture's frames (repeatable)",
+    )
+    parser.add_argument(
+        "--same-depth",
+        action="store_true",
+        help="time only the frames netprotocols and dpkt decode to the"
+        " same depth (selected against dpkt, not scapy); implies --compare",
+    )
     parser.add_argument("--json", type=Path, help="write the results here")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    frames = corpus_frames(FIXTURES)
-    if not frames:
+    corpus = {path.name: read_pcap(path) for path in FIXTURES.glob("*.pcap")}
+    if not corpus:
         print(f"No fixtures found under {FIXTURES}", file=sys.stderr)
+        return 1
+    fixtures = sorted({capture_name(name) for name in args.fixture})
+    try:
+        frames = select_frames(corpus, args.fixture)
+    except ValueError as error:
+        parser.error(str(error))
+    total = sum(len(captured) for captured in corpus.values())
+    selection = []
+    if args.fixture:
+        selection.append(f"{len(frames)} frames in {', '.join(fixtures)}")
+    if args.same_depth:
+        args.compare = True
+        try:
+            same = same_depth_frames(frames, _netprotocols_chain, _dpkt_chain)
+        except ImportError:
+            parser.error("--same-depth needs dpkt: run with --group bench")
+        selection.append(
+            f"{len(same)} of {len(frames)} decoded to the same depth by"
+            " netprotocols and dpkt (scapy's depth is not checked)"
+        )
+        frames = same
+    if not frames:
+        print("No frames selected", file=sys.stderr)
         return 1
 
     result = measure(frames, args.repetitions, args.trials)
@@ -247,6 +383,12 @@ def main() -> int:
         "python": platform.python_version(),
         "netprotocols": __import__("netprotocols").__version__,
     }
+    result["selection"] = {
+        "fixtures": fixtures,
+        "same_depth": args.same_depth,
+        "frames_selected": len(frames),
+        "frames_total": total,
+    }
 
     print(
         f"netprotocols {result['recorded']['netprotocols']} — "
@@ -255,6 +397,9 @@ def main() -> int:
     )
     print(f"  {result['frames_per_sec']:>12,.0f} frames/sec")
     print(f"  on {result['recorded']['on']}")
+    if selection:
+        print(f"  selected {len(frames)} of {total} corpus frames:")
+        print("\n".join(f"    {line}" for line in selection))
 
     if args.compare:
         print("\n".join(compare(frames, args.repetitions, args.trials)))
