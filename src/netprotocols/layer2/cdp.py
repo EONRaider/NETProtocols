@@ -374,8 +374,9 @@ def _raise_address_error(value: bytes, cursor: int, need: int) -> NoReturn:
     :param value: The Addresses or Management Address TLV's value.
     :param cursor: Where in ``value`` the address starts.
     :param need: How many bytes from ``cursor`` the address needs
-        through the end of the first of its fields ``value`` cuts
-        short.
+        through the next field needed to size it: its 2-byte type and
+        length, then through its Address Length, then the whole
+        address.
     :raises InvalidFieldError: always, with ``field`` ``"value"`` and
         ``offset`` relative to the TLV's value.
     """
