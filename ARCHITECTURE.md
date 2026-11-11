@@ -158,6 +158,12 @@ the same three rules (spelled out in [`_base.py`](src/netprotocols/_base.py)):
    how many bytes this header consumed — a *property*, so IPv4 answers
    `ihl * 4` and TCP answers `data_offset * 4`.
 
+`decode()` keeps no state, and neither does `decode_frame()`: each
+call reads one buffer and nothing it decoded before. The reassemblers
+of `netprotocols.reassembly` are the library's only objects that keep
+state across frames (a `Registry` is mutable, but holds configuration,
+not traffic); see *Reassembly is a separate, stateful step* below.
+
 **Three protocols vary this.** The first is text framing. `HTTP` has no
 fixed portion to unpack: `decode()` scans for the empty line that ends
 the head, then for the end the head's framing gives the body, so rule 1
@@ -1342,6 +1348,98 @@ reassembly. Reassemble the connection and call `HTTP.decode()` on its
 bytes instead. HTTPS is not HTTP on the wire: port 443 dispatches to
 `TLS`, and the HTTP inside it is encrypted.
 
+## Reassembly is a separate, stateful step
+
+`decode()` and `decode_frame()` see one frame. A datagram cut into IP
+fragments spans several, and `netprotocols.reassembly` puts it back
+together: it is opt-in, imported as `netprotocols.reassembly` (the
+package does not re-export it, so `import netprotocols` does not import
+it), and its `FragmentReassembler` is the only stateful object in the
+library. The design note `docs/design/reassembly.rst` holds the full
+contract and the decisions behind it; this is what ships.
+
+**Input.** The caller decodes each frame once, with whatever `start`,
+registry and `lax` it uses, and passes the packet *and* the frame:
+
+```python
+from netprotocols import IPv4, IPv6, decode_frame
+from netprotocols.pcap import read_pcap
+from netprotocols.reassembly import Datagram, FragmentReassembler
+
+fragments = FragmentReassembler()
+for index, captured in enumerate(read_pcap(buffer)):
+    packet = decode_frame(captured.data, lax=True)
+    for event in fragments.feed(
+        packet, captured.data, timestamp=captured.timestamp, ref=index
+    ):
+        if isinstance(event, Datagram):
+            start = IPv4 if event.version == 4 else IPv6
+            whole = decode_frame(event.data, start=start, lax=True)
+closed = fragments.close()
+```
+
+A packet alone cannot be reassembled: a non-first fragment's data gets
+no layer, since `IPv4.next_protocol()` and
+`IPv6Fragment.next_protocol()` give it no class. The reassembler finds
+the outermost IP header that is a fragment, sums the `header_len` of
+the layers before it to find it in the frame, and slices the data up to
+the end the IP header declares, clamped to the frame less
+`packet.trailer`. It never calls a decoder. `feed()` raises `TypeError`
+for an argument of the wrong type and `ValueError` for a frame shorter
+than `packet.consumed + len(packet.trailer)`; everything else, however
+malformed or hostile, becomes an event.
+
+**Events.** Each event is a frozen, slotted, keyword-only dataclass
+(`Datagram`, `Overlap`, `Retransmission`, `Evicted`, `Expired`,
+`Anomaly`; `FragmentEvent` is their union, so a `match` over it is
+exhaustive under `mypy --strict`). Every event names its frames by the
+`ref` the caller passed (an `int`, the feed count by default) as `Span`
+values that say which bytes each frame supplied and with which TTL or
+Hop Limit, and names the frame whose own fragment caused it as
+`completing_ref`. An expiry, an eviction to make room for another
+datagram, `advance()` and `close()` produce events with
+`completing_ref=None`. `feed()` returns its events at once, never
+queued: other datagrams' expiries, then their evictions, then the
+arriving fragment's own datagram's events.
+
+**Datagrams.** A `Datagram` holds the whole datagram with a header
+rebuilt from the fragment that supplied the payload's first byte
+(`header_ref`): for IPv4, Total Length, MF, Fragment Offset and the
+Header Checksum rewritten; for IPv6, the Per-Fragment headers with the
+Fragment header removed, the Next Header before it and Payload Length
+rewritten (RFC 791 §3.1, RFC 8200 §4.5). So `decode_frame(event.data,
+start=IPv4)` (or `IPv6`) walks it with the ordinary decoders, and the
+decode contract holds for that header as for any other; it does not
+equal any captured header.
+
+**Overlaps.** Overlapping IPv4 fragments are resolved per receiver by
+an `OverlapPolicy` (Snort frag3's `first`, the default, `last`, `bsd`,
+`linux`, `windows` and `solaris`, plus `discard` and
+`linux-discard`), chosen by the longest `targets` prefix holding the
+destination. Any overlapped byte that differs produces an `Overlap`
+under every policy, one per frame at most, so no inconsistent overlap
+is resolved silently. IPv6 overlaps discard the datagram (RFC 5722 §4,
+erratum 3089), and after any discard the key keeps no state: a later
+train under it reassembles as a new datagram.
+
+**Bounds.** `FragmentBounds` caps the bytes one datagram and all of them
+may hold, the datagrams held and the pieces per datagram, charging
+`FLOW_OVERHEAD` per datagram and `PIECE_OVERHEAD` per piece on top of
+the data; the two constants are measured CPython allocations, and
+`tests/test_reassembly_memory.py` holds them to it. To make room the
+datagram whose first fragment came first is evicted. Timeouts run on
+capture timestamps only (`SECOND` is one second in nanoseconds), so a
+replay produces the same events; per-target timeouts come with
+`targets`. Flows live in insertion-ordered structures, so event order
+never depends on hash values.
+
+**What it is not.** It does not emulate any one operating system: the
+named policies follow frag3's table of stacks measured before 2005, and
+`linux-discard` the Linux commits the design note cites. It checks the
+IPv4 header checksum (`ChecksumMode`), never a transport checksum,
+which spans the reassembled datagram and is verified on the `Datagram`
+with `netprotocols.checksum`.
+
 ## The encode side, and the round-trip guarantee
 
 Every class also works in reverse. Constructors take the friendly
@@ -1412,7 +1510,10 @@ behind an IPv6 Fragment header in the packet with its M flag set or a
 nonzero Fragment Offset, while an atomic fragment (both 0) stays
 bounded; `ip`'s length must cover the whole message, so a message
 reassembled from IPv6 fragments needs a header whose Payload Length
-covers the reassembled datagram, or no `ip`. (The RFC 768 subtlety lives
+covers the reassembled datagram, or no `ip`. A `Datagram` from
+`netprotocols.reassembly` has one: its IPv6 header's Payload Length
+covers the reassembled datagram, so the `IPv6` layer `decode_frame()`
+decodes from `Datagram.data` serves as `ip`. (The RFC 768 subtlety lives
 where it belongs: the `0x0000 → 0xFFFF` substitution applies to UDP
 alone.) SCTP is the one transport that does not use the internet
 checksum: its CRC32c (`crc32c()`, RFC 9260 §A) covers the whole packet
@@ -1502,6 +1603,10 @@ src/netprotocols/
 │                   FINGERPRINT among them), OSPF's LSA Fletcher
 │                   checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
+├── reassembly.py   FragmentReassembler: IPv4/IPv6 fragment
+│                   reassembly, the one module that keeps state
+│                   across frames; imported as netprotocols.reassembly,
+│                   not re-exported by the package
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
 │                   pcap and pcapng readers, from bytes not filenames;
 │                   read_packets(): the same frames with the pcapng

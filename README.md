@@ -342,6 +342,49 @@ enclosing IP layer, no TCP/UDP/SCTP layer, or a transport layer without
 ports at all (ICMPv4/ICMPv6 — this library does not invent a port-slot
 convention for message types that have none).
 
+## Reassembling fragments
+
+`decode()` and `decode_frame()` stay per-frame. To put IP fragments
+back together, feed every decoded packet, with the frame it came from,
+to a `FragmentReassembler` from `netprotocols.reassembly`, a module the
+package does not import on its own:
+
+```python
+from netprotocols import IPv4, IPv6, decode_frame, read_captures
+from netprotocols.reassembly import Datagram, FragmentReassembler
+
+fragments = FragmentReassembler()
+for index, (timestamp, frame) in enumerate(read_captures(data)):
+    packet = decode_frame(frame, lax=True)
+    for event in fragments.feed(packet, frame, timestamp=timestamp, ref=index):
+        if isinstance(event, Datagram):
+            start = IPv4 if event.version == 4 else IPv6
+            whole = decode_frame(event.data, start=start, lax=True)
+            # event.refs: every frame it came from;
+            # event.completing_ref: the frame that completed it
+for event in fragments.close():
+    ...  # the datagrams still missing fragments, as Expired events
+```
+
+Each `Datagram` carries the whole datagram with a rebuilt header, so
+the ordinary decoders and checksum helpers read it. Overlapping IPv4
+fragments are resolved by a per-target `OverlapPolicy` (`first` by
+default; `last`, `bsd`, `linux`, `windows`, `solaris`, `discard`,
+`linux-discard`), and any overlap whose bytes differ is reported as an
+`Overlap` event under every policy; an overlapping IPv6 fragment
+discards its datagram (RFC 5722). Every other rule a fragment breaks is
+an `Anomaly` event, never an exception. What the reassembler holds is
+bounded by `FragmentBounds`, measured on capture timestamps:
+
+| Bound | Default |
+|---|---|
+| `max_flow_bytes` | one maximal datagram and its overheads |
+| `max_total_bytes` | 32 MiB |
+| `max_flows` | 16,384 datagrams |
+| `max_fragments` | 128 per datagram |
+| `age_timeout` | 60 s from the first fragment |
+| `idle_timeout` | none |
+
 ## Decoding HTTP
 
 `HTTP.decode()` reads one HTTP/1.1 message (RFC 9112) from the start of
