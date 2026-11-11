@@ -294,11 +294,17 @@ class SCTPChunk:
     §2.1) chunks out of :attr:`value`. Each one is ``None`` for a
     chunk of a type that has no such field, and for a value too short
     to hold it, so a field before the cut still reads from a value cut
-    short. Each one but :attr:`parameters` never raises;
-    :attr:`parameters` raises when the parameters after the fixed
-    fields do not walk. Fields shared by several types (``tsn``,
-    ``stream_id``, ``ppid``, ``user_data``, ``a_rwnd``) read each
-    type's own layout.
+    short: for :attr:`parameters` that is a value shorter than the 16
+    fixed INIT bytes, and for :attr:`gap_ack_blocks` and
+    :attr:`duplicate_tsns` one shorter than the 12 fixed SACK bytes.
+    Three raise ``InvalidFieldError``: :attr:`parameters` when the
+    parameters after the fixed fields do not walk,
+    :attr:`gap_ack_blocks` when the value ends before every block
+    :attr:`num_gap_ack_blocks` declares, and :attr:`duplicate_tsns`
+    when it ends before every block and duplicate TSN the two counts
+    declare. Every other one never raises. Fields shared by several
+    types (``tsn``, ``stream_id``, ``ppid``, ``user_data``,
+    ``a_rwnd``) read each type's own layout.
     """
 
     type: int

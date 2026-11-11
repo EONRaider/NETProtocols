@@ -495,7 +495,8 @@ or encoding it cannot size. For a list whose entries a count or a
 fixed entry size gives, it is a count or an entry size that does not
 fit the bytes: `IGMP.group_records`, `CDP.addresses` and
 `management_addresses`, `IPv6Routing.segments` (half an address after
-the whole ones), and `SCTPChunk.gap_ack_blocks` and `duplicate_tsns`. A walk answers `None`, without raising, only where
+the whole ones), and `SCTPChunk.gap_ack_blocks` and
+`duplicate_tsns`. A walk answers `None`, without raising, only where
 there is nothing in its format to walk: `vendor_attributes` for an
 attribute other than a Vendor-Specific and for a vendor whose
 sub-attributes are in another format, `parameters` for a chunk other

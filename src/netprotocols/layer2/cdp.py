@@ -373,7 +373,9 @@ def _raise_address_error(value: bytes, cursor: int, need: int) -> NoReturn:
 
     :param value: The Addresses or Management Address TLV's value.
     :param cursor: Where in ``value`` the address starts.
-    :param need: How many bytes from ``cursor`` the address needs.
+    :param need: How many bytes from ``cursor`` the address needs
+        through the end of the first of its fields ``value`` cuts
+        short.
     :raises InvalidFieldError: always, with ``field`` ``"value"`` and
         ``offset`` relative to the TLV's value.
     """
@@ -678,7 +680,9 @@ class CDP(Protocol):
 
         :returns: The addresses, in wire order; ``None`` when there is no
             such TLV.
-        :raises InvalidFieldError: in the cases :attr:`addresses` raises.
+        :raises InvalidFieldError: if the value is shorter than the
+            count's 4 bytes, or an address the count gives runs past it,
+            as for :attr:`addresses`.
         """
         tlv = self.tlv(_MANAGEMENT_ADDRESS)
         return None if tlv is None else _parse_addresses(tlv.value)
