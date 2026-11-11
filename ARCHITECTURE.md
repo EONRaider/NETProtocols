@@ -1503,7 +1503,9 @@ src/netprotocols/
 │                   checksum
 ├── flow.py         FlowKey, flow_key(): canonical bidirectional keys
 ├── pcap.py         read_captures()/read_pcap()/read_pcapng(): classic
-│                   pcap and pcapng readers, from bytes not filenames
+│                   pcap and pcapng readers, from bytes not filenames;
+│                   read_packets(): the same frames with the pcapng
+│                   interface each was captured on
 ├── layer2/         ethernet.py, arp.py, vlan.py (802.1Q / 802.1ad),
 │                   llc.py (802.2 LLC + SNAP, after an 802.3 Length),
 │                   cdp.py (Cisco Discovery Protocol, after SNAP),

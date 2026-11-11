@@ -142,7 +142,9 @@ from netprotocols.layer7.vxlan import VXLAN
 from netprotocols.packet import Packet
 from netprotocols.pcap import (
     CapturedFrame,
+    CapturedPacket,
     read_captures,
+    read_packets,
     read_pcap,
     read_pcapng,
 )
@@ -222,6 +224,7 @@ __all__ = [
     "BGPPrefix",
     "CDPAddress",
     "CapturedFrame",
+    "CapturedPacket",
     "DHCPOption",
     "DNSOverTCP",
     "DNSQuestion",
@@ -325,6 +328,7 @@ __all__ = [
     "peek_server_name",
     "random_mac",
     "read_captures",
+    "read_packets",
     "read_pcap",
     "read_pcapng",
     "register",
