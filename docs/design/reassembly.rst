@@ -894,9 +894,12 @@ The rules that discard on overlap (IPv6, ``discard`` and
 ``linux-discard``) judge overlap on the fragments' declared ranges,
 the offset and length their headers give, not on the bytes a capture
 holds: a fragment the snap length cut still overlaps where its header
-says it does. An exact duplicate has the same declared range as a held
-fragment and equal bytes wherever both were captured; it supplies the
-bytes the held fragment's capture lacks.
+says it does. Under IPv6 and ``discard``, an exact duplicate has the
+same declared range as a held fragment and equal bytes wherever both
+were captured, and it supplies the bytes the held fragment's capture
+lacks. Under ``linux-discard`` a fragment inside one run is a duplicate
+whatever its range within the run, and it is dropped, as Linux drops
+it: the held bytes stand, and none of its bytes is stored.
 
 3.4 Named policies
 ~~~~~~~~~~~~~~~~~~

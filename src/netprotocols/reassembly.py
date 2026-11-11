@@ -71,8 +71,10 @@ erratum 3089), as do the ``discard`` and ``linux-discard`` policies for
 the IPv4 overlaps each one names; the key keeps no state afterwards, so
 a later fragment under it starts a new datagram. These three rules
 judge overlap on the fragments' declared ranges, so a fragment the snap
-length cut still overlaps where its header says it does, and an exact
-duplicate supplies the bytes the held fragment's capture lacks.
+length cut still overlaps where its header says it does. Under IPv6 and
+``discard`` an exact duplicate supplies the bytes the held fragment's
+capture lacks; under ``linux-discard`` a duplicate inside a run is
+dropped, as Linux drops it, and none of its bytes is stored.
 
 **Rules.** Each fragment is checked against the rules below. Every
 discard is reported by an :class:`Anomaly`; a discarded datagram's

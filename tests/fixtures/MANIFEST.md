@@ -1464,7 +1464,9 @@ Frames 30, 35 and 42 are the server's echo replies, outbound, their
 ICMP checksums computed by the kernel. Around each train the script
 read the server netns's `/proc/net/snmp` (`Ip:` ReasmReqds, ReasmOKs,
 ReasmFails) and `/proc/net/netstat` (`IpExt:` ReasmOverlaps), and wrote
-their rise to `linux_overlaps.counters` beside the capture:
+their rise to `linux_overlaps.counters` in the staging directory beside
+the staged capture. That file is not committed; this table, copied from
+it, is the record:
 
 | Train | ReasmReqds | ReasmOKs | ReasmFails | ReasmOverlaps |
 |---|---|---|---|---|
