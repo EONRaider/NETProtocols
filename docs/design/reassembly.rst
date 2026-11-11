@@ -1,16 +1,15 @@
 Design note: reassembly of IP fragments and TCP streams
 =======================================================
 
-This note proposes the design of ``netprotocols.reassembly``, the
+This note specifies the design of ``netprotocols.reassembly``, the
 opt-in, stateful module for issue
 `#373 <https://github.com/EONRaider/NETProtocols/issues/373>`__. It
 specifies the public API, the bounds and their defaults, fragment and
 stream reassembly, the response to each known evasion, the documents
 that change, the test plan and the split into pull requests. It
-describes a module that does not exist yet: every name below is a
-proposal. Each point that needs the maintainer is marked
-**Decision needed**, with a recommendation and its trade-off, and
-:ref:`reassembly-decisions` lists them all.
+describes a module that does not exist yet. Each design decision is
+marked **Decision**, with the options weighed, the accepted one and
+its trade-off, and :ref:`reassembly-decisions` lists them all.
 
 .. contents::
    :local:
@@ -83,7 +82,7 @@ header declares a length of 0 (a TSO capture), the end is the frame's
 end less the trailer, as :attr:`netprotocols.packet.Packet.trailer`
 already computes it.
 
-**Decision needed: the input type.** There are three possible shapes.
+**Decision: the input type.** There are three possible shapes.
 
 .. list-table::
    :header-rows: 1
@@ -102,7 +101,7 @@ already computes it.
      - One decode; the module never calls a decoder.
      - Does not work: a fragment's data and a segment's payload are
        in the packet only where a decoder accepted them whole.
-   * - ``Packet`` and frame (recommended)
+   * - ``Packet`` and frame (accepted)
      - One decode, done by the caller with whatever ``start``,
        registry and ``lax`` it uses. The module never calls a decoder
        on input, so it stays out of the decode path and is
@@ -110,7 +109,7 @@ already computes it.
      - Two arguments that must belong together. A mismatched pair
        is a caller error the module can detect only partly (below).
 
-*Recommendation:* the packet and the frame. Reassembly needs the
+*Accepted:* the packet and the frame. Reassembly needs the
 payload, which only the frame holds, and needs the header fields,
 which only the decode yields; taking both costs nothing and avoids the
 second decode RootWire would otherwise pay on every frame.
@@ -136,7 +135,6 @@ event types:
             policy: OverlapPolicy = OverlapPolicy.FIRST,
             targets: Mapping[str, OverlapPolicy] | None = None,
             checksums: ChecksumMode = ChecksumMode.AUTO,
-            # Only if decision 16 is adopted:
             local: Iterable[str] | None = None,
         ) -> None: ...
 
@@ -159,8 +157,7 @@ event types:
 ``StreamReassembler`` has the same four methods and the same
 arguments, takes ``StreamBounds`` and returns ``StreamEvent``.
 ``StreamBounds`` holds the stream timeouts, among them
-``ack_gap_grace`` if decision 15 is adopted and ``rst_grace`` if
-decision 12's option (a) is (section 2.5).
+``ack_gap_grace`` (decision 15, section 2.5).
 
 - ``feed`` takes one frame and returns, in a fixed order, every event
   that frame caused: first the expiries its timestamp triggers in
@@ -231,10 +228,10 @@ where messages begin. The hop limit is there because TTL-based
 insertion (section 5) shows up as overlapping spans whose hop limits
 differ.
 
-**Decision needed: the type of a reference.** An ``int`` or an opaque,
+**Decision: the type of a reference.** An ``int`` or an opaque,
 caller-chosen token (a type parameter, ``FragmentReassembler[R]``).
 
-*Recommendation:* ``int``. It is what RootWire and every pcap reader
+*Accepted:* ``int``. It is what RootWire and every pcap reader
 have (a frame index), it is totally ordered, so "frames N..M" and
 sorting spans mean something, it costs a small integer per span, and it
 keeps the classes non-generic. *Trade-off:* a caller whose frames are
@@ -283,15 +280,16 @@ Fields every event has:
 segment caused the event in its own flow: the fragment that filled a
 datagram's last hole (``Datagram``), the segment that made a run
 contiguous with the delivered end, that pushed its own direction past
-``max_flow_bytes``, or, if the ACK-based gap of section 4.7 is
-adopted, that confirmed the gap before it (``StreamData``, ``Gap``),
+``max_flow_bytes``, or that confirmed the ACK-based gap before it
+(section 4.7) (``StreamData``, ``Gap``),
 the fragment that pushed its own datagram past ``max_flow_bytes`` or
 ``max_fragments`` (``Evicted``), and the arriving piece of an
 ``Overlap``, ``Retransmission``, ``OutOfOrder``, ``LateData`` or
 ``Anomaly``. It is ``None`` for every event a flush produces: an
 expiry, the eviction of a flow to make room (``max_total_bytes``,
 ``max_flows``), ``advance`` and ``close``; the exception is the flush
-a SYN confirms under decision 12 (b), which carries the SYN's ref. A
+a SYN confirms (decision 12, section 4.4), which carries the SYN's
+ref. A
 ``feed`` that triggers an expiry or eviction in another flow therefore
 returns that flow's events with ``None``, never with its own ref. A
 message decoded from a direction's runs (section 4.8) takes the
@@ -325,8 +323,8 @@ The event types:
    * - ``Overlap``
      - Bytes of an arriving fragment or segment overlap held or
        delivered bytes and differ from them; or, under a rule that
-       discards a datagram on overlap (IPv6, the ``discard`` policy and,
-       if offered, ``linux-discard``, section 3.4), overlap them other
+       discards a datagram on overlap (IPv6, and the ``discard`` and
+       ``linux-discard`` policies, section 3.4), overlap them other
        than as a duplicate the rule allows, equal or not.
      - ``start``, ``end``, ``policy`` (the ``OverlapPolicy`` applied),
        ``kept`` and ``other`` (the two versions of the range),
@@ -344,12 +342,12 @@ The event types:
      - ``start``, ``end``, ``expected``.
    * - ``Gap``
      - A TCP direction skips bytes it never received: a cap forced it,
-       the capture truncated them, the flow is being flushed, or (if
-       adopted, section 4.7) the peer acknowledged past them.
+       the capture truncated them, the flow is being flushed, or the
+       peer acknowledged past them (section 4.7).
      - ``start``, ``end``, ``reason`` (``GapReason``).
    * - ``LateData``
-     - If the ACK-based gap of section 4.7 is adopted: bytes arrive
-       for the range of a gap already declared on an acknowledgement.
+     - Bytes arrive for the range of a gap already declared on an
+       acknowledgement (section 4.7).
      - ``offset`` (stream offset of ``data[0]``), ``data``; its
        ``spans`` tile ``data``, and it is outside the ordered runs.
    * - ``Evicted``
@@ -366,8 +364,7 @@ The event types:
      - ``kind`` (``AnomalyKind``), ``start``, ``end``.
 
 ``FragmentEvent`` and ``StreamEvent`` are the unions of the types each
-reassembler can return (``StreamEvent`` includes ``LateData`` if
-section 4.7's gap is adopted), so a ``match`` over them type-checks as
+reassembler can return, so a ``match`` over them type-checks as
 exhaustive under ``mypy --strict`` with ``typing.assert_never``.
 ``OverlapPolicy``, ``Direction``, ``EndReason``, ``GapReason``,
 ``Bound``, ``Timeout``, ``AnomalyKind`` and ``ChecksumMode`` are
@@ -548,7 +545,7 @@ mid-stream (section 4.2), with an ``Anomaly`` saying so, so an attacker
 who floods to flush a flow's state does not make the rest of that flow
 invisible.
 
-**Decision needed: the fragment eviction order.** When
+**Decision: the fragment eviction order.** When
 ``max_total_bytes`` or ``max_flows`` is reached, a datagram in progress
 must go, or the arriving one must be refused.
 
@@ -564,7 +561,7 @@ must go, or the arriving one must be refused.
   spoofed sources defeats it, and the bookkeeping is a per-source
   count.
 
-*Recommendation:* oldest first. Every eviction is an ``Evicted`` event
+*Accepted:* oldest first. Every eviction is an ``Evicted`` event
 with the spans and holes, so a flood that pushes out legitimate
 datagrams is visible, and the age timeout already removes old
 datagrams in the same order. *Trade-off:* the one stated above: under
@@ -666,9 +663,9 @@ write them.
        and 60 for IPv6; see the decision below.
    * - ``local`` (constructor argument)
      - ``None``
-     - Only if decision 16 is adopted. The capture host's addresses,
-       from which the offload checksum pattern is accepted; ``None``
-       accepts it from any source (section 5.1).
+     - The capture host's addresses (decision 16), from which the
+       offload checksum pattern is accepted; ``None`` accepts it from
+       any source (section 5.1).
 
 .. list-table:: ``StreamBounds`` defaults
    :header-rows: 1
@@ -730,17 +727,13 @@ write them.
      - See below.
    * - ``ack_gap_grace``
      - 1 s
-     - Only if decision 15 is adopted. How long a hole must stay open
-       after the first ACK past it before it is declared a gap
-       (section 4.7).
-   * - ``rst_grace``
-     - none proposed
-     - Only if decision 12's option (a) is adopted, which is not the
-       recommendation. How long ``StreamEnd(RST)`` is deferred
-       (section 4.4).
+     - How long a hole must stay open after the first ACK past it
+       before it is declared a gap (decision 15, section 4.7). Long
+       enough for the reordering of a merged or multi-queue capture,
+       short against the stall it replaces.
    * - ``local`` (constructor argument)
      - ``None``
-     - Only if decision 16 is adopted; as for fragments.
+     - As for fragments (decision 16).
 
 The Suricata figures are the defaults in the
 `suricata.yaml.in <https://raw.githubusercontent.com/OISF/suricata/master/suricata.yaml.in>`__
@@ -751,7 +744,7 @@ false. The example on the
 `configuration page <https://docs.suricata.io/en/latest/configuration/suricata-yaml.html#ip-defrag>`__
 shows other figures for the timeouts.
 
-**Decision needed: fragment timeouts per target, or one global
+**Decision: fragment timeouts per target, or one global
 timeout.** Linux expires an IPv4 datagram after 30 seconds and an IPv6
 one after 60. With one 60-second age timeout, the observer completes an
 IPv4 datagram whose last fragment arrives 30 to 60 seconds after its
@@ -772,7 +765,7 @@ first, which a Linux target has already discarded: an insertion.
   30 seconds after its first fragment, so the caller sees the cases a
   Linux target dropped.
 
-*Recommendation:* per target, with a global default of 60 s for both
+*Accepted:* per target, with a global default of 60 s for both
 versions, and the ``SLOW_REASSEMBLY`` anomaly for IPv4 under the
 default. It keeps RFC 8200's figure where the target is unknown, lets
 a caller who knows its Linux hosts emulate them, and never leaves the
@@ -781,7 +774,7 @@ and one more anomaly kind; a caller who configures nothing still
 completes datagrams a Linux IPv4 target dropped, though each is
 reported.
 
-**Decision needed: a total-age timeout for TCP.** *Recommendation:*
+**Decision: a total-age timeout for TCP.** *Accepted:*
 none by default, settable. A BGP session or a database connection
 lives for days; an age cutoff would end it with a ``StreamEnd`` and
 pick it up again mid-stream, which is noise. Delivered bytes are not
@@ -999,7 +992,7 @@ every overlap but an exact duplicate. It matches neither Linux rule
 exactly: the kernels with only the first commit discard on exact
 duplicates too, and current kernels keep contained fragments.
 
-**Decision needed: which named policies to offer.** *Recommendation:*
+**Decision: which named policies to offer.** *Accepted:*
 for IPv4 fragments, ``first`` (the default), ``last``, ``bsd``,
 ``linux``, ``windows``, ``solaris`` and ``discard``; not ``bsd-right``.
 The current-Linux policy is the next decision.
@@ -1024,7 +1017,7 @@ as an ``Overlap`` event. The policies describe historical stacks, so
 the guarantee that matters is the event, not the emulation; ``discard``
 models no stack cited here, only the RFC's rule.
 
-**Decision needed: a policy for current Linux.** No policy above
+**Decision: a policy for current Linux.** No policy above
 models Linux with commit ade446403bfb: ``linux`` is its behaviour
 before 7969e5c40dfd, and ``discard`` discards a datagram over a
 contained fragment with differing bytes, which current Linux drops as
@@ -1056,7 +1049,7 @@ finds a completed queue (``INET_FRAG_COMPLETE``) is dropped as a
 duplicate; here, as in Linux once the queue is gone, a late fragment
 starts a new datagram that expires.
 
-*Recommendation:* add ``linux-discard``. Linux is a common target in
+*Accepted:* add ``linux-discard``. Linux is a common target in
 the captures this library reads, its rule is fixed by two cited
 commits, and its reference vectors can come from a netns capture
 against the running kernel. *Trade-off:* a caller must know which rule
@@ -1144,7 +1137,7 @@ deliberate: the reassembler observes; whether the target dropped them
 is not visible in a capture, and RFC 1858's rules are filtering
 advice for routers, not receiver requirements.
 
-**Decision needed: what OVERSIZE, MISALIGNED and EMPTY_FRAGMENT
+**Decision: what OVERSIZE, MISALIGNED and EMPTY_FRAGMENT
 discard.** Receivers differ:
 
 - RFC 8200 §4.5 discards only the offending IPv6 fragment, for an
@@ -1175,7 +1168,7 @@ The options, for each of the three rules:
   ``linux-discard``, another choice elsewhere. IPv6 has no per-target
   policy, so this applies to IPv4 only.
 
-*Recommendation:* for IPv6, *fragment* for OVERSIZE and MISALIGNED,
+*Accepted:* for IPv6, *fragment* for OVERSIZE and MISALIGNED,
 following RFC 8200's text, and *datagram* for EMPTY_FRAGMENT, which
 the RFC does not cover. For IPv4, *truncate and keep* for MISALIGNED,
 the only receiver behaviour cited here, and *datagram* for OVERSIZE,
@@ -1217,7 +1210,7 @@ before the Fragment header. It is not called ``header_len``: for IPv6
 it differs from ``IPv6.header_len``, which is always 40, since the
 library decodes each extension header as a layer of its own.
 
-**Decision needed: a synthesized header, or the payload only.** The
+**Decision: a synthesized header, or the payload only.** The
 datagram's header is new bytes: no captured frame holds it. The decode
 contract still holds for it, as for any input: for IPv4,
 ``bytes(IPv4.decode(event.data)) == event.data[:event.payload_offset]``,
@@ -1232,7 +1225,7 @@ which differ in Total Length, flags, offset and checksum.
 The alternative is to emit the reassembled payload plus the first
 fragment's header as captured, and let the caller build a header.
 
-*Recommendation:* the synthesized header, with ``header_ref`` naming
+*Accepted:* the synthesized header, with ``header_ref`` naming
 the frame it came from, and the rules above documented on the event.
 It is what a receiving stack hands up, it decodes with the existing
 walk and no glue, and it gives the checksum helpers a header whose
@@ -1284,7 +1277,7 @@ emitted once for the direction. A segment that then arrives with data
 before offset 0 cannot be placed and is dropped with
 ``Anomaly(BEFORE_STREAM_START)``.
 
-**Decision needed: pick up mid-stream by default.** *Recommendation:*
+**Decision: pick up mid-stream by default.** *Accepted:*
 yes. Captures routinely start inside connections, and an analyzer that
 shows nothing for them is wrong in a way the user cannot see; the
 anomaly says the stream's start is unknown. *Trade-off:* the opposite
@@ -1311,7 +1304,7 @@ rejects a segment whose timestamp is older than the last one accepted,
 to protect against an old duplicate from a previous wrap being
 accepted as current.
 
-**Decision needed: implement PAWS.** *Recommendation:* no. A stale
+**Decision: implement PAWS.** *Accepted:* no. A stale
 segment can pass for current data only when its direction's sequence
 space wraps within the segment's lifetime: 2\ :sup:`32` bytes inside
 one Maximum Segment Lifetime, about 290 Mbit/s sustained with RFC
@@ -1382,7 +1375,7 @@ Three terms hold under every option below:
 - ``StreamEnd(reason=RST)`` is emitted for both directions at once,
   and no ``StreamData`` of that connection follows it.
 
-**Decision needed: what an RST does.**
+**Decision: what an RST does.**
 
 - *(a) Defer*: on the RST, ``Anomaly(RST_RECEIVED)``; ``StreamEnd(RST)``
   only after ``rst_grace`` of capture time passes with no data after
@@ -1432,35 +1425,35 @@ Three terms hold under every option below:
   direction's ``StreamEnd.offset`` rather than restarting at 0, so a
   caller can join the two by offset.
 
-*Recommendation:* (b). It is the only option where an RST alone,
-rejected by the target, cannot cut a stream: the bytes after it stay
-in the same connection at the same offsets, so a message that spans
-the RST decodes whole, and the ``RST_RECEIVED`` anomaly still tells
-the caller at once. *Trade-off:* a caller learns that the connection
-ended only at the closed timeout (120 s of capture time after the
-RST), at a new SYN, or at ``close()``, so a close-delimited HTTP body
-that ends in an RST is decoded that much later, and the state stays
-held that long. The SYN rule reopens the evasion for an attacker who
-forges two packets: an RST and then a SYN with a new ISN, both with a
-TTL too low to reach the target, end the stream for the caller while
-the target's connection goes on. Each is reported (``RST_RECEIVED``,
+*Accepted:* (b). It is the only option where an RST alone, rejected by
+the target, cannot cut a stream: the bytes after it stay in the same
+connection at the same offsets, so a message that spans the RST
+decodes whole, and the ``RST_RECEIVED`` anomaly still tells the caller
+at once. *Trade-off:* a caller learns that the connection ended only
+at the closed timeout (120 s of capture time after the RST), at a new
+SYN, or at ``close()``, so a close-delimited HTTP body that ends in an
+RST is decoded that much later, and the state stays held that long.
+The SYN rule reopens the evasion for an attacker who forges two
+packets: an RST and then a SYN with a new ISN, both with a TTL too low
+to reach the target, end the stream for the caller while the target's
+connection goes on. Each is reported (``RST_RECEIVED``,
 ``SYN_AFTER_RST``), and the real data that follows lands outside the
 new connection's sequence space, as out-of-window or before-start data
 with its anomalies. The alternative, keeping the old connection
 alongside the new one and placing each segment in whichever sequence
 space it fits, closes that route but needs two connections per key and
-a connection identity on every event; it is not proposed. Ignoring the
-SYN instead would lose every real reconnection within the closed
-timeout. The reverse case is an insertion: if the target did accept
-the RST, data sent after it was refused there, yet is delivered here,
-marked by ``Anomaly(DATA_AFTER_RST)``. Option (a) bounds the delay to
-``rst_grace``, but an attacker who waits longer than it gets (c)'s
-outcome. Under (c), and under (a) past the grace period, a rejected
-RST gives the caller a ``StreamEnd`` it acts on: section 4.8 sets
-``closed=True``, a close-delimited body is cut short, and the rest of
-the message arrives in a new connection where no decoder can frame it
-without the caller joining the two. That is the Ptacek & Newsham
-evasion, reported but not prevented.
+a connection identity on every event; it is not part of the design.
+Ignoring the SYN instead would lose every real reconnection within the
+closed timeout. The reverse case is an insertion: if the target did
+accept the RST, data sent after it was refused there, yet is delivered
+here, marked by ``Anomaly(DATA_AFTER_RST)``. Option (a) bounds the
+delay to ``rst_grace``, but an attacker who waits longer than it gets
+(c)'s outcome. Under (c), and under (a) past the grace period, a
+rejected RST gives the caller a ``StreamEnd`` it acts on: section 4.8
+sets ``closed=True``, a close-delimited body is cut short, and the
+rest of the message arrives in a new connection where no decoder can
+frame it without the caller joining the two. That is the Ptacek &
+Newsham evasion, reported but not prevented.
 
 4.5 Windows and overlaps
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1505,7 +1498,7 @@ Policies therefore decide only among bytes not yet delivered: data
 held past a hole. The ``contrary`` flag makes the remaining case, a
 target that would have taken the later version, visible.
 
-**Decision needed: retransmissions older than** ``retain_bytes``. A
+**Decision: retransmissions older than** ``retain_bytes``. A
 segment that repeats delivered bytes more than ``retain_bytes`` behind
 the delivered end cannot be compared, and is reported as
 ``Retransmission(verified=False)``. If its bytes differ, that is an
@@ -1540,7 +1533,7 @@ sender can retransmit that far back.
   is reported as a possible inconsistency, so the event stops meaning
   that bytes differed.
 
-*Recommendation:* ACK-anchored, with the remaining exception accepted
+*Accepted:* ACK-anchored, with the remaining exception accepted
 and documented: ``Retransmission(verified=False)`` is the report, and
 SECURITY.md's scope (section 6.2) names it. It leaves unverified only
 repeats more than 64 KiB below what the receiver has acknowledged,
@@ -1554,19 +1547,19 @@ keeps the plain 64 KiB exception, in which a differing retransmission
 further back on a scaled connection is an insertion the caller sees
 only as an unverified retransmission.
 
-**Decision needed: when to deliver.** Delivering on contiguity (the
+**Decision: when to deliver.** Delivering on contiguity (the
 issue's "as they become available") delivers before a later, differing
 retransmission can be seen. The alternative delivers a run only once
 the receiver has acknowledged it, as Suricata hands data to its
 application-layer parsers, so overlaps arriving before the ACK are
-resolved by policy first. *Recommendation:* deliver on contiguity, with
+resolved by policy first. *Accepted:* deliver on contiguity, with
 the ``contrary`` flag, and offer ACK-gated delivery later as an option.
 Contiguity delivery makes a run's ``completing_ref`` the segment of the
 sending direction that made the run contiguous (section 1.4), which is
 what RootWire attaches messages to; ACK-gating would make it the
 peer's ACK for every run, and delivers nothing for a one-sided
-capture without a fallback. The ACK-based gap of section 4.7, if
-adopted, makes it the peer's ACK only for a run that a declared gap
+capture without a fallback. The ACK-based gap of section 4.7 makes it
+the peer's ACK only for a run that a declared gap
 releases, the one case where an ACK and no data segment is what made
 the bytes deliverable. *Trade-off:* under ``last``, and under any
 future per-OS TCP policy that favours later data, the delivered stream
@@ -1588,7 +1581,7 @@ declares) is a known loss: its captured bytes are delivered and a
 segment is not held behind a hole that can never fill. A segment with
 a bad checksum follows ``checksums`` (section 5.1).
 
-**Decision needed: a gap when the peer acknowledges past a hole.** A
+**Decision: a gap when the peer acknowledges past a hole.** A
 segment the capture missed but the receiver got is never
 retransmitted: the receiver acknowledges past it. The direction then
 holds everything after the hole until ``max_flow_bytes`` forces a
@@ -1628,7 +1621,7 @@ tracking (section 4.5) is not required. Two limits apply to both:
   acknowledges: merged multi-interface captures and multi-queue
   capture reorder frames (section 2.4). A hole is therefore declared a
   gap only when it is still open ``ack_gap_grace`` of capture time
-  after the first ACK past it (proposed: 1 s), and a later frame, an
+  after the first ACK past it (1 s by default), and a later frame, an
   ACK at or past the same point or data of the direction beyond the
   hole, confirms it. Data that fills the hole within the grace period
   cancels it.
@@ -1638,7 +1631,7 @@ gap (section 1.4), since that frame made the bytes deliverable; the
 alternative is ``None``, as for a flush, which leaves such a run with
 no completing frame.
 
-*Recommendation:* gap on ACK, late bytes delivered, with the cap, the
+*Accepted:* gap on ACK, late bytes delivered, with the cap, the
 confirmation, and the confirming frame as ``completing_ref``. It turns
 a stall of up to an hour into a reported gap on exactly the lossy,
 often mid-stream captures where it happens, and keeps every captured
@@ -1748,7 +1741,7 @@ host's own outgoing TSO and GSO frames carry it legitimately. Its
 pieces therefore follow the mode as a bad checksum would (below), and
 each one is reported as ``Anomaly(UNVERIFIED_CHECKSUM)``.
 
-**Decision needed: bad checksums.** ``decode()`` carries checksums
+**Decision: bad checksums.** ``decode()`` carries checksums
 verbatim and verification is explicit, through
 :mod:`netprotocols.checksum` (ARCHITECTURE.md, "The encode side, and
 the round-trip guarantee"), so the library has no default to follow
@@ -1813,7 +1806,7 @@ here. ``ChecksumMode`` would have:
   ordinary size and needs the MTU, which a capture does not record.
 
 Each mode emits ``Anomaly(BAD_CHECKSUM)`` for every bad checksum.
-*Recommendation:* ``AUTO`` from local senders, with ``local`` naming
+*Accepted:* ``AUTO`` from local senders, with ``local`` naming
 the capture host's addresses, and, when the caller gives no ``local``,
 ``AUTO`` by pattern. A capture taken on the host it analyses, RootWire's
 case, keeps its outgoing direction, which ``DROP`` loses, and a
@@ -1881,7 +1874,7 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
        (section 3.5).
    * - Fragment timeout desynchronization (the observer and the target
        time out at different moments)
-     - Age timeout from the first fragment, per target if so decided
+     - Age timeout from the first fragment, per target
        (section 2.5); every abandoned datagram is an ``Expired`` event
        with its spans and holes, so a train completed after the
        observer gave up is visible as an ``Expired`` followed by a new
@@ -1896,7 +1889,7 @@ verifies on the ``Datagram`` with :mod:`netprotocols.checksum`.
      - ``Anomaly(ISN_CHANGED)``; ISN replaced only before data
        (section 4.4).
    * - Spoofed or out-of-window RST tearing down observer state
-     - Per the RST decision (section 4.4). Under the proposed option,
+     - Per the RST decision (section 4.4). Under the accepted option,
        the RST is an ``Anomaly(RST_RECEIVED)``, the connection is not
        ended, and data after it continues the same stream with
        ``Anomaly(DATA_AFTER_RST)``; the ``StreamEnd(RST)`` waits for
@@ -2062,13 +2055,14 @@ Affected:
   if the package does not import the module (section 6.4).
 - §6, "Claims we must not make", gains: "reassembles exactly as
   <operating system> does". The named policies follow frag3's mapping
-  of stacks measured before 2005, and ``linux-discard``, if offered,
-  follows two kernel commits, not every kernel since.
+  of stacks measured before 2005, and ``linux-discard``
+  follows the kernel commits of section 3.4's table, not every
+  kernel since.
 
 6.4 Package exports
 ~~~~~~~~~~~~~~~~~~~
 
-**Decision needed: re-export from** ``netprotocols``. The package's
+**Decision: re-export from** ``netprotocols``. The package's
 convention is to re-export: ``netprotocols/__init__.py`` imports the
 public names of ``pcap``, ``flow`` and ``checksum`` as well as every
 protocol, and the docstring of ``tests/test_exports.py`` states that
@@ -2086,7 +2080,7 @@ protocol, and the docstring of ``tests/test_exports.py`` states that
   import cost until it is used; ``__all__`` lists the names and a
   ``TYPE_CHECKING`` import gives type checkers the same view.
 
-*Recommendation:* no re-export. The per-frame decoder pays no import
+*Accepted:* no re-export. The per-frame decoder pays no import
 cost (CLAIMS §1.4) and the stateful API is visibly separate from the
 stateless one. *Trade-off:* it breaks the re-export convention above,
 callers write one more import line, and ``tests/test_exports.py`` has
@@ -2143,7 +2137,7 @@ source frame:
 - the overlapping fragment pattern of Suricata's ``DefragSturgesNovak*``
   tests, once per offered IPv4 policy, with the expected reassembled
   bytes in a table in the test, one row per policy, taken from those
-  tests; for ``linux-discard``, if offered, the pattern and the expected
+  tests; for ``linux-discard``, the pattern and the expected
   outcome come from a netns capture against the running kernel;
 - the same pattern over IPv6, expecting the RFC 5722 discard, and then
   a clean train under the same key, expecting a new ``Datagram``;
@@ -2156,7 +2150,7 @@ source frame:
 - TCP: a retransmission with different bytes, before and after
   delivery, under ``first`` and ``last``; data after FIN; data after
   an RST in each direction, in order and out of order, and a differing
-  retransmission across it, under the RST option decided; a SYN with a
+  retransmission across it, under option (b) of decision 12; a SYN with a
   changed ISN; a sequence wrap inside a stream; data without ACK; an
   RST without ACK; a bad checksum under each ``ChecksumMode`` value,
   and an offloaded direction under ``AUTO``.
@@ -2297,18 +2291,21 @@ machinery, ``Span``, ``Overlap``, ``Retransmission``, ``Evicted``,
 Follow-ups, filed when wanted: per-OS TCP overlap policies with
 reference vectors, ACK-gated delivery, PAWS, and ``bsd-right``.
 
-A decision of :ref:`reassembly-decisions` that adds a name
-(``linux-discard``, ``ChecksumMode.AUTO``, ``local``,
-``GapReason.ACKED``, ``ack_gap_grace``, ``LateData``, and the anomaly
-kinds ``RST_RECEIVED``, ``SYN_AFTER_RST``, ``ACK_BEYOND_DATA`` and
-``CHECKSUM_OFFLOAD``, per-target fragment timeouts) ships, if
-accepted, in the issue of its step, with its tests.
+The names the decisions of :ref:`reassembly-decisions` add ship in the
+issue of their step, with their tests: ``linux-discard``,
+``ChecksumMode.AUTO``, ``local``, per-target fragment timeouts and the
+anomaly kind ``CHECKSUM_OFFLOAD`` in A; ``GapReason.ACKED``,
+``ack_gap_grace``, ``LateData``, and the anomaly kinds
+``RST_RECEIVED``, ``SYN_AFTER_RST`` and ``ACK_BEYOND_DATA`` in B.
 
 
 .. _reassembly-decisions:
 
-Decisions needed
-----------------
+Decisions
+---------
+
+Each decision is accepted as listed; its section gives the options
+weighed and the trade-off.
 
 .. list-table::
    :header-rows: 1
@@ -2316,7 +2313,7 @@ Decisions needed
 
    * - #
      - Decision
-     - Recommendation
+     - Accepted
    * - 1
      - Input type (1.1)
      - The decoded ``Packet`` and its frame.
@@ -2384,4 +2381,4 @@ Decisions needed
      - Re-export from ``netprotocols`` (6.4)
      - No; ``netprotocols.reassembly`` only.
 
-The defaults of section 2.5 are proposed for acceptance with these.
+The defaults of section 2.5 are accepted with these.
