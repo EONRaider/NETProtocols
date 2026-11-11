@@ -1501,9 +1501,9 @@ and an overlap without a conflict in trains 4 to 7.
 6.18.44, over a veth pair between the netns `nprts` (`nprtsv`,
 10.9.80.1/24, MAC `02:00:0a:09:50:01`, the server) and `nprtc`
 (`nprtcv`, 10.9.80.2/24, `02:00:0a:09:50:02`, the client), with
-permanent neighbor entries, IPv6 off, checksum offload, TSO, GSO and
-GRO off on both ends, and both ends routing the subnet with `advmss
-536`, so no segment carries more than 524 data bytes (536 less the
+permanent neighbor entries, no IPv6 (the kernel used has none),
+checksum offload, TSO, GSO and GRO off on both ends, and both ends
+routing the subnet with `advmss 536`, so no segment carries more than 524 data bytes (536 less the
 timestamps option). The capture subnet, 10.9.80.0/24, is used by no
 other script. Every IPv4 header and TCP checksum is verified by
 `check_fixtures`. The capture, on the server's veth end with the

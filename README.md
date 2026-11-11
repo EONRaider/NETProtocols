@@ -364,8 +364,7 @@ own. A TCP segment rebuilt from fragments is fed to the stream
 reassembler with the frame that completed it:
 
 ```python
-from netprotocols import IPv4, IPv6, decode_frame
-from netprotocols.pcap import read_pcap
+from netprotocols import IPv4, IPv6, decode_frame, read_captures
 from netprotocols.reassembly import (
     Datagram,
     FragmentReassembler,
@@ -374,9 +373,8 @@ from netprotocols.reassembly import (
 
 fragments = FragmentReassembler()
 streams = StreamReassembler()
-for index, captured in enumerate(read_pcap(buffer)):
-    packet = decode_frame(captured.data, lax=True)
-    frame, ts = captured.data, captured.timestamp
+for index, (ts, frame) in enumerate(read_captures(data)):
+    packet = decode_frame(frame, lax=True)
     for event in fragments.feed(packet, frame, timestamp=ts, ref=index):
         handle((event,))
         if isinstance(event, Datagram):
@@ -405,8 +403,9 @@ segments not yet delivered by `first` or `last`; any overlap whose
 bytes differ is reported as an `Overlap` event under every policy, and
 an overlapping IPv6 fragment discards its datagram (RFC 5722). Holes a
 capture missed but the receiver acknowledged become `Gap` events, an
-RST is reported at once but ends the stream only if no data follows
-it, and every other rule a fragment or segment breaks is an `Anomaly`
+RST is reported at once and ends the stream at the closed timeout after
+it when no data follows it, at `close()`, or at once when a SYN with a
+new ISN follows, and every other rule a fragment or segment breaks is an `Anomaly`
 event, never an exception. What each reassembler holds is bounded, and
 measured on capture timestamps. Every `feed()` moves the capture
 clock, a frame with nothing to reassemble included, and returns the

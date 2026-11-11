@@ -1467,7 +1467,8 @@ before it, and delivers each direction as a byte stream numbered from
 capture began mid-stream (an `Anomaly(MIDSTREAM)`). Sequence numbers
 map to offsets by serial-number arithmetic, so a stream crosses a wrap
 of the sequence space. Bytes are delivered as soon as they are
-contiguous, one `StreamData` per `feed()` whose spans tile its data; a
+contiguous, one `StreamData` per `feed()` and direction, split where a
+`Gap` falls, whose spans tile its data; a
 segment past a hole is held (`OutOfOrder`). Overlapping bytes not yet
 delivered are resolved by a per-receiver `OverlapPolicy`, `first` (the
 default) or `last`, with an `Overlap` for any byte that differs;
@@ -1477,9 +1478,10 @@ highest acknowledgement: a difference is an `Overlap` keeping the
 delivered version, flagged `contrary` under `last`, and a repeat older
 than that is a `Retransmission(verified=False)`, the one inconsistent
 overlap reported without an `Overlap`. A hole the peer acknowledges
-past and that stays open for `ack_gap_grace` (1 s) of capture time is
-declared a `Gap(ACKED)` by the next frame that confirms it, up to the
-highest offset received, and bytes that arrive for it later are
+past and that stays open for `ack_gap_grace` (1 s) of capture time,
+timed from the first acknowledgement past it once it is the lowest, is
+declared a `Gap(ACKED)` by the next frame that confirms it, up to that
+acknowledgement and the highest offset received, and bytes that arrive for it later are
 `LateData`; a segment the snap length cut is an immediate
 `Gap(TRUNCATED)`. An RST never ends a connection on its own: it is an
 `Anomaly(RST_RECEIVED)` at once, data after it continues the same
@@ -1491,7 +1493,8 @@ SYN with a new ISN follows, which starts a new connection
 breaks is an `Anomaly`. `StreamBounds` charges `FLOW_OVERHEAD` per
 connection, `PIECE_OVERHEAD` per direction and per held chunk, and the
 retained bytes with their frames; a connection over `max_flow_bytes`
-sheds retained bytes and then declares its lowest hole a `Gap(CAP)`,
+sheds retained bytes and recorded `Gap(ACKED)` ranges and then
+declares its lowest hole a `Gap(CAP)`,
 so captured data is delivered rather than dropped, and to make room
 under `max_flows` or `max_total_bytes` the least recently active
 connection not yet carrying data both ways goes first, so a SYN flood

@@ -5,10 +5,10 @@
 #
 # Builds two netns joined by a veth pair (nprtsv in nprts, the server,
 # 10.9.80.1/24; nprtcv in nprtc, the client, 10.9.80.2/24), with fixed
-# MAC addresses, permanent neighbor entries on both ends, IPv6 off, and
-# tx/rx checksum offload, TSO, GSO and GRO off on both veth ends, so the
-# kernel computes every checksum and sends every segment as it is on the
-# wire. Both ends route the subnet with advmss 536, so neither side
+# MAC addresses, permanent neighbor entries on both ends, IPv6 off where
+# the kernel has it, and tx/rx checksum offload, TSO, GSO and GRO off on
+# both veth ends, so the kernel computes every checksum and sends every
+# segment as it is on the wire. Both ends route the subnet with advmss 536, so neither side
 # sends a segment of more than 536 data bytes and a large response spans
 # hundreds of segments.
 #
@@ -85,13 +85,15 @@ trap cleanup EXIT
 cleanup
 
 setup_ns() {  # netns dev address peer-address peer-mac
-    ip netns exec "$1" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 \
-        >/dev/null 2>&1 || true
+    if [[ -e /proc/sys/net/ipv6 ]]; then
+        ip netns exec "$1" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 \
+            >/dev/null || fail "$1: sysctl could not turn IPv6 off."
+    fi
     ip -n "$1" addr add "$3/24" dev "$2"
     ip netns exec "$1" ethtool -K "$2" tx off rx off >/dev/null ||
         fail "$2: ethtool could not turn tx/rx checksum offload off."
-    ip netns exec "$1" ethtool -K "$2" tso off gso off gro off \
-        >/dev/null 2>&1 || true
+    ip netns exec "$1" ethtool -K "$2" tso off gso off gro off >/dev/null ||
+        fail "$2: ethtool could not turn TSO, GSO and GRO off."
     ip -n "$1" link set lo up
     ip -n "$1" link set "$2" up
     ip -n "$1" route replace 10.9.80.0/24 dev "$2" advmss 536

@@ -1560,7 +1560,9 @@ Pyodide" is verified only by the CPython-side simulation above, not by
 ### 3.2 "Zero dependencies, no I/O, no sockets"
 **Status: VERIFIED — but do not lead with it**
 
-17 stdlib modules imported (`__future__` and the type-checking-only
+17 stdlib modules imported, counted by top-level module name, so
+`collections` and `collections.abc` count once (`__future__` and the
+type-checking-only
 `_typeshed` aside; `netprotocols.reassembly` adds `bisect` and
 `heapq`, and its `collections.OrderedDict` comes from a package
 `collections.abc` already imports); `socket` used for exactly two

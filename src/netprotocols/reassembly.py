@@ -178,8 +178,8 @@ TCP layer is inside an IP fragment, returns only the expiries its
 timestamp causes; the caller feeds the reassembled datagram instead.
 
 - **Delivery.** Bytes contiguous with a direction's delivered end are
-  delivered at once as one :class:`StreamData` per call, ``spans``
-  tiling its ``data``; a segment past a hole is held, with
+  delivered at once as one :class:`StreamData` per call and direction,
+  split where a :class:`Gap` falls, ``spans`` tiling its ``data``; a segment past a hole is held, with
   :class:`OutOfOrder`. Delivered bytes are final. A segment the snap
   length cut delivers its captured bytes and a ``Gap(TRUNCATED)`` for
   the rest. A direction ends with ``StreamEnd(FIN)`` when delivery
@@ -194,15 +194,16 @@ timestamp causes; the caller feeds the reassembled datagram instead.
   version, with ``contrary`` set under ``last``; equal bytes are a
   :class:`Retransmission`, and bytes the direction cannot compare a
   ``Retransmission(verified=False)``.
-- **Acknowledged holes.** When the peer acknowledges past a hole that
-  is still open ``ack_gap_grace`` after the first such
-  acknowledgement, a later acknowledgement past it, or data of the
-  direction past it, declares each acknowledged hole a
-  ``Gap(ACKED)``, up to the highest offset the direction received, and
-  delivers the bytes after it with that frame's reference. An
-  acknowledgement past that offset is :attr:`AnomalyKind.ACK_BEYOND_DATA`,
-  once per direction. Bytes that arrive later for an acknowledged gap
-  still retained are :class:`LateData`.
+- **Acknowledged holes.** When the peer first acknowledges past the
+  lowest hole, a grace starts, held to that acknowledgement. Once
+  ``ack_gap_grace`` has passed, a frame that acknowledges at or past it,
+  or carries data of the direction past the delivered end, declares
+  each hole below it a ``Gap(ACKED)``, up to the highest offset the
+  direction received, and delivers the bytes after each with that
+  frame's reference; a grace for the holes past it then starts. An
+  acknowledgement past the highest offset received is
+  :attr:`AnomalyKind.ACK_BEYOND_DATA`, once per direction. Bytes that
+  arrive later for an acknowledged gap are :class:`LateData`.
 - **RST.** An RST is :attr:`AnomalyKind.RST_RECEIVED` at once and makes
   the connection's end pending until the closed timeout after it. Data
   of either direction past what it had received when the RST came
@@ -241,11 +242,12 @@ timestamp causes; the caller feeds the reassembled datagram instead.
 **Stream bounds.** :class:`StreamBounds` caps what is held. A
 connection is charged :data:`FLOW_OVERHEAD`, each of its directions
 :data:`PIECE_OVERHEAD`, each held chunk :data:`PIECE_OVERHEAD` and its
-data, each acknowledged gap retained :data:`PIECE_OVERHEAD`, and each
-retained run :data:`PIECE_OVERHEAD`, its data and the reserve a
-growing ``bytearray`` keeps, and a fixed charge per frame it names. A
-connection over ``max_flow_bytes`` first sheds retained bytes, oldest
-first, then has its lowest hole declared a ``Gap(CAP)`` and the held
+data, each acknowledged gap it records :data:`PIECE_OVERHEAD`, and each
+retained run :data:`PIECE_OVERHEAD`, the bytes its ``bytearray`` has
+allocated, and a fixed charge per frame it names. A connection over
+``max_flow_bytes`` first sheds retained bytes, oldest first, then
+recorded acknowledged gaps, oldest first, then has its lowest hole
+declared a ``Gap(CAP)`` and the held
 bytes after it delivered, until it fits; one whose fixed state alone
 does not fit is evicted. To make room under ``max_flows`` or
 ``max_total_bytes``, the least recently active connection that has not
@@ -525,7 +527,8 @@ class GapReason(enum.Enum):
     #: :meth:`StreamReassembler.close`.
     FLUSH = "flush"
     #: The peer acknowledged past them, and the hole stayed open
-    #: ``ack_gap_grace`` after the first such acknowledgement.
+    #: ``ack_gap_grace`` after the first acknowledgement past it while
+    #: it was the lowest.
     ACKED = "acked"
 
 
