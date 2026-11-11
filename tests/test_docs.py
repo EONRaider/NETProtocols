@@ -109,6 +109,7 @@ class TestCorpusFiguresInDocs:
             "mpls.py",
             "tftp.py",
             "radius.py",
+            "reassembly.py",
         ],
     )
     def test_layout_map_lists_every_shipped_module(self, module: str) -> None:

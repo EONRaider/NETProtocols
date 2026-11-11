@@ -1,20 +1,29 @@
 """Tests that each layer sub-package exports what the layer defines.
 
-The top-level package re-exports every public name, so an omission in a
+The top-level package re-exports every public name but those of the
+public submodules in ``PUBLIC_SUBMODULES``, so an omission in a
 layer's own ``__init__`` is invisible until someone writes
 ``from netprotocols.layer7 import DHCP`` and it fails while
 ``from netprotocols import DHCP`` works. The expectation is derived
 from ``__module__``, so a protocol added to the top level but missing
 from its layer fails here.
+
+A public submodule is imported by its own name only: the package
+neither re-exports its names nor imports it.
 """
 
 import importlib
+import subprocess
+import sys
 
 import pytest
 
 import netprotocols
 
 LAYER_PACKAGES = ["layer2", "layer3", "layer4", "layer7"]
+
+#: Submodules reached as ``netprotocols.<name>`` only.
+PUBLIC_SUBMODULES = ["reassembly"]
 
 
 def owning_layer(name: str) -> str | None:
@@ -80,3 +89,35 @@ class TestLayerExports:
             f"expected every layer to own at least one exported name; "
             f"got {sorted(covered)}"
         )
+
+
+class TestPublicSubmodules:
+    @pytest.mark.parametrize("name", PUBLIC_SUBMODULES)
+    def test_names_are_not_reexported(self, name: str) -> None:
+        """No name of a public submodule is in the top-level __all__ or
+        namespace, so it is reachable by one path only."""
+        module = importlib.import_module(f"netprotocols.{name}")
+        assert not set(module.__all__) & set(netprotocols.__all__)
+        assert not [n for n in module.__all__ if n in vars(netprotocols)]
+
+    @pytest.mark.parametrize("name", PUBLIC_SUBMODULES)
+    def test_all_matches_its_namespace(self, name: str) -> None:
+        """Every name in the submodule's __all__ resolves."""
+        module = importlib.import_module(f"netprotocols.{name}")
+        missing = [n for n in module.__all__ if not hasattr(module, n)]
+        assert not missing, f"netprotocols.{name} lacks {missing}"
+
+    @pytest.mark.parametrize("name", PUBLIC_SUBMODULES)
+    def test_package_import_does_not_import_it(self, name: str) -> None:
+        """``import netprotocols`` leaves the submodule unimported."""
+        script = (
+            "import sys, netprotocols; "
+            f"print('netprotocols.{name}' in sys.modules)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "False"
