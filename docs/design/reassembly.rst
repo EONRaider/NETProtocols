@@ -1745,7 +1745,7 @@ each one is reported as ``Anomaly(UNVERIFIED_CHECKSUM)``.
 verbatim and verification is explicit, through
 :mod:`netprotocols.checksum` (ARCHITECTURE.md, "The encode side, and
 the round-trip guarantee"), so the library has no default to follow
-here. ``ChecksumMode`` would have:
+here. ``ChecksumMode`` has:
 
 - ``DROP``: a piece with a bad checksum is not used. It closes the
   insertion. On a capture taken on a host with transmit checksum
