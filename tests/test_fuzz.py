@@ -1803,23 +1803,49 @@ def _radius_seeded(draw: st.DrawFn) -> bytes:
     return bytes(raw[:cut]) + tail
 
 
+def _reference_radius_prefix(radius: RADIUS) -> list[RADIUSAttribute]:
+    """Walk a RADIUS packet's attributes independently of netprotocols,
+    up to the first whose Type has no Length after it, or whose Length
+    is below 2 or runs past the attributes."""
+    raw, offset, found = radius.attributes, 0, []
+    while offset + 2 <= len(raw):
+        length = raw[offset + 1]
+        if length < 2 or offset + length > len(raw):
+            break
+        found.append(
+            RADIUSAttribute(raw[offset], raw[offset + 2 : offset + length])
+        )
+        offset += length
+    return found
+
+
 def _read_every_radius_attribute(radius: RADIUS) -> None:
     """Walk the attributes and read every value and display accessor:
     the walk either tiles the attributes exactly or raises
     InvalidFieldError, and nothing else raises; so does each
-    Vendor-Specific's sub-attribute walk (see _read_vendor_attributes)."""
+    Vendor-Specific's sub-attribute walk (see _read_vendor_attributes).
+    The packet-level lookups never raise, and answer the first value of
+    their type among the attributes before the first broken one."""
+    prefix = _reference_radius_prefix(radius)
+    for kind, name in (
+        (1, "user_name"),
+        (4, "nas_ip_address"),
+        (5, "nas_port"),
+        (8, "framed_ip_address"),
+    ):
+        first = next((a.value for a in prefix if a.type == kind), None)
+        assert getattr(radius, name) == first, name
     try:
         attributes = radius.parsed_attributes
     except InvalidFieldError:
         event("RADIUS attributes: malformed")
         return
+    assert list(attributes) == prefix
     assert b"".join(map(bytes, attributes)) == radius.attributes
     for found in attributes:
         assert found.type_name
         _ = found.value
         _read_vendor_attributes(found)
-    _ = (radius.user_name, radius.nas_ip_address)
-    _ = (radius.nas_port, radius.framed_ip_address)
     event(f"RADIUS attributes: {len(attributes)}")
     vendor_specific = any(found.type == 26 for found in attributes)
     event(f"RADIUS Vendor-Specific reached: {vendor_specific}")

@@ -172,7 +172,7 @@ from struct import Struct
 from typing import TYPE_CHECKING, ClassVar, Self
 
 from netprotocols._base import Protocol, bytes_to_ipv4, bytes_to_ipv6
-from netprotocols._tlv import walk_kind_length_value
+from netprotocols._tlv import read_until_malformed, walk_kind_length_value
 from netprotocols.utils.exceptions import (
     InvalidFieldError,
     TruncatedHeaderError,
@@ -636,12 +636,7 @@ class STUN(Protocol):
         The flag is whether the walk reached the end without a malformed
         attribute.
         """
-        found: list[STUNAttribute] = []
-        try:
-            found.extend(self._walk())
-        except InvalidFieldError:
-            return tuple(found), False
-        return tuple(found), True
+        return read_until_malformed(self._walk())
 
     def attribute(self, kind: int) -> STUNAttribute | None:
         """Return the first attribute of type ``kind``, or ``None``.
