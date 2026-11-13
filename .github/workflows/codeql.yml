@@ -31,7 +31,7 @@ jobs:
 
       # build-mode: none extracts the database straight from source,
       # with no build step.
-      - uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           languages: python
           build-mode: none
@@ -67,7 +67,7 @@ jobs:
       # category. Setting one on either step alone would start a second
       # analysis next to the first.
       - id: analyze
-        uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           upload: failure-only
 
@@ -82,6 +82,6 @@ jobs:
           SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
         run: python3 scripts/filter_codeql_sarif.py "$SARIF_DIR"
 
-      - uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: ${{ steps.analyze.outputs.sarif-output }}
